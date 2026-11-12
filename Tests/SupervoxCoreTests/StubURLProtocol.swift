@@ -25,9 +25,8 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     enum End: Sendable {
         /// Fin normale de la réponse.
         case finish
-        /// La connexion tombe après les morceaux déjà livrés.
-        case fail(URLError.Code)
-        /// Le serveur se tait sans fermer : seule une annulation côté client arrête la requête (voir `stopLoadingCount`).
+        /// Le serveur se tait sans fermer : seule une annulation côté client (voir `stopLoadingCount`) ou
+        /// `dropConnection(of:code:)` arrête la requête.
         case hang
     }
 
@@ -36,6 +35,8 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         var requests: [URLRequest] = []
         var lastBody = Data()
         var stopLoadingCount = 0
+        /// La requête en cours d'un flux qui se tait (`End.hang`).
+        var hanging: StubURLProtocol?
     }
 
     /// En-tête qui porte l'identifiant de l'enregistrement. Il est posé par la session, pas par le client testé.
@@ -79,6 +80,14 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     /// Nombre de fois où le client a arrêté sa requête (annulation) ou où elle s'est terminée.
     static func stopLoadingCount(of client: OpenAICompatibleClient) -> Int { read(client) { $0.stopLoadingCount } }
 
+    /// Coupe la connexion d'un flux qui se tait (`End.hang`). C'est le test qui choisit l'instant, une fois qu'il a vu
+    /// passer les morceaux : une coupure donnée tout de suite après eux peut les faire perdre à URLSession.
+    static func dropConnection(of client: OpenAICompatibleClient, code: URLError.Code) {
+        let id = id(of: client)
+        guard let live = entries.withLock({ $0[id]?.hanging }) else { fatalError("aucun flux en cours à couper") }
+        live.client?.urlProtocol(live, didFailWithError: URLError(code))
+    }
+
     // MARK: URLProtocol
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -93,7 +102,10 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
 
     override func stopLoading() {
         let id = stubID
-        Self.entries.withLock { $0[id]?.stopLoadingCount += 1 }
+        Self.entries.withLock {
+            $0[id]?.stopLoadingCount += 1
+            $0[id]?.hanging = nil
+        }
     }
 
     override func startLoading() {
@@ -115,12 +127,13 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didLoad: data)
             client?.urlProtocolDidFinishLoading(self)
         case .stream(let status, let chunks, let end):
-            client?.urlProtocol(self, didReceive: httpResponse(status, [:]), cacheStoragePolicy: .notAllowed)
+            // Sans `Content-Type`, URLSession retient les premiers octets pour deviner le type du contenu : un vrai
+            // serveur de flux en envoie un, le stub aussi, sinon le test ne verrait pas les octets au fil de l'eau.
+            client?.urlProtocol(self, didReceive: httpResponse(status, ["Content-Type": "text/event-stream"]), cacheStoragePolicy: .notAllowed)
             for chunk in chunks { client?.urlProtocol(self, didLoad: chunk) }
             switch end {
             case .finish: client?.urlProtocolDidFinishLoading(self)
-            case .fail(let code): client?.urlProtocol(self, didFailWithError: URLError(code))
-            case .hang: break
+            case .hang: Self.entries.withLock { $0[id]?.hanging = self }
             }
         }
     }
