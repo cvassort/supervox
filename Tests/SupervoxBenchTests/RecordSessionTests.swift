@@ -44,15 +44,21 @@ private struct Harness {
 private let items = [CorpusItem(id: "p01", text: "Le worker Celery plante.", terms: []),
                      CorpusItem(id: "p02", text: "Merci.", terms: [])]
 
-/// Lance une session avec `enters` appuis sur Entrée disponibles (`nil` ensuite : fin d'entrée).
-private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRecorder, enters: Int,
-                 overwrite: Bool = false, tailDelay: Double = 0) throws -> (RecordSession.Summary, [String]) {
-    var remaining = enters
+/// Date fixe des prises, pour le fichier de capture.
+private let takeDate = Date(timeIntervalSince1970: 1_800_000_000)
+
+/// Lance une session avec `enters` appuis sur Entrée disponibles (`nil` ensuite : fin d'entrée), ou, si `answers`
+/// est donné, ces réponses dans l'ordre. Une prise gardée demande trois Entrée : démarrer, arrêter, garder.
+private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRecorder, enters: Int = 0,
+                 answers: [String]? = nil, overwrite: Bool = false,
+                 tailDelay: Double = 0) throws -> (RecordSession.Summary, [String]) {
+    var remaining = answers ?? Array(repeating: "", count: enters)
     var output: [String] = []
-    let session = RecordSession(
+    var session = RecordSession(
         items: items, outputDirectory: h.dir, overwrite: overwrite, recorder: recorder,
-        readLine: { if remaining > 0 { remaining -= 1; return "" } else { return nil } },
+        readLine: { remaining.isEmpty ? nil : remaining.removeFirst() },
         say: { output.append($0) }, tailDelay: tailDelay, wait: { recorder.note("wait(\($0))") })
+    session.now = { takeDate }
     let summary = try session.run()
     return (summary, output)
 }
@@ -60,7 +66,7 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
 @Test func tooShortTakeIsRefusedAskedAgainAndOnlyTheGoodTakeIsWritten() throws {
     let h = Harness(); defer { h.cleanup() }
     let recorder = ScriptedRecorder([take(seconds: 0.3, amplitude: 0.2), take(seconds: 1.0, amplitude: 0.8)])
-    let (summary, out) = try run(h, items: [items[0]], recorder: recorder, enters: 4)
+    let (summary, out) = try run(h, items: [items[0]], recorder: recorder, enters: 5)
 
     #expect(summary == .init(recorded: ["p01"], skipped: [], interrupted: false))
     #expect(recorder.starts == 2 && recorder.stops == 2)
@@ -77,7 +83,7 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
     let h = Harness(); defer { h.cleanup() }
     let justUnder = take(seconds: 0.49, amplitude: 0.5)
     let exactly = take(seconds: 0.5, amplitude: 0.5)
-    let (summary, out) = try run(h, items: [items[0]], recorder: ScriptedRecorder([justUnder, exactly]), enters: 4)
+    let (summary, out) = try run(h, items: [items[0]], recorder: ScriptedRecorder([justUnder, exactly]), enters: 5)
     #expect(summary.recorded == ["p01"])
     #expect(out.filter { $0.contains("trop court") }.count == 1)
 }
@@ -103,7 +109,7 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
     try Data("contenu d'origine".utf8).write(to: h.file("p01"))
 
     let (summary, _) = try run(h, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]),
-                               enters: 2, overwrite: true)
+                               enters: 3, overwrite: true)
 
     #expect(summary.recorded == ["p01"])
     let written = try WavFile.read(h.file("p01"))
@@ -114,7 +120,7 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
     let h = Harness(); defer { h.cleanup() }
     try FileManager.default.createDirectory(at: h.dir, withIntermediateDirectories: true)
     try Data("x".utf8).write(to: h.file("p01"))
-    let (summary, _) = try run(h, recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 2)
+    let (summary, _) = try run(h, recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 3)
     #expect(summary == .init(recorded: ["p02"], skipped: ["p01"], interrupted: false))
     #expect(FileManager.default.fileExists(atPath: h.file("p02").path))
 }
@@ -159,7 +165,7 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
 @Test func outputDirectoryIsCreatedWhenMissing() throws {
     let h = Harness(); defer { h.cleanup() }
     #expect(!FileManager.default.fileExists(atPath: h.dir.path))
-    _ = try run(h, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 2)
+    _ = try run(h, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 3)
     #expect(FileManager.default.fileExists(atPath: h.file("p01").path))
 }
 
@@ -168,7 +174,7 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
 @Test func captureKeepsRunningForTheTailDelayBeforeStop() throws {
     let h = Harness(); defer { h.cleanup() }
     let recorder = ScriptedRecorder([take(seconds: 1, amplitude: 0.5)])
-    _ = try run(h, items: [items[0]], recorder: recorder, enters: 2, tailDelay: RecordSession.defaultTailDelay)
+    _ = try run(h, items: [items[0]], recorder: recorder, enters: 3, tailDelay: RecordSession.defaultTailDelay)
     #expect(recorder.events == ["start", "wait(0.4)", "stop"])
     #expect(RecordSession.defaultTailDelay >= 0.4, "au moins la fenêtre maximale admise par le SDK (400 ms)")
 }
@@ -179,4 +185,61 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
     let recorder = ScriptedRecorder([take(seconds: 1, amplitude: 0.5)])
     _ = try run(h, items: [items[0]], recorder: recorder, enters: 1, tailDelay: 0.4)
     #expect(recorder.events == ["start", "stop"])
+}
+
+// MARK: - Refaire une prise
+
+/// Après une prise, « r » puis Entrée la refait : la phrase est redemandée, seule la prise gardée est écrite.
+@Test func aTakeCanBeRedoneAndOnlyTheKeptTakeIsWritten() throws {
+    let h = Harness(); defer { h.cleanup() }
+    let recorder = ScriptedRecorder([take(seconds: 1.0, amplitude: 0.2), take(seconds: 1.5, amplitude: 0.8)])
+    let (summary, out) = try run(h, items: [items[0]], recorder: recorder, answers: ["", "", "r", "", "", ""])
+    #expect(summary == .init(recorded: ["p01"], skipped: [], interrupted: false))
+    #expect(recorder.starts == 2)
+    #expect(out.filter { $0.contains("Entrée pour garder, r puis Entrée pour refaire") }.count == 2)
+    #expect(out.filter { $0.hasPrefix("[p01]") }.count == 2, "la même phrase est redemandée")
+    let written = try WavFile.read(h.file("p01"))
+    #expect(abs(written.duration - 1.5) < 0.01 && abs(peak(written) - 0.8) < 0.05, "la seconde prise, pas la première")
+}
+
+/// Refaire une prise ne touche pas au fichier existant tant qu'aucune nouvelle prise n'est gardée.
+@Test func redoingDoesNotTouchTheExistingFileUntilATakeIsKept() throws {
+    let h = Harness(); defer { h.cleanup() }
+    try FileManager.default.createDirectory(at: h.dir, withIntermediateDirectories: true)
+    let original = Data("contenu d'origine".utf8)
+    try original.write(to: h.file("p01"))
+    let (summary, _) = try run(h, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]),
+                               answers: ["", "", "r"], overwrite: true)   // refaire, puis fin d'entrée
+    #expect(summary.interrupted && summary.recorded.isEmpty)
+    #expect(try Data(contentsOf: h.file("p01")) == original)
+}
+
+/// Une réponse autre que vide ou « r » est redemandée ; « R » vaut « r » ; une fin d'entrée à cette question jette
+/// la prise (elle n'a pas été gardée).
+@Test func unclearAnswerIsAskedAgainAndEndOfInputDiscardsTheTake() throws {
+    let h = Harness(); defer { h.cleanup() }
+    let recorder = ScriptedRecorder([take(seconds: 1, amplitude: 0.2), take(seconds: 1, amplitude: 0.8)])
+    let (summary, out) = try run(h, items: [items[0]], recorder: recorder, answers: ["", "", "oui", " R ", "", "", "", ""])
+    #expect(summary.recorded == ["p01"] && recorder.starts == 2)
+    #expect(out.contains { $0.contains("non comprise") })
+    #expect(abs(peak(try WavFile.read(h.file("p01"))) - 0.8) < 0.05)
+
+    let h2 = Harness(); defer { h2.cleanup() }
+    let (closed, _) = try run(h2, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 2)
+    #expect(closed.interrupted && closed.recorded.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: h2.file("p01").path))
+}
+
+// MARK: - Fichier de capture
+
+/// Chaque prise gardée laisse, à côté des fichiers, le périphérique d'entrée, sa fréquence native et la date ; une
+/// session suivante complète le fichier sans effacer les prises précédentes.
+@Test func eachKeptTakeIsDescribedInTheCaptureFile() throws {
+    let h = Harness(); defer { h.cleanup() }
+    _ = try run(h, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 3)
+    _ = try run(h, items: [items[1]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 3)
+    let takes = try CaptureLog.read(h.dir)
+    #expect(takes == ["p01": CaptureTake(input: "micro de test", nativeSampleRate: 48000, date: takeDate),
+                      "p02": CaptureTake(input: "micro de test", nativeSampleRate: 48000, date: takeDate)])
+    #expect(try CaptureLog.read(h.dir.appendingPathComponent("absent")) == [:])
 }

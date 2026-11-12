@@ -503,3 +503,29 @@ private func spokenCorpus(_ n: Int) -> [CorpusItem] { (1...n).map { CorpusItem(i
                                         requestTimeout: 12)
     #expect(EndpointTranscriber(client: client, model: "m").measurementConditions.contains("12 s sans aucune donnée reçue"))
 }
+
+// MARK: - Lancement : date, modèles, capture
+
+@Test func captureSummaryNamesDevicesRatesAndDates() {
+    let day1 = Date(timeIntervalSince1970: 1_800_000_000), day2 = Date(timeIntervalSince1970: 1_800_100_000)
+    let takes = ["a": CaptureTake(input: "Micro A, 9 canaux, 48000 Hz, canal 1 lu", nativeSampleRate: 48000, date: day1),
+                 "b": CaptureTake(input: "Micro A, 9 canaux, 48000 Hz, canal 1 lu", nativeSampleRate: 48000, date: day2),
+                 "c": CaptureTake(input: "Casque B, 3 canaux, 24000 Hz, canal 1 lu", nativeSampleRate: 24000, date: day2)]
+    let text = CaptureLog.summary(takes, ids: ["a", "b", "c", "d"])
+    #expect(text.contains("Micro A, 9 canaux, 48000 Hz, canal 1 lu (2 prise(s))"))
+    #expect(text.contains("Casque B, 3 canaux, 24000 Hz, canal 1 lu (1 prise(s))"))
+    #expect(text.contains("fréquence native 24000 Hz, 48000 Hz") || text.contains("fréquence native 48000 Hz, 24000 Hz"))
+    #expect(text.contains("sans information de capture : d"))
+    #expect(CaptureLog.summary([:], ids: ["a"]).contains("non renseignée"))
+}
+
+@Test func reportsStateTheLaunchDateModelsAndCapture() {
+    let launch = LaunchInfo(date: Date(timeIntervalSince1970: 1_800_000_000),
+                            models: ["WhisperKit `large-v3-v20240930_turbo`"], capture: "Capture : micro de test.")
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    let transcription = Reports.markdownReport(corpus: corpus, runs: [], vocabulary: [], launch: launch)
+    for text in [transcription] {
+        #expect(text.contains("## Lancement") && text.contains("2027-01-15T") && text.contains("large-v3-v20240930_turbo"))
+        #expect(text.contains("Capture : micro de test."))
+    }
+}

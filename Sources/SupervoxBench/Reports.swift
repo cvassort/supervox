@@ -37,6 +37,14 @@ struct EngineSummary: Equatable, Codable {
     var termRecall: Double? { termsTotal > 0 ? Double(termsFound) / Double(termsTotal) : nil }
 }
 
+/// Ce qui situe un lancement : sa date, les identifiants de modèles passés en argument, et la capture des
+/// enregistrements (`CaptureLog.summary`).
+struct LaunchInfo {
+    let date: Date
+    let models: [String]
+    let capture: String
+}
+
 /// Avancement d'un rapport écrit pendant le lancement : `done` passes ou essais faits sur `planned` prévus.
 struct ReportProgress: Equatable {
     let done: Int
@@ -160,7 +168,7 @@ enum Reports {
     /// des échecs et des phrases exclues.
     /// `progress` : rapport écrit en cours de lancement, signalé en tête.
     static func markdownReport(corpus: [CorpusItem], runs: [EngineRun], vocabulary: [String],
-                               progress: ReportProgress? = nil) -> String {
+                               progress: ReportProgress? = nil, launch: LaunchInfo? = nil) -> String {
         var text = "# Transcription\n\n"
         if let progress { text += partialBanner(progress, unit: "passe(s)") }
         text += "\(corpus.count) phrase(s). "
@@ -170,6 +178,7 @@ enum Reports {
         text += markdownTable(summaries(corpus: corpus, runs: runs))
         text += "\nTaux d'erreur agrégé sur tous les mots du corpus ; phrases en échec ou sans voix hors de tout taux.\n"
         text += "\n## Règles de comparaison\n\n" + comparisonRules
+        if let launch { text += launchSection(launch) }
 
         // Conditions de mesure, une fois par moteur, telles que chaque moteur les décrit.
         text += "\n## Conditions de mesure\n\n"
@@ -225,6 +234,18 @@ enum Reports {
             summary.note = run.note
             return summary
         }
+    }
+
+    /// Section « Lancement » : date (heure locale, avec son décalage), modèles passés en argument, capture.
+    static func launchSection(_ launch: LaunchInfo) -> String {
+        let format = ISO8601DateFormatter()
+        format.timeZone = .current
+        var text = "\n## Lancement\n\n- Date du lancement : \(format.string(from: launch.date))\n"
+        text += "- Modèles passés en argument : "
+            + (launch.models.isEmpty ? "aucun (moteurs à modèle fixe, décrits dans les conditions de mesure)" : launch.models.joined(separator: " ; "))
+            + "\n"
+        text += "- \(oneLine(launch.capture))\n"
+        return text
     }
 
     /// Mention de tête d'un rapport partiel.

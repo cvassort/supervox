@@ -36,7 +36,11 @@ swift run supervox-bench <commande> --help
 ```
 
 - `record` : enregistre ta voix pour chaque phrase d'un corpus (`--corpus`, `--out`, `--overwrite`).
-  Un exemple de corpus est dans `Bench/corpus.example.tsv`. Aucune variable d'environnement.
+  Un exemple de corpus est dans `Bench/corpus.example.tsv`. Aucune variable d'environnement. Après chaque prise :
+  Entrée pour la garder, `r` puis Entrée pour la refaire (rien n'est écrit avant « garder »). Chaque prise gardée
+  est décrite dans `capture.json`, à côté des fichiers (périphérique d'entrée, fréquence native, date) ;
+  `transcribe` et `latency` le reprennent dans leur rapport, avec la date du lancement et les identifiants de
+  modèles passés en argument.
 - `transcribe` : fait transcrire les enregistrements par chaque moteur et compare les taux d'erreur
   (`--corpus`, `--audio`, `--engines`, `--out`, et d'autres options). Le moteur `endpoint` demande
   `--endpoint-model` et lit l'endpoint dans l'environnement, avant toute autre étape ; les moteurs locaux n'en ont

@@ -371,6 +371,7 @@ struct TranscribeCommand: AsyncParsableCommand {
     }
 
     func run(environment: [String: String]) async throws {
+        let launchedAt = Date()
         // Tout ce qui peut être refusé l'est avant de charger le moindre modèle et avant tout appel réseau.
         let names = try EngineList.parse(engines)
         let model = endpointModel?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -400,6 +401,12 @@ struct TranscribeCommand: AsyncParsableCommand {
             }
         }
         let redact = endpointConfig.map(endpointRedactor) ?? { $0 }
+        var models: [String] = []
+        if names.contains("whisperkit") { models.append("WhisperKit `\(whisperkitModel)`") }
+        if names.contains("endpoint") { models.append("endpoint `\(model)`") }
+        let launch = LaunchInfo(date: launchedAt, models: models,
+                                capture: CaptureLog.summary(of: URL(fileURLWithPath: audio, isDirectory: true),
+                                                            ids: items.map(\.id)))
         let planned = plannedPasses(transcribers, vocabulary: terms)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -415,14 +422,14 @@ struct TranscribeCommand: AsyncParsableCommand {
             afterPass: { done in
                 // Rapport réécrit après chaque passe : un arrêt en cours de route garde les passes finies.
                 do {
-                    try writeReports(directory, corpus: items, runs: done, vocabulary: terms,
+                    try writeReports(directory, corpus: items, runs: done, vocabulary: terms, launch: launch,
                                      progress: ReportProgress(done: done.count, planned: planned))
                 } catch {
                     print("Attention : rapport partiel non écrit : \(describe(error))")
                 }
             }
         )
-        try writeReports(directory, corpus: items, runs: runs, vocabulary: terms, progress: nil)
+        try writeReports(directory, corpus: items, runs: runs, vocabulary: terms, launch: launch, progress: nil)
 
         print("")
         print(Reports.markdownTable(Reports.summaries(corpus: items, runs: runs)))
@@ -432,8 +439,9 @@ struct TranscribeCommand: AsyncParsableCommand {
     /// `transcription.md` et `transcription.json`, écrits en entier à chaque fois (écriture atomique). Le contrôle du
     /// rapport existant est fait une fois, au lancement : les réécritures suivantes portent sur les fichiers du lancement.
     private func writeReports(_ directory: URL, corpus: [CorpusItem], runs: [EngineRun], vocabulary: [String],
-                              progress: ReportProgress?) throws {
-        let markdown = Reports.markdownReport(corpus: corpus, runs: runs, vocabulary: vocabulary, progress: progress)
+                              launch: LaunchInfo, progress: ReportProgress?) throws {
+        let markdown = Reports.markdownReport(corpus: corpus, runs: runs, vocabulary: vocabulary, progress: progress,
+                                              launch: launch)
         try markdown.write(to: directory.appendingPathComponent("transcription.md"), atomically: true, encoding: .utf8)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

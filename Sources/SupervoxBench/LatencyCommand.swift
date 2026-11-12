@@ -471,6 +471,7 @@ struct LatencyCommand: AsyncParsableCommand {
     }
 
     func run(environment: [String: String]) async throws {
+        let launchedAt = Date()
         // Tout ce qui peut être refusé l'est avant de charger le moindre modèle et avant tout appel réseau.
         guard Self.localEngines.contains(engine) else {
             throw LatencyError.invalidOption("moteur « \(engine) » refusé : moteur local attendu (\(Self.localEngines.joined(separator: ", "))) ; "
@@ -532,6 +533,10 @@ struct LatencyCommand: AsyncParsableCommand {
                                        maxTokens: Self.maxTokens, runs: runs, detector: FluidVoiceDetector.conditions,
                                        detectorHop: FluidVoiceDetector.hopSeconds)
         settings.requestTimeout = requestTimeout
+        var models = ["chat `\(chatModel)`", "synthèse `\(ttsModel)`, voix `\(voice)`"]
+        if engine == "whisperkit" { models.insert("WhisperKit `\(whisperkitModel)`", at: 0) }
+        let launch = LaunchInfo(date: launchedAt, models: models,
+                                capture: CaptureLog.summary(of: directory, ids: recordings.map(\.id)))
         let report = outDirectory.appendingPathComponent(Self.reportFile)
         let result = try await runLatencyTrials(
             recordings: recordings, runs: runs, silence: Double(silenceMs) / 1000, speechRegistry: registry,
@@ -548,7 +553,8 @@ struct LatencyCommand: AsyncParsableCommand {
             afterTrial: { done in
                 // Rapport réécrit après chaque essai : un arrêt en cours de route garde les essais faits.
                 let partial = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech, unreadable: loaded.unreadable,
-                                                      trials: done, progress: ReportProgress(done: done.count, planned: runs))
+                                                      trials: done, progress: ReportProgress(done: done.count, planned: runs),
+                                                      launch: launch)
                 do { try partial.write(to: report, atomically: true, encoding: .utf8) } catch {
                     print("Attention : rapport partiel non écrit : \(describe(error))")
                 }
@@ -556,7 +562,7 @@ struct LatencyCommand: AsyncParsableCommand {
 
         let trials = result.trials
         let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech, unreadable: loaded.unreadable,
-                                               trials: trials, stopReason: result.stopReason)
+                                               trials: trials, stopReason: result.stopReason, launch: launch)
         try markdown.write(to: report, atomically: true, encoding: .utf8)
         print("")
         print(Reports.latencyVerdict(settings: settings, trials: trials))

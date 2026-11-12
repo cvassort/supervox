@@ -646,3 +646,11 @@ private func wavFolder() throws -> URL {
     #expect(md.contains("| a | 1,00 | 0,50 |  |"))
     #expect(md.contains("Ignorés, illisibles : `c.wav : ") && md.contains("`d.wav : "))
 }
+
+@Test func latencyReportStatesTheLaunchDateModelsAndCapture() {
+    let launch = LaunchInfo(date: Date(timeIntervalSince1970: 1_800_000_000), models: ["chat `m`", "synthèse `t`"],
+                            capture: "Capture : micro de test.")
+    let md = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: [],
+                                     launch: launch)
+    #expect(md.contains("## Lancement") && md.contains("2027-01-15T") && md.contains("chat `m`") && md.contains("Capture : micro de test."))
+}

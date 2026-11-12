@@ -48,6 +48,8 @@ struct RecordSession {
     /// marge, la fin de la phrase lue serait coupée et fausserait la transcription. Injectable : les tests la mettent à 0.
     var tailDelay = RecordSession.defaultTailDelay
     var wait: (Double) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    /// Date d'une prise gardée, pour `CaptureLog`.
+    var now: () -> Date = { Date() }
 
     func run() throws -> Summary {
         // L'identifiant devient un nom de fichier : on refuse tout le corpus d'emblée plutôt qu'à la 20e phrase.
@@ -95,13 +97,36 @@ struct RecordSession {
                     say("Rééchantillonnage impossible : on recommence.")
                     continue
                 }
+                // Une erreur de lecture gonflerait le taux d'erreur de tous les moteurs : la prise peut être refaite.
+                // Rien n'est écrit avant « garder » ; une fin d'entrée ici jette la prise.
+                switch askKeepOrRedo(duration: mono16k.duration) {
+                case nil: summary.interrupted = true; return summary
+                case false?: say("On refait la phrase."); continue
+                case true?: break
+                }
                 try WavFile.write(mono16k, to: file)
+                try CaptureLog.record(CaptureTake(input: recorder.inputDescription, nativeSampleRate: clip.sampleRate,
+                                                  date: now()), id: item.id, in: outputDirectory)
                 say(String(format: "Enregistré : %@ (%.2f s)", file.lastPathComponent, mono16k.duration))
                 summary.recorded.append(item.id)
                 accepted = true
             }
         }
         return summary
+    }
+
+    /// Après une prise : `true` pour la garder (Entrée), `false` pour la refaire (« r » puis Entrée, casse et espaces
+    /// ignorés), `nil` si l'entrée se ferme. Toute autre réponse est redemandée.
+    private func askKeepOrRedo(duration: Double) -> Bool? {
+        say(String(format: "Prise de %.2f s. Entrée pour garder, r puis Entrée pour refaire.", duration))
+        while true {
+            guard let answer = readLine() else { return nil }
+            switch answer.trimmingCharacters(in: .whitespaces).lowercased() {
+            case "": return true
+            case "r": return false
+            default: say("Réponse non comprise : Entrée pour garder, r puis Entrée pour refaire.")
+            }
+        }
     }
 }
 

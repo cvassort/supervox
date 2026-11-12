@@ -258,7 +258,7 @@ extension Reports {
     /// `progress` : rapport écrit en cours de lancement, signalé en tête.
     static func latencyMarkdown(settings: LatencySettings, recordings: [LatencyRecording], withoutSpeech: [String],
                                 unreadable: [String] = [], trials: [LatencyTrial], stopReason: String? = nil,
-                                progress: ReportProgress? = nil) -> String {
+                                progress: ReportProgress? = nil, launch: LaunchInfo? = nil) -> String {
         let counts = TrialCounts(trials)
         let raw = counts.summary(target: settings.target)
         let live = counts.summary(target: settings.target, silence: settings.liveSilence)
@@ -305,6 +305,7 @@ extension Reports {
             + "l'endpoint est abandonnée après \(Int(settings.requestTimeout.rounded())) s sans aucune donnée reçue "
             + "(délai d'inactivité, pas une durée totale ; --request-timeout) : l'essai est alors en échec.\n\n"
         text += "Détecteur de voix : \(settings.detector).\n"
+        if let launch { text += launchSection(launch) }
 
         text += "\n## Limites\n\nChaque limite dit dans quel sens la réalité s'écarte du chiffre de tête.\n\n"
         text += "- **Le silence de fin de tour est une constante ajoutée, pas une détection en direct.** Le chiffre de "
