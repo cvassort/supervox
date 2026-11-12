@@ -11,7 +11,7 @@ la qualité de transcription de plusieurs moteurs et le délai de réponse de bo
 - macOS 26 ou plus (version minimale déclarée par le paquet) et Xcode 27 (le code utilise des API de macOS 27,
   sous `if #available`, et il faut le SDK 27 pour compiler).
 - État de la vérification : testé en local sous macOS 27 avec Xcode 27. Le pipeline GitHub Actions (étiquette
-  `xcode-27`, image en préversion) n'a pas encore été exécuté. macOS 26 est la version minimale déclarée, mais
+  `xcode-27`, image en préversion) exécute les tests unitaires sous Xcode 27 à chaque envoi et à chaque pull request. macOS 26 est la version minimale déclarée, mais
   elle n'est pas vérifiée.
 
 ## Tests
