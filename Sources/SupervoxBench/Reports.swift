@@ -215,7 +215,8 @@ enum Reports {
 
     /// Ce que la comparaison des textes plie et ce qu'elle compte, en langage clair (`TextNormalizer`).
     static let comparisonRules = """
-        - **Plié, jamais compté comme erreur** : la casse, les apostrophes, les traits d'union et la ponctuation. \
+        - **Plié, jamais compté comme erreur** : la casse, les apostrophes, les traits d'union et la ponctuation. Un trait d'union vaut une espace : \
+        « e-mail » et « e mail » sont le même texte, mais « e-mail » contre « email » compte comme une graphie séparée contre une jointe. \
         « L'API » et « l api » sont le même texte.
         - **Compté comme erreur** : des chiffres contre des nombres en lettres (« 3 » contre « trois ») ; une graphie \
         jointe contre une graphie séparée (« FastAPI » contre « Fast API », « GitHub » contre « Git Hub ») : un mot \

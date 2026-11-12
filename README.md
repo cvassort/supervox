@@ -80,7 +80,7 @@ Dossier de sortie (`--out`), contrôlé avant tout chargement de modèle et tout
 
 Le taux d'erreur et le rappel des termes comparent des mots normalisés :
 
-- plié, jamais compté comme erreur : la casse, les apostrophes, les traits d'union et la ponctuation ;
+- plié, jamais compté comme erreur : la casse, les apostrophes, les traits d'union et la ponctuation (un trait d'union vaut une espace : « e-mail » contre « email » compte comme une graphie séparée contre une jointe) ;
 - compté comme erreur : des chiffres contre des nombres en lettres (« 3 » contre « trois »), une graphie jointe
   contre une graphie séparée (« FastAPI » contre « Fast API ») ; les accents comptent ;
 - un terme est trouvé si ses mots normalisés se suivent dans la transcription : un moteur qui écrit « Fast API »

@@ -113,7 +113,7 @@ struct TranscriptionClientTests {
     @Test func transcribeMapsHTTPErrors() async throws {
         let unauthorized = fixtureString("transcription-401.json")
         #expect(unauthorized.contains("AuthenticationError"))  // la fixture n'est pas vide et vient bien d'un refus d'authentification
-        // Message neutre, en anglais : un message dans la langue du fournisseur le situerait.
+        // Message neutre, en anglais.
         #expect(unauthorized == #"{"error":{"code":null,"message":"Invalid or expired authentication token","param":null,"type":"AuthenticationError"}}"#)
         // Clé réaliste : avec la clé « k » du helper, le masquage de la clé réécrirait chaque « k » du corps (« To***en »).
         let e401 = await thrownError { try await stubbedClient(status: 401, fixture: "transcription-401.json", apiKey: "cle-de-test-0123").transcribe(wav: Data(), model: "m", language: nil, prompt: nil) }

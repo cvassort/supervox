@@ -587,7 +587,7 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     let md = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: result.trials)
     let detail = md.components(separatedBy: "## Détail des essais").last ?? ""
     #expect(detail.contains("| h2, nouvelle |") && detail.contains("| h2, réutilisée |") && detail.contains("| non relevée |"))
-    #expect(md.contains("Connexion de la synthèse, relevée à chaque essai (URLSessionTaskMetrics) : h2, 1 nouvelle et 1 réutilisée ; non relevée sur 1 essai(s)"))
+    #expect(md.contains("Connexion de la synthèse, relevée à chaque essai (URLSessionTaskMetrics) : h2, 1 nouvelle(s) et 1 réutilisée(s) ; non relevée sur 1 essai(s)"))
     #expect(!md.contains("les suivants la réutilisent"))
 }
 
@@ -600,7 +600,9 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     let head = text.range(of: "Verdict avec ce détecteur de voix et 600 ms de silence")
     let raw = text.range(of: "Verdict de la chaîne mesurée (transcription, modèle, synthèse) avec un silence constant de 600 ms")
     #expect(head != nil && raw != nil && head!.lowerBound < raw!.lowerBound)
-    #expect(text.contains("Un autre détecteur de voix, ou un autre découpage du silence par le détecteur, déplacerait le premier verdict, pas le second"))
+    #expect(text.contains("Un autre détecteur de voix, ou un autre découpage du silence par le détecteur, déplacerait surtout le premier verdict."))
+    #expect(text.contains("il dépend encore du détecteur par l'endroit où chaque clip est coupé"))
+    #expect(!text.contains("pas le second"))
 }
 
 // MARK: - Enregistrements : clip non coupé, fichiers illisibles

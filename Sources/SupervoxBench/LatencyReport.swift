@@ -223,8 +223,9 @@ extension Reports {
             rawLine += " Les deux verdicts diffèrent : seul le premier compte la détection en direct."
         }
         lines.append(rawLine)
-        lines.append("Un autre détecteur de voix, ou un autre découpage du silence par le détecteur, déplacerait le "
-                     + "premier verdict, pas le second, qui n'ajoute qu'un silence constant à la chaîne mesurée.")
+        lines.append("Un autre détecteur de voix, ou un autre découpage du silence par le détecteur, déplacerait "
+                     + "surtout le premier verdict. Le second n'ajoute qu'un silence constant à la chaîne mesurée ; il "
+                     + "dépend encore du détecteur par l'endroit où chaque clip est coupé, donc par ce qui est transcrit.")
         lines.append("Règle : test binomial exact unilatéral à 95 % sur la part de tours ratés (total au-dessus de la "
                      + "cible, sans contenu ou en échec), tolérance \(share) % ; les suspects de cache ne sont pas jugés. "
                      + "Le niveau de 95 % suppose des essais indépendants : ici ils s'enchaînent, à tour de rôle sur "
@@ -448,7 +449,7 @@ extension Reports {
         }
         var parts = order.map { name -> String in
             let c = byProtocol[name]!
-            return "\(name), \(c.fresh) nouvelle et \(c.reused) réutilisée"
+            return "\(name), \(c.fresh) nouvelle(s) et \(c.reused) réutilisée(s)"
         }
         let missing = done.filter { $0.connection == nil }.count
         if missing > 0 { parts.append("non relevée sur \(missing) essai(s)") }
