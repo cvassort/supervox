@@ -385,3 +385,22 @@ actor SelfDescribingSpy: Transcriber {
     let s = Reports.summarize(engine: "fake", corpus: corpus, results: out["fake"]!)
     #expect(s.failures == 1 && s.excluded == 0)
 }
+
+// MARK: - Règles de comparaison dites au lecteur
+
+/// Le rapport dit en clair ce que la comparaison plie, ce qu'elle compte comme erreur, et ce que cela veut dire pour
+/// le rappel des termes : sans cela, « 3 » contre « trois » ou « Fast API » contre « FastAPI » passeraient pour des
+/// fautes du moteur. Les exemples cités sont vérifiés contre la vraie normalisation, pas seulement recopiés.
+@Test func reportStatesTheComparisonRules() {
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    let report = Reports.markdownReport(corpus: corpus, runs: [], vocabulary: [])
+    let rules = report.components(separatedBy: "## Règles de comparaison").last ?? ""
+    #expect(report.contains("## Règles de comparaison"))
+    for folded in ["casse", "apostrophes", "traits d'union", "ponctuation"] { #expect(rules.contains(folded), "\(folded)") }
+    #expect(rules.contains("« 3 » contre « trois »") && rules.contains("« FastAPI » contre « Fast API »"))
+    #expect(rules.contains("rappel des termes"))
+    // Les exemples du texte sont exacts : pliés à l'identique, ou comptés comme erreurs.
+    #expect(WordErrorRate.compute(reference: "L'API pull-request", hypothesis: "l api Pull Request").rate == 0)
+    #expect(WordErrorRate.compute(reference: "3 workers", hypothesis: "trois workers").rate > 0)
+    #expect(TermRecall.compute(terms: ["FastAPI"], hypothesis: "le Fast API").found == 0)
+}

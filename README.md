@@ -46,6 +46,20 @@ swift run supervox-bench <commande> --help
   (`--audio`, `--engine`, `--chat-model`, `--tts-model`, `--voice`, `--out`, et d'autres options).
   Elle lit toujours l'endpoint dans l'environnement.
 
+### Comparaison des textes
+
+Le taux d'erreur et le rappel des termes comparent des mots normalisés :
+
+- plié, jamais compté comme erreur : la casse, les apostrophes, les traits d'union et la ponctuation ;
+- compté comme erreur : des chiffres contre des nombres en lettres (« 3 » contre « trois »), une graphie jointe
+  contre une graphie séparée (« FastAPI » contre « Fast API ») ; les accents comptent ;
+- un terme est trouvé si ses mots normalisés se suivent dans la transcription : un moteur qui écrit « Fast API »
+  perd le terme « FastAPI » et deux mots.
+
+Au chargement du corpus, un terme de la 3e colonne est refusé, avec son numéro de ligne, s'il ne figure pas dans sa
+propre phrase une fois normalisé (il ne pourrait jamais être trouvé), ou s'il se réduit à une seule lettre
+(« C++ » et « C# » deviennent « c », trouvé dans « c'est »).
+
 Les commandes qui appellent un service distant lisent deux variables d'environnement :
 
 - `SUPERVOX_BASE_URL` : adresse de base du service (compatible avec l'API OpenAI) ;

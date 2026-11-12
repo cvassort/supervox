@@ -3,7 +3,7 @@ import SupervoxCore
 import SupervoxEngines
 import Testing
 
-// Vrais moteurs, vrais modèles (téléchargés au premier passage : de quelques centaines de Mo à quelques Go).
+// Vrais moteurs, vrais modèles (téléchargés au premier passage).
 // Activé seulement avec SUPERVOX_INTEGRATION=1. Les moteurs passent un par un : en parallèle, ils se disputeraient
 // le Neural Engine et la mémoire, et les durées affichées ne voudraient rien dire.
 

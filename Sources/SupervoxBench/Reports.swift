@@ -153,6 +153,7 @@ enum Reports {
             : "Vocabulaire global (\(vocabulary.count) terme(s)) : \(vocabulary.joined(separator: ", ")).\n\n"
         text += markdownTable(summaries(corpus: corpus, runs: runs))
         text += "\nTaux d'erreur agrégé sur tous les mots du corpus ; phrases en échec ou sans voix hors de tout taux.\n"
+        text += "\n## Règles de comparaison\n\n" + comparisonRules
 
         // Conditions de mesure, une fois par moteur, telles que chaque moteur les décrit.
         text += "\n## Conditions de mesure\n\n"
@@ -186,6 +187,20 @@ enum Reports {
         }
         return text
     }
+
+    /// Ce que la comparaison des textes plie et ce qu'elle compte, en langage clair (`TextNormalizer`).
+    static let comparisonRules = """
+        - **Plié, jamais compté comme erreur** : la casse, les apostrophes, les traits d'union et la ponctuation. \
+        « L'API » et « l api » sont le même texte.
+        - **Compté comme erreur** : des chiffres contre des nombres en lettres (« 3 » contre « trois ») ; une graphie \
+        jointe contre une graphie séparée (« FastAPI » contre « Fast API », « GitHub » contre « Git Hub ») : un mot \
+        contre deux, soit deux erreurs de mots. Les accents comptent.
+        - **Conséquence pour le rappel des termes** : un terme est trouvé si ses mots, pliés de la même façon, se \
+        suivent dans la transcription. Un moteur qui écrit « Fast API » ne trouve pas « FastAPI » : il perd le terme \
+        et deux mots, alors que l'auditeur entend la même chose. Deux moteurs peuvent ainsi différer de façon \
+        systématique sur la graphie seule : lire les termes manqués ci-dessous avant de conclure.
+
+        """
 
     /// Une synthèse par ligne de passage, remarque comprise.
     static func summaries(corpus: [CorpusItem], runs: [EngineRun]) -> [EngineSummary] {

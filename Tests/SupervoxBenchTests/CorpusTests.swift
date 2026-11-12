@@ -23,8 +23,9 @@ import Testing
 /// un fichier CRLF. On vérifie que les lignes sont bien séparées, qu'aucun "\r" ne reste collé
 /// au dernier champ, et que la numérotation compte les lignes de commentaire et les lignes vides.
 @Test func handlesWindowsLineEndings() throws {
-    let items = try Corpus.parse("# c\r\np01\tA.\tx|y\r\n\r\np02\tB.\t\r\n")
-    #expect(items == [CorpusItem(id: "p01", text: "A.", terms: ["x", "y"]),
+    // Termes de plus d'une lettre et présents dans la phrase : sinon le corpus serait refusé pour une autre raison.
+    let items = try Corpus.parse("# c\r\np01\tA xa yb.\txa|yb\r\n\r\np02\tB.\t\r\n")
+    #expect(items == [CorpusItem(id: "p01", text: "A xa yb.", terms: ["xa", "yb"]),
                       CorpusItem(id: "p02", text: "B.", terms: [])])
     // Ligne fautive = 4e ligne physique (commentaire + vide comptés), pas le 2e item.
     #expect(throws: CorpusError.malformedLine(4)) {
@@ -42,9 +43,9 @@ import Testing
 }
 
 @Test func lastLineWithoutTrailingNewlineIsKept() throws {
-    let items = try Corpus.parse("p01\tA.\t\np02\tB.\tt")
+    let items = try Corpus.parse("p01\tA.\t\np02\tB terme.\tterme")
     #expect(items.map(\.id) == ["p01", "p02"])
-    #expect(items[1].terms == ["t"])
+    #expect(items[1].terms == ["terme"])
 }
 
 @Test func stripsLeadingByteOrderMark() throws {
@@ -77,8 +78,8 @@ import Testing
 }
 
 @Test func trimsSpacesAroundFieldsAndTerms() throws {
-    let items = try Corpus.parse("  p01 \t  Le worker plante.  \t worker Celery | pull request ||  | FastAPI \n")
-    #expect(items == [CorpusItem(id: "p01", text: "Le worker plante.",
+    let items = try Corpus.parse("  p01 \t  Le worker Celery bloque la pull request FastAPI.  \t worker Celery | pull request ||  | FastAPI \n")
+    #expect(items == [CorpusItem(id: "p01", text: "Le worker Celery bloque la pull request FastAPI.",
                                  terms: ["worker Celery", "pull request", "FastAPI"])])
 }
 
@@ -109,6 +110,36 @@ import Testing
 @Test func loadThrowsWhenFileIsMissing() {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("absent-\(UUID().uuidString).tsv")
     #expect(throws: (any Error).self) { try Corpus.load(from: url) }
+}
+
+// MARK: - Termes vérifiables
+
+/// Un terme mal tapé dans la 3e colonne ne pourrait jamais être trouvé, même par une transcription parfaite : refusé,
+/// avec la ligne. La comparaison est celle du rappel des termes (normalisée) : « FastAPI » ne figure pas dans
+/// « Fast API », qui se normalise en deux mots.
+@Test func termAbsentFromItsOwnSentenceIsRefusedWithItsLine() {
+    #expect(throws: CorpusError.termNotInText("Kubernetes", line: 2)) {
+        try Corpus.parse("# c\np01\tLe cluster Kubernets redémarre.\tcluster|Kubernetes\n")
+    }
+    #expect(throws: CorpusError.termNotInText("FastAPI", line: 1)) {
+        try Corpus.parse("p01\tLe service Fast API répond.\tFastAPI\n")
+    }
+    #expect(CorpusError.termNotInText("Kubernetes", line: 2).description.contains("ligne 2"))
+}
+
+/// « C++ » et « C# » se normalisent en « c », comme le « c » de « c'est » : un tel terme serait trouvé dans toute
+/// phrase qui contient « c'est », quoi qu'ait écrit le moteur. Un terme sans aucun mot ne peut pas être vérifié.
+@Test func termReducedToASingleLetterOrToNothingIsRefused() {
+    #expect(throws: CorpusError.termTooShort("C++", line: 1)) { try Corpus.parse("p01\tC'est écrit en C++.\tC++\n") }
+    #expect(throws: CorpusError.termTooShort("C#", line: 2)) { try Corpus.parse("p01\tA b.\t\np02\tDu C# partout.\tC#\n") }
+    #expect(throws: CorpusError.termTooShort("...", line: 1)) { try Corpus.parse("p01\tAttends...\t...\n") }
+    #expect(CorpusError.termTooShort("C++", line: 1).description.contains("ligne 1"))
+}
+
+/// Ce que la normalisation plie ne fait pas refuser un terme : casse, trait d'union, apostrophe.
+@Test func termsDifferingOnlyInFoldedFormAreAccepted() throws {
+    let items = try Corpus.parse("p01\tOuvre la Pull Request de l'API.\tpull-request|l API\n")
+    #expect(items[0].terms == ["pull-request", "l API"])
 }
 
 @Test func committedExampleCorpusIsValid() throws {

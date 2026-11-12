@@ -1,4 +1,5 @@
 import Foundation
+import SupervoxCore
 
 /// Une phrase du corpus : l'identifiant, le texte de référence et les termes techniques
 /// dont on mesure le rappel dans la transcription.
@@ -9,10 +10,30 @@ struct CorpusItem: Equatable {
 }
 
 /// Les numéros de ligne sont 1-based et comptent les lignes de commentaire et les lignes vides.
-enum CorpusError: Error, Equatable {
+enum CorpusError: Error, Equatable, CustomStringConvertible {
     case malformedLine(Int)
     case duplicateID(String, line: Int)
     case empty
+    /// La suite de mots normalisés du terme n'apparaît pas dans sa propre phrase normalisée : même une transcription
+    /// parfaite ne le trouverait pas.
+    case termNotInText(String, line: Int)
+    /// Le terme normalisé n'a aucun mot, ou un seul mot d'une seule lettre (« C++ » et « C# » deviennent « c ») : il
+    /// serait trouvé dans toute phrase qui contient ce mot (« c'est » donne « c », « est »).
+    case termTooShort(String, line: Int)
+
+    var description: String {
+        switch self {
+        case .malformedLine(let line): "corpus, ligne \(line) : attendu id<TAB>texte<TAB>termes (3e colonne facultative)"
+        case .duplicateID(let id, let line): "corpus, ligne \(line) : identifiant « \(id) » déjà utilisé"
+        case .empty: "corpus vide"
+        case .termNotInText(let term, let line):
+            "corpus, ligne \(line) : le terme « \(term) » ne figure pas dans sa phrase une fois normalisé (casse, "
+                + "ponctuation, apostrophes et traits d'union pliés) ; il ne pourrait jamais être trouvé"
+        case .termTooShort(let term, let line):
+            "corpus, ligne \(line) : le terme « \(term) » se réduit, une fois normalisé, à une seule lettre ou à rien ; "
+                + "il serait trouvé dans des mots sans rapport (« c'est » contient « c »)"
+        }
+    }
 }
 
 /// Format : une phrase par ligne, `id<TAB>texte<TAB>terme1|terme2`.
@@ -22,6 +43,8 @@ enum CorpusError: Error, Equatable {
 /// - Plus de 3 colonnes : refusé (une tabulation dans le texte décalerait les termes en silence).
 /// - Identifiant et texte sont rognés puis doivent être non vides ; les termes sont rognés, les vides écartés.
 /// - Fins de ligne `\n` ou `\r\n` ; un BOM UTF-8 initial est ignoré.
+/// - Chaque terme doit pouvoir être trouvé par une transcription parfaite de sa phrase, avec la règle du rappel des
+///   termes (`TermRecall`, mots normalisés contigus) ; un terme qui se réduit à une lettre ou à rien est refusé.
 enum Corpus {
     static func parse(_ contents: String) throws -> [CorpusItem] {
         var items: [CorpusItem] = []
@@ -54,6 +77,15 @@ enum Corpus {
                     .map { $0.trimmingCharacters(in: .whitespaces) }
                     .filter { !$0.isEmpty }
                 : []
+            for term in terms {
+                let words = TextNormalizer.words(term)
+                if words.isEmpty || (words.count == 1 && words[0].count == 1) {
+                    throw CorpusError.termTooShort(term, line: number)
+                }
+                guard TermRecall.compute(terms: [term], hypothesis: text).found == 1 else {
+                    throw CorpusError.termNotInText(term, line: number)
+                }
+            }
             items.append(CorpusItem(id: id, text: text, terms: terms))
         }
 

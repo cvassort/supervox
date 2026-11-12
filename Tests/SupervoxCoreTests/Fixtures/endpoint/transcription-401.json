@@ -1,1 +1,1 @@
-{"error":{"code":null,"message":"Token d'authentification invalide ou expiré","param":null,"type":"AuthenticationError"}}
+{"error":{"code":null,"message":"Invalid or expired authentication token","param":null,"type":"AuthenticationError"}}
