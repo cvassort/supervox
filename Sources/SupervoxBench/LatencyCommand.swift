@@ -1,4 +1,5 @@
 import ArgumentParser
+import CryptoKit
 import Foundation
 import SupervoxCore
 import SupervoxEngines
@@ -72,9 +73,9 @@ enum TrialOutcome: Equatable {
     case measured(TurnTiming)
     /// Le modèle n'a rendu aucun texte de réponse (flux vide, ou réflexion seule) : compté, jamais moyenné.
     case noContent(TurnTiming, reason: String)
-    /// Toute la première phrase est arrivée dans le premier morceau de contenu : forme d'une réponse sortie du cache
-    /// de la passerelle. Rapporté à part, jamais moyenné.
-    case suspectCache(TurnTiming)
+    /// Forme d'une réponse sortie d'un cache : première phrase entière dans le premier morceau de contenu, ou audio
+    /// identique octet pour octet à celui d'un essai précédent. Rapporté à part, jamais moyenné.
+    case suspectCache(TurnTiming, reason: String)
     /// Une étape a levé une erreur (HTTP, réseau, moteur) ; message sans adresse d'endpoint ni clé.
     case failed(stage: TrialStage, message: String)
 }
@@ -91,6 +92,7 @@ struct LatencyTrial: Equatable {
 
 enum LatencyError: Error, Equatable, CustomStringConvertible {
     case duplicateRequest(String)
+    case speechVariantsExhausted(sentence: String, maxSpaces: Int)
     case noRecordings(String)
     case noSpeech
     case invalidOption(String)
@@ -99,10 +101,73 @@ enum LatencyError: Error, Equatable, CustomStringConvertible {
         switch self {
         case .duplicateRequest(let what):
             "requête \(what) identique à une requête déjà envoyée : la passerelle pourrait la rendre depuis son cache"
+        case .speechVariantsExhausted(let sentence, let maxSpaces):
+            "le texte « \(sentence) » a déjà été envoyé à la synthèse avec 1 à \(maxSpaces) espaces finaux (registre du "
+                + "dossier de sortie) : arrêt plutôt que de répéter une requête que la passerelle pourrait rendre depuis "
+                + "son cache. Effacer le registre réautoriserait ces requêtes."
         case .noRecordings(let path): "aucun fichier .wav dans \(path)"
         case .noSpeech: "aucun enregistrement ne contient de voix détectée : rien à mesurer"
         case .invalidOption(let message): message
         }
+    }
+}
+
+/// Registre des requêtes de synthèse déjà envoyées, pour qu'aucune ne soit répétée, y compris d'un lancement à
+/// l'autre : la passerelle de l'endpoint rend une requête identique depuis son cache. Le registre ne garde que des
+/// empreintes SHA-256 (jamais le texte), une par ligne, dans un fichier relu à l'ouverture et complété avant chaque
+/// envoi. L'empreinte couvre `context` (modèle, voix, format, paramètres) et le texte envoyé.
+final class SpeechRequestRegistry {
+    /// Nombre maximal d'espaces finaux. Sondé sur l'endpoint : 0, 40, 120 et 250 espaces donnent le même audio
+    /// (même taille d'octets) que le texte seul.
+    static let defaultMaxSpaces = 250
+
+    let file: URL?
+    let maxSpaces: Int
+    private let context: String
+    private var seen: Set<String>
+
+    /// `file` nil : registre en mémoire seulement.
+    init(file: URL?, context: String, maxSpaces: Int = SpeechRequestRegistry.defaultMaxSpaces) throws {
+        self.file = file
+        self.context = context
+        self.maxSpaces = maxSpaces
+        seen = []
+        if let file, FileManager.default.fileExists(atPath: file.path) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            seen = Set(text.split(whereSeparator: \.isNewline).map(String.init))
+        }
+    }
+
+    /// `sentence` suivie du plus petit nombre d'espaces (1 à `maxSpaces`) qui donne une requête jamais envoyée ; la
+    /// requête est inscrite au registre avant d'être rendue. Lève `speechVariantsExhausted` à la borne.
+    func uniqueInput(for sentence: String) throws -> String {
+        for count in 1...maxSpaces {
+            let input = sentence + String(repeating: " ", count: count)
+            let digest = Self.digest(context + "\u{0}" + input)
+            guard !seen.contains(digest) else { continue }
+            try record(digest)
+            return input
+        }
+        throw LatencyError.speechVariantsExhausted(sentence: sentence, maxSpaces: maxSpaces)
+    }
+
+    static func digest(_ text: String) -> String { digest(Data(text.utf8)) }
+
+    static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func record(_ digest: String) throws {
+        if let file {
+            if !FileManager.default.fileExists(atPath: file.path) {
+                try Data().write(to: file)
+            }
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data((digest + "\n").utf8))
+        }
+        seen.insert(digest)
     }
 }
 
@@ -111,14 +176,16 @@ enum LatencyError: Error, Equatable, CustomStringConvertible {
 /// 1. `silence` est la constante donnée ;
 /// 2. `transcription` : durée de `transcribe` sur le clip coupé ; un texte vide arrête l'essai (rien à envoyer) ;
 /// 3. `firstSentence` : de l'appel à `chat` (la requête part à l'appel) à la première phrase complète ;
-/// 4. `synthesis` : durée de `speak` sur cette phrase, suivie d'espaces dont le nombre est propre à l'essai
-///    (`spaceOffset` + numéro de l'essai) : la requête est unique sans changer ce qui est dit.
+/// 4. `synthesis` : durée de `speak` sur cette phrase, suivie des espaces que choisit `speechRegistry` pour que la
+///    requête n'ait jamais été envoyée : ce qui est dit ne change pas.
 ///
-/// Chaque requête de chat porte une référence `nonce()` dans son message système. Une requête de chat ou de synthèse
-/// identique à une précédente arrête tout (`duplicateRequest`) : elle pourrait sortir du cache.
+/// Chaque requête de chat porte une référence `nonce()` dans son message système ; une requête de chat identique à
+/// une précédente arrête tout (`duplicateRequest`) : elle pourrait sortir du cache. Un essai est « suspect de cache »
+/// si sa première phrase est arrivée entière dans le premier morceau de contenu, ou si l'audio de sa synthèse est
+/// identique octet pour octet à celui d'un essai précédent du lancement.
 /// Une erreur sur un essai est notée pour cet essai, passée par `redact`, et les essais suivants continuent ;
 /// seule l'annulation de la tâche arrête le déroulé.
-func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double, spaceOffset: Int,
+func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double, speechRegistry: SpeechRequestRegistry,
                       nonce: () -> String, redact: (String) -> String,
                       transcribe: (AudioClip) async throws -> String,
                       chat: ([ChatMessage]) -> AsyncThrowingStream<ChatDelta, Error>,
@@ -127,7 +194,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
     precondition(!recordings.isEmpty && runs > 0, "au moins un enregistrement et un essai")
     let clock = ContinuousClock()
     var sentChats: Set<String> = []
-    var sentSpeech: Set<String> = []
+    var audioSeen: [String: Int] = [:]   // empreinte de l'audio → numéro de l'essai
     var trials: [LatencyTrial] = []
 
     for index in 0..<runs {
@@ -181,18 +248,28 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
         }
 
         // Synthèse de la première phrase.
-        let input = first.text + String(repeating: " ", count: spaceOffset + number)
-        guard sentSpeech.insert(input).inserted else { throw LatencyError.duplicateRequest("de synthèse") }
+        let input = try speechRegistry.uniqueInput(for: first.text)
         start = clock.now
+        let audio: Data
         do {
-            _ = try await speak(input)
+            audio = try await speak(input)
         } catch {
             trials.append(trial(transcript, first, .failed(stage: .synthesis, message: try failure(error))))
             continue
         }
         let timing = TurnTiming(silence: silence, transcription: transcription, firstSentence: firstSentence,
                                 synthesis: seconds(start.duration(to: clock.now)))
-        trials.append(trial(transcript, first, first.contentChunks == 1 ? .suspectCache(timing) : .measured(timing)))
+        let audioDigest = SpeechRequestRegistry.digest(audio)
+        let outcome: TrialOutcome
+        if let earlier = audioSeen[audioDigest] {
+            outcome = .suspectCache(timing, reason: "audio de synthèse identique octet pour octet à celui de l'essai \(earlier)")
+        } else if first.contentChunks == 1 {
+            outcome = .suspectCache(timing, reason: "première phrase arrivée entière dans le premier morceau de contenu")
+        } else {
+            outcome = .measured(timing)
+        }
+        audioSeen[audioDigest] = audioSeen[audioDigest] ?? number
+        trials.append(trial(transcript, first, outcome))
         progress("essai \(number)/\(runs) (\(recording.id)) : \(decimal(timing.total ?? 0)) s")
     }
     return trials
@@ -235,6 +312,8 @@ struct LatencyCommand: AsyncParsableCommand {
     /// consomme ce plafond avant de répondre.
     static let maxTokens = 300
     static let speechFormat = "wav"
+    /// Registre des requêtes de synthèse déjà envoyées (empreintes), dans le dossier de sortie.
+    static let speechRegistryFile = "latence-synthese-envoyee.sha256"
 
     @Option(name: .long, help: "Dossier des enregistrements : tous ses fichiers .wav, par ordre de nom.")
     var audio: String
@@ -258,7 +337,7 @@ struct LatencyCommand: AsyncParsableCommand {
     var silenceMs = 600
 
     @Option(name: .long, help: "Nombre total d'essais, répartis à tour de rôle sur les enregistrements.")
-    var runs = 10
+    var runs = 40
 
     @Option(name: .long, help: "Objectif, en secondes, jugé sur le 90e centile.")
     var target = 2.0
@@ -266,7 +345,7 @@ struct LatencyCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Variante du modèle WhisperKit.")
     var whisperkitModel = "large-v3-v20240930_turbo"
 
-    @Option(name: .long, help: "Dossier de sortie : latence.md.")
+    @Option(name: .long, help: "Dossier de sortie : latence.md, et le registre des requêtes de synthèse déjà envoyées.")
     var out: String
 
     /// `key=value` ; la clé est non vide, la valeur peut l'être.
@@ -329,10 +408,17 @@ struct LatencyCommand: AsyncParsableCommand {
         try await transcriber.prepare()
         try await transcriber.warmUp(vocabulary: [])
 
+        let outDirectory = URL(fileURLWithPath: out, isDirectory: true)
+        try FileManager.default.createDirectory(at: outDirectory, withIntermediateDirectories: true)
+        let extrasKey = extras.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
+        let registry = try SpeechRequestRegistry(
+            file: outDirectory.appendingPathComponent(Self.speechRegistryFile),
+            context: [ttsModel, voice, Self.speechFormat, extrasKey].joined(separator: "\u{0}"))
+
         let client = OpenAICompatibleClient(config: config)
         let (chatModel, ttsModel, voice) = (self.chatModel, self.ttsModel, self.voice)
         let trials = try await runLatencyTrials(
-            recordings: recordings, runs: runs, silence: Double(silenceMs) / 1000, spaceOffset: Int.random(in: 0..<32),
+            recordings: recordings, runs: runs, silence: Double(silenceMs) / 1000, speechRegistry: registry,
             nonce: { String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased() },
             redact: redact,
             transcribe: { try await transcriber.transcribe($0, language: Self.language, vocabulary: []) },
@@ -346,8 +432,6 @@ struct LatencyCommand: AsyncParsableCommand {
                                        detectorHop: FluidVoiceDetector.hopSeconds)
         let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
                                                trials: trials)
-        let outDirectory = URL(fileURLWithPath: out, isDirectory: true)
-        try FileManager.default.createDirectory(at: outDirectory, withIntermediateDirectories: true)
         let report = outDirectory.appendingPathComponent("latence.md")
         try markdown.write(to: report, atomically: true, encoding: .utf8)
         print("")

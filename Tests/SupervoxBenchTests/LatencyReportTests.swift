@@ -34,7 +34,23 @@ import Testing
     let s = Reports.summarizeLatency(t, target: 2.0)
     #expect(s.runs == 3 && s.noContent == 1)
     #expect(abs(s.medianTotal! - 1.7) < 1e-9)   // médiane de 1,5 et 1,9 : l'essai sans contenu n'y entre pas
-    #expect(s.meetsTarget == true)
+    // Amendé par le contrôleur (tour de correction 1) : 1 essai sans réponse sur 3 dépasse 10 %, verdict non établi.
+    #expect(s.meetsTarget == nil)
+}
+
+/// Jusqu'à 10 % d'essais sans réponse (sans contenu ou en échec), le verdict est rendu ; au-delà, il n'est pas
+/// établi. Les suspects de cache ne comptent pas dans cette part, mais dans le total des essais.
+@Test func verdictIsWithheldBeyondTenPercentUnanswered() {
+    let measured = Array(repeating: TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 0.3), count: 9)
+    let empty = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: nil, synthesis: nil)
+    let oneInTen = Reports.summarizeLatency(measured + [empty], target: 2.0)
+    #expect(oneInTen.runs == 10 && oneInTen.unanswered == 1 && oneInTen.meetsTarget == true)
+    let withFailure = Reports.summarizeLatency(measured + [empty], failed: 1, target: 2.0)
+    #expect(withFailure.runs == 11 && withFailure.unanswered == 2 && withFailure.meetsTarget == nil)
+    let twoFailures = Reports.summarizeLatency(measured, failed: 2, target: 2.0)
+    #expect(twoFailures.meetsTarget == nil && twoFailures.measured == 9)
+    let suspects = Reports.summarizeLatency(measured + [empty], suspect: 5, target: 2.0)
+    #expect(suspects.runs == 15 && suspects.measured == 9 && suspects.meetsTarget == true)
 }
 
 @Test func targetIsJudgedOnP90AndUnknownWhenNothingMeasured() {
@@ -126,13 +142,15 @@ private let streamed: [ChatDelta] = [.content("Quel est"), .content(" l'objectif
 private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
                     transcript: @escaping (AudioClip) async throws -> String = { _ in "je veux refactorer" },
                     chat: @escaping (Int) -> AsyncThrowingStream<ChatDelta, Error>,
-                    speak: @escaping (Int, String) async throws -> Data = { _, _ in Data([1]) },
+                    speak: @escaping (Int, String) async throws -> Data = { n, _ in Data("audio \(n)".utf8) },
                     nonce: @escaping () -> String = { UUID().uuidString },
+                    registry: SpeechRequestRegistry? = nil,
                     sent: Sent = Sent()) async throws -> [LatencyTrial] {
     var chatCalls = 0
     var speechCalls = 0
     return try await runLatencyTrials(
-        recordings: recordings, runs: runs, silence: 0.6, spaceOffset: 3, nonce: nonce,
+        recordings: recordings, runs: runs, silence: 0.6,
+        speechRegistry: try registry ?? SpeechRequestRegistry(file: nil, context: "t"), nonce: nonce,
         redact: { $0.replacingOccurrences(of: "gw.example.test", with: "<endpoint>") },
         transcribe: transcript,
         chat: { messages in
@@ -176,6 +194,46 @@ private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
     #expect(users == Array(repeating: "je veux refactorer", count: 5))
     #expect(inputs.count == 5 && Set(inputs).count == 5)
     #expect(inputs.allSatisfy { $0.trimmingCharacters(in: .whitespaces) == "Quel est l'objectif ?" })
+}
+
+/// Le registre des requêtes de synthèse est relu d'un lancement à l'autre dans le même dossier : deux lancements où le
+/// modèle répète la même phrase n'envoient jamais deux fois la même requête. Le fichier ne garde que des empreintes.
+@Test func speechRequestsStayUniqueAcrossLaunchesSharingAnOutputFolder() async throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("sv-registre-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent(LatencyCommand.speechRegistryFile)
+    let first = Sent(), second = Sent()
+    _ = try await trials(runs: 3, chat: { _ in stream(streamed) },
+                         registry: try SpeechRequestRegistry(file: file, context: "t|v"), sent: first)
+    _ = try await trials(runs: 3, chat: { _ in stream(streamed) },
+                         registry: try SpeechRequestRegistry(file: file, context: "t|v"), sent: second)
+    let all = first.speechInputs + second.speechInputs
+    #expect(all.count == 6 && Set(all).count == 6)
+    let stored = try String(contentsOf: file, encoding: .utf8)
+    #expect(stored.split(separator: "\n").count == 6 && !stored.contains("objectif"))
+    // Une autre voix est une autre requête : le registre ne la bloque pas.
+    let otherVoice = try SpeechRequestRegistry(file: file, context: "t|w")
+    #expect(try otherVoice.uniqueInput(for: "Quel est l'objectif ?") == "Quel est l'objectif ? ")
+}
+
+/// À la borne du nombre d'espaces, la commande s'arrête au lieu de répéter une requête.
+@Test func speechRegistryStopsAtTheSpaceBound() async throws {
+    let registry = try SpeechRequestRegistry(file: nil, context: "t", maxSpaces: 2)
+    await #expect(throws: LatencyError.speechVariantsExhausted(sentence: "Quel est l'objectif ?", maxSpaces: 2)) {
+        _ = try await trials(runs: 3, chat: { _ in stream(streamed) }, registry: registry)
+    }
+}
+
+/// Deux synthèses d'un même texte ont toujours rendu des octets différents : un audio identique octet pour octet à
+/// celui d'un essai précédent a la forme d'une réponse sortie d'un cache, et l'essai est mis à part.
+@Test func identicalSynthesisAudioIsFlaggedAsPossiblyCached() async throws {
+    let out = try await trials(runs: 3, chat: { _ in stream(streamed) },
+                               speak: { n, _ in Data(n == 2 ? "autre".utf8 : "même".utf8) })
+    guard case .measured = out[0].outcome, case .measured = out[1].outcome,
+          case .suspectCache(_, let reason) = out[2].outcome
+    else { Issue.record("classement inattendu : \(out.map(\.outcome))"); return }
+    #expect(reason.contains("essai 1"))
 }
 
 /// Un générateur d'aléa défaillant ne doit pas laisser partir deux requêtes identiques : la commande s'arrête.
@@ -272,10 +330,48 @@ private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
                                    detectorHop: 0.256)
     let md = Reports.latencyMarkdown(settings: settings, recordings: [recording], withoutSpeech: ["muet"], trials: out)
     #expect(md.contains("4 essai(s) = 1 mesuré(s) + 1 sans contenu + 1 en échec + 1 suspect(s) de cache"))
-    #expect(md.contains("p90 sur 1 essai(s) mesuré(s) sur 4"))
+    #expect(md.contains("sur 1 essai(s) mesuré(s) sur 4"))
+    #expect(md.contains("non établi") && md.contains("2 essai(s) sur 4 sans réponse"))   // 50 % sans réponse
+    #expect(md.contains("Verdict indicatif"))
     #expect(md.contains("constante ajoutée") && md.contains("en bloc"))
     #expect(md.contains("muet"))
     // 600 ms comptées par tranches de 256 ms, à partir de la fin de la première tranche silencieuse : (1 + 3) × 0,256.
-    #expect(md.contains("au plus tôt 1,02 s") && md.contains("au moins 0,42 s de plus"))
+    #expect(md.contains("au plus tôt 1,02 s") && md.contains("soit 0,42 s de plus"))
     #expect(!md.contains("gw.example.test"))
+}
+
+private let settings600 = LatencySettings(engine: "parakeet", chatModel: "m", ttsModel: "t", voice: "v", ttsExtra: [:],
+                                          silenceMs: 600, target: 2.0, maxTokens: 300, runs: 30, detector: "détecteur",
+                                          detectorHop: 0.256)
+
+private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) -> [LatencyTrial] {
+    let timing = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: synthesis)
+    return (1...count).map { LatencyTrial(number: $0, recording: "r", transcript: "t", sentence: "s", contentChunks: 3,
+                                          outcome: .measured(timing)) }
+        + (0..<suspects).map { LatencyTrial(number: count + 1 + $0, recording: "r", transcript: "t", sentence: "s",
+                                            contentChunks: 1, outcome: .suspectCache(timing, reason: "un morceau")) }
+}
+
+/// Le verdict de tête compte la détection en direct : le silence constant (0,6 s) est remplacé par le plancher du
+/// détecteur, (1 + ⌈0,6 / 0,256⌉) × 0,256 = 1,024 s. Le p90 brut suit, et la ligne dit quand les deux diffèrent.
+@Test func headlineVerdictCountsLiveDetectionAndSaysWhenRawDiffers() {
+    #expect(abs(settings600.liveSilence - 1.024) < 1e-9)
+    // Total brut 1,5 s, en direct 1,924 s : tenu des deux côtés.
+    let fast = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(30, synthesis: 0.3))
+    #expect(fast.contains("au lieu de 0,60 s) : objectif de 2,0 s tenu — p90 1,92 s sur 30 essai(s) mesuré(s) sur 30"))
+    #expect(fast.contains("p90 brut, silence constant de 600 ms : objectif de 2,0 s tenu — p90 1,50 s"))
+    #expect(!fast.contains("diffèrent") && !fast.contains("indicatif"))
+    // Total brut 1,7 s, en direct 2,124 s : le brut tiendrait, le verdict de tête ne tient pas.
+    let close = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(30, synthesis: 0.5))
+    #expect(close.contains("objectif de 2,0 s NON tenu — p90 2,12 s"))
+    #expect(close.contains("Les deux verdicts diffèrent"))
+}
+
+/// Sous 29 essais mesurés, la ligne de verdict elle-même le dit indicatif ; au-delà de 10 % de suspects de cache,
+/// une ligne le signale.
+@Test func fewMeasuredRunsGiveAnIndicativeVerdictAndManySuspectsAreFlagged() {
+    let few = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(28, synthesis: 0.3, suspects: 4))
+    let headline = few.split(separator: "\n").first { $0.hasPrefix("Verdict") }.map(String.init) ?? ""
+    #expect(headline.contains("tenu") && headline.contains("Verdict indicatif : 28 essai(s) mesuré(s), moins de 29"))
+    #expect(few.contains("4 essai(s) sur 32 suspect(s) de cache, plus de 10 %"))
 }

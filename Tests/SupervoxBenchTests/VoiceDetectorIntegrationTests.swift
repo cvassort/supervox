@@ -53,19 +53,17 @@ struct VoiceDetectorIntegrationTests {
     /// Chaque phrase, à chaque décalage du début de la voix sur la grille de 256 ms : l'écart entre la fin du dernier
     /// passage détecté et la fin de référence est affiché.
     ///
-    /// Mesuré (FluidAudio 0.18.3, 3 phrases × 4 décalages) : la fin détectée est toujours en retard, de +0,045 à
-    /// +0,314 s ; 5 cas sur 12 dépassent les 0,2 s du plan. Le retard vient de la grille de 256 ms et du modèle, qui
-    /// juge encore « voix » une partie de la tranche qui suit la fin. La borne du plan est gardée telle quelle, en
-    /// problème connu : la relâcher est une décision du plan, pas de ce test.
+    /// Borne retenue par le contrôleur (elle remplace les ±0,2 s du plan, que la grille de 256 ms ne permet pas de
+    /// tenir à toutes les phases) : la fin détectée n'est jamais en avance sur la vraie fin, ce qui couperait des
+    /// mots, et elle est en retard de moins de deux tranches du détecteur (0,512 s), ce qui exclut un passage fermé à
+    /// la fin du clip faute de silence suffisant. Mesuré (FluidAudio 0.18.3, 3 phrases × 4 décalages) : retard de
+    /// +0,045 à +0,314 s. La fin tombe aussi sur la grille du détecteur, ce qui exclut une marge ajoutée.
     ///
-    /// Ce dont dépend la coupe du clip, vérifié strictement : la fin n'est jamais avant la vraie fin (aux 10 ms près
-    /// de la référence), ce qui couperait des mots ; elle tombe sur la grille du détecteur, ce qui exclut une marge
-    /// ajoutée ; et le retard reste sous deux tranches, ce qui exclut un passage fermé à la fin du clip faute de
-    /// silence suffisant.
-    @Test func speechEndIsLocatedWithin200ms() async throws {
+    /// « Jamais en avance » tolère 10 ms : la fin de référence est elle-même placée à 8 ms près (seuils de −60 à
+    /// −40 dBFS), un écart de quelques millisecondes vers l'avant viendrait de la référence, pas du détecteur.
+    @Test func speechEndIsNeverEarlyAndLessThanTwoHopsLate() async throws {
         let detector = FluidVoiceDetector()
         let hop = FluidVoiceDetector.hopSeconds
-        var errors: [(case: String, error: Double)] = []
         for text in sentences {
             let speech = try spoken(text)
             for lead in leads {
@@ -79,11 +77,7 @@ struct VoiceDetectorIntegrationTests {
                 #expect(error >= -0.01, "fin détectée avant la vraie fin : \(label), écart \(error) s")
                 #expect(error < 2 * hop, "fin détectée plus de deux tranches après la vraie fin : \(label), écart \(error) s")
                 #expect(abs(end / hop - (end / hop).rounded()) < 1e-6, "fin hors de la grille du détecteur : \(label), \(end) s")
-                errors.append((label, error))
             }
-        }
-        withKnownIssue("fin de voix sur une grille de 256 ms, en retard de 0,045 à 0,314 s mesurés : la borne de 0,2 s du plan n'est pas tenue à toutes les phases") {
-            for (label, error) in errors { #expect(abs(error) <= 0.2, "\(label) : écart \(error) s") }
         }
     }
 }
