@@ -1,0 +1,281 @@
+import ArgumentParser
+import Foundation
+import SupervoxCore
+import SupervoxEngines
+
+// MARK: - Déroulé d'un passage
+
+/// Fait transcrire chaque phrase du corpus par chaque moteur, l'un après l'autre (jamais en parallèle : les durées
+/// seraient faussées par la concurrence). Rend les résultats par nom de moteur, dans l'ordre du corpus.
+///
+/// - L'audio de chaque phrase est lu, et la présence de voix décidée, une seule fois pour tous les moteurs : tous
+///   reçoivent exactement le même clip et la même décision.
+/// - Une phrase sans voix n'est envoyée à aucun moteur (`hasSpeech: false`).
+/// - Un audio illisible est un échec de la phrase pour chaque moteur.
+/// - `prepare()` n'est pas chronométré ; s'il échoue, chaque phrase parlée porte son erreur.
+/// - Seul l'appel à `transcribe` est chronométré, avec une horloge monotone.
+/// - `vocabulary` est passé tel quel à chaque appel : c'est la liste globale, jamais les termes d'une phrase.
+/// - Deux moteurs du même nom s'écraseraient dans le dictionnaire : c'est une erreur de programmation (`precondition`) ;
+///   la commande les refuse avant d'arriver ici.
+func runEngines(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
+                hasSpeech: (AudioClip) async -> Bool, vocabulary: [String] = [],
+                language: String = "fr", progress: (String) -> Void = { _ in }) async -> [String: [ItemResult]] {
+    let names = engines.map(\.name)
+    precondition(Set(names).count == names.count, "deux moteurs portent le même nom : \(names)")
+
+    enum Input {
+        case clip(AudioClip, hasSpeech: Bool)
+        case unreadable(String)
+    }
+    var inputs: [Input] = []
+    for item in corpus {
+        do {
+            let clip = try audio(item.id)
+            inputs.append(.clip(clip, hasSpeech: await hasSpeech(clip)))
+        } catch {
+            inputs.append(.unreadable("audio illisible : \(describe(error))"))
+        }
+    }
+
+    let clock = ContinuousClock()
+    var out: [String: [ItemResult]] = [:]
+    let pass = vocabulary.isEmpty ? "" : " (avec vocabulaire)"
+    for engine in engines {
+        progress("\(engine.name)\(pass) : chargement…")
+        var prepareFailure: String?
+        do { try await engine.prepare() } catch { prepareFailure = "chargement : \(describe(error))" }
+        if let prepareFailure { progress("\(engine.name) : \(prepareFailure)") }
+        else { progress("\(engine.name)\(pass) : transcription de \(corpus.count) phrase(s)…") }
+
+        var rows: [ItemResult] = []
+        for (item, input) in zip(corpus, inputs) {
+            switch input {
+            case .unreadable(let message):
+                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: message, hasSpeech: true))
+            case .clip(_, hasSpeech: false):
+                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: nil, hasSpeech: false))
+            case .clip(let clip, hasSpeech: true):
+                if let prepareFailure {
+                    rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: prepareFailure, hasSpeech: true))
+                    continue
+                }
+                let start = clock.now
+                do {
+                    let text = try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
+                    let elapsed = start.duration(to: clock.now)
+                    rows.append(ItemResult(id: item.id, hypothesis: text, seconds: seconds(elapsed), failure: nil, hasSpeech: true))
+                } catch {
+                    rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: describe(error), hasSpeech: true))
+                }
+            }
+        }
+        out[engine.name] = rows
+    }
+    return out
+}
+
+/// Une ligne du rapport : un moteur, mesuré avec ou sans le vocabulaire global.
+struct EngineRun {
+    let label: String
+    let results: [ItemResult]
+    let note: String?
+}
+
+/// Passage complet du banc. Chaque moteur est mesuré sans vocabulaire ; si une liste globale est donnée, chaque moteur
+/// qui l'accepte est mesuré une seconde fois avec elle, sous l'étiquette `<nom>+vocab`, et chaque moteur qui ne
+/// l'accepte pas porte une remarque. Lignes dans l'ordre des moteurs, la ligne `+vocab` juste après la sienne.
+func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
+                  hasSpeech: (AudioClip) async -> Bool, vocabulary: [String], language: String = "fr",
+                  progress: (String) -> Void = { _ in }) async -> [EngineRun] {
+    let plain = await runEngines(engines, corpus: corpus, audio: audio, hasSpeech: hasSpeech, vocabulary: [],
+                                 language: language, progress: progress)
+    let capable = vocabulary.isEmpty ? [] : engines.filter(\.acceptsVocabulary)
+    let withVocabulary = capable.isEmpty ? [:]
+        : await runEngines(capable, corpus: corpus, audio: audio, hasSpeech: hasSpeech, vocabulary: vocabulary,
+                           language: language, progress: progress)
+
+    var runs: [EngineRun] = []
+    for engine in engines {
+        let note = (!vocabulary.isEmpty && !engine.acceptsVocabulary)
+            ? "mesuré sans vocabulaire : l'adaptateur de ce moteur ne lui transmet pas de liste de termes" : nil
+        runs.append(EngineRun(label: engine.name, results: plain[engine.name] ?? [], note: note))
+        if let results = withVocabulary[engine.name] {
+            runs.append(EngineRun(label: engine.name + "+vocab", results: results, note: nil))
+        }
+    }
+    return runs
+}
+
+private func seconds(_ duration: Duration) -> Double {
+    Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+}
+
+/// Message d'erreur lisible : `description` du type s'il en a une, sinon la forme Swift du cas avec ses valeurs
+/// (ex. `http(status: 503, body: "…")`). On n'utilise pas `localizedDescription` : pour une erreur Swift sans
+/// traduction, il rend « The operation couldn't be completed » et perd le détail.
+func describe(_ error: any Error) -> String {
+    String(describing: error)
+}
+
+// MARK: - Entrées de la commande
+
+enum TranscribeError: Error, Equatable, CustomStringConvertible {
+    case noEngine
+    case unknownEngine(String)
+    case duplicateEngine(String)
+    case missingAudio([String])
+    case unreadableAudio(id: String, reason: String)
+    case emptyAudio(String)
+    case missingEndpointModel
+    case emptyVocabulary(String)
+
+    var description: String {
+        switch self {
+        case .noEngine: "aucun moteur demandé"
+        case .unknownEngine(let name): "moteur inconnu : « \(name) » (attendus : \(EngineList.known.joined(separator: ", ")))"
+        case .duplicateEngine(let name): "moteur demandé deux fois : « \(name) »"
+        case .missingAudio(let ids): "aucun fichier audio pour \(ids.count) phrase(s) du corpus : \(ids.joined(separator: ", "))"
+        case .unreadableAudio(let id, let reason): "audio de « \(id) » illisible : \(reason)"
+        case .emptyAudio(let id): "audio de « \(id) » vide"
+        case .missingEndpointModel: "le moteur endpoint demande --endpoint-model"
+        case .emptyVocabulary(let path): "le fichier de vocabulaire \(path) ne contient aucun terme"
+        }
+    }
+}
+
+/// Liste `--engines` : noms séparés par des virgules, sans doublon (un doublon écraserait les résultats de l'autre).
+enum EngineList {
+    static let known = ["whisperkit", "parakeet", "apple", "endpoint"]
+
+    static func parse(_ text: String) throws -> [String] {
+        let names = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !names.isEmpty else { throw TranscribeError.noEngine }
+        var seen: Set<String> = []
+        for name in names {
+            guard known.contains(name) else { throw TranscribeError.unknownEngine(name) }
+            guard seen.insert(name).inserted else { throw TranscribeError.duplicateEngine(name) }
+        }
+        return names
+    }
+}
+
+/// Fichier `--vocabulary` : un terme par ligne ; lignes vides et lignes commençant par `#` ignorées ; espaces rognés ;
+/// doublons retirés (premier gardé).
+enum VocabularyFile {
+    static func parse(_ contents: String) -> [String] {
+        var terms: [String] = []
+        for line in contents.split(omittingEmptySubsequences: true, whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" }) {
+            let term = line.trimmingCharacters(in: .whitespaces)
+            if term.isEmpty || term.hasPrefix("#") || terms.contains(term) { continue }
+            terms.append(term)
+        }
+        return terms
+    }
+}
+
+/// Audio du corpus : `<dossier>/<id>.wav` pour chaque phrase.
+enum CorpusAudio {
+    /// Lit tous les fichiers avant tout chargement de modèle. Un identifiant sans fichier arrête tout (liste complète
+    /// des manquants) : un corpus incomplet comparerait les moteurs sur autre chose que ce qui a été déclaré.
+    /// Un WAV qui n'est pas à 16 kHz est rééchantillonné ici, une fois, pour tous les moteurs.
+    static func load(_ corpus: [CorpusItem], from directory: URL) throws -> [String: AudioClip] {
+        let files = corpus.map { ($0.id, directory.appendingPathComponent($0.id + ".wav")) }
+        let missing = files.filter { !FileManager.default.fileExists(atPath: $0.1.path) }.map(\.0)
+        guard missing.isEmpty else { throw TranscribeError.missingAudio(missing) }
+
+        var clips: [String: AudioClip] = [:]
+        for (id, url) in files {
+            let raw: AudioClip
+            do { raw = try WavFile.read(url) } catch { throw TranscribeError.unreadableAudio(id: id, reason: describe(error)) }
+            guard !raw.samples.isEmpty else { throw TranscribeError.emptyAudio(id) }
+            let clip = Resampler.resample(raw, to: transcriberSampleRate)
+            guard !clip.samples.isEmpty else {
+                throw TranscribeError.unreadableAudio(id: id, reason: "rééchantillonnage à 16 kHz impossible")
+            }
+            clips[id] = clip
+        }
+        return clips
+    }
+}
+
+// MARK: - Commande
+
+struct TranscribeCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "transcribe",
+        abstract: "Fait transcrire les enregistrements du corpus par chaque moteur et compare les taux d'erreur."
+    )
+
+    /// Le banc mesure la dictée en français ; la locale d'Apple suit.
+    static let language = "fr"
+    static let appleLocale = "fr-FR"
+
+    @Option(name: .long, help: "Fichier du corpus (TSV : id, texte, termes).")
+    var corpus: String
+
+    @Option(name: .long, help: "Dossier des enregistrements : <dossier>/<id>.wav.")
+    var audio: String
+
+    @Option(name: .long, help: "Moteurs, séparés par des virgules : whisperkit, parakeet, apple, endpoint.")
+    var engines = "whisperkit,parakeet,apple"
+
+    @Option(name: .long, help: "Identifiant du modèle de transcription de l'endpoint (obligatoire avec le moteur endpoint).")
+    var endpointModel: String?
+
+    @Option(name: .long, help: "Variante du modèle WhisperKit.")
+    var whisperkitModel = "large-v3-v20240930_turbo"
+
+    @Option(name: .long, help: "Vocabulaire global, un terme par ligne. Les moteurs qui l'acceptent sont mesurés sans puis avec.")
+    var vocabulary: String?
+
+    @Option(name: .long, help: "Dossier de sortie : transcription.md et transcription.json.")
+    var out: String
+
+    func run() async throws {
+        // Tout ce qui peut être refusé l'est avant de charger le moindre modèle.
+        let names = try EngineList.parse(engines)
+        let model = endpointModel?.trimmingCharacters(in: .whitespaces) ?? ""
+        if names.contains("endpoint") && model.isEmpty { throw TranscribeError.missingEndpointModel }
+        let items = try Corpus.load(from: URL(fileURLWithPath: corpus))
+        var terms: [String] = []
+        if let vocabulary {
+            terms = VocabularyFile.parse(try String(contentsOf: URL(fileURLWithPath: vocabulary), encoding: .utf8))
+            if terms.isEmpty { throw TranscribeError.emptyVocabulary(vocabulary) }
+        }
+        let clips = try CorpusAudio.load(items, from: URL(fileURLWithPath: audio, isDirectory: true))
+        let transcribers: [any Transcriber] = try names.map { name in
+            switch name {
+            case "whisperkit": WhisperKitTranscriber(model: whisperkitModel)
+            case "parakeet": ParakeetTranscriber()
+            case "apple": AppleSpeechTranscriber(locale: Self.appleLocale)
+            default:
+                EndpointTranscriber(client: OpenAICompatibleClient(config: try EndpointConfig.fromEnvironment(
+                    ProcessInfo.processInfo.environment)), model: model)
+            }
+        }
+
+        let runs = await runBenchmark(
+            transcribers, corpus: items,
+            audio: { id in
+                guard let clip = clips[id] else { throw TranscribeError.missingAudio([id]) }
+                return clip
+            },
+            hasSpeech: { _ in true },   // branché sur la détection de voix à la tâche 7
+            vocabulary: terms, language: Self.language,
+            progress: { print($0) }
+        )
+
+        let directory = URL(fileURLWithPath: out, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let markdown = Reports.markdownReport(corpus: items, runs: runs, vocabulary: terms)
+        try markdown.write(to: directory.appendingPathComponent("transcription.md"), atomically: true, encoding: .utf8)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let json = TranscriptionJSON(language: Self.language, vocabulary: terms, corpus: items, runs: runs)
+        try encoder.encode(json).write(to: directory.appendingPathComponent("transcription.json"), options: .atomic)
+
+        print("")
+        print(Reports.markdownTable(Reports.summaries(corpus: items, runs: runs)))
+        print("Rapport : \(directory.appendingPathComponent("transcription.md").path)")
+    }
+}

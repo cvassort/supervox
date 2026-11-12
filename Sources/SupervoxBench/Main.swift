@@ -1,6 +1,7 @@
 import ArgumentParser
 
 @main
-struct BenchCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "supervox-bench", subcommands: [RecordCommand.self])
+struct BenchCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(commandName: "supervox-bench",
+                                                    subcommands: [RecordCommand.self, TranscribeCommand.self])
 }
