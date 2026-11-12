@@ -12,3 +12,7 @@ build/
 DerivedData/
 xcuserdata/
 *.xcuserstate
+
+# Dossiers d'outils locaux (mémoire de session, navigateur automatisé)
+.memsearch/
+.playwright-mcp/
