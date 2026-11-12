@@ -1,0 +1,14 @@
+data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0,"logprobs":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk","prompt_text":null,"prompt_token_ids":null}
+
+data: {"choices":[{"delta":{"content":"un"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":", deux, trois,"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":" quatre, cinq"},"finish_reason":"stop","index":0,"logprobs":null,"stop_reason":106,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk","usage":{"completion_tokens":10,"prompt_tokens":31,"total_tokens":41}}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0,"logprobs":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk","usage":{"completion_tokens":10,"prompt_tokens":31,"total_tokens":41}}
+
+data: [DONE]
+

@@ -1,0 +1,34 @@
+data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0,"logprobs":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk","prompt_text":null,"prompt_token_ids":null}
+
+data: {"choices":[{"delta":{"reasoning":"Here"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"'s a thinking process:\n\n1.  **An"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"alyze User Input:**\n   - **"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"Language:** French\n   - **Task"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":":** Count"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" from one"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" to five\n   - **Format:** All"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" in lowercase?"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" Wait, \""},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"en toutes lettres\" means \"in"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" full"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" words\" (as"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" opposed"},"finish_reason":"length","index":0,"logprobs":null,"stop_reason":null,"token_ids":null}],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk"}
+
+data: {"choices":[],"created":1794495100,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk","usage":{"completion_tokens":60,"prompt_tokens":29,"total_tokens":89}}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0,"logprobs":null}],"created":1794495101,"id":"requete-test","model":"modele-test","object":"chat.completion.chunk","usage":{"completion_tokens":0,"prompt_tokens":29,"reasoning_tokens":60,"total_tokens":89}}
+
+data: [DONE]
+

@@ -32,7 +32,11 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
-        .testTarget(name: "SupervoxCoreTests", dependencies: ["SupervoxCore"]),
+        .testTarget(
+            name: "SupervoxCoreTests",
+            dependencies: ["SupervoxCore"],
+            resources: [.copy("Fixtures")]
+        ),
         .testTarget(name: "SupervoxBenchTests", dependencies: ["SupervoxBench", "SupervoxEngines"]),
     ]
 )
