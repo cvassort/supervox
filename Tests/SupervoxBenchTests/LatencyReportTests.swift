@@ -40,6 +40,41 @@ import Testing
     #expect(s.meetsTarget == nil)
 }
 
+/// Test du brief, amendé à la règle binomiale. Il manquait au tour 2 (supprimé par erreur au lieu d'être amendé) ;
+/// rétabli au tour 3. Totaux : rapide 1,5 s, lent 2,7 s, cible 2,0 s.
+@Test func targetIsJudgedOnTheShareOfMissedTurnsAndUnknownWhenNothingMeasured() {
+    let fast = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 0.3)
+    let slow = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 1.5)
+    // 2 lents sur 10 : P(X ≤ 2) = 0,930 et P(X ≥ 2) = 0,264 pour Binomiale(10 ; 0,1) → non établi.
+    let twoSlow = Reports.summarizeLatency(Array(repeating: slow, count: 2) + Array(repeating: fast, count: 8), target: 2.0)
+    #expect(twoSlow.missed == 2 && twoSlow.judged == 10)
+    #expect(twoSlow.meetsTarget == nil)
+    // 8 lents sur 10 : P(X ≥ 8) = 3,7 × 10⁻⁷ → non tenu.
+    let eightSlow = Reports.summarizeLatency(Array(repeating: slow, count: 8) + Array(repeating: fast, count: 2), target: 2.0)
+    #expect(eightSlow.missed == 8 && eightSlow.judged == 10)
+    #expect(eightSlow.meetsTarget == false)
+    // Rien de mesuré : ni tenu ni non tenu.
+    let nothing = Reports.summarizeLatency([], target: 2.0)
+    #expect(nothing.meetsTarget == nil)
+    #expect(nothing.judged == 0 && nothing.missed == 0)
+    let text = Reports.latencyVerdict(settings: settings600, trials: [])
+    #expect(text.contains("Verdict, détection de fin de tour en direct comptée"))
+    #expect(text.components(separatedBy: "objectif de 2,0 s non établi — aucun essai jugé.").count == 3)  // les deux verdicts
+}
+
+/// Série entièrement suspecte de cache : aucun essai n'est jugé, le rapport le dit et ne conclut pas.
+@Test func allSuspectSeriesIsReportedAsNotJudged() {
+    let timing = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 0.3)
+    let suspects = (1...5).map { LatencyTrial(number: $0, recording: "r", transcript: "t", sentence: "s", contentChunks: 1,
+                                              outcome: .suspectCache(timing, reason: "un morceau")) }
+    let md = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [],
+                                     trials: suspects)
+    #expect(md.contains("5 essai(s) = 0 mesuré(s) + 0 sans contenu + 0 en échec + 5 suspect(s) de cache"))
+    #expect(md.components(separatedBy: "objectif de 2,0 s non établi — aucun essai jugé.").count == 3)
+    #expect(!md.contains("s tenu") && !md.contains("NON tenu"))
+    #expect(md.contains("Attention : 5 essai(s) sur 5 suspect(s) de cache"))
+}
+
 // MARK: - Test binomial
 
 /// Référence indépendante de l'implémentation : sommes directes de C(n, k) pᵏ (1 − p)ⁿ⁻ᵏ, coefficient calculé par
@@ -450,7 +485,10 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     let ten = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(10, synthesis: 0.3))
     #expect(ten.contains("non établi — 0 essai(s) au-dessus de la cible ou sans réponse sur 10 jugé(s)"))
     #expect(ten.contains("« tenu » est impossible, même sans raté (il faut au moins 29 essais jugés)"))
-    #expect(short.contains("avec 43 essai(s) jugé(s), « tenu » exige au plus \(Reports.verdictThresholds(judged: 43).maxMissedForMet!) raté(s)"))
+    // Seuils pour n = 43, calculés à part (Python, fractions exactes) et non lus dans l'implémentation :
+    // P(X ≤ 0) = 0,0108 et P(X ≤ 1) = 0,0623 → « tenu » au plus 0 raté ; P(X ≥ 9) = 0,0244 et P(X ≥ 8) = 0,0607
+    // → « non tenu » à partir de 9.
+    #expect(short.contains("avec 43 essai(s) jugé(s), « tenu » exige au plus 0 raté(s), « non tenu » au moins 9 raté(s)."))
 }
 
 /// Le plancher en direct ne fait qu'allonger les totaux : le verdict de tête n'est jamais plus favorable que le brut.

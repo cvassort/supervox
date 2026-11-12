@@ -185,9 +185,9 @@ extension Reports {
             let basis = "\(s.missed) essai(s) au-dessus de la cible ou sans réponse sur \(s.judged) jugé(s)"
             switch s.meetsTarget {
             case true?:
-                return "objectif de \(target) s tenu — \(basis) ; à 95 %, moins de \(share) % des tours ratent la cible."
+                return "objectif de \(target) s tenu — \(basis) ; à 95 %, si les essais étaient indépendants, moins de \(share) % des tours ratent la cible."
             case false?:
-                return "objectif de \(target) s NON tenu — \(basis) ; à 95 %, plus de \(share) % des tours ratent la cible."
+                return "objectif de \(target) s NON tenu — \(basis) ; à 95 %, si les essais étaient indépendants, plus de \(share) % des tours ratent la cible."
             case nil:
                 guard s.judged > 0 else { return "objectif de \(target) s non établi — aucun essai jugé." }
                 let limits = verdictThresholds(judged: s.judged)
@@ -215,7 +215,10 @@ extension Reports {
         }
         lines.append(rawLine)
         lines.append("Règle : test binomial exact unilatéral à 95 % sur la part de tours ratés (total au-dessus de la "
-                     + "cible, sans contenu ou en échec), tolérance \(share) % ; les suspects de cache ne sont pas jugés.")
+                     + "cible, sans contenu ou en échec), tolérance \(share) % ; les suspects de cache ne sont pas jugés. "
+                     + "Le niveau de 95 % suppose des essais indépendants : ici ils s'enchaînent, à tour de rôle sur "
+                     + "quelques enregistrements, contre un endpoint dont la charge varie, et cette hypothèse est "
+                     + "probablement violée ; le niveau réel est inconnu.")
         if live.unanswered > 0 {
             lines.append("\(live.unanswered) essai(s) sans réponse (\(live.noContent) sans contenu, \(live.failed) en "
                          + "échec), comptés comme ratés dans le verdict.")
@@ -254,8 +257,8 @@ extension Reports {
             + "synthèse `\(settings.ttsModel)`, voix `\(settings.voice)`"
         let extras = settings.ttsExtra.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         text += extras.isEmpty ? "" : " (\(extras.joined(separator: ", ")))"
-        text += " ; silence de fin de tour \(settings.silenceMs) ms ; objectif \(decimal(settings.target, digits: 1)) s "
-            + "au 90e centile. \(settings.runs) essai(s) à tour de rôle sur \(recordings.count) enregistrement(s) avec voix.\n\n"
+        text += " ; silence de fin de tour \(settings.silenceMs) ms ; objectif : au plus un tour sur dix au-dessus de "
+            + "\(decimal(settings.target, digits: 1)) s (test binomial, voir le verdict). \(settings.runs) essai(s) à tour de rôle sur \(recordings.count) enregistrement(s) avec voix.\n\n"
 
         if let stopReason {
             text += "**Lancement arrêté avant la fin** : \(trials.count) essai(s) faits sur \(settings.runs) prévus. "
@@ -266,10 +269,11 @@ extension Reports {
         text += "\n## Médianes par maillon (essais mesurés)\n\n| Maillon | Médiane (s) |\n|---|---|\n"
         for name in TurnTiming.links { text += "| \(name) | \(s(raw.medianByLink[name])) |\n" }
         text += "| **total, silence constant** | \(s(raw.medianTotal)) |\n"
-        text += "| **total, silence constant, 90e centile** | \(s(raw.p90Total)) |\n"
+        text += "| **total, silence constant, 90e centile (descriptif, pas le verdict)** | \(s(raw.p90Total)) |\n"
         text += "| **total, détection en direct comptée** | \(s(live.medianTotal)) |\n"
-        text += "| **total, détection en direct comptée, 90e centile** | \(s(live.p90Total)) |\n"
-        text += "\nLa somme des médianes par maillon n'est pas la médiane du total.\n"
+        text += "| **total, détection en direct comptée, 90e centile (descriptif, pas le verdict)** | \(s(live.p90Total)) |\n"
+        text += "\nChiffres descriptifs : le verdict ne porte pas sur ce 90e centile mais sur le nombre de tours ratés. "
+            + "La somme des médianes par maillon n'est pas la médiane du total.\n"
 
         text += "\n## Ce qui est mesuré\n\n"
         text += "Pour chaque essai, sur un enregistrement : (1) la fin de la voix est repérée par le détecteur et le "
@@ -317,7 +321,7 @@ extension Reports {
         text += "- L'endpoint est partagé et sa charge varie d'une heure à l'autre : **sens inconnu**, les chiffres "
             + "valent pour le moment de la mesure.\n"
         text += "- Un modèle qui réfléchit avant de répondre peut épuiser les \(settings.maxTokens) jetons sans rien "
-            + "dire : l'essai est alors « sans contenu », hors des centiles mais compté dans la part sans réponse. "
+            + "dire : l'essai est alors « sans contenu », hors des centiles mais compté comme raté. "
             + "Si ce plafond coupe des réponses qui seraient arrivées tard, réalité **plus lente**.\n"
         text += "- **Taille de l'échantillon et règle du verdict** : le verdict est un test binomial exact unilatéral "
             + "à 95 % sur la part de tours ratés (au-dessus de la cible, sans contenu ou en échec), tolérance "

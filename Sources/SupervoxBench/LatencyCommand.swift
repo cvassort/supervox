@@ -173,7 +173,7 @@ final class SpeechRequestRegistry {
             var line = digest + "\n"
             if end > 0 {
                 try handle.seek(toOffset: end - 1)
-                if handle.readData(ofLength: 1) != Data("\n".utf8) { line = "\n" + line }
+                if try handle.read(upToCount: 1) != Data("\n".utf8) { line = "\n" + line }
                 try handle.seek(toOffset: end)
             }
             try handle.write(contentsOf: Data(line.utf8))
@@ -194,7 +194,8 @@ struct LatencyTrials {
 /// 2. `transcription` : durée de `transcribe` sur le clip coupé ; un texte vide arrête l'essai (rien à envoyer) ;
 /// 3. `firstSentence` : de l'appel à `chat` (la requête part à l'appel) à la première phrase complète ;
 /// 4. `synthesis` : durée de `speak` sur cette phrase, suivie des espaces que choisit `speechRegistry` pour que la
-///    requête n'ait jamais été envoyée : ce qui est dit ne change pas.
+///    requête n'ait jamais été envoyée (sondé : l'audio garde la même taille en octets, pas les mêmes octets ; ce qui
+///    est dit n'a pas été réécouté).
 ///
 /// Chaque requête de chat porte une référence `nonce()` dans son message système ; une requête de chat identique à
 /// une précédente arrête tout (`duplicateRequest`) : elle pourrait sortir du cache. Un essai est « suspect de cache »
@@ -368,7 +369,7 @@ struct LatencyCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Nombre total d'essais, répartis à tour de rôle sur les enregistrements.")
     var runs = 40
 
-    @Option(name: .long, help: "Objectif, en secondes, jugé sur le 90e centile.")
+    @Option(name: .long, help: "Objectif, en secondes : au plus un tour sur dix au-dessus (test binomial exact à 95 %).")
     var target = 2.0
 
     @Option(name: .long, help: "Variante du modèle WhisperKit.")
