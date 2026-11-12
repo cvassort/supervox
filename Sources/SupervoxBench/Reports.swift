@@ -37,18 +37,31 @@ struct EngineSummary: Equatable, Codable {
     var termRecall: Double? { termsTotal > 0 ? Double(termsFound) / Double(termsTotal) : nil }
 }
 
+/// Avancement d'un rapport écrit pendant le lancement : `done` passes ou essais faits sur `planned` prévus.
+struct ReportProgress: Equatable {
+    let done: Int
+    let planned: Int
+}
+
 /// Contenu de `transcription.json` : les synthèses et les résultats bruts de chaque ligne.
+/// `complete` est faux tant que le lancement n'est pas allé au bout (rapport écrit après chaque passe).
 struct TranscriptionJSON: Encodable {
     struct Run: Encodable {
         let label: String
         let summary: EngineSummary
         let items: [ItemResult]
     }
+    let complete: Bool
+    let passesDone: Int
+    let passesPlanned: Int
     let language: String
     let vocabulary: [String]
     let runs: [Run]
 
-    init(language: String, vocabulary: [String], corpus: [CorpusItem], runs: [EngineRun]) {
+    init(language: String, vocabulary: [String], corpus: [CorpusItem], runs: [EngineRun], progress: ReportProgress? = nil) {
+        self.complete = progress == nil
+        self.passesDone = progress?.done ?? runs.count
+        self.passesPlanned = progress?.planned ?? runs.count
         self.language = language
         self.vocabulary = vocabulary
         self.runs = zip(runs, Reports.summaries(corpus: corpus, runs: runs)).map {
@@ -145,8 +158,11 @@ enum Reports {
 
     /// Rapport complet : le tableau, puis pour chaque ligne la liste des phrases fautives (référence et transcription),
     /// des échecs et des phrases exclues.
-    static func markdownReport(corpus: [CorpusItem], runs: [EngineRun], vocabulary: [String]) -> String {
+    /// `progress` : rapport écrit en cours de lancement, signalé en tête.
+    static func markdownReport(corpus: [CorpusItem], runs: [EngineRun], vocabulary: [String],
+                               progress: ReportProgress? = nil) -> String {
         var text = "# Transcription\n\n"
+        if let progress { text += partialBanner(progress, unit: "passe(s)") }
         text += "\(corpus.count) phrase(s). "
         text += vocabulary.isEmpty
             ? "Sans vocabulaire global.\n\n"
@@ -209,6 +225,13 @@ enum Reports {
             summary.note = run.note
             return summary
         }
+    }
+
+    /// Mention de tête d'un rapport partiel.
+    static func partialBanner(_ progress: ReportProgress, unit: String) -> String {
+        "**Rapport partiel** : \(progress.done) \(unit) sur \(progress.planned) écrite(s) à ce stade. Le lancement est "
+            + "en cours, ou s'est arrêté avant la fin (Ctrl-C, panne) : tout ce qui suit ne porte que sur ce qui est "
+            + "fait.\n\n"
     }
 
     static func oneLine(_ text: String) -> String {

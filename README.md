@@ -49,6 +49,17 @@ swift run supervox-bench <commande> --help
   global (même format et mêmes contrôles que dans `transcribe`) ; le rapport nomme la configuration mesurée
   (`parakeet` ou `parakeet+vocab`). Refusé avec `apple`, qui n'accepte pas de vocabulaire.
 
+Pannes et interruptions :
+
+- chaque requête à l'endpoint est abandonnée après `--request-timeout` secondes (30 par défaut) sans aucune donnée
+  reçue : c'est un délai d'inactivité, pas une durée totale. La phrase (ou l'essai) est alors en échec.
+- dans `transcribe`, un moteur est arrêté après 3 échecs de transport consécutifs (endpoint injoignable ou muet) :
+  ses phrases restantes, et sa passe avec vocabulaire, sont en échec avec cette raison ; les moteurs suivants passent.
+- les rapports sont réécrits au fil de l'eau, après chaque passe de moteur (`transcribe`) ou chaque essai
+  (`latency`), avec la mention « Rapport partiel » en tête (et `"complete": false` dans le JSON) tant que le
+  lancement n'est pas allé au bout. Un Ctrl-C laisse sur le disque le dernier rapport partiel ; le relancer dans le
+  même dossier demande `--overwrite`.
+
 Dossier de sortie (`--out`), contrôlé avant tout chargement de modèle et tout appel réseau :
 
 - `transcribe` et `latency` refusent d'écrire sur un rapport existant (`transcription.md`, `transcription.json`,

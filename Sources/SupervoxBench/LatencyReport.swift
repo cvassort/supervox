@@ -1,4 +1,5 @@
 import Foundation
+import SupervoxCore
 
 // MARK: - Durées d'un tour
 
@@ -73,6 +74,8 @@ struct LatencySettings {
     let detector: String
     /// Pas du détecteur de voix, en secondes.
     let detectorHop: Double
+    /// Délai d'inactivité de chaque requête à l'endpoint, en secondes.
+    var requestTimeout: Double = OpenAICompatibleClient.defaultRequestTimeout
 
     var silence: Double { Double(silenceMs) / 1000 }
 
@@ -247,8 +250,10 @@ extension Reports {
     }
 
     /// Rapport `latence.md`.
+    /// `progress` : rapport écrit en cours de lancement, signalé en tête.
     static func latencyMarkdown(settings: LatencySettings, recordings: [LatencyRecording], withoutSpeech: [String],
-                                trials: [LatencyTrial], stopReason: String? = nil) -> String {
+                                trials: [LatencyTrial], stopReason: String? = nil,
+                                progress: ReportProgress? = nil) -> String {
         let counts = TrialCounts(trials)
         let raw = counts.summary(target: settings.target)
         let live = counts.summary(target: settings.target, silence: settings.liveSilence)
@@ -267,6 +272,7 @@ extension Reports {
         text += " ; silence de fin de tour \(settings.silenceMs) ms ; objectif : au plus un tour sur dix au-dessus de "
             + "\(decimal(settings.target, digits: 1)) s (test binomial, voir le verdict). \(settings.runs) essai(s) à tour de rôle sur \(recordings.count) enregistrement(s) avec voix.\n\n"
 
+        if let progress { text += partialBanner(progress, unit: "essai(s)") }
         if let stopReason {
             text += "**Lancement arrêté avant la fin** : \(trials.count) essai(s) faits sur \(settings.runs) prévus. "
                 + "Cause : \(oneLine(stopReason)). Le verdict ne porte que sur les essais faits.\n\n"
@@ -290,7 +296,9 @@ extension Reports {
             + "préchauffé hors chrono) ; (4) **première phrase** : de l'envoi de la requête au modèle (consigne "
             + "d'intervieweur et transcription) à la première phrase complète rendue par le découpeur en phrases ; "
             + "(5) **synthèse** : durée de l'appel de synthèse de cette phrase, jusqu'au dernier octet de l'audio. "
-            + "Les étapes s'enchaînent strictement, l'une après l'autre, et les essais aussi.\n\n"
+            + "Les étapes s'enchaînent strictement, l'une après l'autre, et les essais aussi. Chaque requête à "
+            + "l'endpoint est abandonnée après \(Int(settings.requestTimeout.rounded())) s sans aucune donnée reçue "
+            + "(délai d'inactivité, pas une durée totale ; --request-timeout) : l'essai est alors en échec.\n\n"
         text += "Détecteur de voix : \(settings.detector).\n"
 
         text += "\n## Limites\n\nChaque limite dit dans quel sens la réalité s'écarte du chiffre de tête.\n\n"

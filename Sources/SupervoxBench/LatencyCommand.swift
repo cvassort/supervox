@@ -205,18 +205,25 @@ struct LatencyTrials {
 /// requête de chat en double, la borne d'espaces du registre atteinte ou une erreur d'écriture du registre arrêtent
 /// le déroulé : les essais déjà faits sont rendus avec la cause de l'arrêt (`stopReason`), l'essai en cours est
 /// abandonné. L'annulation de la tâche, elle, est levée.
+/// `afterTrial` reçoit tous les essais faits, après chaque essai classé : la commande réécrit son rapport.
 func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double, speechRegistry: SpeechRequestRegistry,
                       nonce: () -> String, redact: (String) -> String,
                       transcribe: (AudioClip) async throws -> String,
                       chat: ([ChatMessage]) -> AsyncThrowingStream<ChatDelta, Error>,
                       speak: (String) async throws -> Data,
-                      progress: (String) -> Void = { _ in }) async throws -> LatencyTrials {
+                      progress: (String) -> Void = { _ in },
+                      afterTrial: ([LatencyTrial]) -> Void = { _ in }) async throws -> LatencyTrials {
     precondition(!recordings.isEmpty && runs > 0, "au moins un enregistrement et un essai")
     let clock = ContinuousClock()
     var sentChats: Set<String> = []
     var audioSeen: [String: Int] = [:]   // empreinte de l'audio → numéro de l'essai
     var stopReason: String?
     var trials: [LatencyTrial] = []
+    // Seul point d'ajout d'un essai : chacun est rendu à `afterTrial` dès qu'il est classé, hors chrono.
+    func keep(_ trial: LatencyTrial) {
+        trials.append(trial)
+        afterTrial(trials)
+    }
 
     for index in 0..<runs {
         let recording = recordings[index % recordings.count]
@@ -236,12 +243,12 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
         do {
             transcript = try await transcribe(recording.clip).trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            trials.append(trial(nil, nil, .failed(stage: .transcription, message: try failure(error))))
+            keep(trial(nil, nil, .failed(stage: .transcription, message: try failure(error))))
             continue
         }
         let transcription = seconds(start.duration(to: clock.now))
         guard !transcript.isEmpty else {
-            trials.append(trial("", nil, .failed(stage: .transcription, message: "transcription vide")))
+            keep(trial("", nil, .failed(stage: .transcription, message: "transcription vide")))
             continue
         }
 
@@ -259,15 +266,15 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
                                                       ChatMessage(role: "user", content: transcript)]))
         } catch EndpointError.malformedResponse {
             let after = decimal(seconds(start.duration(to: clock.now)))
-            trials.append(trial(transcript, nil, .noContent(noContent, reason: "flux vide, sans réponse ni réflexion (après \(after) s)")))
+            keep(trial(transcript, nil, .noContent(noContent, reason: "flux vide, sans réponse ni réflexion (après \(after) s)")))
             continue
         } catch {
-            trials.append(trial(transcript, nil, .failed(stage: .chat, message: try failure(error))))
+            keep(trial(transcript, nil, .failed(stage: .chat, message: try failure(error))))
             continue
         }
         let firstSentence = seconds(start.duration(to: clock.now))
         guard let first else {
-            trials.append(trial(transcript, nil, .noContent(noContent, reason: "réflexion seule, aucun texte de réponse (après \(decimal(firstSentence)) s)")))
+            keep(trial(transcript, nil, .noContent(noContent, reason: "réflexion seule, aucun texte de réponse (après \(decimal(firstSentence)) s)")))
             continue
         }
 
@@ -284,7 +291,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
         do {
             audio = try await speak(input)
         } catch {
-            trials.append(trial(transcript, first, .failed(stage: .synthesis, message: try failure(error))))
+            keep(trial(transcript, first, .failed(stage: .synthesis, message: try failure(error))))
             continue
         }
         let timing = TurnTiming(silence: silence, transcription: transcription, firstSentence: firstSentence,
@@ -299,7 +306,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
             outcome = .measured(timing)
         }
         audioSeen[audioDigest] = audioSeen[audioDigest] ?? number
-        trials.append(trial(transcript, first, outcome))
+        keep(trial(transcript, first, outcome))
         progress("essai \(number)/\(runs) (\(recording.id)) : \(decimal(timing.total ?? 0)) s")
     }
     return LatencyTrials(trials: trials, stopReason: stopReason)
@@ -385,6 +392,9 @@ struct LatencyCommand: AsyncParsableCommand {
 
     static let reportFile = "latence.md"
 
+    @Option(name: .long, help: "Délai d'inactivité de chaque requête à l'endpoint, en secondes (sans aucune donnée reçue) : l'essai est alors en échec.")
+    var requestTimeout = OpenAICompatibleClient.defaultRequestTimeout
+
     /// `key=value` ; la clé est non vide, la valeur peut l'être.
     static func parseExtras(_ items: [String]) throws -> [String: String] {
         var extras: [String: String] = [:]
@@ -418,6 +428,7 @@ struct LatencyCommand: AsyncParsableCommand {
         guard runs > 0 else { throw LatencyError.invalidOption("--runs doit être positif") }
         guard silenceMs >= 0 else { throw LatencyError.invalidOption("--silence-ms ne peut pas être négatif") }
         guard target > 0 else { throw LatencyError.invalidOption("--target doit être positif") }
+        guard requestTimeout > 0 else { throw LatencyError.invalidOption("--request-timeout doit être positif") }
         let extras = try Self.parseExtras(ttsExtra)
         let config = try EndpointConfig.fromEnvironment(environment)
         let redact = endpointRedactor(config)
@@ -469,8 +480,14 @@ struct LatencyCommand: AsyncParsableCommand {
             file: outDirectory.appendingPathComponent(Self.speechRegistryFile),
             context: [ttsModel, voice, Self.speechFormat, extrasKey].joined(separator: "\u{0}"))
 
-        let client = OpenAICompatibleClient(config: config)
+        let client = OpenAICompatibleClient(config: config, requestTimeout: requestTimeout)
         let (chatModel, ttsModel, voice) = (self.chatModel, self.ttsModel, self.voice)
+        var settings = LatencySettings(engine: transcription.label, vocabulary: terms, chatModel: chatModel, ttsModel: ttsModel,
+                                       voice: voice, ttsExtra: extras, silenceMs: silenceMs, target: target,
+                                       maxTokens: Self.maxTokens, runs: runs, detector: FluidVoiceDetector.conditions,
+                                       detectorHop: FluidVoiceDetector.hopSeconds)
+        settings.requestTimeout = requestTimeout
+        let report = outDirectory.appendingPathComponent(Self.reportFile)
         let result = try await runLatencyTrials(
             recordings: recordings, runs: runs, silence: Double(silenceMs) / 1000, speechRegistry: registry,
             nonce: { String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased() },
@@ -478,16 +495,19 @@ struct LatencyCommand: AsyncParsableCommand {
             transcribe: transcription.transcribe,
             chat: { client.chatStream(model: chatModel, messages: $0, maxTokens: Self.maxTokens) },
             speak: { try await client.speech(model: ttsModel, input: $0, voice: voice, format: Self.speechFormat, extra: extras) },
-            progress: { print($0) })
+            progress: { print($0) },
+            afterTrial: { done in
+                // Rapport réécrit après chaque essai : un arrêt en cours de route garde les essais faits.
+                let partial = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
+                                                      trials: done, progress: ReportProgress(done: done.count, planned: runs))
+                do { try partial.write(to: report, atomically: true, encoding: .utf8) } catch {
+                    print("Attention : rapport partiel non écrit : \(describe(error))")
+                }
+            })
 
-        let settings = LatencySettings(engine: transcription.label, vocabulary: terms, chatModel: chatModel, ttsModel: ttsModel, voice: voice,
-                                       ttsExtra: extras, silenceMs: silenceMs, target: target, maxTokens: Self.maxTokens,
-                                       runs: runs, detector: FluidVoiceDetector.conditions,
-                                       detectorHop: FluidVoiceDetector.hopSeconds)
         let trials = result.trials
         let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
                                                trials: trials, stopReason: result.stopReason)
-        let report = outDirectory.appendingPathComponent(Self.reportFile)
         try markdown.write(to: report, atomically: true, encoding: .utf8)
         print("")
         print(Reports.latencyVerdict(settings: settings, trials: trials))

@@ -5,10 +5,18 @@ import Foundation
 public final class OpenAICompatibleClient: Sendable {
     private let config: EndpointConfig
     private let session: URLSession
+    /// Délai d'inactivité de chaque requête, en secondes : la requête échoue (`EndpointError.transport`) si aucune
+    /// donnée n'arrive pendant cette durée (mesuré : un serveur muet fait échouer la requête au bout du délai ; une
+    /// réponse qui s'étire sur plus longtemps mais livre des octets plus souvent passe). Ce n'est pas une durée totale.
+    public let requestTimeout: TimeInterval
 
-    public init(config: EndpointConfig, session: URLSession = .shared) {
+    /// Sans délai explicite, une requête attendrait 60 s (défaut du système) à chaque appel sur un endpoint muet.
+    public static let defaultRequestTimeout: TimeInterval = 30
+
+    public init(config: EndpointConfig, session: URLSession = .shared, requestTimeout: TimeInterval = defaultRequestTimeout) {
         self.config = config
         self.session = session
+        self.requestTimeout = requestTimeout
     }
 
     /// Transcrit un WAV en bloc (`POST <base>/v1/audio/transcriptions`, `multipart/form-data`).
@@ -26,6 +34,7 @@ public final class OpenAICompatibleClient: Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
         let (data, _) = try await send(request, body: form.finished())
@@ -78,6 +87,7 @@ public final class OpenAICompatibleClient: Sendable {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let (data, response) = try await send(request, body: try encoder.encode(fields))
@@ -158,6 +168,7 @@ public final class OpenAICompatibleClient: Sendable {
         }
         var request = URLRequest(url: try endpointURL(path: ["chat", "completions"]))
         request.httpMethod = "POST"
+        request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")

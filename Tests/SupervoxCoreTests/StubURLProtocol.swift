@@ -48,14 +48,16 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
 
     // MARK: Fabrication
 
-    static func makeClient(reply: Reply, baseURL: String, apiKey: String) -> OpenAICompatibleClient {
+    static func makeClient(reply: Reply, baseURL: String, apiKey: String,
+                           requestTimeout: TimeInterval = OpenAICompatibleClient.defaultRequestTimeout) -> OpenAICompatibleClient {
         let id = UUID().uuidString
         entries.withLock { $0[id] = Entry(reply: reply) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         configuration.httpAdditionalHeaders = [idHeader: id]
         let config = EndpointConfig(baseURL: URL(string: baseURL)!, apiKey: apiKey)
-        let client = OpenAICompatibleClient(config: config, session: URLSession(configuration: configuration))
+        let client = OpenAICompatibleClient(config: config, session: URLSession(configuration: configuration),
+                                            requestTimeout: requestTimeout)
         clients.withLock { $0[ObjectIdentifier(client)] = (client, id) }
         return client
     }
@@ -164,13 +166,17 @@ func stubbedClient(reply: StubURLProtocol.Reply, baseURL: String = "https://exem
 }
 
 /// Client dont le « serveur » répond `status` avec le contenu du fichier enregistré `fixture`.
-func stubbedClient(status: Int, fixture: String, baseURL: String = "https://exemple.test", apiKey: String = "k") -> OpenAICompatibleClient {
-    stubbedClient(reply: .response(status: status, body: fixtureData(fixture)), baseURL: baseURL, apiKey: apiKey)
+func stubbedClient(status: Int, fixture: String, baseURL: String = "https://exemple.test", apiKey: String = "k",
+                   requestTimeout: TimeInterval = OpenAICompatibleClient.defaultRequestTimeout) -> OpenAICompatibleClient {
+    StubURLProtocol.makeClient(reply: .response(status: status, body: fixtureData(fixture)), baseURL: baseURL, apiKey: apiKey,
+                               requestTimeout: requestTimeout)
 }
 
 /// Client dont le « serveur » répond `status` avec le corps `body`.
-func stubbedClient(status: Int, body: String, baseURL: String = "https://exemple.test", apiKey: String = "k") -> OpenAICompatibleClient {
-    stubbedClient(reply: .response(status: status, body: Data(body.utf8)), baseURL: baseURL, apiKey: apiKey)
+func stubbedClient(status: Int, body: String, baseURL: String = "https://exemple.test", apiKey: String = "k",
+                   requestTimeout: TimeInterval = OpenAICompatibleClient.defaultRequestTimeout) -> OpenAICompatibleClient {
+    StubURLProtocol.makeClient(reply: .response(status: status, body: Data(body.utf8)), baseURL: baseURL, apiKey: apiKey,
+                               requestTimeout: requestTimeout)
 }
 
 /// Client dont le « serveur » répond `status` avec les octets `body` et les en-têtes `headers`.

@@ -1,5 +1,6 @@
 import Foundation
 import SupervoxCore
+import SupervoxEngines
 import Testing
 @testable import SupervoxBench
 
@@ -403,4 +404,102 @@ actor SelfDescribingSpy: Transcriber {
     #expect(WordErrorRate.compute(reference: "L'API pull-request", hypothesis: "l api Pull Request").rate == 0)
     #expect(WordErrorRate.compute(reference: "3 workers", hypothesis: "trois workers").rate > 0)
     #expect(TermRecall.compute(terms: ["FastAPI"], hypothesis: "le Fast API").found == 0)
+}
+
+// MARK: - Écriture au fil de l'eau et arrêt d'un moteur injoignable
+
+/// Moteur dont chaque appel suit un script : `nil` rend un texte, sinon l'erreur est levée. Compte les appels.
+actor ScriptedEngine: Transcriber {
+    nonisolated let name: String
+    nonisolated let acceptsVocabulary: Bool
+    private var script: [(any Error)?]
+    private(set) var calls = 0
+    private(set) var warmUps: [[String]] = []
+    init(name: String, acceptsVocabulary: Bool = false, script: [(any Error)?]) {
+        self.name = name; self.acceptsVocabulary = acceptsVocabulary; self.script = script
+    }
+    func prepare() async throws {}
+    func warmUp(vocabulary: [String]) async throws { warmUps.append(vocabulary) }
+    func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {
+        calls += 1
+        if !script.isEmpty, let error = script.removeFirst() { throw error }
+        return "bonjour"
+    }
+}
+
+private let transport = EndpointError.transport("The request timed out.")
+private func spokenCorpus(_ n: Int) -> [CorpusItem] { (1...n).map { CorpusItem(id: "\(16000 + $0)", text: "bonjour", terms: []) } }
+
+/// Trois pannes de transport de suite : le moteur est arrêté, les phrases restantes portent la raison, sa passe
+/// « +vocab » n'est pas lancée, et le moteur suivant passe normalement.
+@Test func engineIsStoppedAfterThreeConsecutiveTransportFailures() async {
+    let dead = ScriptedEngine(name: "endpoint", acceptsVocabulary: true, script: Array(repeating: transport, count: 10))
+    let next = ScriptedEngine(name: "local", script: [])
+    let corpus = spokenCorpus(6)
+    let runs = await runBenchmark([dead, next], corpus: corpus, audio: clipFromID, hasSpeech: { _ in true }, vocabulary: ["K"])
+    #expect(runs.map(\.label) == ["endpoint", "endpoint+vocab", "local"])
+    #expect(await dead.calls == 3)
+    #expect(await dead.warmUps == [[]], "la passe +vocab n'est pas préparée")
+    let plain = runs[0].results
+    #expect(plain.prefix(3).allSatisfy { $0.failure?.contains("timed out") == true })
+    #expect(plain.dropFirst(3).allSatisfy { $0.failure?.contains("3 échecs de transport consécutifs") == true && $0.hasSpeech })
+    #expect(runs[1].results.count == 6 && runs[1].results.allSatisfy { $0.failure?.contains("3 échecs de transport consécutifs") == true })
+    #expect(await next.calls == 6 && runs[2].results.allSatisfy { $0.hypothesis == "bonjour" })
+}
+
+/// Seules les pannes de transport consécutives comptent : une réponse (même une erreur HTTP) remet le compte à zéro ;
+/// une phrase sans voix n'appelle pas le moteur et ne le remet pas à zéro.
+@Test func onlyConsecutiveTransportFailuresStopAnEngine() async {
+    let flaky = ScriptedEngine(name: "endpoint", script: [transport, transport, EndpointError.http(status: 503, body: "x"),
+                                                         transport, transport, nil, transport, transport])
+    let runs = await runBenchmark([flaky], corpus: spokenCorpus(8), audio: clipFromID, hasSpeech: { _ in true }, vocabulary: [])
+    #expect(await flaky.calls == 8)
+    #expect(!runs[0].results.contains { $0.failure?.contains("consécutifs") == true })
+
+    let silent = ScriptedEngine(name: "endpoint", script: [transport, transport, transport, nil])
+    let corpus = spokenCorpus(5)
+    let stopped = await runBenchmark([silent], corpus: corpus, audio: clipFromID,
+                                     hasSpeech: { $0.sampleRate != 16003 }, vocabulary: [])   // 3e phrase sans voix
+    #expect(await silent.calls == 3)
+    #expect(stopped[0].results[2].hasSpeech == false && stopped[0].results[2].failure == nil)
+    #expect(stopped[0].results[4].failure?.contains("consécutifs") == true)
+}
+
+/// Après chaque passe, les passes finies sont rendues : la commande réécrit le rapport au fil de l'eau.
+@Test func eachFinishedPassIsHandedOverForAPartialReport() async {
+    var seen: [[String]] = []
+    let a = VocabularySpy(name: "a", acceptsVocabulary: true)
+    let b = VocabularySpy(name: "b", acceptsVocabulary: false)
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    let runs = await runBenchmark([a, b], corpus: corpus, audio: clipFromID, hasSpeech: { _ in true }, vocabulary: ["K"],
+                                  afterPass: { seen.append($0.map(\.label)) })
+    #expect(seen == [["a"], ["a", "a+vocab"], ["a", "a+vocab", "b"]])
+    #expect(runs.map(\.label) == seen.last)
+    #expect(plannedPasses([a, b], vocabulary: ["K"]) == 3 && plannedPasses([a, b], vocabulary: []) == 2)
+}
+
+/// Un rapport partiel le dit en tête, Markdown et JSON ; le rapport final n'a plus cette mention.
+@Test func partialTranscriptionReportIsMarkedAsSuch() throws {
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    let runs = [EngineRun(engine: "a", label: "a", results: [ItemResult(id: "16000", hypothesis: "bonjour", seconds: 1,
+                                                                        failure: nil, hasSpeech: true)],
+                          note: nil, conditions: "c")]
+    let partial = Reports.markdownReport(corpus: corpus, runs: runs, vocabulary: [], progress: ReportProgress(done: 1, planned: 3))
+    let head = partial.components(separatedBy: "\n## ").first ?? ""
+    #expect(head.contains("**Rapport partiel**") && head.contains("1 passe(s) sur 3"))
+    #expect(!Reports.markdownReport(corpus: corpus, runs: runs, vocabulary: []).contains("partiel"))
+    let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+        TranscriptionJSON(language: "fr", vocabulary: [], corpus: corpus, runs: runs, progress: ReportProgress(done: 1, planned: 3))))
+        as? [String: Any]
+    #expect(json?["complete"] as? Bool == false && json?["passesDone"] as? Int == 1 && json?["passesPlanned"] as? Int == 3)
+    let final = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+        TranscriptionJSON(language: "fr", vocabulary: [], corpus: corpus, runs: runs))) as? [String: Any]
+    #expect(final?["complete"] as? Bool == true)
+}
+
+/// Le délai de requête de l'endpoint est dit dans ses conditions de mesure, reprises par le rapport.
+@Test func endpointConditionsStateTheRequestTimeout() {
+    let client = OpenAICompatibleClient(config: EndpointConfig(baseURL: URL(string: "https://exemple.test")!, apiKey: "k"),
+                                        requestTimeout: 12)
+    #expect(EndpointTranscriber(client: client, model: "m").measurementConditions.contains("12 s sans aucune donnée reçue"))
 }

@@ -29,7 +29,7 @@ func runEngines(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (Stri
     var out: [String: [ItemResult]] = [:]
     for engine in engines {
         out[engine.name] = await runPass(engine, label: engine.name, corpus: corpus, inputs: inputs,
-                                         vocabulary: vocabulary, language: language, redact: redact, progress: progress)
+                                         vocabulary: vocabulary, language: language, redact: redact, progress: progress).rows
     }
     return out
 }
@@ -49,9 +49,16 @@ struct EngineRun {
 /// s'enchaînent avant le moteur suivant, et chacune est précédée de son passage à vide : la passe « +vocab » ne
 /// démarre pas sur un modèle refroidi par les autres moteurs. Un moteur qui n'accepte pas de vocabulaire porte une
 /// remarque. Chaque message d'échec passe par `redact` avant d'être gardé ou affiché.
+///
+/// Un moteur arrêté par des pannes de transport consécutives (voir `runPass`) ne lance pas sa passe « +vocab » : ses
+/// phrases parlées y sont en échec avec la même raison. Les moteurs suivants passent normalement.
+///
+/// `afterPass` reçoit, après chaque passe, toutes les lignes finies (conditions du moteur en cours lues à cet
+/// instant) : la commande réécrit son rapport au fil de l'eau. La valeur rendue relit les conditions après les passes.
 func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
                   hasSpeech: (AudioClip) async throws -> Bool, vocabulary: [String], language: String = "fr",
-                  redact: (String) -> String = { $0 }, progress: (String) -> Void = { _ in }) async -> [EngineRun] {
+                  redact: (String) -> String = { $0 }, progress: (String) -> Void = { _ in },
+                  afterPass: ([EngineRun]) -> Void = { _ in }) async -> [EngineRun] {
     requireUniqueNames(engines)
     let inputs = await loadInputs(corpus, audio: audio, hasSpeech: hasSpeech, redact: redact)
     var runs: [EngineRun] = []
@@ -60,21 +67,35 @@ func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (St
             ? "mesuré sans vocabulaire : l'adaptateur de ce moteur ne lui transmet pas de liste de termes" : nil
         let plain = await runPass(engine, label: engine.name, corpus: corpus, inputs: inputs, vocabulary: [],
                                   language: language, redact: redact, progress: progress)
-        var primed: [ItemResult]?
-        if !vocabulary.isEmpty && engine.acceptsVocabulary {
-            primed = await runPass(engine, label: vocabularyLabel(engine.name), corpus: corpus, inputs: inputs,
-                                   vocabulary: vocabulary, language: language, redact: redact, progress: progress)
+        let plainRun = { (conditions: String) in
+            EngineRun(engine: engine.name, label: engine.name, results: plain.rows, note: note, conditions: conditions)
         }
+        guard !vocabulary.isEmpty && engine.acceptsVocabulary else {
+            runs.append(plainRun(await engine.measurementConditions))
+            afterPass(runs)
+            continue
+        }
+        afterPass(runs + [plainRun(await engine.measurementConditions)])
+        let primed = await runPass(engine, label: vocabularyLabel(engine.name), corpus: corpus, inputs: inputs,
+                                   vocabulary: vocabulary, language: language, redact: redact, progress: progress,
+                                   stoppedBefore: plain.stopped)
         // Lu après les passes : le moteur peut y dire ce qui s'est réellement appliqué.
         let conditions = await engine.measurementConditions
-        runs.append(EngineRun(engine: engine.name, label: engine.name, results: plain, note: note, conditions: conditions))
-        if let primed {
-            runs.append(EngineRun(engine: engine.name, label: vocabularyLabel(engine.name), results: primed, note: nil,
-                                  conditions: conditions))
-        }
+        runs.append(plainRun(conditions))
+        runs.append(EngineRun(engine: engine.name, label: vocabularyLabel(engine.name), results: primed.rows, note: nil,
+                              conditions: conditions))
+        afterPass(runs)
     }
     return runs
 }
+
+/// Nombre de passes de `runBenchmark` : une par moteur, plus une par moteur qui accepte le vocabulaire donné.
+func plannedPasses(_ engines: [any Transcriber], vocabulary: [String]) -> Int {
+    engines.reduce(0) { $0 + 1 + (!vocabulary.isEmpty && $1.acceptsVocabulary ? 1 : 0) }
+}
+
+/// Pannes de transport consécutives (endpoint injoignable, ou muet au-delà du délai de requête) qui arrêtent un moteur.
+let consecutiveTransportFailureLimit = 3
 
 /// Étiquette d'un moteur mesuré avec le vocabulaire global, la même dans `transcribe` et `latency`.
 func vocabularyLabel(_ engine: String) -> String { engine + "+vocab" }
@@ -111,17 +132,26 @@ private func loadInputs(_ corpus: [CorpusItem], audio: (String) throws -> AudioC
 
 /// Une passe d'un moteur sur tout le corpus : chargement, passage à vide avec le vocabulaire de la passe, puis une
 /// transcription chronométrée par phrase parlée.
+///
+/// Après `consecutiveTransportFailureLimit` pannes de transport de suite (`EndpointError.transport`), le moteur est
+/// arrêté : les phrases parlées restantes sont en échec avec cette raison, rendue dans `stopped`. Une réponse, même
+/// une erreur HTTP, remet le compte à zéro ; une phrase sans voix n'appelle pas le moteur et ne change pas le compte.
+/// `stoppedBefore` : moteur déjà arrêté, la passe n'appelle rien et chaque phrase parlée porte cette raison.
 private func runPass(_ engine: any Transcriber, label: String, corpus: [CorpusItem], inputs: [PassInput],
                      vocabulary: [String], language: String, redact: (String) -> String,
-                     progress: (String) -> Void) async -> [ItemResult] {
-    progress("\(label) : chargement et préchauffage…")
-    var setupFailure: String?
-    do { try await engine.prepare() } catch { setupFailure = redact("chargement : \(describe(error))") }
+                     progress: (String) -> Void, stoppedBefore: String? = nil) async -> (rows: [ItemResult], stopped: String?) {
+    var setupFailure: String? = stoppedBefore
+    if setupFailure == nil {
+        progress("\(label) : chargement et préchauffage…")
+        do { try await engine.prepare() } catch { setupFailure = redact("chargement : \(describe(error))") }
+    }
     if setupFailure == nil {
         do { try await engine.warmUp(vocabulary: vocabulary) } catch { setupFailure = redact("préchauffage : \(describe(error))") }
     }
     if let setupFailure { progress("\(label) : \(setupFailure)") }
     else { progress("\(label) : transcription de \(corpus.count) phrase(s)…") }
+    var transportFailures = 0
+    var stopped: String? = stoppedBefore
 
     let clock = ContinuousClock()
     var rows: [ItemResult] = []
@@ -132,8 +162,8 @@ private func runPass(_ engine: any Transcriber, label: String, corpus: [CorpusIt
         case .clip(_, hasSpeech: false):
             rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: nil, hasSpeech: false))
         case .clip(let clip, hasSpeech: true):
-            if let setupFailure {
-                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: setupFailure, hasSpeech: true))
+            if let failure = setupFailure ?? stopped {
+                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: failure, hasSpeech: true))
                 continue
             }
             let start = clock.now
@@ -141,12 +171,19 @@ private func runPass(_ engine: any Transcriber, label: String, corpus: [CorpusIt
                 let text = try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
                 let elapsed = start.duration(to: clock.now)
                 rows.append(ItemResult(id: item.id, hypothesis: text, seconds: seconds(elapsed), failure: nil, hasSpeech: true))
+                transportFailures = 0
             } catch {
                 rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: redact(describe(error)), hasSpeech: true))
+                if case .transport? = error as? EndpointError { transportFailures += 1 } else { transportFailures = 0 }
+                if transportFailures == consecutiveTransportFailureLimit {
+                    stopped = "moteur arrêté après \(consecutiveTransportFailureLimit) échecs de transport consécutifs "
+                        + "(endpoint injoignable ou muet), phrase non envoyée"
+                    progress("\(label) : \(stopped ?? "")")
+                }
             }
         }
     }
-    return rows
+    return (rows, stopped)
 }
 
 private func seconds(_ duration: Duration) -> Double {
@@ -324,6 +361,9 @@ struct TranscribeCommand: AsyncParsableCommand {
     @Flag(name: .long, help: "Remplace transcription.md et transcription.json s'ils existent (sinon la commande refuse).")
     var overwrite = false
 
+    @Option(name: .long, help: "Moteur endpoint : délai d'inactivité de chaque requête, en secondes (sans aucune donnée reçue).")
+    var requestTimeout = OpenAICompatibleClient.defaultRequestTimeout
+
     static let reportFiles = ["transcription.md", "transcription.json"]
 
     func run() async throws {
@@ -335,6 +375,7 @@ struct TranscribeCommand: AsyncParsableCommand {
         let names = try EngineList.parse(engines)
         let model = endpointModel?.trimmingCharacters(in: .whitespaces) ?? ""
         if names.contains("endpoint") && model.isEmpty { throw TranscribeError.missingEndpointModel }
+        guard requestTimeout > 0 else { throw ValidationError("--request-timeout doit être positif") }
         // Variables de l'endpoint lues en tout premier, quand il est demandé.
         let endpointConfig = names.contains("endpoint") ? try EndpointConfig.fromEnvironment(environment) : nil
         let directory = URL(fileURLWithPath: out, isDirectory: true)
@@ -348,16 +389,19 @@ struct TranscribeCommand: AsyncParsableCommand {
         // Le détecteur de voix est chargé avant tout moteur : sans lui, la commande s'arrête.
         let detector = FluidVoiceDetector()
         try await detector.prepare()
-        let transcribers: [any Transcriber] = try names.map { name in
+        let transcribers: [any Transcriber] = names.map { name in
             switch name {
             case "whisperkit": WhisperKitTranscriber(model: whisperkitModel)
             case "parakeet": ParakeetTranscriber()
             case "apple": AppleSpeechTranscriber(locale: Self.appleLocale)
             default:   // `endpointConfig` est lu en tête dès que le moteur endpoint est demandé
-                EndpointTranscriber(client: OpenAICompatibleClient(config: endpointConfig!), model: model)
+                EndpointTranscriber(client: OpenAICompatibleClient(config: endpointConfig!, requestTimeout: requestTimeout),
+                                    model: model)
             }
         }
         let redact = endpointConfig.map(endpointRedactor) ?? { $0 }
+        let planned = plannedPasses(transcribers, vocabulary: terms)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         let runs = await runBenchmark(
             transcribers, corpus: items,
@@ -367,19 +411,34 @@ struct TranscribeCommand: AsyncParsableCommand {
             },
             hasSpeech: { try await !detector.segments(in: $0).isEmpty },
             vocabulary: terms, language: Self.language, redact: redact,
-            progress: { print($0) }
+            progress: { print($0) },
+            afterPass: { done in
+                // Rapport réécrit après chaque passe : un arrêt en cours de route garde les passes finies.
+                do {
+                    try writeReports(directory, corpus: items, runs: done, vocabulary: terms,
+                                     progress: ReportProgress(done: done.count, planned: planned))
+                } catch {
+                    print("Attention : rapport partiel non écrit : \(describe(error))")
+                }
+            }
         )
-
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let markdown = Reports.markdownReport(corpus: items, runs: runs, vocabulary: terms)
-        try markdown.write(to: directory.appendingPathComponent("transcription.md"), atomically: true, encoding: .utf8)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let json = TranscriptionJSON(language: Self.language, vocabulary: terms, corpus: items, runs: runs)
-        try encoder.encode(json).write(to: directory.appendingPathComponent("transcription.json"), options: .atomic)
+        try writeReports(directory, corpus: items, runs: runs, vocabulary: terms, progress: nil)
 
         print("")
         print(Reports.markdownTable(Reports.summaries(corpus: items, runs: runs)))
         print("Rapport : \(directory.appendingPathComponent("transcription.md").path)")
+    }
+
+    /// `transcription.md` et `transcription.json`, écrits en entier à chaque fois (écriture atomique). Le contrôle du
+    /// rapport existant est fait une fois, au lancement : les réécritures suivantes portent sur les fichiers du lancement.
+    private func writeReports(_ directory: URL, corpus: [CorpusItem], runs: [EngineRun], vocabulary: [String],
+                              progress: ReportProgress?) throws {
+        let markdown = Reports.markdownReport(corpus: corpus, runs: runs, vocabulary: vocabulary, progress: progress)
+        try markdown.write(to: directory.appendingPathComponent("transcription.md"), atomically: true, encoding: .utf8)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let json = TranscriptionJSON(language: Self.language, vocabulary: vocabulary, corpus: corpus, runs: runs,
+                                     progress: progress)
+        try encoder.encode(json).write(to: directory.appendingPathComponent("transcription.json"), options: .atomic)
     }
 }

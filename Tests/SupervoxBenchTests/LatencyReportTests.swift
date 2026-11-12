@@ -522,3 +522,50 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     let plain = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: [])
     #expect(plain.contains("`parakeet` (sans vocabulaire)"))
 }
+
+// MARK: - Écriture au fil de l'eau
+
+/// Chaque essai, quelle que soit son issue (mesuré, en échec, sans contenu), est rendu dès qu'il est classé : la
+/// commande réécrit le rapport après chaque essai, et un Ctrl-C ne perd que l'essai en cours.
+@Test func everyTrialIsHandedOverAsSoonAsItIsClassified() async throws {
+    var counts: [Int] = []
+    var chatCalls = 0
+    var transcriptions = 0
+    _ = try await runLatencyTrials(
+        recordings: [recording], runs: 5, silence: 0.6, speechRegistry: try SpeechRequestRegistry(file: nil, context: "t"),
+        nonce: { UUID().uuidString }, redact: { $0 },
+        transcribe: { _ in
+            transcriptions += 1
+            if transcriptions == 1 { throw TranscriberError.engine("moteur en panne") }   // échec de transcription
+            return "je veux refactorer"
+        },
+        chat: { _ in
+            chatCalls += 1
+            switch chatCalls {
+            case 1: return stream([], error: EndpointError.transport("délai"))   // échec
+            case 2: return stream([.reasoning("hmm")])                          // sans contenu
+            default: return stream(streamed)                                    // mesurés
+            }
+        },
+        speak: { _ in Data(UUID().uuidString.utf8) },
+        afterTrial: { counts.append($0.count) })
+    #expect(counts == [1, 2, 3, 4, 5])
+}
+
+@Test func partialLatencyReportIsMarkedAsSuch() {
+    let trials = measuredTrials(3, synthesis: 0.3)
+    let partial = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: trials,
+                                          progress: ReportProgress(done: 3, planned: 30))
+    let head = partial.components(separatedBy: "## Verdict").first ?? ""
+    #expect(head.contains("**Rapport partiel**") && head.contains("3 essai(s) sur 30"))
+    #expect(!Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: trials)
+        .contains("partiel"))
+}
+
+/// Le délai de requête est dit dans ce qui est mesuré.
+@Test func latencyReportStatesTheRequestTimeout() {
+    var settings = settings600
+    settings.requestTimeout = 12
+    let md = Reports.latencyMarkdown(settings: settings, recordings: [recording], withoutSpeech: [], trials: [])
+    #expect(md.contains("12 s sans aucune donnée reçue"))
+}

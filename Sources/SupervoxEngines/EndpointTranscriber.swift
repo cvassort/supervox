@@ -12,7 +12,9 @@ public struct EndpointTranscriber: Transcriber {
         "aucun préchauffage. Durée mesurée : écriture et relecture d'un WAV temporaire, requête HTTP multipart et "
             + "réponse (réseau, file d'attente du serveur ; ouverture de la connexion sur la première phrase). Une "
             + "requête identique déjà envoyée peut être servie par un cache : ne pas comparer ces durées d'une "
-            + "relance à l'autre."
+            + "relance à l'autre. Requête abandonnée après \(Int(client.requestTimeout.rounded())) s sans aucune "
+            + "donnée reçue (délai d'inactivité, pas une durée totale) : la phrase est alors en échec ; après "
+            + "3 échecs de transport consécutifs, le moteur est arrêté."
     }
     private let client: OpenAICompatibleClient
     private let model: String
