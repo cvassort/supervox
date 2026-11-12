@@ -33,5 +33,6 @@ let package = Package(
             ]
         ),
         .testTarget(name: "SupervoxCoreTests", dependencies: ["SupervoxCore"]),
+        .testTarget(name: "SupervoxBenchTests", dependencies: ["SupervoxBench", "SupervoxEngines"]),
     ]
 )
