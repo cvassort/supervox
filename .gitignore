@@ -1,0 +1,14 @@
+# Notes de cadrage et données personnelles : restent sur le disque, jamais dans le dépôt public
+docs/journal.md
+docs/recherche/
+spike/
+.superpowers/
+bench-data/
+
+# macOS, Xcode, SwiftPM
+.DS_Store
+.build/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
