@@ -34,29 +34,75 @@ import Testing
     let s = Reports.summarizeLatency(t, target: 2.0)
     #expect(s.runs == 3 && s.noContent == 1)
     #expect(abs(s.medianTotal! - 1.7) < 1e-9)   // médiane de 1,5 et 1,9 : l'essai sans contenu n'y entre pas
-    // Amendé par le contrôleur (tour de correction 1) : 1 essai sans réponse sur 3 dépasse 10 %, verdict non établi.
+    // Amendé par le contrôleur : l'essai sans contenu est un raté ; 1 raté sur 3 jugés ne permet ni « tenu » ni
+    // « non tenu » à 95 % (P(X ≤ 1) = 0,972, P(X ≥ 1) = 0,271 pour Binomiale(3 ; 0,1)) : non établi.
+    #expect(s.missed == 1 && s.judged == 3)
     #expect(s.meetsTarget == nil)
 }
 
-/// Jusqu'à 10 % d'essais sans réponse (sans contenu ou en échec), le verdict est rendu ; au-delà, il n'est pas
-/// établi. Les suspects de cache ne comptent pas dans cette part, mais dans le total des essais.
-@Test func verdictIsWithheldBeyondTenPercentUnanswered() {
-    let measured = Array(repeating: TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 0.3), count: 9)
-    let empty = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: nil, synthesis: nil)
-    let oneInTen = Reports.summarizeLatency(measured + [empty], target: 2.0)
-    #expect(oneInTen.runs == 10 && oneInTen.unanswered == 1 && oneInTen.meetsTarget == true)
-    let withFailure = Reports.summarizeLatency(measured + [empty], failed: 1, target: 2.0)
-    #expect(withFailure.runs == 11 && withFailure.unanswered == 2 && withFailure.meetsTarget == nil)
-    let twoFailures = Reports.summarizeLatency(measured, failed: 2, target: 2.0)
-    #expect(twoFailures.meetsTarget == nil && twoFailures.measured == 9)
-    let suspects = Reports.summarizeLatency(measured + [empty], suspect: 5, target: 2.0)
-    #expect(suspects.runs == 15 && suspects.measured == 9 && suspects.meetsTarget == true)
+// MARK: - Test binomial
+
+/// Référence indépendante de l'implémentation : sommes directes de C(n, k) pᵏ (1 − p)ⁿ⁻ᵏ, coefficient calculé par
+/// produit (l'implémentation passe par les logarithmes des factorielles).
+private func referenceTails(_ x: Int, _ n: Int) -> (atMost: Double, atLeast: Double) {
+    func pmf(_ k: Int) -> Double {
+        var c = 1.0
+        for i in 0..<k { c = c * Double(n - i) / Double(i + 1) }
+        return c * pow(0.1, Double(k)) * pow(0.9, Double(n - k))
+    }
+    let atMost = (0...x).reduce(0.0) { $0 + pmf($1) }
+    let atLeast = (x...n).reduce(0.0) { $0 + pmf($1) }
+    return (atMost, atLeast)
 }
 
-@Test func targetIsJudgedOnP90AndUnknownWhenNothingMeasured() {
-    let slow = (0..<10).map { TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: $0 < 8 ? 0.3 : 1.5) }
-    #expect(Reports.summarizeLatency(slow, target: 2.0).meetsTarget == false)   // médiane 1,5 mais p90 à 2,7
-    #expect(Reports.summarizeLatency([], target: 2.0).meetsTarget == nil)
+private func referenceVerdict(_ x: Int, _ n: Int) -> Bool? {
+    let t = referenceTails(x, n)
+    return t.atMost <= 0.05 ? true : (t.atLeast <= 0.05 ? false : nil)
+}
+
+/// Valeurs calculées à part (Python, `math.comb`) : 0,9²⁹ = 0,0471 → tenu ; 0,9²⁸ = 0,0523 → non établi ;
+/// n = 40 : 0,9⁴⁰ = 0,0148 → tenu, P(X ≤ 1) = 0,0805 → non établi ; P(X ≥ 8) = 0,0419 → non tenu,
+/// P(X ≥ 7) > 0,05 → non établi.
+@Test func binomialVerdictMatchesExactValues() {
+    #expect(Reports.binomialVerdict(missed: 0, judged: 29) == true)
+    #expect(Reports.binomialVerdict(missed: 0, judged: 28) == nil)
+    #expect(Reports.binomialVerdict(missed: 0, judged: 40) == true)
+    #expect(Reports.binomialVerdict(missed: 1, judged: 40) == nil)
+    #expect(Reports.binomialVerdict(missed: 8, judged: 40) == false)
+    #expect(Reports.binomialVerdict(missed: 7, judged: 40) == nil)
+    #expect(Reports.binomialVerdict(missed: 0, judged: 0) == nil)
+    #expect(Reports.verdictThresholds(judged: 40).maxMissedForMet == 0)
+    #expect(Reports.verdictThresholds(judged: 40).minMissedForNotMet == 8)
+    #expect(Reports.verdictThresholds(judged: 28).maxMissedForMet == nil)
+    #expect(Reports.minJudgedForMet == 29)
+    #expect(abs(referenceTails(0, 29).atMost - pow(0.9, 29)) < 1e-12)   // la référence elle-même
+}
+
+/// L'implémentation suit la référence pour tout x, sur plusieurs tailles de série.
+@Test func binomialVerdictAgreesWithDirectSumsForEveryCount() {
+    for n in [1, 3, 10, 28, 29, 30, 40, 100] {
+        for x in 0...n {
+            #expect(Reports.binomialVerdict(missed: x, judged: n) == referenceVerdict(x, n), "n = \(n), x = \(x)")
+        }
+    }
+}
+
+/// Un essai sans contenu et un essai en échec comptent chacun comme un raté ; un suspect de cache n'est ni jugé ni
+/// raté.
+@Test func unansweredRunsAreMissesAndSuspectsAreNotJudged() {
+    let fast = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 0.3)
+    let slow = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 1.5)
+    let empty = TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: nil, synthesis: nil)
+    let s = Reports.summarizeLatency(Array(repeating: fast, count: 36) + [slow, empty], failed: 1, suspect: 5, target: 2.0)
+    // 38 durées (36 rapides, 1 lente, 1 sans contenu) + 1 échec = 39 jugés ; + 5 suspects = 44 lancés.
+    #expect(s.runs == 44 && s.judged == 39 && s.missed == 3 && s.measured == 37)
+    #expect(s.meetsTarget == referenceVerdict(3, 39))
+    let allFast = Reports.summarizeLatency(Array(repeating: fast, count: 29), suspect: 10, target: 2.0)
+    #expect(allFast.judged == 29 && allFast.missed == 0 && allFast.meetsTarget == true)
+    let oneEmpty = Reports.summarizeLatency(Array(repeating: fast, count: 28) + [empty], target: 2.0)
+    #expect(oneEmpty.missed == 1 && oneEmpty.meetsTarget == nil)
+    let oneFailed = Reports.summarizeLatency(Array(repeating: fast, count: 28), failed: 1, target: 2.0)
+    #expect(oneFailed.missed == 1 && oneFailed.judged == 29 && oneFailed.meetsTarget == nil)
 }
 
 // MARK: - Première phrase
@@ -146,6 +192,17 @@ private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
                     nonce: @escaping () -> String = { UUID().uuidString },
                     registry: SpeechRequestRegistry? = nil,
                     sent: Sent = Sent()) async throws -> [LatencyTrial] {
+    try await launch(runs: runs, recordings: recordings, transcript: transcript, chat: chat, speak: speak, nonce: nonce,
+                     registry: registry, sent: sent).trials
+}
+
+private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
+                    transcript: @escaping (AudioClip) async throws -> String = { _ in "je veux refactorer" },
+                    chat: @escaping (Int) -> AsyncThrowingStream<ChatDelta, Error>,
+                    speak: @escaping (Int, String) async throws -> Data = { n, _ in Data("audio \(n)".utf8) },
+                    nonce: @escaping () -> String = { UUID().uuidString },
+                    registry: SpeechRequestRegistry? = nil,
+                    sent: Sent = Sent()) async throws -> LatencyTrials {
     var chatCalls = 0
     var speechCalls = 0
     return try await runLatencyTrials(
@@ -217,12 +274,29 @@ private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
     #expect(try otherVoice.uniqueInput(for: "Quel est l'objectif ?") == "Quel est l'objectif ? ")
 }
 
-/// À la borne du nombre d'espaces, la commande s'arrête au lieu de répéter une requête.
-@Test func speechRegistryStopsAtTheSpaceBound() async throws {
+/// À la borne du nombre d'espaces, le lancement s'arrête au lieu de répéter une requête, et garde les essais déjà
+/// faits ; le rapport dit l'arrêt et sa cause.
+@Test func speechRegistryStopsAtTheSpaceBoundAndKeepsMeasuredRuns() async throws {
     let registry = try SpeechRequestRegistry(file: nil, context: "t", maxSpaces: 2)
-    await #expect(throws: LatencyError.speechVariantsExhausted(sentence: "Quel est l'objectif ?", maxSpaces: 2)) {
-        _ = try await trials(runs: 3, chat: { _ in stream(streamed) }, registry: registry)
-    }
+    let result = try await launch(runs: 4, chat: { _ in stream(streamed) }, registry: registry)
+    #expect(result.trials.count == 2)
+    #expect(result.stopReason?.contains("essai 3") == true && result.stopReason?.contains("1 à 2 espaces") == true)
+    let md = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [],
+                                     trials: result.trials, stopReason: result.stopReason)
+    #expect(md.contains("**Lancement arrêté avant la fin** : 2 essai(s) faits sur 30 prévus") && md.contains("1 à 2 espaces"))
+}
+
+/// Un registre dont la dernière ligne n'a pas de fin de ligne : la nouvelle empreinte va sur sa propre ligne.
+@Test func registryAppendsOnItsOwnLineAfterAnUnterminatedFile() throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("sv-registre-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try Data("ancienne-empreinte".utf8).write(to: file)
+    let registry = try SpeechRequestRegistry(file: file, context: "t")
+    _ = try registry.uniqueInput(for: "Bonjour.")
+    let lines = try String(contentsOf: file, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
+    #expect(lines.count == 3 && lines[0] == "ancienne-empreinte" && lines[1].count == 64 && lines[2].isEmpty)
+    // Relu, le registre reconnaît les deux empreintes : la même requête n'est pas renvoyée.
+    #expect(try SpeechRequestRegistry(file: file, context: "t").uniqueInput(for: "Bonjour.") == "Bonjour.  ")
 }
 
 /// Deux synthèses d'un même texte ont toujours rendu des octets différents : un audio identique octet pour octet à
@@ -237,10 +311,9 @@ private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
 }
 
 /// Un générateur d'aléa défaillant ne doit pas laisser partir deux requêtes identiques : la commande s'arrête.
-@Test func duplicateChatRequestStopsTheCommand() async {
-    await #expect(throws: LatencyError.self) {
-        _ = try await trials(runs: 2, chat: { _ in stream(streamed) }, nonce: { "fixe" })
-    }
+@Test func duplicateChatRequestStopsTheCommand() async throws {
+    let result = try await launch(runs: 3, chat: { _ in stream(streamed) }, nonce: { "fixe" })
+    #expect(result.trials.count == 1 && result.stopReason?.contains("essai 2") == true)
 }
 
 /// Un flux vide (`.malformedResponse`) et un flux de réflexion seule sont des essais « sans contenu », comptés à part ;
@@ -330,9 +403,11 @@ private func trials(runs: Int, recordings: [LatencyRecording] = [recording],
                                    detectorHop: 0.256)
     let md = Reports.latencyMarkdown(settings: settings, recordings: [recording], withoutSpeech: ["muet"], trials: out)
     #expect(md.contains("4 essai(s) = 1 mesuré(s) + 1 sans contenu + 1 en échec + 1 suspect(s) de cache"))
-    #expect(md.contains("sur 1 essai(s) mesuré(s) sur 4"))
-    #expect(md.contains("non établi") && md.contains("2 essai(s) sur 4 sans réponse"))   // 50 % sans réponse
-    #expect(md.contains("Verdict indicatif"))
+    // Jugés : 3 (le suspect est écarté) ; ratés : l'échec et le sans contenu. P(X ≥ 2) = 0,028 pour
+    // Binomiale(3 ; 0,1) : on peut affirmer que plus de 10 % des tours ratent, non tenu.
+    #expect(md.contains("NON tenu — 2 essai(s) au-dessus de la cible ou sans réponse sur 3 jugé(s)"))
+    #expect(md.contains("2 essai(s) sans réponse (1 sans contenu, 1 en échec), comptés comme ratés dans le verdict"))
+    #expect(!md.contains("indicatif") && !md.contains("0,74") && !md.contains("deux séries"))
     #expect(md.contains("constante ajoutée") && md.contains("en bloc"))
     #expect(md.contains("muet"))
     // 600 ms comptées par tranches de 256 ms, à partir de la fin de la première tranche silencieuse : (1 + 3) × 0,256.
@@ -353,25 +428,48 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
 }
 
 /// Le verdict de tête compte la détection en direct : le silence constant (0,6 s) est remplacé par le plancher du
-/// détecteur, (1 + ⌈0,6 / 0,256⌉) × 0,256 = 1,024 s. Le p90 brut suit, et la ligne dit quand les deux diffèrent.
+/// détecteur, (1 + ⌈0,6 / 0,256⌉) × 0,256 = 1,024 s. Le verdict brut suit, et la ligne dit quand les deux diffèrent.
 @Test func headlineVerdictCountsLiveDetectionAndSaysWhenRawDiffers() {
     #expect(abs(settings600.liveSilence - 1.024) < 1e-9)
-    // Total brut 1,5 s, en direct 1,924 s : tenu des deux côtés.
+    // Total brut 1,5 s, en direct 1,924 s : 0 raté sur 30, tenu des deux côtés (0,9³⁰ = 0,042).
     let fast = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(30, synthesis: 0.3))
-    #expect(fast.contains("au lieu de 0,60 s) : objectif de 2,0 s tenu — p90 1,92 s sur 30 essai(s) mesuré(s) sur 30"))
-    #expect(fast.contains("p90 brut, silence constant de 600 ms : objectif de 2,0 s tenu — p90 1,50 s"))
-    #expect(!fast.contains("diffèrent") && !fast.contains("indicatif"))
-    // Total brut 1,7 s, en direct 2,124 s : le brut tiendrait, le verdict de tête ne tient pas.
+    #expect(fast.contains("au lieu de 0,60 s) : objectif de 2,0 s tenu — 0 essai(s) au-dessus de la cible ou sans réponse sur 30 jugé(s)"))
+    #expect(fast.contains("Verdict brut, silence constant de 600 ms : objectif de 2,0 s tenu"))
+    #expect(!fast.contains("diffèrent") && !fast.contains("comptés comme ratés"))
+    #expect(fast.contains("détection en direct comptée, médiane 1,92 s, 90e centile 1,92 s ; silence constant, médiane 1,50 s"))
+    // Total brut 1,7 s, en direct 2,124 s : brut tenu, en direct 30 ratés sur 30, non tenu.
     let close = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(30, synthesis: 0.5))
-    #expect(close.contains("objectif de 2,0 s NON tenu — p90 2,12 s"))
+    #expect(close.contains("objectif de 2,0 s NON tenu — 30 essai(s) au-dessus de la cible ou sans réponse sur 30 jugé(s)"))
     #expect(close.contains("Les deux verdicts diffèrent"))
+    // Non établi : la ligne dit combien de ratés permettraient de conclure, pour ce n.
+    let short = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(40, synthesis: 0.3)
+        + measuredTrials(3, synthesis: 0.5).map { LatencyTrial(number: $0.number + 40, recording: "r", transcript: "t",
+                                                               sentence: "s", contentChunks: 3, outcome: $0.outcome) })
+    #expect(short.contains("non établi — 3 essai(s) au-dessus de la cible ou sans réponse sur 43 jugé(s)"))
+    // 10 essais sans raté : P(X ≤ 0) = 0,9¹⁰ = 0,349, et « tenu » est impossible à cette taille.
+    let ten = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(10, synthesis: 0.3))
+    #expect(ten.contains("non établi — 0 essai(s) au-dessus de la cible ou sans réponse sur 10 jugé(s)"))
+    #expect(ten.contains("« tenu » est impossible, même sans raté (il faut au moins 29 essais jugés)"))
+    #expect(short.contains("avec 43 essai(s) jugé(s), « tenu » exige au plus \(Reports.verdictThresholds(judged: 43).maxMissedForMet!) raté(s)"))
 }
 
-/// Sous 29 essais mesurés, la ligne de verdict elle-même le dit indicatif ; au-delà de 10 % de suspects de cache,
-/// une ligne le signale.
-@Test func fewMeasuredRunsGiveAnIndicativeVerdictAndManySuspectsAreFlagged() {
-    let few = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(28, synthesis: 0.3, suspects: 4))
-    let headline = few.split(separator: "\n").first { $0.hasPrefix("Verdict") }.map(String.init) ?? ""
-    #expect(headline.contains("tenu") && headline.contains("Verdict indicatif : 28 essai(s) mesuré(s), moins de 29"))
-    #expect(few.contains("4 essai(s) sur 32 suspect(s) de cache, plus de 10 %"))
+/// Le plancher en direct ne fait qu'allonger les totaux : le verdict de tête n'est jamais plus favorable que le brut.
+@Test func headlineVerdictIsNeverMoreFavourableThanRaw() {
+    func rank(_ v: Bool?) -> Int { v == true ? 2 : (v == nil ? 1 : 0) }
+    for synthesis in stride(from: 0.1, through: 1.3, by: 0.1) {
+        for slowCount in [0, 1, 3, 8] {
+            let timings = (0..<40).map { TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4,
+                                                    synthesis: $0 < slowCount ? synthesis + 0.5 : synthesis) }
+            let raw = Reports.summarizeLatency(timings, target: 2.0)
+            let live = Reports.summarizeLatency(timings.map { $0.withSilence(settings600.liveSilence) }, target: 2.0)
+            #expect(rank(live.meetsTarget) <= rank(raw.meetsTarget), "synthèse \(synthesis), lents \(slowCount)")
+        }
+    }
+}
+
+/// Au-delà de 10 % de suspects de cache, une ligne le signale ; ils ne sont pas jugés.
+@Test func manySuspectsAreFlaggedAndNotJudged() {
+    let text = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(28, synthesis: 0.3, suspects: 4))
+    #expect(text.contains("4 essai(s) sur 32 suspect(s) de cache, plus de 10 %"))
+    #expect(text.contains("sur 28 jugé(s)"))
 }

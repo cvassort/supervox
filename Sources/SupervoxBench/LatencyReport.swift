@@ -31,24 +31,28 @@ struct TurnTiming: Equatable {
 
 /// Synthèse d'une série d'essais. Les essais sans contenu, en échec et suspects de cache sont comptés, jamais moyennés.
 struct LatencySummary: Equatable {
-    /// Tous les essais : mesurés, sans contenu, en échec et suspects de cache.
+    /// Tous les essais lancés : mesurés, sans contenu, en échec et suspects de cache.
     let runs: Int
     let noContent: Int
     let failed: Int
     let suspect: Int
+    /// Essais jugés ratés : mesurés au-dessus de la cible, sans contenu ou en échec.
+    let missed: Int
+    /// Chiffres descriptifs, sur les seuls essais mesurés : ils ne fondent pas le verdict.
     let medianTotal: Double?
     let p90Total: Double?
     /// Médiane de chaque maillon sur les seuls essais complets.
     let medianByLink: [String: Double]
-    /// Objectif tenu si le 90e centile du total ne le dépasse pas. `nil` (non établi) sans aucun essai mesuré, ou
-    /// quand les essais sans réponse (sans contenu ou en échec) dépassent `Reports.maxUnansweredShare` des essais :
-    /// le tour du 90e centile peut alors être « pas de réponse », et les essais écartés sont sans doute les plus lents.
+    /// Verdict du test binomial exact (`Reports.binomialVerdict`) sur la part de tours ratés : `true` (tenu), `false`
+    /// (non tenu), `nil` (non établi, et toujours quand aucun essai n'est jugé).
     let meetsTarget: Bool?
 
-    /// Essais dont la durée entre dans les centiles.
+    /// Essais dont la durée est connue et qui entrent dans les chiffres descriptifs.
     var measured: Int { runs - noContent - failed - suspect }
-    /// Essais sans réponse : sans contenu ou en échec.
+    /// Essais sans réponse : sans contenu ou en échec. Comptés comme ratés.
     var unanswered: Int { noContent + failed }
+    /// Essais jugés : tous sauf les suspects de cache.
+    var judged: Int { runs - suspect }
 }
 
 /// Réglages d'une mesure de latence, recopiés dans le rapport.
@@ -78,20 +82,56 @@ struct LatencySettings {
 }
 
 extension Reports {
-    /// Au-delà de cette part d'essais sans réponse, le verdict n'est pas établi.
-    static let maxUnansweredShare = 0.10
+    /// Part de tours ratés tolérée : « le 90e centile du tour est sous la cible » veut dire « au plus 10 % des tours
+    /// ratent la cible ».
+    static let toleratedMissShare = 0.10
+    /// Risque d'erreur unilatéral du verdict (niveau de confiance 95 %).
+    static let verdictRisk = 0.05
 
-    /// En dessous de ce nombre d'essais mesurés, le verdict est indicatif. Pour n essais, le plus lent dépasse le vrai
-    /// 90e centile avec une probabilité 1 − 0,9ⁿ (essais indépendants, loi continue) : 0,65 pour n = 10, 0,9477 pour
-    /// n = 28, 0,9529 pour n = 29 ; 29 est le plus petit n qui donne 95 %. Le p90 interpolé est plus bas encore : à
-    /// n = 10, il se trouve entre la 9e et la 10e valeur, et la 9e tombe sous le vrai 90e centile avec une
-    /// probabilité de 0,9¹⁰ + 10 × 0,9⁹ × 0,1 = 0,736 (la 10e : 0,349) ; il est donc sous le vrai 90e centile dans
-    /// 35 à 74 % des séries selon la loi des durées, un biais vers « tenu ».
-    static let minMeasuredForFirmVerdict = 29
+    /// P(X ≤ x) et P(X ≥ x) pour X ~ Binomiale(n, p), sommes exactes des probabilités ponctuelles calculées en
+    /// logarithmes (pas de dépassement de capacité vers zéro pour un grand n).
+    static func binomialTails(missed x: Int, judged n: Int, p: Double) -> (atMost: Double, atLeast: Double) {
+        guard n > 0 else { return (1, 1) }
+        var lnFact = [0.0]   // ln(k!) pour k = 0…n
+        for k in 1...n { lnFact.append(lnFact[k - 1] + log(Double(k))) }
+        func pmf(_ k: Int) -> Double {
+            exp(lnFact[n] - lnFact[k] - lnFact[n - k] + Double(k) * log(p) + Double(n - k) * log(1 - p))
+        }
+        let atMost = (0...min(x, n)).reduce(0) { $0 + pmf($1) }
+        let atLeast = x <= 0 ? 1 : (min(x, n + 1) <= n ? (x...n).reduce(0) { $0 + pmf($1) } : 0)
+        return (min(atMost, 1), min(atLeast, 1))
+    }
 
-    /// Les essais sans contenu (`total` nil), `failed` essais en échec et `suspect` essais suspects de cache sont
-    /// comptés mais n'entrent ni dans les centiles ni dans les médianes par maillon. Le verdict porte sur le 90e
-    /// centile du total, pas sur la médiane ; voir `LatencySummary.meetsTarget` pour le cas « non établi ».
+    /// Verdict sur `x` tours ratés parmi `n` jugés, test binomial exact unilatéral : « tenu » si l'on peut affirmer
+    /// avec 95 % de confiance que moins de 10 % des tours ratent la cible (P(X ≤ x | n, 0,10) ≤ 0,05), « non tenu »
+    /// si l'on peut affirmer que plus de 10 % la ratent (P(X ≥ x | n, 0,10) ≤ 0,05), `nil` sinon et quand n = 0.
+    static func binomialVerdict(missed x: Int, judged n: Int) -> Bool? {
+        guard n > 0 else { return nil }
+        let tails = binomialTails(missed: x, judged: n, p: toleratedMissShare)
+        if tails.atMost <= verdictRisk { return true }
+        if tails.atLeast <= verdictRisk { return false }
+        return nil
+    }
+
+    /// Pour `n` essais jugés : le plus grand nombre de ratés qui donne encore « tenu » (nil si même 0 ne suffit pas),
+    /// et le plus petit qui donne « non tenu » (nil s'il n'y en a pas).
+    static func verdictThresholds(judged n: Int) -> (maxMissedForMet: Int?, minMissedForNotMet: Int?) {
+        guard n > 0 else { return (nil, nil) }
+        let met = (0...n).last { binomialVerdict(missed: $0, judged: n) == true }
+        let notMet = (0...n).first { binomialVerdict(missed: $0, judged: n) == false }
+        return (met, notMet)
+    }
+
+    /// Plus petit nombre d'essais jugés, tous sans raté, qui permet « tenu ».
+    static var minJudgedForMet: Int {
+        var n = 1
+        while binomialVerdict(missed: 0, judged: n) != true { n += 1 }
+        return n
+    }
+
+    /// Les essais sans contenu (`total` nil) et `failed` essais en échec comptent comme ratés ; les `suspect` essais
+    /// suspects de cache ne sont ni jugés ni ratés. Un essai mesuré est raté si son total dépasse `target`. Médianes et
+    /// 90e centile sont descriptifs, sur les essais mesurés seulement.
     static func summarizeLatency(_ timings: [TurnTiming], failed: Int = 0, suspect: Int = 0,
                                  target: Double) -> LatencySummary {
         let complete = timings.filter { $0.total != nil }
@@ -100,13 +140,12 @@ extension Reports {
         for (index, name) in TurnTiming.links.enumerated() {
             if let median = percentile(complete.compactMap { $0.linkValues[index] }, 0.5) { byLink[name] = median }
         }
-        let runs = timings.count + failed + suspect
         let noContent = timings.count - complete.count
-        let p90 = percentile(totals, 0.9)
-        let tooManyUnanswered = Double(noContent + failed) > maxUnansweredShare * Double(runs)
-        return LatencySummary(runs: runs, noContent: noContent, failed: failed, suspect: suspect,
-                              medianTotal: percentile(totals, 0.5), p90Total: p90, medianByLink: byLink,
-                              meetsTarget: tooManyUnanswered ? nil : p90.map { $0 <= target })
+        let missed = totals.filter { $0 > target }.count + noContent + failed
+        let judged = timings.count + failed
+        return LatencySummary(runs: judged + suspect, noContent: noContent, failed: failed, suspect: suspect,
+                              missed: missed, medianTotal: percentile(totals, 0.5), p90Total: percentile(totals, 0.9),
+                              medianByLink: byLink, meetsTarget: binomialVerdict(missed: missed, judged: judged))
     }
 
     /// Essais d'une série, par catégorie.
@@ -134,62 +173,60 @@ extension Reports {
     }
 
     /// Le verdict en quelques lignes. Celui de tête compte la détection de fin de tour en direct (plancher calculé) ;
-    /// le p90 brut, avec la constante de silence, suit. Le nombre d'essais mesurés est toujours donné, et le verdict
-    /// est dit indicatif sous `minMeasuredForFirmVerdict` essais mesurés.
+    /// le verdict brut, avec la constante de silence, suit, et la ligne dit quand les deux diffèrent. Chaque verdict
+    /// donne les nombres qui le fondent ; un verdict non établi dit combien de ratés permettraient de conclure.
     static func latencyVerdict(settings: LatencySettings, trials: [LatencyTrial]) -> String {
         let counts = TrialCounts(trials)
         let live = counts.summary(target: settings.target, silence: settings.liveSilence)
         let raw = counts.summary(target: settings.target)
-        let n = trials.count
         let target = decimal(settings.target, digits: 1)
-        func state(_ met: Bool?) -> String {
-            switch met {
-            case true?: "objectif de \(target) s tenu"
-            case false?: "objectif de \(target) s NON tenu"
-            case nil: "objectif de \(target) s non établi"
+        let share = Int(toleratedMissShare * 100)
+        func verdict(_ s: LatencySummary) -> String {
+            let basis = "\(s.missed) essai(s) au-dessus de la cible ou sans réponse sur \(s.judged) jugé(s)"
+            switch s.meetsTarget {
+            case true?:
+                return "objectif de \(target) s tenu — \(basis) ; à 95 %, moins de \(share) % des tours ratent la cible."
+            case false?:
+                return "objectif de \(target) s NON tenu — \(basis) ; à 95 %, plus de \(share) % des tours ratent la cible."
+            case nil:
+                guard s.judged > 0 else { return "objectif de \(target) s non établi — aucun essai jugé." }
+                let limits = verdictThresholds(judged: s.judged)
+                let met = limits.maxMissedForMet.map { "« tenu » exige au plus \($0) raté(s)" }
+                    ?? "« tenu » est impossible, même sans raté (il faut au moins \(minJudgedForMet) essais jugés)"
+                let notMet = limits.minMissedForNotMet.map { "« non tenu » au moins \($0) raté(s)" }
+                    ?? "« non tenu » est impossible"
+                return "objectif de \(target) s non établi — \(basis) ; ni l'un ni l'autre ne peut être affirmé à 95 % : "
+                    + "avec \(s.judged) essai(s) jugé(s), \(met), \(notMet)."
             }
         }
         func figures(_ s: LatencySummary) -> String {
-            guard let p90 = s.p90Total, let median = s.medianTotal else { return "aucun essai mesuré" }
-            return "p90 \(decimal(p90, digits: 2)) s sur \(s.measured) essai(s) mesuré(s) sur \(n) (médiane "
-                + "\(decimal(median, digits: 2)) s)"
+            guard let p90 = s.p90Total, let median = s.medianTotal else { return "—" }
+            return "médiane \(decimal(median, digits: 2)) s, 90e centile \(decimal(p90, digits: 2)) s"
         }
 
         var lines: [String] = []
-        lines.append("\(n) essai(s) = \(live.measured) mesuré(s) + \(live.noContent) sans contenu + \(live.failed) en échec + "
-                     + "\(live.suspect) suspect(s) de cache")
-
-        var headline = "Verdict, détection de fin de tour en direct comptée (\(decimal(settings.liveSilence, digits: 2)) s "
-            + "de silence au lieu de \(decimal(settings.silence, digits: 2)) s) : \(state(live.meetsTarget)) — \(figures(live))."
-        if live.meetsTarget == nil, live.measured > 0 {
-            headline += " Non établi : \(live.unanswered) essai(s) sur \(n) sans réponse (sans contenu ou en échec), plus "
-                + "de \(Int(maxUnansweredShare * 100)) % ; le tour du 90e centile peut être « pas de réponse », et les "
-                + "essais écartés sont sans doute les plus lents."
-        }
-        if live.measured > 0, live.measured < minMeasuredForFirmVerdict {
-            headline += " Verdict indicatif : \(live.measured) essai(s) mesuré(s), moins de \(minMeasuredForFirmVerdict). "
-                + "Le p90 de peu d'essais tombe le plus souvent sous le vrai 90e centile (à 10 essais, la 9e valeur y "
-                + "est sous lui avec une probabilité de 0,74), et il faut \(minMeasuredForFirmVerdict) essais pour que "
-                + "le plus lent le dépasse avec 95 % de confiance ; sur ce banc, deux séries de 10 essais aux mêmes "
-                + "réglages ont donné deux verdicts opposés."
-        }
-        lines.append(headline)
-
-        var rawLine = "p90 brut, silence constant de \(settings.silenceMs) ms : \(state(raw.meetsTarget)) — \(figures(raw))."
+        lines.append("\(live.runs) essai(s) = \(live.measured) mesuré(s) + \(live.noContent) sans contenu + "
+                     + "\(live.failed) en échec + \(live.suspect) suspect(s) de cache")
+        lines.append("Verdict, détection de fin de tour en direct comptée (\(decimal(settings.liveSilence, digits: 2)) s "
+                     + "de silence au lieu de \(decimal(settings.silence, digits: 2)) s) : \(verdict(live))")
+        var rawLine = "Verdict brut, silence constant de \(settings.silenceMs) ms : \(verdict(raw))"
         if raw.meetsTarget != live.meetsTarget {
             rawLine += " Les deux verdicts diffèrent : seul le premier compte la détection en direct."
         }
         lines.append(rawLine)
-
-        if Double(live.suspect) > maxUnansweredShare * Double(n) {
-            lines.append("Attention : \(live.suspect) essai(s) sur \(n) suspect(s) de cache, plus de "
-                         + "\(Int(maxUnansweredShare * 100)) % ; écartés, ils ne comptent pas dans la part sans réponse.")
+        lines.append("Règle : test binomial exact unilatéral à 95 % sur la part de tours ratés (total au-dessus de la "
+                     + "cible, sans contenu ou en échec), tolérance \(share) % ; les suspects de cache ne sont pas jugés.")
+        if live.unanswered > 0 {
+            lines.append("\(live.unanswered) essai(s) sans réponse (\(live.noContent) sans contenu, \(live.failed) en "
+                         + "échec), comptés comme ratés dans le verdict.")
         }
+        if Double(live.suspect) > toleratedMissShare * Double(live.runs) {
+            lines.append("Attention : \(live.suspect) essai(s) sur \(live.runs) suspect(s) de cache, plus de \(share) % ; "
+                         + "écartés, ils ne sont ni jugés ni comptés comme ratés.")
+        }
+        lines.append("Chiffres descriptifs sur les \(live.measured) essai(s) mesuré(s), qui ne fondent pas le verdict : "
+                     + "détection en direct comptée, \(figures(live)) ; silence constant, \(figures(raw)).")
         lines.append(liveDetectionFloor(settings))
-        let judged = n - counts.suspect
-        let under = counts.measured.filter { $0.withSilence(settings.liveSilence).total! <= settings.target }.count
-        lines.append("Essais sous l'objectif, détection en direct comptée, sans contenu et échecs comptés hors objectif, "
-                     + "suspects de cache écartés : \(under) sur \(judged).")
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -205,7 +242,7 @@ extension Reports {
 
     /// Rapport `latence.md`.
     static func latencyMarkdown(settings: LatencySettings, recordings: [LatencyRecording], withoutSpeech: [String],
-                                trials: [LatencyTrial]) -> String {
+                                trials: [LatencyTrial], stopReason: String? = nil) -> String {
         let counts = TrialCounts(trials)
         let raw = counts.summary(target: settings.target)
         let live = counts.summary(target: settings.target, silence: settings.liveSilence)
@@ -220,6 +257,10 @@ extension Reports {
         text += " ; silence de fin de tour \(settings.silenceMs) ms ; objectif \(decimal(settings.target, digits: 1)) s "
             + "au 90e centile. \(settings.runs) essai(s) à tour de rôle sur \(recordings.count) enregistrement(s) avec voix.\n\n"
 
+        if let stopReason {
+            text += "**Lancement arrêté avant la fin** : \(trials.count) essai(s) faits sur \(settings.runs) prévus. "
+                + "Cause : \(oneLine(stopReason)). Le verdict ne porte que sur les essais faits.\n\n"
+        }
         text += "## Verdict\n\n" + latencyVerdict(settings: settings, trials: trials)
 
         text += "\n## Médianes par maillon (essais mesurés)\n\n| Maillon | Médiane (s) |\n|---|---|\n"
@@ -278,8 +319,11 @@ extension Reports {
         text += "- Un modèle qui réfléchit avant de répondre peut épuiser les \(settings.maxTokens) jetons sans rien "
             + "dire : l'essai est alors « sans contenu », hors des centiles mais compté dans la part sans réponse. "
             + "Si ce plafond coupe des réponses qui seraient arrivées tard, réalité **plus lente**.\n"
-        text += "- **Taille de l'échantillon** : le p90 calculé sur peu d'essais tombe le plus souvent sous le vrai 90e "
-            + "centile (voir le verdict). Chiffre **optimiste** sous \(minMeasuredForFirmVerdict) essais mesurés.\n"
+        text += "- **Taille de l'échantillon et règle du verdict** : le verdict est un test binomial exact unilatéral "
+            + "à 95 % sur la part de tours ratés (au-dessus de la cible, sans contenu ou en échec), tolérance "
+            + "\(Int(toleratedMissShare * 100)) %. Avec peu d'essais, il reste « non établi » : « tenu » demande au "
+            + "moins \(minJudgedForMet) essais jugés, tous sans raté. Le test suppose des essais indépendants et de même "
+            + "loi ; la charge de l'endpoint varie dans le temps : **sens inconnu**.\n"
 
         text += "\n## Unicité des requêtes\n\n"
         text += "Observé : la passerelle de l'endpoint a rendu une requête de chat identique depuis son cache (toute "

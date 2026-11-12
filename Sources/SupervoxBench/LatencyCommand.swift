@@ -96,6 +96,7 @@ enum LatencyError: Error, Equatable, CustomStringConvertible {
     case noRecordings(String)
     case noSpeech
     case invalidOption(String)
+    case stopped(String)
 
     var description: String {
         switch self {
@@ -108,6 +109,7 @@ enum LatencyError: Error, Equatable, CustomStringConvertible {
         case .noRecordings(let path): "aucun fichier .wav dans \(path)"
         case .noSpeech: "aucun enregistrement ne contient de voix détectée : rien à mesurer"
         case .invalidOption(let message): message
+        case .stopped(let reason): "lancement arrêté avant la fin (rapport écrit avec les essais déjà faits) : \(reason)"
         }
     }
 }
@@ -117,8 +119,10 @@ enum LatencyError: Error, Equatable, CustomStringConvertible {
 /// empreintes SHA-256 (jamais le texte), une par ligne, dans un fichier relu à l'ouverture et complété avant chaque
 /// envoi. L'empreinte couvre `context` (modèle, voix, format, paramètres) et le texte envoyé.
 final class SpeechRequestRegistry {
-    /// Nombre maximal d'espaces finaux. Sondé sur l'endpoint : 0, 40, 120 et 250 espaces donnent le même audio
-    /// (même taille d'octets) que le texte seul.
+    /// Nombre maximal d'espaces finaux. Sondé sur l'endpoint, trois textes : 0 à 3 espaces, puis 0 et 40, puis 0,
+    /// 120 et 250 ; pour chaque texte, l'audio rendu a eu la même taille en octets quel que soit le nombre d'espaces
+    /// (pas les mêmes octets : deux synthèses d'un même texte diffèrent toujours). Même taille veut dire même durée
+    /// pour un WAV de même format ; ce qui est dit n'a pas été réécouté.
     static let defaultMaxSpaces = 250
 
     let file: URL?
@@ -162,13 +166,26 @@ final class SpeechRequestRegistry {
             if !FileManager.default.fileExists(atPath: file.path) {
                 try Data().write(to: file)
             }
-            let handle = try FileHandle(forWritingTo: file)
+            let handle = try FileHandle(forUpdating: file)
             defer { try? handle.close() }
-            try handle.seekToEnd()
-            try handle.write(contentsOf: Data((digest + "\n").utf8))
+            // Un fichier dont la dernière ligne n'a pas de fin de ligne ne doit pas coller la nouvelle empreinte à elle.
+            let end = try handle.seekToEnd()
+            var line = digest + "\n"
+            if end > 0 {
+                try handle.seek(toOffset: end - 1)
+                if handle.readData(ofLength: 1) != Data("\n".utf8) { line = "\n" + line }
+                try handle.seek(toOffset: end)
+            }
+            try handle.write(contentsOf: Data(line.utf8))
         }
         seen.insert(digest)
     }
+}
+
+/// Essais d'un lancement, et la cause de son arrêt avant la fin, s'il y en a eu un.
+struct LatencyTrials {
+    let trials: [LatencyTrial]
+    let stopReason: String?
 }
 
 /// Déroule `runs` essais, à tour de rôle sur les enregistrements (essai 1 sur le premier, 2 sur le deuxième…), l'un
@@ -183,18 +200,21 @@ final class SpeechRequestRegistry {
 /// une précédente arrête tout (`duplicateRequest`) : elle pourrait sortir du cache. Un essai est « suspect de cache »
 /// si sa première phrase est arrivée entière dans le premier morceau de contenu, ou si l'audio de sa synthèse est
 /// identique octet pour octet à celui d'un essai précédent du lancement.
-/// Une erreur sur un essai est notée pour cet essai, passée par `redact`, et les essais suivants continuent ;
-/// seule l'annulation de la tâche arrête le déroulé.
+/// Une erreur sur un essai est notée pour cet essai, passée par `redact`, et les essais suivants continuent. Une
+/// requête de chat en double, la borne d'espaces du registre atteinte ou une erreur d'écriture du registre arrêtent
+/// le déroulé : les essais déjà faits sont rendus avec la cause de l'arrêt (`stopReason`), l'essai en cours est
+/// abandonné. L'annulation de la tâche, elle, est levée.
 func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double, speechRegistry: SpeechRequestRegistry,
                       nonce: () -> String, redact: (String) -> String,
                       transcribe: (AudioClip) async throws -> String,
                       chat: ([ChatMessage]) -> AsyncThrowingStream<ChatDelta, Error>,
                       speak: (String) async throws -> Data,
-                      progress: (String) -> Void = { _ in }) async throws -> [LatencyTrial] {
+                      progress: (String) -> Void = { _ in }) async throws -> LatencyTrials {
     precondition(!recordings.isEmpty && runs > 0, "au moins un enregistrement et un essai")
     let clock = ContinuousClock()
     var sentChats: Set<String> = []
     var audioSeen: [String: Int] = [:]   // empreinte de l'audio → numéro de l'essai
+    var stopReason: String?
     var trials: [LatencyTrial] = []
 
     for index in 0..<runs {
@@ -226,7 +246,10 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
 
         // Première phrase.
         let system = interviewerSystemMessage(nonce: nonce())
-        guard sentChats.insert(system + "\u{0}" + transcript).inserted else { throw LatencyError.duplicateRequest("de chat") }
+        guard sentChats.insert(system + "\u{0}" + transcript).inserted else {
+            stopReason = "essai \(number) : \(LatencyError.duplicateRequest("de chat"))"
+            break
+        }
         let noContent = TurnTiming(silence: silence, transcription: transcription, firstSentence: nil, synthesis: nil)
         start = clock.now
         let first: FirstSentence?
@@ -248,7 +271,13 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
         }
 
         // Synthèse de la première phrase.
-        let input = try speechRegistry.uniqueInput(for: first.text)
+        let input: String
+        do {
+            input = try speechRegistry.uniqueInput(for: first.text)
+        } catch {
+            stopReason = "essai \(number), registre des requêtes de synthèse : \(describe(error))"
+            break
+        }
         start = clock.now
         let audio: Data
         do {
@@ -272,7 +301,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
         trials.append(trial(transcript, first, outcome))
         progress("essai \(number)/\(runs) (\(recording.id)) : \(decimal(timing.total ?? 0)) s")
     }
-    return trials
+    return LatencyTrials(trials: trials, stopReason: stopReason)
 }
 
 /// Retire d'un message l'adresse de l'endpoint (complète et nom d'hôte) et la clé.
@@ -417,7 +446,7 @@ struct LatencyCommand: AsyncParsableCommand {
 
         let client = OpenAICompatibleClient(config: config)
         let (chatModel, ttsModel, voice) = (self.chatModel, self.ttsModel, self.voice)
-        let trials = try await runLatencyTrials(
+        let result = try await runLatencyTrials(
             recordings: recordings, runs: runs, silence: Double(silenceMs) / 1000, speechRegistry: registry,
             nonce: { String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased() },
             redact: redact,
@@ -430,12 +459,14 @@ struct LatencyCommand: AsyncParsableCommand {
                                        ttsExtra: extras, silenceMs: silenceMs, target: target, maxTokens: Self.maxTokens,
                                        runs: runs, detector: FluidVoiceDetector.conditions,
                                        detectorHop: FluidVoiceDetector.hopSeconds)
+        let trials = result.trials
         let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
-                                               trials: trials)
+                                               trials: trials, stopReason: result.stopReason)
         let report = outDirectory.appendingPathComponent("latence.md")
         try markdown.write(to: report, atomically: true, encoding: .utf8)
         print("")
         print(Reports.latencyVerdict(settings: settings, trials: trials))
         print("Rapport : \(report.path)")
+        if let reason = result.stopReason { throw LatencyError.stopped(reason) }
     }
 }
