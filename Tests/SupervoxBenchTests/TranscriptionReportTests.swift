@@ -346,3 +346,42 @@ actor SelfDescribingSpy: Transcriber {
                                   vocabulary: ["Keycloak"])
     #expect(runs.map(\.conditions) == ["dernier préchauffage avec [\"Keycloak\"]", "dernier préchauffage avec [\"Keycloak\"]"])
 }
+
+// MARK: - Détection de voix
+
+/// La présence de voix est décidée une fois par enregistrement pour tout le passage, pas une fois par passe : toutes
+/// les passes (ici « a », « a+vocab », « b ») reçoivent la même décision.
+@Test func speechIsDetectedOncePerRecordingForAllPasses() async {
+    let calls = EventLog()
+    let a = VocabularySpy(name: "a", acceptsVocabulary: true)
+    let b = VocabularySpy(name: "b", acceptsVocabulary: false)
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: []), CorpusItem(id: "8000", text: "salut", terms: [])]
+    let runs = await runBenchmark([a, b], corpus: corpus, audio: clipFromID,
+                                  hasSpeech: { await calls.add("\(Int($0.sampleRate))"); return $0.sampleRate == 16000 },
+                                  vocabulary: ["K"])
+    #expect(await calls.events == ["16000", "8000"])
+    #expect(runs.map(\.label) == ["a", "a+vocab", "b"])
+    #expect(runs.allSatisfy { $0.results.map(\.hasSpeech) == [true, false] })
+    #expect(await a.received == [[], ["K"]])
+    #expect(await b.received == [[]])
+}
+
+/// Une erreur du détecteur sur un enregistrement n'est ni « voix » ni « sans voix » par défaut : la phrase est en
+/// échec pour chaque moteur, avec le message, et n'est envoyée à aucun moteur.
+@Test func detectorErrorFailsTheItemForEveryEngine() async {
+    let spy = VocabularySpy(name: "spy", acceptsVocabulary: false)
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: []), CorpusItem(id: "8000", text: "salut", terms: [])]
+    let out = await runEngines([spy, FakeTranscriber(name: "fake", answers: ["8000": "salut"])], corpus: corpus,
+                               audio: clipFromID, hasSpeech: { clip in
+                                   if clip.sampleRate == 16000 { throw TranscriberError.engine("modèle de voix absent") }
+                                   return true
+                               })
+    for name in ["spy", "fake"] {
+        let first = out[name]![0]
+        #expect(first.hasSpeech && first.hypothesis == nil && first.failure?.contains("modèle de voix absent") == true)
+        #expect(out[name]![1].failure == nil && out[name]![1].hasSpeech)
+    }
+    #expect(await spy.received.count == 1)   // seule la phrase « 8000 » a été transcrite
+    let s = Reports.summarize(engine: "fake", corpus: corpus, results: out["fake"]!)
+    #expect(s.failures == 1 && s.excluded == 0)
+}

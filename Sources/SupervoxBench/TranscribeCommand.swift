@@ -11,7 +11,8 @@ import SupervoxEngines
 /// - L'audio de chaque phrase est lu, et la présence de voix décidée, une seule fois pour tous les moteurs : tous
 ///   reçoivent exactement le même clip et la même décision.
 /// - Une phrase sans voix n'est envoyée à aucun moteur (`hasSpeech: false`).
-/// - Un audio illisible est un échec de la phrase pour chaque moteur.
+/// - Un audio illisible, ou une erreur du détecteur de voix, est un échec de la phrase pour chaque moteur : jamais une
+///   décision par défaut, qui ferait transcrire du silence ou écarterait une phrase parlée sans le dire.
 /// - `prepare()` puis `warmUp(vocabulary:)` ne sont pas chronométrés ; si l'un échoue, chaque phrase parlée porte
 ///   son erreur.
 /// - Seul l'appel à `transcribe` est chronométré, avec une horloge monotone.
@@ -19,7 +20,7 @@ import SupervoxEngines
 /// - Deux moteurs du même nom s'écraseraient dans le dictionnaire : c'est une erreur de programmation (`precondition`) ;
 ///   la commande les refuse avant d'arriver ici.
 func runEngines(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
-                hasSpeech: (AudioClip) async -> Bool, vocabulary: [String] = [],
+                hasSpeech: (AudioClip) async throws -> Bool, vocabulary: [String] = [],
                 language: String = "fr", progress: (String) -> Void = { _ in }) async -> [String: [ItemResult]] {
     requireUniqueNames(engines)
     let inputs = await loadInputs(corpus, audio: audio, hasSpeech: hasSpeech)
@@ -47,7 +48,7 @@ struct EngineRun {
 /// démarre pas sur un modèle refroidi par les autres moteurs. Un moteur qui n'accepte pas de vocabulaire porte une
 /// remarque.
 func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
-                  hasSpeech: (AudioClip) async -> Bool, vocabulary: [String], language: String = "fr",
+                  hasSpeech: (AudioClip) async throws -> Bool, vocabulary: [String], language: String = "fr",
                   progress: (String) -> Void = { _ in }) async -> [EngineRun] {
     requireUniqueNames(engines)
     let inputs = await loadInputs(corpus, audio: audio, hasSpeech: hasSpeech)
@@ -81,18 +82,23 @@ private func requireUniqueNames(_ engines: [any Transcriber]) {
 /// Entrée d'une phrase, préparée une fois pour tous les moteurs.
 private enum PassInput {
     case clip(AudioClip, hasSpeech: Bool)
-    case unreadable(String)
+    /// Audio illisible ou détection de voix en échec : le message est l'échec de la phrase.
+    case failed(String)
 }
 
 private func loadInputs(_ corpus: [CorpusItem], audio: (String) throws -> AudioClip,
-                        hasSpeech: (AudioClip) async -> Bool) async -> [PassInput] {
+                        hasSpeech: (AudioClip) async throws -> Bool) async -> [PassInput] {
     var inputs: [PassInput] = []
     for item in corpus {
+        let clip: AudioClip
+        do { clip = try audio(item.id) } catch {
+            inputs.append(.failed("audio illisible : \(describe(error))"))
+            continue
+        }
         do {
-            let clip = try audio(item.id)
-            inputs.append(.clip(clip, hasSpeech: await hasSpeech(clip)))
+            inputs.append(.clip(clip, hasSpeech: try await hasSpeech(clip)))
         } catch {
-            inputs.append(.unreadable("audio illisible : \(describe(error))"))
+            inputs.append(.failed("détection de voix : \(describe(error))"))
         }
     }
     return inputs
@@ -115,7 +121,7 @@ private func runPass(_ engine: any Transcriber, label: String, corpus: [CorpusIt
     var rows: [ItemResult] = []
     for (item, input) in zip(corpus, inputs) {
         switch input {
-        case .unreadable(let message):
+        case .failed(let message):
             rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: message, hasSpeech: true))
         case .clip(_, hasSpeech: false):
             rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: nil, hasSpeech: false))
@@ -306,6 +312,9 @@ struct TranscribeCommand: AsyncParsableCommand {
             }
         }
         let clips = try CorpusAudio.load(items, from: URL(fileURLWithPath: audio, isDirectory: true))
+        // Le détecteur de voix est chargé avant tout moteur : sans lui, la commande s'arrête.
+        let detector = FluidVoiceDetector()
+        try await detector.prepare()
         let transcribers: [any Transcriber] = try names.map { name in
             switch name {
             case "whisperkit": WhisperKitTranscriber(model: whisperkitModel)
@@ -323,7 +332,7 @@ struct TranscribeCommand: AsyncParsableCommand {
                 guard let clip = clips[id] else { throw TranscribeError.missingAudio([id]) }
                 return clip
             },
-            hasSpeech: { _ in true },   // branché sur la détection de voix à la tâche 7
+            hasSpeech: { try await !detector.segments(in: $0).isEmpty },
             vocabulary: terms, language: Self.language,
             progress: { print($0) }
         )

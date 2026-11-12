@@ -3,7 +3,9 @@ import Foundation
 public enum EndpointError: Error, Equatable {
     /// Une variable d'environnement obligatoire est absente ou vide.
     case missingVariable(String)
-    /// Réponse HTTP hors 2xx. `body` est le corps reçu, sans la clé d'API, tronqué à 500 caractères.
+    /// Erreur rapportée par le serveur : statut hors 2xx, ou objet JSON `error` reçu avec un statut 2xx (dans un flux
+    /// de chat ou à la place de l'audio) ; `status` est alors ce statut 2xx. `body` est le corps reçu, sans la clé
+    /// d'API, tronqué à 500 caractères.
     case http(status: Int, body: String)
     /// Réponse 2xx dont le contenu n'a pas la forme attendue.
     case malformedResponse

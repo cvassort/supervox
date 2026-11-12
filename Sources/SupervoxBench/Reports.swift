@@ -211,3 +211,248 @@ enum Reports {
         return escaped.count > 300 ? String(escaped.prefix(300)) + "…" : escaped
     }
 }
+
+// MARK: - Latence
+
+/// Durées d'un tour de parole, en secondes : de la fin de la voix au premier son de la réponse.
+struct TurnTiming: Equatable {
+    /// Silence de fin de tour : constante ajoutée, pas une détection en direct.
+    let silence: Double
+    let transcription: Double
+    /// De l'envoi au modèle à la première phrase complète ; `nil` si le modèle n'a rendu aucun texte.
+    let firstSentence: Double?
+    /// Synthèse de la première phrase ; `nil` si elle n'a pas eu lieu.
+    let synthesis: Double?
+
+    /// Somme des maillons ; `nil` si une étape n'a rien rendu.
+    var total: Double? {
+        guard let firstSentence, let synthesis else { return nil }
+        return silence + transcription + firstSentence + synthesis
+    }
+
+    /// Noms des maillons dans `LatencySummary.medianByLink`, dans l'ordre du tour.
+    static let links = ["silence", "transcription", "première phrase", "synthèse"]
+
+    fileprivate var linkValues: [Double?] { [silence, transcription, firstSentence, synthesis] }
+}
+
+struct LatencySummary: Equatable {
+    /// Essais résumés, sans contenu compris.
+    let runs: Int
+    let noContent: Int
+    let medianTotal: Double?
+    let p90Total: Double?
+    /// Médiane de chaque maillon sur les seuls essais complets.
+    let medianByLink: [String: Double]
+    /// Objectif tenu si le 90e centile du total ne le dépasse pas ; `nil` sans aucun essai complet.
+    let meetsTarget: Bool?
+}
+
+/// Réglages d'une mesure de latence, recopiés dans le rapport.
+struct LatencySettings {
+    let engine: String
+    let chatModel: String
+    let ttsModel: String
+    let voice: String
+    let ttsExtra: [String: String]
+    let silenceMs: Int
+    let target: Double
+    let maxTokens: Int
+    let runs: Int
+    /// Description du détecteur de voix et de ses réglages.
+    let detector: String
+    /// Pas du détecteur de voix, en secondes.
+    let detectorHop: Double
+}
+
+extension Reports {
+    /// Les essais sans contenu sont comptés mais n'entrent ni dans les centiles ni dans les médianes par maillon.
+    /// Le verdict porte sur le 90e centile du total, pas sur la médiane.
+    static func summarizeLatency(_ timings: [TurnTiming], target: Double) -> LatencySummary {
+        let complete = timings.filter { $0.total != nil }
+        let totals = complete.compactMap(\.total)
+        var byLink: [String: Double] = [:]
+        for (index, name) in TurnTiming.links.enumerated() {
+            if let median = percentile(complete.compactMap { $0.linkValues[index] }, 0.5) { byLink[name] = median }
+        }
+        let p90 = percentile(totals, 0.9)
+        return LatencySummary(runs: timings.count, noContent: timings.count - complete.count,
+                              medianTotal: percentile(totals, 0.5), p90Total: p90, medianByLink: byLink,
+                              meetsTarget: p90.map { $0 <= target })
+    }
+
+    /// Comptes d'une série d'essais par catégorie.
+    private struct TrialCounts {
+        var measured: [TurnTiming] = []
+        var noContent: [TurnTiming] = []
+        var suspect = 0
+        var failed = 0
+        init(_ trials: [LatencyTrial]) {
+            for trial in trials {
+                switch trial.outcome {
+                case .measured(let t): measured.append(t)
+                case .noContent(let t, _): noContent.append(t)
+                case .suspectCache: suspect += 1
+                case .failed: failed += 1
+                }
+            }
+        }
+    }
+
+    /// Le verdict en quelques lignes, avec le décompte des essais : un verdict tenu sur une partie seulement des essais
+    /// ne doit pas se lire comme un verdict sur tous.
+    static func latencyVerdict(settings: LatencySettings, trials: [LatencyTrial]) -> String {
+        let counts = TrialCounts(trials)
+        let summary = summarizeLatency(counts.measured + counts.noContent, target: settings.target)
+        let measured = counts.measured.count
+        var lines: [String] = []
+        lines.append("\(trials.count) essai(s) = \(measured) mesuré(s) + \(counts.noContent.count) sans contenu + "
+                     + "\(counts.failed) en échec + \(counts.suspect) suspect(s) de cache")
+        let target = decimal(settings.target, digits: 1)
+        switch summary.meetsTarget {
+        case nil:
+            lines.append("Verdict : non établi, aucun essai mesuré.")
+        case let met?:
+            lines.append("Verdict : objectif de \(target) s \(met ? "tenu" : "NON tenu") — p90 sur \(measured) essai(s) "
+                         + "mesuré(s) sur \(trials.count) : \(decimal(summary.p90Total!, digits: 2)) s (médiane "
+                         + "\(decimal(summary.medianTotal!, digits: 2)) s).")
+        }
+        if measured < trials.count {
+            lines.append("Attention : \(trials.count - measured) essai(s) sur \(trials.count) sans durée retenue. Un tour "
+                         + "sans réponse est un échec de la conversation : le verdict ne porte que sur les essais mesurés.")
+        }
+        lines.append(liveDetectionFloor(settings))
+        // Lecture prudente : sans contenu et échecs comptés hors objectif ; suspects de cache hors du compte.
+        let judged = trials.count - counts.suspect
+        let under = counts.measured.filter { $0.total! <= settings.target }.count
+        lines.append("Essais sous l'objectif, sans contenu et échecs comptés hors objectif, suspects de cache écartés : "
+                     + "\(under) sur \(judged).")
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// Ce que coûterait en direct, avec le détecteur du banc, l'attente du silence de fin de tour. Lu dans le code de
+    /// FluidAudio (`VadManager+Streaming.swift`), non mesuré : le silence commence à compter à la fin de la première
+    /// tranche jugée silencieuse, et la fin de tour tombe à la première fin de tranche où `silenceMs` est atteint, soit
+    /// (1 + ⌈silence / pas⌉) × pas après le début de cette tranche, qui est elle-même après la vraie fin de la voix.
+    static func liveDetectionFloor(_ settings: LatencySettings) -> String {
+        let silence = Double(settings.silenceMs) / 1000
+        let hop = settings.detectorHop
+        let floor = (1 + (silence / hop).rounded(.up)) * hop
+        return "Avec ce détecteur en direct (tranches de \(Int((hop * 1000).rounded())) ms ; lu dans le code, non "
+            + "mesuré), attendre \(settings.silenceMs) ms de silence décide la fin de tour au plus tôt "
+            + "\(decimal(floor, digits: 2)) s après le début de la tranche où il cesse d'entendre la voix, tranche "
+            + "elle-même en retard sur la vraie fin : au moins \(decimal(floor - silence, digits: 2)) s de plus que "
+            + "le silence compté ici."
+    }
+
+    /// Rapport `latence.md`.
+    static func latencyMarkdown(settings: LatencySettings, recordings: [LatencyRecording], withoutSpeech: [String],
+                                trials: [LatencyTrial]) -> String {
+        let counts = TrialCounts(trials)
+        let summary = summarizeLatency(counts.measured + counts.noContent, target: settings.target)
+        func s(_ value: Double?) -> String { value.map { decimal($0, digits: 2) } ?? "—" }
+
+        var text = "# Latence de bout en bout\n\n"
+        text += "Délai entre la fin de la parole et le premier son de la réponse. Moteur de transcription local "
+            + "`\(settings.engine)` ; modèle de chat `\(settings.chatModel)` (au plus \(settings.maxTokens) jetons) ; "
+            + "synthèse `\(settings.ttsModel)`, voix `\(settings.voice)`"
+        let extras = settings.ttsExtra.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+        text += extras.isEmpty ? "" : " (\(extras.joined(separator: ", ")))"
+        text += " ; silence de fin de tour \(settings.silenceMs) ms ; objectif \(decimal(settings.target, digits: 1)) s "
+            + "au 90e centile. \(settings.runs) essai(s) à tour de rôle sur \(recordings.count) enregistrement(s) avec voix.\n\n"
+
+        text += "## Verdict\n\n" + latencyVerdict(settings: settings, trials: trials)
+
+        text += "\n## Médianes par maillon (essais mesurés)\n\n| Maillon | Médiane (s) |\n|---|---|\n"
+        for name in TurnTiming.links { text += "| \(name) | \(s(summary.medianByLink[name])) |\n" }
+        text += "| **total** | \(s(summary.medianTotal)) |\n| **total, 90e centile** | \(s(summary.p90Total)) |\n"
+        text += "\nLa somme des médianes par maillon n'est pas la médiane du total.\n"
+
+        text += "\n## Ce qui est mesuré\n\n"
+        text += "Pour chaque essai, sur un enregistrement : (1) la fin de la voix est repérée par le détecteur et le "
+            + "clip est coupé à cet instant, hors chrono ; (2) **silence** : \(settings.silenceMs) ms ajoutées ; "
+            + "(3) **transcription** : durée de la transcription du clip coupé par le moteur local (préchargé et "
+            + "préchauffé hors chrono) ; (4) **première phrase** : de l'envoi de la requête au modèle (consigne "
+            + "d'intervieweur et transcription) à la première phrase complète rendue par le découpeur en phrases ; "
+            + "(5) **synthèse** : durée de l'appel de synthèse de cette phrase, jusqu'au dernier octet de l'audio. "
+            + "Les étapes s'enchaînent strictement, l'une après l'autre, et les essais aussi.\n\n"
+        text += "Détecteur de voix : \(settings.detector).\n"
+
+        text += "\n## Limites\n\n"
+        text += "- **Le silence de fin de tour est une constante ajoutée, pas une détection en direct.** "
+            + liveDetectionFloor(settings) + " Rend la réalité **plus lente** que ce chiffre.\n"
+        text += "- **La transcription est mesurée en bloc sur la phrase entière, ce qui majore ce que donnera un moteur "
+            + "en flux.** Rend la réalité **plus rapide**.\n"
+        text += "- Les étapes sont mesurées l'une après l'autre : une conversation réelle pourrait transcrire pendant "
+            + "le silence de fin de tour. Réalité **plus rapide**.\n"
+        text += "- La synthèse ne part qu'à la première phrase complète (c'est ce qui est mesuré). Le découpeur "
+            + "attend le morceau suivant après un terminateur en bout de texte : une réponse d'une seule question est "
+            + "chronométrée jusqu'à la fin du flux. Un découpage plus fin rendrait la réalité **plus rapide**.\n"
+        text += "- La synthèse est attendue en entier (pas de lecture pendant le téléchargement) : une synthèse en "
+            + "flux rendrait la réalité **plus rapide**. Le démarrage de la lecture audio n'est pas compté : réalité "
+            + "**plus lente**.\n"
+        text += "- Le clip est coupé à la fin de voix détectée, toujours en retard sur la vraie fin (jusqu'à 0,31 s "
+            + "mesurés sur voix de synthèse) : la transcription porte sur un peu de silence en plus. Réalité très "
+            + "légèrement **plus rapide**.\n"
+        text += "- Le premier essai ouvre la connexion à l'endpoint, les suivants la réutilisent ; dans une vraie "
+            + "conversation, après une longue pause, elle peut être fermée. Réalité possiblement **plus lente** "
+            + "(non mesuré).\n"
+        text += "- L'endpoint est partagé : sa charge varie d'une heure à l'autre. Les chiffres valent pour le moment "
+            + "de la mesure.\n"
+        text += "- Un modèle qui réfléchit avant de répondre peut épuiser les \(settings.maxTokens) jetons sans "
+            + "rien dire : l'essai est alors « sans contenu ».\n"
+
+        text += "\n## Unicité des requêtes\n\n"
+        text += "La passerelle de l'endpoint rend une requête identique depuis son cache (observé : toute la réponse "
+            + "en un seul morceau, en une fraction du temps). Chaque requête de chat porte, à la fin du message "
+            + "système, une référence aléatoire propre à l'essai ; chaque texte envoyé à la synthèse est suivi d'un "
+            + "nombre d'espaces propre à l'essai (décalage aléatoire par lancement + numéro de l'essai), ce qui ne "
+            + "change pas ce qui est dit. Une requête identique à une précédente arrête la commande. Un essai dont la "
+            + "première phrase est arrivée entière dans le premier morceau de contenu a la forme d'une réponse sortie "
+            + "du cache : il est compté à part, jamais moyenné.\n"
+
+        func section(_ title: String, _ lines: [String]) {
+            text += "\n## \(title)\n\n" + (lines.isEmpty ? "Aucun.\n" : lines.joined(separator: "\n") + "\n")
+        }
+        section("Essais suspects de cache (écartés)", trials.compactMap { trial in
+            guard case .suspectCache(let t) = trial.outcome else { return nil }
+            return "- essai \(trial.number) (`\(trial.recording)`) : total \(s(t.total)) s, première phrase "
+                + "\(s(t.firstSentence)) s en un seul morceau : « \(oneLine(trial.sentence ?? "")) »"
+        })
+        section("Essais sans contenu", trials.compactMap { trial in
+            guard case .noContent(_, let reason) = trial.outcome else { return nil }
+            return "- essai \(trial.number) (`\(trial.recording)`) : \(oneLine(reason))"
+        })
+        section("Essais en échec", trials.compactMap { trial in
+            guard case .failed(let stage, let message) = trial.outcome else { return nil }
+            return "- essai \(trial.number) (`\(trial.recording)`), étape \(stage.rawValue) : \(oneLine(message))"
+        })
+
+        text += "\n## Enregistrements\n\n| Enregistrement | Durée (s) | Fin de voix détectée (s) |\n|---|---|---|\n"
+        for recording in recordings {
+            text += "| \(cell(recording.id)) | \(s(recording.duration)) | \(s(recording.speechEnd)) |\n"
+        }
+        if !withoutSpeech.isEmpty {
+            text += "\nSans voix détectée, non mesurés : \(withoutSpeech.map { "`\($0)`" }.joined(separator: ", ")).\n"
+        }
+
+        text += "\n## Détail des essais\n\n"
+        text += "| Essai | Enregistrement | État | Transcription (s) | Première phrase (s) | Synthèse (s) | Total (s) | "
+            + "Morceaux | Transcription | Première phrase |\n|---|---|---|---|---|---|---|---|---|---|\n"
+        for trial in trials {
+            let state: String
+            var timing: TurnTiming?
+            switch trial.outcome {
+            case .measured(let t): state = "mesuré"; timing = t
+            case .noContent(let t, _): state = "sans contenu"; timing = t
+            case .suspectCache(let t): state = "suspect de cache"; timing = t
+            case .failed(let stage, _): state = "échec (\(stage.rawValue))"
+            }
+            let cells = ["\(trial.number)", trial.recording, state, s(timing?.transcription), s(timing?.firstSentence),
+                         s(timing?.synthesis), s(timing?.total), trial.contentChunks.map(String.init) ?? "—",
+                         trial.transcript ?? "—", trial.sentence ?? "—"]
+            text += "| " + cells.map(cell).joined(separator: " | ") + " |\n"
+        }
+        return text
+    }
+}
