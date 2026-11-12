@@ -80,12 +80,12 @@ struct TranscriptionClientTests {
         let text = try await client.transcribe(wav: wav, model: "m", language: "fr", prompt: "FastAPI")
         #expect(text == recordedTranscript)
 
-        let request = try #require(StubURLProtocol.lastRequest)
+        let request = try #require(StubURLProtocol.lastRequest(of: client))
         #expect(request.httpMethod == "POST")
         #expect(request.url?.absoluteString == "https://exemple.test\(transcriptionPath)")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer k")
 
-        let parsed = try #require(parseMultipart(StubURLProtocol.lastBody, contentType: request.value(forHTTPHeaderField: "Content-Type")))
+        let parsed = try #require(parseMultipart(StubURLProtocol.lastBody(of: client), contentType: request.value(forHTTPHeaderField: "Content-Type")))
         func value(_ name: String) -> String? {
             parsed.parts.first { $0.name == name }.map { String(decoding: $0.data, as: UTF8.self) }
         }
@@ -104,8 +104,8 @@ struct TranscriptionClientTests {
         for (language, prompt) in [(nil, nil), ("", ""), (nil, ""), ("", nil)] as [(String?, String?)] {
             let client = stubbedClient(status: 200, fixture: "transcription-200.json")
             _ = try await client.transcribe(wav: Data([1]), model: "m", language: language, prompt: prompt)
-            let request = try #require(StubURLProtocol.lastRequest)
-            let parsed = try #require(parseMultipart(StubURLProtocol.lastBody, contentType: request.value(forHTTPHeaderField: "Content-Type")))
+            let request = try #require(StubURLProtocol.lastRequest(of: client))
+            let parsed = try #require(parseMultipart(StubURLProtocol.lastBody(of: client), contentType: request.value(forHTTPHeaderField: "Content-Type")))
             #expect(parsed.parts.map(\.name) == ["file", "model", "response_format"], "language=\(String(describing: language)) prompt=\(String(describing: prompt))")
         }
     }
@@ -164,7 +164,7 @@ struct TranscriptionClientTests {
     func baseURLShapesReachTheSamePath(base: String, expected: String) async throws {
         let client = stubbedClient(status: 200, body: "{\"text\":\"ok\"}", baseURL: base)
         _ = try await client.transcribe(wav: Data([1]), model: "m", language: nil, prompt: nil)
-        #expect(StubURLProtocol.lastRequest?.url?.absoluteString == expected)
+        #expect(StubURLProtocol.lastRequest(of: client)?.url?.absoluteString == expected)
     }
 
     /// Une adresse sans schéma (`exemple.test`) est refusée avant toute requête.
@@ -176,7 +176,7 @@ struct TranscriptionClientTests {
             return
         }
         #expect(!message.isEmpty)
-        #expect(StubURLProtocol.lastRequest == nil)
+        #expect(StubURLProtocol.lastRequest(of: client) == nil)
     }
 
     @Test func networkFailureIsMappedToTransport() async {
@@ -187,7 +187,7 @@ struct TranscriptionClientTests {
             return
         }
         #expect(!message.isEmpty)
-        #expect(StubURLProtocol.lastRequest != nil)  // la requête est bien partie : c'est le réseau qui a échoué
+        #expect(StubURLProtocol.lastRequest(of: client) != nil)  // la requête est bien partie : c'est le réseau qui a échoué
     }
 
     /// Une requête annulée (Ctrl-C, délai d'une tâche parente) n'est pas une panne réseau : on propage l'annulation.
