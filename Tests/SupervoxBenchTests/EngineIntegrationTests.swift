@@ -81,4 +81,11 @@ struct EngineIntegrationTests {
         try await measure(AppleSpeechTranscriber(locale: "fr-FR", warmUp: false), label: "apple (froid)", clip: clip)
         try await measure(AppleSpeechTranscriber(locale: "fr-FR"), label: "apple", clip: clip)
     }
+
+    /// Une locale que le framework ne propose pas fait échouer `prepare()` : pas de repli silencieux sur une autre.
+    @Test func appleSpeechRejectsUnsupportedLocale() async {
+        await #expect(throws: TranscriberError.unsupportedLocale("zz-ZZ")) {
+            try await AppleSpeechTranscriber(locale: "zz-ZZ").prepare()
+        }
+    }
 }

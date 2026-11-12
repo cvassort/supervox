@@ -48,8 +48,9 @@ public actor WhisperKitTranscriber: Transcriber {
             temperature: 0,
             usePrefillPrompt: true,
             detectLanguage: false,
-            skipSpecialTokens: true,   // sinon le texte porte <|fr|>, <|0.00|>… comptés comme mots insérés
-            withoutTimestamps: true
+            skipSpecialTokens: true    // sinon le texte porte <|fr|>, <|0.00|>… comptés comme mots insérés
+            // Horodatage laissé au défaut de la bibliothèque (activé) : même texte que sans sur le corpus de contrôle,
+            // ~0,03 s de plus par phrase, et c'est lui qui découpe un enregistrement de plus de 30 s en fenêtres.
         )
         if !vocabulary.isEmpty {
             guard let tokenizer = kit.tokenizer else { throw TranscriberError.vocabularyUnavailable("tokenizer WhisperKit absent") }

@@ -155,7 +155,7 @@ private func clipFromID(_ id: String) -> AudioClip { AudioClip(samples: [0.1], s
     let corpus = [CorpusItem(id: "a", text: "bonjour", terms: []), CorpusItem(id: "b", text: "salut", terms: [])]
     let s = Reports.summarize(engine: "x", corpus: corpus,
                               results: [ItemResult(id: "a", hypothesis: "bonjour", seconds: 1, failure: nil, hasSpeech: true)])
-    #expect(s.failures == 1 && s.wer == 0)
+    #expect(s.failures == 1 && abs(s.wer! - 0) < 1e-9)
 }
 
 /// Deux moteurs du même nom écraseraient leurs résultats dans le dictionnaire : `runEngines` s'arrête.

@@ -31,8 +31,7 @@ public actor AppleSpeechTranscriber: Transcriber {
         }
         // Correspondance par le framework, pas par `==` : « fr-FR » et « fr_FR » désignent la même locale.
         guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: localeIdentifier)) else {
-            let supported = await SpeechTranscriber.supportedLocales.map(\.identifier).sorted().joined(separator: ", ")
-            throw TranscriberError.engine("locale \(localeIdentifier) absente de SpeechTranscriber.supportedLocales (\(supported))")
+            throw TranscriberError.unsupportedLocale(localeIdentifier)
         }
         let module = Self.module(locale)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
