@@ -39,12 +39,24 @@ swift run supervox-bench <commande> --help
   Un exemple de corpus est dans `Bench/corpus.example.tsv`. Aucune variable d'environnement.
 - `transcribe` : fait transcrire les enregistrements par chaque moteur et compare les taux d'erreur
   (`--corpus`, `--audio`, `--engines`, `--out`, et d'autres options). Le moteur `endpoint` demande
-  `--endpoint-model` et lit l'endpoint dans l'environnement ; les moteurs locaux n'en ont pas besoin.
+  `--endpoint-model` et lit l'endpoint dans l'environnement, avant toute autre étape ; les moteurs locaux n'en ont
+  pas besoin. Les messages d'erreur sont débarrassés de l'adresse de l'endpoint et de la clé, comme dans `latency`.
   La commande charge un modèle de détection de voix avant tout moteur : il est téléchargé au premier lancement,
   même avec le seul moteur du système (`--engines apple`).
 - `latency` : mesure le délai entre la fin de la parole et la première phrase synthétisée de la réponse
   (`--audio`, `--engine`, `--chat-model`, `--tts-model`, `--voice`, `--out`, et d'autres options).
-  Elle lit toujours l'endpoint dans l'environnement.
+  Elle lit toujours l'endpoint dans l'environnement. `--vocabulary <fichier>` mesure le moteur avec le vocabulaire
+  global (même format et mêmes contrôles que dans `transcribe`) ; le rapport nomme la configuration mesurée
+  (`parakeet` ou `parakeet+vocab`). Refusé avec `apple`, qui n'accepte pas de vocabulaire.
+
+Dossier de sortie (`--out`), contrôlé avant tout chargement de modèle et tout appel réseau :
+
+- `transcribe` et `latency` refusent d'écrire sur un rapport existant (`transcription.md`, `transcription.json`,
+  `latence.md`) sans `--overwrite`, et le message nomme le fichier : une mesure ne se refait pas à l'identique.
+  Le registre des requêtes de synthèse de `latency` est cumulatif et n'est jamais effacé.
+- les trois commandes refusent un dossier situé dans un dépôt git qui ne l'ignore pas (vérifié avec
+  `git check-ignore`) : enregistrements et rapports contiennent ta voix et ce que tu as dit. Sans `git`, ou hors de
+  tout dépôt, elles écrivent normalement.
 
 ### Comparaison des textes
 

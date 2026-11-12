@@ -511,3 +511,14 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     #expect(text.contains("4 essai(s) sur 32 suspect(s) de cache, plus de 10 %"))
     #expect(text.contains("sur 28 jugé(s)"))
 }
+
+/// Le rapport nomme la configuration de transcription réellement mesurée, vocabulaire compris.
+@Test func reportNamesTheMeasuredTranscriptionConfiguration() {
+    let primed = LatencySettings(engine: "parakeet+vocab", vocabulary: ["Keycloak", "Celery"], chatModel: "m", ttsModel: "t",
+                                 voice: "v", ttsExtra: [:], silenceMs: 600, target: 2.0, maxTokens: 300, runs: 1,
+                                 detector: "détecteur", detectorHop: 0.256)
+    let md = Reports.latencyMarkdown(settings: primed, recordings: [recording], withoutSpeech: [], trials: [])
+    #expect(md.contains("`parakeet+vocab` (vocabulaire global de 2 terme(s)") && md.contains("Keycloak, Celery"))
+    let plain = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: [])
+    #expect(plain.contains("`parakeet` (sans vocabulaire)"))
+}

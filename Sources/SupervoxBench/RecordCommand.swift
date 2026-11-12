@@ -121,6 +121,9 @@ struct RecordCommand: ParsableCommand {
     var overwrite = false
 
     func run() throws {
+        // Avant de lire le corpus et d'ouvrir le micro.
+        try OutputGuard.checkIgnoredByGit(URL(fileURLWithPath: out, isDirectory: true),
+                                          content: "ces enregistrements contiennent ta voix")
         let items = try Corpus.load(from: URL(fileURLWithPath: corpus))
         let session = RecordSession(
             items: items,

@@ -57,7 +57,10 @@ struct LatencySummary: Equatable {
 
 /// Réglages d'une mesure de latence, recopiés dans le rapport.
 struct LatencySettings {
+    /// Étiquette de la configuration de transcription mesurée : `parakeet`, ou `parakeet+vocab` avec un vocabulaire.
     let engine: String
+    /// Vocabulaire global donné au moteur (préchauffage et chaque transcription) ; vide sans `--vocabulary`.
+    var vocabulary: [String] = []
     let chatModel: String
     let ttsModel: String
     let voice: String
@@ -253,7 +256,11 @@ extension Reports {
 
         var text = "# Latence de bout en bout\n\n"
         text += "Délai entre la fin de la parole et le premier son de la réponse. Moteur de transcription local "
-            + "`\(settings.engine)` ; modèle de chat `\(settings.chatModel)` (au plus \(settings.maxTokens) jetons) ; "
+            + "`\(settings.engine)`"
+        text += settings.vocabulary.isEmpty ? " (sans vocabulaire)"
+            : " (vocabulaire global de \(settings.vocabulary.count) terme(s), au préchauffage et à chaque transcription : "
+                + "\(settings.vocabulary.joined(separator: ", ")))"
+        text += " ; modèle de chat `\(settings.chatModel)` (au plus \(settings.maxTokens) jetons) ; "
             + "synthèse `\(settings.ttsModel)`, voix `\(settings.voice)`"
         let extras = settings.ttsExtra.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         text += extras.isEmpty ? "" : " (\(extras.joined(separator: ", ")))"

@@ -305,19 +305,15 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
     return LatencyTrials(trials: trials, stopReason: stopReason)
 }
 
-/// Retire d'un message l'adresse de l'endpoint (complète et nom d'hôte) et la clé.
-func endpointRedactor(_ config: EndpointConfig) -> (String) -> String {
-    let address = config.baseURL.absoluteString
-    var secrets = [address, address.hasSuffix("/") ? String(address.dropLast()) : address]
-    if let host = config.baseURL.host(), !host.isEmpty { secrets.append(host) }
-    let key = config.apiKey
-    return { text in
-        var out = key.isEmpty ? text : text.replacingOccurrences(of: key, with: "***")
-        for secret in secrets where !secret.isEmpty {
-            out = out.replacingOccurrences(of: secret, with: "<endpoint>", options: .caseInsensitive)
-        }
-        return out
-    }
+/// Charge et préchauffe `transcriber` avec le vocabulaire de la mesure, hors chrono ; rend l'étiquette de la
+/// configuration mesurée (`parakeet` ou `parakeet+vocab`, comme dans `transcribe`) et la transcription à chronométrer,
+/// qui reçoit le même vocabulaire à chaque essai.
+func prepareLatencyTranscription(_ transcriber: any Transcriber, vocabulary: [String], language: String) async throws
+    -> (label: String, transcribe: (AudioClip) async throws -> String) {
+    try await transcriber.prepare()
+    try await transcriber.warmUp(vocabulary: vocabulary)
+    let label = vocabulary.isEmpty ? transcriber.name : vocabularyLabel(transcriber.name)
+    return (label, { try await transcriber.transcribe($0, language: language, vocabulary: vocabulary) })
 }
 
 private func seconds(_ duration: Duration) -> Double {
@@ -375,8 +371,19 @@ struct LatencyCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Variante du modèle WhisperKit.")
     var whisperkitModel = "large-v3-v20240930_turbo"
 
+    @Option(name: .long, help: ArgumentHelp(
+        "Vocabulaire global, un terme par ligne : le moteur est préchauffé et mesuré avec lui (étiquette <moteur>+vocab).",
+        discussion: "Même format et mêmes contrôles que dans transcribe. Avec WhisperKit, l'amorce est comptée avant "
+            + "tout chargement de modèle. Refusé avec un moteur qui n'accepte pas de vocabulaire (apple)."))
+    var vocabulary: String?
+
     @Option(name: .long, help: "Dossier de sortie : latence.md, et le registre des requêtes de synthèse déjà envoyées.")
     var out: String
+
+    @Flag(name: .long, help: "Remplace latence.md s'il existe (sinon la commande refuse). Le registre des requêtes de synthèse n'est jamais effacé.")
+    var overwrite = false
+
+    static let reportFile = "latence.md"
 
     /// `key=value` ; la clé est non vide, la valeur peut l'être.
     static func parseExtras(_ items: [String]) throws -> [String: String] {
@@ -391,7 +398,19 @@ struct LatencyCommand: AsyncParsableCommand {
     }
 
     func run() async throws {
-        // Tout ce qui peut être refusé l'est avant de charger le moindre modèle.
+        try await run(environment: ProcessInfo.processInfo.environment)
+    }
+
+    func makeTranscriber() -> any Transcriber {
+        switch engine {
+        case "whisperkit": WhisperKitTranscriber(model: whisperkitModel)
+        case "parakeet": ParakeetTranscriber()
+        default: AppleSpeechTranscriber(locale: TranscribeCommand.appleLocale)
+        }
+    }
+
+    func run(environment: [String: String]) async throws {
+        // Tout ce qui peut être refusé l'est avant de charger le moindre modèle et avant tout appel réseau.
         guard Self.localEngines.contains(engine) else {
             throw LatencyError.invalidOption("moteur « \(engine) » refusé : moteur local attendu (\(Self.localEngines.joined(separator: ", "))) ; "
                                              + "un moteur distant recevrait le même audio à chaque essai et pourrait répondre depuis un cache")
@@ -400,8 +419,20 @@ struct LatencyCommand: AsyncParsableCommand {
         guard silenceMs >= 0 else { throw LatencyError.invalidOption("--silence-ms ne peut pas être négatif") }
         guard target > 0 else { throw LatencyError.invalidOption("--target doit être positif") }
         let extras = try Self.parseExtras(ttsExtra)
-        let config = try EndpointConfig.fromEnvironment(ProcessInfo.processInfo.environment)
+        let config = try EndpointConfig.fromEnvironment(environment)
         let redact = endpointRedactor(config)
+        let outDirectory = URL(fileURLWithPath: out, isDirectory: true)
+        try OutputGuard.checkIgnoredByGit(outDirectory, content: "ce rapport contient ce que tu as dit (transcriptions) "
+                                          + "et les réponses du modèle")
+        // Le registre des requêtes de synthèse reste cumulatif : seul le rapport est protégé.
+        try OutputGuard.checkNotExisting([outDirectory.appendingPathComponent(Self.reportFile)], overwrite: overwrite)
+        let transcriber = makeTranscriber()
+        if vocabulary != nil && !transcriber.acceptsVocabulary {
+            throw LatencyError.invalidOption("le moteur \(engine) n'accepte pas de vocabulaire : --vocabulary serait "
+                                             + "ignoré et la mesure porterait une étiquette trompeuse")
+        }
+        let terms = try await GlobalVocabulary.load(vocabulary, whisperKitModel: engine == "whisperkit" ? whisperkitModel : nil,
+                                                    say: { print($0) })
 
         let directory = URL(fileURLWithPath: audio, isDirectory: true)
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -429,16 +460,9 @@ struct LatencyCommand: AsyncParsableCommand {
             print("Attention : moins d'essais que d'enregistrements, \(recordings.count - runs) enregistrement(s) ne seront pas mesurés.")
         }
 
-        let transcriber: any Transcriber = switch engine {
-        case "whisperkit": WhisperKitTranscriber(model: whisperkitModel)
-        case "parakeet": ParakeetTranscriber()
-        default: AppleSpeechTranscriber(locale: TranscribeCommand.appleLocale)
-        }
         print("\(engine) : chargement et préchauffage…")
-        try await transcriber.prepare()
-        try await transcriber.warmUp(vocabulary: [])
+        let transcription = try await prepareLatencyTranscription(transcriber, vocabulary: terms, language: Self.language)
 
-        let outDirectory = URL(fileURLWithPath: out, isDirectory: true)
         try FileManager.default.createDirectory(at: outDirectory, withIntermediateDirectories: true)
         let extrasKey = extras.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
         let registry = try SpeechRequestRegistry(
@@ -451,19 +475,19 @@ struct LatencyCommand: AsyncParsableCommand {
             recordings: recordings, runs: runs, silence: Double(silenceMs) / 1000, speechRegistry: registry,
             nonce: { String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(16)).lowercased() },
             redact: redact,
-            transcribe: { try await transcriber.transcribe($0, language: Self.language, vocabulary: []) },
+            transcribe: transcription.transcribe,
             chat: { client.chatStream(model: chatModel, messages: $0, maxTokens: Self.maxTokens) },
             speak: { try await client.speech(model: ttsModel, input: $0, voice: voice, format: Self.speechFormat, extra: extras) },
             progress: { print($0) })
 
-        let settings = LatencySettings(engine: engine, chatModel: chatModel, ttsModel: ttsModel, voice: voice,
+        let settings = LatencySettings(engine: transcription.label, vocabulary: terms, chatModel: chatModel, ttsModel: ttsModel, voice: voice,
                                        ttsExtra: extras, silenceMs: silenceMs, target: target, maxTokens: Self.maxTokens,
                                        runs: runs, detector: FluidVoiceDetector.conditions,
                                        detectorHop: FluidVoiceDetector.hopSeconds)
         let trials = result.trials
         let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
                                                trials: trials, stopReason: result.stopReason)
-        let report = outDirectory.appendingPathComponent("latence.md")
+        let report = outDirectory.appendingPathComponent(Self.reportFile)
         try markdown.write(to: report, atomically: true, encoding: .utf8)
         print("")
         print(Reports.latencyVerdict(settings: settings, trials: trials))
