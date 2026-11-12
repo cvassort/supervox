@@ -2,6 +2,7 @@ import Foundation
 import SupervoxCore
 import SupervoxEngines
 import Testing
+@testable import SupervoxBench
 
 // Vrai détecteur, vrai modèle (téléchargé au premier passage). Activé seulement avec SUPERVOX_INTEGRATION=1.
 
@@ -79,5 +80,28 @@ struct VoiceDetectorIntegrationTests {
                 #expect(abs(end / hop - (end / hop).rounded()) < 1e-6, "fin hors de la grille du détecteur : \(label), \(end) s")
             }
         }
+    }
+
+    /// `latency` signale un enregistrement dont la voix court jusqu'à la fin du clip (passage fermé par la bibliothèque
+    /// à la fin du clip, clip non coupé) ; la même phrase suivie d'une seconde de silence ne l'est pas.
+    @Test func speechRunningToTheEndOfTheClipIsFlagged() async throws {
+        let speech = try spoken(sentences[1])
+        let last = speech.samples.lastIndex { abs($0) >= referenceFloor } ?? 0
+        let cut = AudioClip(samples: Array(speech.samples[...last]), sampleRate: speech.sampleRate)
+        let (padded, _) = clipWithTrailingSilence(speech, lead: 0)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("sv-vad-fin-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try WavFile.write(cut, to: folder.appendingPathComponent("1-coupee.wav"))
+        try WavFile.write(padded, to: folder.appendingPathComponent("2-silence.wav"))
+        let detector = FluidVoiceDetector()
+        let loaded = try await LatencyAudio.load(folder, segments: { try await detector.segments(in: $0) }, warn: { _ in })
+        for recording in loaded.recordings {
+            print(String(format: "[intégration] %@ : durée %.3f s, fin de voix %.3f s, ouverte en fin de clip : %@",
+                         recording.id, recording.duration, recording.speechEnd, recording.openAtClipEnd ? "oui" : "non"))
+        }
+        #expect(loaded.recordings.map(\.id) == ["1-coupee", "2-silence"])
+        #expect(loaded.recordings.first?.openAtClipEnd == true)
+        #expect(loaded.recordings.last?.openAtClipEnd == false)
     }
 }

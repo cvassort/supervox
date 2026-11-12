@@ -58,7 +58,7 @@ import Testing
     #expect(nothing.meetsTarget == nil)
     #expect(nothing.judged == 0 && nothing.missed == 0)
     let text = Reports.latencyVerdict(settings: settings600, trials: [])
-    #expect(text.contains("Verdict, détection de fin de tour en direct comptée"))
+    #expect(text.contains("Verdict avec ce détecteur de voix et 600 ms de silence"))
     #expect(text.components(separatedBy: "objectif de 2,0 s non établi — aucun essai jugé.").count == 3)  // les deux verdicts
 }
 
@@ -253,7 +253,7 @@ private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
         speak: { input in
             speechCalls += 1
             sent.speech(input)
-            return try await speak(speechCalls, input)
+            return SpeechAudio(data: try await speak(speechCalls, input))
         })
 }
 
@@ -469,7 +469,7 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     // Total brut 1,5 s, en direct 1,924 s : 0 raté sur 30, tenu des deux côtés (0,9³⁰ = 0,042).
     let fast = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(30, synthesis: 0.3))
     #expect(fast.contains("au lieu de 0,60 s) : objectif de 2,0 s tenu — 0 essai(s) au-dessus de la cible ou sans réponse sur 30 jugé(s)"))
-    #expect(fast.contains("Verdict brut, silence constant de 600 ms : objectif de 2,0 s tenu"))
+    #expect(fast.contains("Verdict de la chaîne mesurée (transcription, modèle, synthèse) avec un silence constant de 600 ms : objectif de 2,0 s tenu"))
     #expect(!fast.contains("diffèrent") && !fast.contains("comptés comme ratés"))
     #expect(fast.contains("détection en direct comptée, médiane 1,92 s, 90e centile 1,92 s ; silence constant, médiane 1,50 s"))
     // Total brut 1,7 s, en direct 2,124 s : brut tenu, en direct 30 ratés sur 30, non tenu.
@@ -547,7 +547,7 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
             default: return stream(streamed)                                    // mesurés
             }
         },
-        speak: { _ in Data(UUID().uuidString.utf8) },
+        speak: { _ in SpeechAudio(data: Data(UUID().uuidString.utf8)) },
         afterTrial: { counts.append($0.count) })
     #expect(counts == [1, 2, 3, 4, 5])
 }
@@ -568,4 +568,81 @@ private func measuredTrials(_ count: Int, synthesis: Double, suspects: Int = 0) 
     settings.requestTimeout = 12
     let md = Reports.latencyMarkdown(settings: settings, recordings: [recording], withoutSpeech: [], trials: [])
     #expect(md.contains("12 s sans aucune donnée reçue"))
+}
+
+// MARK: - Connexion de la synthèse
+
+/// La connexion de chaque appel de synthèse est relevée (protocole, réutilisation) et rapportée essai par essai et en
+/// une ligne ; le rapport ne prétend plus que la connexion est réutilisée sans l'avoir observé.
+@Test func synthesisConnectionIsReportedPerTrialAndSummarised() async throws {
+    let observed: [ConnectionInfo?] = [ConnectionInfo(networkProtocol: "h2", reused: false),
+                                       ConnectionInfo(networkProtocol: "h2", reused: true), nil]
+    var calls = 0
+    let result = try await runLatencyTrials(
+        recordings: [recording], runs: 3, silence: 0.6, speechRegistry: try SpeechRequestRegistry(file: nil, context: "t"),
+        nonce: { UUID().uuidString }, redact: { $0 }, transcribe: { _ in "je veux refactorer" },
+        chat: { _ in stream(streamed) },
+        speak: { _ in calls += 1; return SpeechAudio(data: Data("audio \(calls)".utf8), connection: observed[calls - 1]) })
+    #expect(result.trials.map(\.connection) == observed)
+    let md = Reports.latencyMarkdown(settings: settings600, recordings: [recording], withoutSpeech: [], trials: result.trials)
+    let detail = md.components(separatedBy: "## Détail des essais").last ?? ""
+    #expect(detail.contains("| h2, nouvelle |") && detail.contains("| h2, réutilisée |") && detail.contains("| non relevée |"))
+    #expect(md.contains("Connexion de la synthèse, relevée à chaque essai (URLSessionTaskMetrics) : h2, 1 nouvelle et 1 réutilisée ; non relevée sur 1 essai(s)"))
+    #expect(!md.contains("les suivants la réutilisent"))
+}
+
+// MARK: - Libellé des deux verdicts
+
+/// Le verdict de tête dit qu'il dépend du détecteur et de son silence ; le second porte sur la chaîne mesurée avec un
+/// silence constant. L'ordre ne change pas.
+@Test func verdictsAreLabelledForWhatTheyMeasure() {
+    let text = Reports.latencyVerdict(settings: settings600, trials: measuredTrials(30, synthesis: 0.3))
+    let head = text.range(of: "Verdict avec ce détecteur de voix et 600 ms de silence")
+    let raw = text.range(of: "Verdict de la chaîne mesurée (transcription, modèle, synthèse) avec un silence constant de 600 ms")
+    #expect(head != nil && raw != nil && head!.lowerBound < raw!.lowerBound)
+    #expect(text.contains("Un autre détecteur de voix, ou un autre découpage du silence par le détecteur, déplacerait le premier verdict, pas le second"))
+}
+
+// MARK: - Enregistrements : clip non coupé, fichiers illisibles
+
+private func wavFolder() throws -> URL {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("sv-lat-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+}
+
+/// Un fichier .wav illisible (stéréo, ou pas un WAV) est ignoré avec un avertissement qui le nomme ; les autres sont
+/// mesurés. Une voix encore ouverte à la fin du clip (passage fermé par la bibliothèque à la fin du clip) est signalée,
+/// et le clip n'est pas coupé.
+@Test func recordingsAreLoadedSkippingUnreadableFilesAndFlaggingUncutClips() async throws {
+    let folder = try wavFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+    let oneSecond = AudioClip(samples: [Float](repeating: 0.1, count: 16000), sampleRate: 16000)
+    try WavFile.write(oneSecond, to: folder.appendingPathComponent("a.wav"))
+    try WavFile.write(oneSecond, to: folder.appendingPathComponent("b.wav"))
+    try Data("pas un wav".utf8).write(to: folder.appendingPathComponent("c.wav"))
+    var stereo = try Data(contentsOf: folder.appendingPathComponent("a.wav"))
+    stereo[22] = 2   // champ « canaux » de l'en-tête fmt
+    try stereo.write(to: folder.appendingPathComponent("d.wav"))
+
+    // Détecteur simulé, appelé dans l'ordre des noms sur les seuls fichiers lisibles : « a » a sa voix jusqu'à 0,5 s,
+    // « b » jusqu'à la fin du clip (ce que rend la bibliothèque pour un passage encore ouvert).
+    var ends = [0.5, 1.0]
+    var warnings: [String] = []
+    let loaded = try await LatencyAudio.load(folder, segments: { _ in [SpeechSegment(start: 0, end: ends.removeFirst())] },
+                                             warn: { warnings.append($0) })
+    #expect(loaded.recordings.map(\.id) == ["a", "b"] && loaded.withoutSpeech.isEmpty)
+    #expect(loaded.recordings[0].openAtClipEnd == false && loaded.recordings[0].clip.samples.count == 8000)
+    #expect(loaded.recordings[1].openAtClipEnd == true && loaded.recordings[1].clip.samples.count == 16000)
+    #expect(loaded.unreadable.count == 2 && loaded.unreadable[0].hasPrefix("c.wav") && loaded.unreadable[1].hasPrefix("d.wav"))
+    #expect(loaded.unreadable[1].contains("canaux"))
+    #expect(warnings.count == 2 && warnings[0].contains("c.wav") && warnings[1].contains("d.wav"))
+
+    let silent = try await LatencyAudio.load(folder, segments: { _ in [] }, warn: { _ in })
+    #expect(silent.recordings.isEmpty && silent.withoutSpeech == ["a", "b"])
+
+    let md = Reports.latencyMarkdown(settings: settings600, recordings: loaded.recordings, withoutSpeech: [],
+                                     unreadable: loaded.unreadable, trials: [])
+    #expect(md.contains("| b | 1,00 | 1,00 | voix encore ouverte à la fin du clip : clip non coupé |"))
+    #expect(md.contains("| a | 1,00 | 0,50 |  |"))
+    #expect(md.contains("Ignorés, illisibles : `c.wav : ") && md.contains("`d.wav : "))
 }

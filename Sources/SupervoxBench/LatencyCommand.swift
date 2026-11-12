@@ -60,6 +60,54 @@ struct LatencyRecording {
     let speechEnd: Double
     /// Durée de l'enregistrement entier.
     let duration: Double
+    /// La voix était encore ouverte à la fin du clip : la bibliothèque a fermé le passage à la fin du clip, faute de
+    /// silence final suffisant. `speechEnd` est alors la fin du clip, pas une fin de voix observée, et le clip n'est
+    /// pas coupé.
+    var openAtClipEnd = false
+}
+
+/// Audio rendu par une synthèse, et la connexion qui l'a porté (`nil` : non relevée).
+struct SpeechAudio: Equatable {
+    let data: Data
+    var connection: ConnectionInfo? = nil
+}
+
+/// Enregistrements de `latency` : tous les `.wav` d'un dossier, par ordre de nom.
+enum LatencyAudio {
+    struct Loaded {
+        var recordings: [LatencyRecording] = []
+        var withoutSpeech: [String] = []
+        /// « fichier.wav : raison », pour chaque fichier ignoré parce qu'illisible.
+        var unreadable: [String] = []
+    }
+
+    /// Lit chaque fichier, le ramène à 16 kHz et repère sa fin de voix (dernier passage de `segments`), hors chrono.
+    /// Un fichier illisible (pas un WAV, stéréo…) est ignoré avec un avertissement qui le nomme, au lieu d'arrêter la
+    /// commande. Le clip est coupé à la fin de voix ; si elle tombe à la fin du clip (voix encore ouverte), le clip
+    /// est gardé entier et l'enregistrement est signalé.
+    static func load(_ directory: URL, segments: (AudioClip) async throws -> [SpeechSegment],
+                     warn: (String) -> Void) async throws -> Loaded {
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension.lowercased() == "wav" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var loaded = Loaded()
+        for file in files {
+            let id = file.deletingPathExtension().lastPathComponent
+            let clip: AudioClip
+            do { clip = Resampler.resample(try WavFile.read(file), to: transcriberSampleRate) } catch {
+                let entry = "\(file.lastPathComponent) : \(describe(error))"
+                loaded.unreadable.append(entry)
+                warn("Attention : fichier ignoré, illisible : \(entry)")
+                continue
+            }
+            guard let end = try await segments(clip).last?.end else { loaded.withoutSpeech.append(id); continue }
+            let count = min(clip.samples.count, Int((end * clip.sampleRate).rounded()))
+            loaded.recordings.append(LatencyRecording(
+                id: id, clip: AudioClip(samples: Array(clip.samples[..<count]), sampleRate: clip.sampleRate),
+                speechEnd: end, duration: clip.duration, openAtClipEnd: count == clip.samples.count))
+        }
+        return loaded
+    }
 }
 
 enum TrialStage: String, Equatable {
@@ -88,6 +136,8 @@ struct LatencyTrial: Equatable {
     let sentence: String?
     let contentChunks: Int?
     let outcome: TrialOutcome
+    /// Connexion de l'appel de synthèse (protocole, réutilisation) ; `nil` sans synthèse aboutie ou non relevée.
+    var connection: ConnectionInfo? = nil
 }
 
 enum LatencyError: Error, Equatable, CustomStringConvertible {
@@ -210,7 +260,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
                       nonce: () -> String, redact: (String) -> String,
                       transcribe: (AudioClip) async throws -> String,
                       chat: ([ChatMessage]) -> AsyncThrowingStream<ChatDelta, Error>,
-                      speak: (String) async throws -> Data,
+                      speak: (String) async throws -> SpeechAudio,
                       progress: (String) -> Void = { _ in },
                       afterTrial: ([LatencyTrial]) -> Void = { _ in }) async throws -> LatencyTrials {
     precondition(!recordings.isEmpty && runs > 0, "au moins un enregistrement et un essai")
@@ -228,9 +278,10 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
     for index in 0..<runs {
         let recording = recordings[index % recordings.count]
         let number = index + 1
-        func trial(_ transcript: String?, _ first: FirstSentence?, _ outcome: TrialOutcome) -> LatencyTrial {
+        func trial(_ transcript: String?, _ first: FirstSentence?, _ outcome: TrialOutcome,
+                   connection: ConnectionInfo? = nil) -> LatencyTrial {
             LatencyTrial(number: number, recording: recording.id, transcript: transcript, sentence: first?.text,
-                         contentChunks: first?.contentChunks, outcome: outcome)
+                         contentChunks: first?.contentChunks, outcome: outcome, connection: connection)
         }
         func failure(_ error: any Error) throws -> String {
             if error is CancellationError { throw error }
@@ -287,7 +338,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
             break
         }
         start = clock.now
-        let audio: Data
+        let audio: SpeechAudio
         do {
             audio = try await speak(input)
         } catch {
@@ -296,7 +347,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
         }
         let timing = TurnTiming(silence: silence, transcription: transcription, firstSentence: firstSentence,
                                 synthesis: seconds(start.duration(to: clock.now)))
-        let audioDigest = SpeechRequestRegistry.digest(audio)
+        let audioDigest = SpeechRequestRegistry.digest(audio.data)
         let outcome: TrialOutcome
         if let earlier = audioSeen[audioDigest] {
             outcome = .suspectCache(timing, reason: "audio de synthèse identique octet pour octet à celui de l'essai \(earlier)")
@@ -306,7 +357,7 @@ func runLatencyTrials(recordings: [LatencyRecording], runs: Int, silence: Double
             outcome = .measured(timing)
         }
         audioSeen[audioDigest] = audioSeen[audioDigest] ?? number
-        keep(trial(transcript, first, outcome))
+        keep(trial(transcript, first, outcome, connection: audio.connection))
         progress("essai \(number)/\(runs) (\(recording.id)) : \(decimal(timing.total ?? 0)) s")
     }
     return LatencyTrials(trials: trials, stopReason: stopReason)
@@ -446,26 +497,20 @@ struct LatencyCommand: AsyncParsableCommand {
                                                     say: { print($0) })
 
         let directory = URL(fileURLWithPath: audio, isDirectory: true)
-        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension.lowercased() == "wav" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        guard !files.isEmpty else { throw LatencyError.noRecordings(audio) }
+        let hasWav = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .contains { $0.pathExtension.lowercased() == "wav" }
+        guard hasWav else { throw LatencyError.noRecordings(audio) }
 
         // Fin de voix de chaque enregistrement, une fois, hors chrono.
         let detector = FluidVoiceDetector()
         try await detector.prepare()
-        var recordings: [LatencyRecording] = []
-        var withoutSpeech: [String] = []
-        for file in files {
-            let id = file.deletingPathExtension().lastPathComponent
-            let clip = Resampler.resample(try WavFile.read(file), to: transcriberSampleRate)
-            guard let end = try await detector.segments(in: clip).last?.end else { withoutSpeech.append(id); continue }
-            let count = min(clip.samples.count, Int((end * clip.sampleRate).rounded()))
-            recordings.append(LatencyRecording(id: id, clip: AudioClip(samples: Array(clip.samples[..<count]),
-                                                                       sampleRate: clip.sampleRate),
-                                               speechEnd: end, duration: clip.duration))
-        }
+        let loaded = try await LatencyAudio.load(directory, segments: { try await detector.segments(in: $0) },
+                                                 warn: { print($0) })
+        let (recordings, withoutSpeech) = (loaded.recordings, loaded.withoutSpeech)
         guard !recordings.isEmpty else { throw LatencyError.noSpeech }
+        for recording in recordings where recording.openAtClipEnd {
+            print("Attention : \(recording.id) : voix encore ouverte à la fin du clip, clip non coupé.")
+        }
         print("\(recordings.count) enregistrement(s) avec voix, \(withoutSpeech.count) sans ; \(runs) essai(s).")
         if runs < recordings.count {
             print("Attention : moins d'essais que d'enregistrements, \(recordings.count - runs) enregistrement(s) ne seront pas mesurés.")
@@ -494,11 +539,15 @@ struct LatencyCommand: AsyncParsableCommand {
             redact: redact,
             transcribe: transcription.transcribe,
             chat: { client.chatStream(model: chatModel, messages: $0, maxTokens: Self.maxTokens) },
-            speak: { try await client.speech(model: ttsModel, input: $0, voice: voice, format: Self.speechFormat, extra: extras) },
+            speak: {
+                let measured = try await client.speechMeasured(model: ttsModel, input: $0, voice: voice,
+                                                               format: Self.speechFormat, extra: extras)
+                return SpeechAudio(data: measured.audio, connection: measured.connection)
+            },
             progress: { print($0) },
             afterTrial: { done in
                 // Rapport réécrit après chaque essai : un arrêt en cours de route garde les essais faits.
-                let partial = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
+                let partial = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech, unreadable: loaded.unreadable,
                                                       trials: done, progress: ReportProgress(done: done.count, planned: runs))
                 do { try partial.write(to: report, atomically: true, encoding: .utf8) } catch {
                     print("Attention : rapport partiel non écrit : \(describe(error))")
@@ -506,7 +555,7 @@ struct LatencyCommand: AsyncParsableCommand {
             })
 
         let trials = result.trials
-        let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech,
+        let markdown = Reports.latencyMarkdown(settings: settings, recordings: recordings, withoutSpeech: withoutSpeech, unreadable: loaded.unreadable,
                                                trials: trials, stopReason: result.stopReason)
         try markdown.write(to: report, atomically: true, encoding: .utf8)
         print("")

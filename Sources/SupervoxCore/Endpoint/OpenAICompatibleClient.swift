@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Client d'un endpoint HTTP compatible OpenAI. Aucun nom de fournisseur ni de modèle : tout vient de `EndpointConfig`
 /// et des arguments des appels.
@@ -76,6 +77,14 @@ public final class OpenAICompatibleClient: Sendable {
     /// Un corps vide, un corps JSON ou texte (une erreur renvoyée avec un statut 2xx) et, pour `wav`, un corps sans en-tête
     /// WAV ne sont pas de l'audio : ils lèvent une erreur au lieu d'être rendus.
     public func speech(model: String, input: String, voice: String, format: String, extra: [String: String]) async throws -> Data {
+        try await speechMeasured(model: model, input: input, voice: voice, format: format, extra: extra).audio
+    }
+
+    /// `speech`, et la connexion qui l'a portée telle que `URLSessionTaskMetrics` la décrit (dernière transaction de
+    /// la tâche) : protocole négocié, connexion réutilisée ou ouverte pour l'appel. `connection` est `nil` si le
+    /// système n'a pas livré de mesures avant la fin de l'appel.
+    public func speechMeasured(model: String, input: String, voice: String, format: String,
+                               extra: [String: String]) async throws -> (audio: Data, connection: ConnectionInfo?) {
         let url = try endpointURL(path: ["audio", "speech"])
         var fields = extra
         fields["model"] = model
@@ -90,9 +99,10 @@ public final class OpenAICompatibleClient: Sendable {
         request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await send(request, body: try encoder.encode(fields))
+        let observer = ConnectionObserver()
+        let (data, response) = try await send(request, body: try encoder.encode(fields), delegate: observer)
         try checkIsAudio(data, response: response, format: format)
-        return data
+        return (data, observer.connection)
     }
 
     // MARK: - Requêtes
@@ -119,11 +129,12 @@ public final class OpenAICompatibleClient: Sendable {
 
     /// Envoie la requête et rend le corps et la réponse d'un statut 2xx. Toute autre issue est une `EndpointError`,
     /// sauf l'annulation de la tâche, qui reste une `CancellationError`.
-    private func send(_ request: URLRequest, body: Data) async throws -> (data: Data, response: HTTPURLResponse) {
+    private func send(_ request: URLRequest, body: Data,
+                      delegate: (any URLSessionTaskDelegate)? = nil) async throws -> (data: Data, response: HTTPURLResponse) {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.upload(for: request, from: body)
+            (data, response) = try await session.upload(for: request, from: body, delegate: delegate)
         } catch {
             throw mapped(error)
         }
@@ -227,6 +238,32 @@ public final class OpenAICompatibleClient: Sendable {
         let head = Array(data.prefix(12))
         return (head[0..<4] == [0x52, 0x49, 0x46, 0x46] || head[0..<4] == [0x52, 0x46, 0x36, 0x34])  // "RIFF" ou "RF64"
             && head[8..<12] == [0x57, 0x41, 0x56, 0x45]  // "WAVE"
+    }
+}
+
+/// Connexion qui a porté une requête, d'après `URLSessionTaskMetrics`.
+public struct ConnectionInfo: Equatable, Sendable {
+    /// Protocole négocié (ALPN) : `h2`, `http/1.1`, `h3`… ; `nil` si le système ne l'a pas dit.
+    public let networkProtocol: String?
+    /// `true` si la requête est partie sur une connexion déjà ouverte.
+    public let reused: Bool
+
+    public init(networkProtocol: String?, reused: Bool) {
+        self.networkProtocol = networkProtocol
+        self.reused = reused
+    }
+}
+
+/// Délégué propre à une tâche : relève la connexion dans les mesures livrées à la fin de la tâche (mesuré sur
+/// l'endpoint : elles arrivent avant le retour de l'appel).
+private final class ConnectionObserver: NSObject, URLSessionTaskDelegate, Sendable {
+    private let observed = Mutex<ConnectionInfo?>(nil)
+    var connection: ConnectionInfo? { observed.withLock { $0 } }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard let last = metrics.transactionMetrics.last else { return }
+        let info = ConnectionInfo(networkProtocol: last.networkProtocolName, reused: last.isReusedConnection)
+        observed.withLock { $0 = info }
     }
 }
 

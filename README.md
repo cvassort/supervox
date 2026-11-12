@@ -47,7 +47,10 @@ swift run supervox-bench <commande> --help
   (`--audio`, `--engine`, `--chat-model`, `--tts-model`, `--voice`, `--out`, et d'autres options).
   Elle lit toujours l'endpoint dans l'environnement. `--vocabulary <fichier>` mesure le moteur avec le vocabulaire
   global (même format et mêmes contrôles que dans `transcribe`) ; le rapport nomme la configuration mesurée
-  (`parakeet` ou `parakeet+vocab`). Refusé avec `apple`, qui n'accepte pas de vocabulaire.
+  (`parakeet` ou `parakeet+vocab`). Refusé avec `apple`, qui n'accepte pas de vocabulaire. Un fichier `.wav`
+  illisible du dossier (pas un WAV, stéréo…) est ignoré avec un avertissement qui le nomme. Le rapport donne, pour
+  chaque essai, la connexion de l'appel de synthèse (protocole négocié, connexion réutilisée ou nouvelle), et signale
+  un enregistrement dont la voix court jusqu'à la fin du fichier (clip non coupé).
 
 Pannes et interruptions :
 

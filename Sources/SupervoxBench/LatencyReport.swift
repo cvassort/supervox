@@ -178,8 +178,9 @@ extension Reports {
         }
     }
 
-    /// Le verdict en quelques lignes. Celui de tête compte la détection de fin de tour en direct (plancher calculé) ;
-    /// le verdict brut, avec la constante de silence, suit, et la ligne dit quand les deux diffèrent. Chaque verdict
+    /// Le verdict en quelques lignes. Celui de tête vaut pour ce détecteur de voix et ce silence de fin de tour
+    /// (plancher calculé de la détection en direct) ; le second porte sur la chaîne mesurée (transcription, modèle,
+    /// synthèse) avec un silence constant, et la ligne dit quand les deux diffèrent. Chaque verdict
     /// donne les nombres qui le fondent ; un verdict non établi dit combien de ratés permettraient de conclure.
     static func latencyVerdict(settings: LatencySettings, trials: [LatencyTrial]) -> String {
         let counts = TrialCounts(trials)
@@ -213,13 +214,17 @@ extension Reports {
         var lines: [String] = []
         lines.append("\(live.runs) essai(s) = \(live.measured) mesuré(s) + \(live.noContent) sans contenu + "
                      + "\(live.failed) en échec + \(live.suspect) suspect(s) de cache")
-        lines.append("Verdict, détection de fin de tour en direct comptée (\(decimal(settings.liveSilence, digits: 2)) s "
-                     + "de silence au lieu de \(decimal(settings.silence, digits: 2)) s) : \(verdict(live))")
-        var rawLine = "Verdict brut, silence constant de \(settings.silenceMs) ms : \(verdict(raw))"
+        lines.append("Verdict avec ce détecteur de voix et \(settings.silenceMs) ms de silence (fin de tour décidée en "
+                     + "direct au plus tôt \(decimal(settings.liveSilence, digits: 2)) s après la fin de voix repérée, au "
+                     + "lieu de \(decimal(settings.silence, digits: 2)) s) : \(verdict(live))")
+        var rawLine = "Verdict de la chaîne mesurée (transcription, modèle, synthèse) avec un silence constant de "
+            + "\(settings.silenceMs) ms : \(verdict(raw))"
         if raw.meetsTarget != live.meetsTarget {
             rawLine += " Les deux verdicts diffèrent : seul le premier compte la détection en direct."
         }
         lines.append(rawLine)
+        lines.append("Un autre détecteur de voix, ou un autre découpage du silence par le détecteur, déplacerait le "
+                     + "premier verdict, pas le second, qui n'ajoute qu'un silence constant à la chaîne mesurée.")
         lines.append("Règle : test binomial exact unilatéral à 95 % sur la part de tours ratés (total au-dessus de la "
                      + "cible, sans contenu ou en échec), tolérance \(share) % ; les suspects de cache ne sont pas jugés. "
                      + "Le niveau de 95 % suppose des essais indépendants : ici ils s'enchaînent, à tour de rôle sur "
@@ -252,7 +257,7 @@ extension Reports {
     /// Rapport `latence.md`.
     /// `progress` : rapport écrit en cours de lancement, signalé en tête.
     static func latencyMarkdown(settings: LatencySettings, recordings: [LatencyRecording], withoutSpeech: [String],
-                                trials: [LatencyTrial], stopReason: String? = nil,
+                                unreadable: [String] = [], trials: [LatencyTrial], stopReason: String? = nil,
                                 progress: ReportProgress? = nil) -> String {
         let counts = TrialCounts(trials)
         let raw = counts.summary(target: settings.target)
@@ -329,10 +334,9 @@ extension Reports {
         text += "- Le clip est coupé à la fin de voix détectée, en retard sur la vraie fin. Un système en direct "
             + "transcrit lui aussi l'audio jusqu'à sa décision de fin de tour, qui vient encore plus tard : sur ce "
             + "point, la réalité n'est pas plus rapide, plutôt **très légèrement plus lente**.\n"
-        text += "- Le premier essai ouvre la connexion à l'endpoint, les suivants la réutilisent, et les essais "
-            + "s'enchaînent sans pause ; dans une vraie conversation, après une longue pause, la connexion peut être "
-            + "fermée et le service de synthèse refroidi (un premier appel à plus d'1 s a été observé). Réalité "
-            + "**plus lente** (non mesuré ici).\n"
+        text += "- \(connectionSummary(trials)) Les essais s'enchaînent sans pause ; dans une vraie conversation, "
+            + "après une longue pause, la connexion peut être fermée et le service de synthèse refroidi (un premier "
+            + "appel à plus d'1 s a été observé). Réalité **plus lente** (non mesuré ici).\n"
         text += "- L'endpoint est partagé et sa charge varie d'une heure à l'autre : **sens inconnu**, les chiffres "
             + "valent pour le moment de la mesure.\n"
         text += "- Un modèle qui réfléchit avant de répondre peut épuiser les \(settings.maxTokens) jetons sans rien "
@@ -376,17 +380,26 @@ extension Reports {
             return "- essai \(trial.number) (`\(trial.recording)`), étape \(stage.rawValue) : \(oneLine(message))"
         })
 
-        text += "\n## Enregistrements\n\n| Enregistrement | Durée (s) | Fin de voix détectée (s) |\n|---|---|---|\n"
+        text += "\n## Enregistrements\n\n| Enregistrement | Durée (s) | Fin de voix détectée (s) | Remarque |\n|---|---|---|---|\n"
         for recording in recordings {
-            text += "| \(cell(recording.id)) | \(s(recording.duration)) | \(s(recording.speechEnd)) |\n"
+            let remark = recording.openAtClipEnd ? "voix encore ouverte à la fin du clip : clip non coupé" : ""
+            text += "| \(cell(recording.id)) | \(s(recording.duration)) | \(s(recording.speechEnd)) | \(remark) |\n"
+        }
+        if recordings.contains(where: \.openAtClipEnd) {
+            text += "\nVoix encore ouverte à la fin du clip : le détecteur n'a pas vu de silence final, la bibliothèque a "
+                + "fermé le passage à la fin du clip. La « fin de voix » y est la fin du clip, pas une fin observée ; le "
+                + "clip est transcrit entier.\n"
         }
         if !withoutSpeech.isEmpty {
             text += "\nSans voix détectée, non mesurés : \(withoutSpeech.map { "`\($0)`" }.joined(separator: ", ")).\n"
         }
+        if !unreadable.isEmpty {
+            text += "\nIgnorés, illisibles : \(unreadable.map { "`\(oneLine($0))`" }.joined(separator: ", ")).\n"
+        }
 
         text += "\n## Détail des essais\n\nTotaux avec le silence constant.\n\n"
         text += "| Essai | Enregistrement | État | Transcription (s) | Première phrase (s) | Synthèse (s) | Total (s) | "
-            + "Morceaux | Transcription | Première phrase |\n|---|---|---|---|---|---|---|---|---|---|\n"
+            + "Morceaux | Connexion (synthèse) | Transcription | Première phrase |\n|---|---|---|---|---|---|---|---|---|---|---|\n"
         for trial in trials {
             let state: String
             var timing: TurnTiming?
@@ -398,9 +411,46 @@ extension Reports {
             }
             let cells = ["\(trial.number)", trial.recording, state, s(timing?.transcription), s(timing?.firstSentence),
                          s(timing?.synthesis), s(timing?.total), trial.contentChunks.map(String.init) ?? "—",
-                         trial.transcript ?? "—", trial.sentence ?? "—"]
+                         connection(trial), trial.transcript ?? "—", trial.sentence ?? "—"]
             text += "| " + cells.map(cell).joined(separator: " | ") + " |\n"
         }
         return text
+    }
+
+    /// Essais dont la synthèse a abouti : seuls ceux-là ont une connexion à relever.
+    private static func synthesized(_ trial: LatencyTrial) -> Bool {
+        switch trial.outcome {
+        case .measured, .suspectCache: true
+        case .noContent, .failed: false
+        }
+    }
+
+    /// Cellule « Connexion (synthèse) » : protocole et réutilisation relevés, « non relevée », ou « — » sans synthèse.
+    private static func connection(_ trial: LatencyTrial) -> String {
+        guard synthesized(trial) else { return "—" }
+        guard let info = trial.connection else { return "non relevée" }
+        return "\(info.networkProtocol ?? "protocole inconnu"), \(info.reused ? "réutilisée" : "nouvelle")"
+    }
+
+    /// La connexion de la synthèse telle qu'observée, en une phrase, par protocole.
+    static func connectionSummary(_ trials: [LatencyTrial]) -> String {
+        let done = trials.filter(synthesized)
+        guard !done.isEmpty else { return "Connexion de la synthèse : aucune synthèse aboutie, rien à relever." }
+        var byProtocol: [String: (fresh: Int, reused: Int)] = [:]
+        var order: [String] = []
+        for info in done.compactMap(\.connection) {
+            let name = info.networkProtocol ?? "protocole inconnu"
+            if byProtocol[name] == nil { order.append(name) }
+            var counts = byProtocol[name] ?? (0, 0)
+            if info.reused { counts.reused += 1 } else { counts.fresh += 1 }
+            byProtocol[name] = counts
+        }
+        var parts = order.map { name -> String in
+            let c = byProtocol[name]!
+            return "\(name), \(c.fresh) nouvelle et \(c.reused) réutilisée"
+        }
+        let missing = done.filter { $0.connection == nil }.count
+        if missing > 0 { parts.append("non relevée sur \(missing) essai(s)") }
+        return "Connexion de la synthèse, relevée à chaque essai (URLSessionTaskMetrics) : \(parts.joined(separator: " ; "))."
     }
 }
