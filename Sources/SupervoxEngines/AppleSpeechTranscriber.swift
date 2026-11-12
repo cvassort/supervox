@@ -14,14 +14,18 @@ import SupervoxCore
 /// initial est fait dans `prepare()`.
 public actor AppleSpeechTranscriber: Transcriber {
     public nonisolated let name = "apple"
+    public nonisolated var measurementConditions: String {
+        "ressources de la locale installées et modèle gardé en mémoire pour la vie du processus, préchauffé avant "
+            + "chaque passe sur 2 s de bruit, hors chrono. Durée mesurée : conversion du tampon au format de "
+            + "l'analyseur, création d'un SpeechTranscriber et d'un SpeechAnalyzer neufs, prepareToAnalyze, analyse "
+            + "et finalisation de la phrase."
+    }
     private let localeIdentifier: String
-    private let warmUp: Bool
     private var prepared: (locale: Locale, format: AVAudioFormat)?
 
     /// `locale` : identifiant de locale, ex. `fr-FR`.
-    public init(locale: String, warmUp: Bool = true) {
+    public init(locale: String) {
         self.localeIdentifier = locale
-        self.warmUp = warmUp
     }
 
     public func prepare() async throws {
@@ -40,9 +44,12 @@ public actor AppleSpeechTranscriber: Transcriber {
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
             throw TranscriberError.engine("aucun format audio compatible avec SpeechTranscriber (\(locale.identifier))")
         }
-        let prepared = (locale: locale, format: format)
-        if warmUp { _ = try await run(warmUpClip(), prepared) }
-        self.prepared = prepared
+        self.prepared = (locale: locale, format: format)
+    }
+
+    public func warmUp(vocabulary: [String]) async throws {
+        guard let prepared else { throw TranscriberError.notPrepared(name) }
+        _ = try await run(warmUpClip(), prepared)
     }
 
     public func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {

@@ -16,20 +16,44 @@ struct FakeTranscriber: Transcriber {
     }
 }
 
-/// Double qui mémorise chaque vocabulaire reçu, dans l'ordre des appels.
+/// Journal partagé entre plusieurs doubles : ordre global des appels.
+actor EventLog {
+    private(set) var events: [String] = []
+    func add(_ event: String) { events.append(event) }
+}
+
+/// Double qui mémorise chaque vocabulaire reçu par `transcribe`, dans l'ordre des appels ; si un journal est donné,
+/// il y note aussi `prepare`, `warmUp` et `transcribe` avec le vocabulaire.
 actor VocabularySpy: Transcriber {
     nonisolated let name: String
     nonisolated let acceptsVocabulary: Bool
+    nonisolated let measurementConditions: String
+    private let log: EventLog?
     private(set) var received: [[String]] = []
 
-    init(name: String = "spy", acceptsVocabulary: Bool = true) {
+    init(name: String = "spy", acceptsVocabulary: Bool = true, log: EventLog? = nil, conditions: String = "conditions de test") {
         self.name = name
         self.acceptsVocabulary = acceptsVocabulary
+        self.log = log
+        self.measurementConditions = conditions
     }
 
-    func prepare() async throws {}
+    func prepare() async throws { await log?.add("\(name) prepare") }
+    func warmUp(vocabulary: [String]) async throws { await log?.add("\(name) warmUp \(vocabulary)") }
     func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {
         received.append(vocabulary)
+        await log?.add("\(name) transcribe \(vocabulary)")
+        return ""
+    }
+}
+
+/// Moteur dont le passage à vide échoue.
+struct UnwarmableTranscriber: Transcriber {
+    let name: String
+    func prepare() async throws {}
+    func warmUp(vocabulary: [String]) async throws { throw TranscriberError.engine("préchauffage impossible") }
+    func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {
+        Issue.record("transcribe ne doit pas être appelé après un préchauffage en échec")
         return ""
     }
 }
@@ -209,6 +233,39 @@ private func clipFromID(_ id: String) -> AudioClip { AudioClip(samples: [0.1], s
     #expect(rows[0].note != nil && rows[1].note == nil && rows[2].note == nil)
 }
 
+/// Les deux passes d'un même moteur s'enchaînent, chacune précédée d'un passage à vide avec son propre vocabulaire,
+/// avant de passer au moteur suivant : la passe « +vocab » ne démarre pas à froid après les autres moteurs.
+@Test func passesOfAnEngineAreChainedAndEachIsWarmedUp() async {
+    let log = EventLog()
+    let a = VocabularySpy(name: "a", acceptsVocabulary: true, log: log)
+    let b = VocabularySpy(name: "b", acceptsVocabulary: false, log: log)
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    _ = await runBenchmark([a, b], corpus: corpus, audio: clipFromID, hasSpeech: { _ in true }, vocabulary: ["K"])
+    #expect(await log.events == [
+        "a prepare", "a warmUp []", "a transcribe []",
+        "a prepare", "a warmUp [\"K\"]", "a transcribe [\"K\"]",
+        "b prepare", "b warmUp []", "b transcribe []",
+    ])
+}
+
+@Test func warmUpFailureMarksEverySpokenItemAsFailed() async {
+    let out = await runEngines([UnwarmableTranscriber(name: "w")], corpus: [CorpusItem(id: "16000", text: "bonjour", terms: [])],
+                               audio: clipFromID, hasSpeech: { _ in true })
+    #expect(out["w"]?.first?.failure?.contains("préchauffage impossible") == true)
+}
+
+/// Chaque moteur décrit lui-même ce que contient sa mesure ; le rapport le reprend une fois par moteur.
+@Test func reportDescribesEachEngineMeasurementOnce() async {
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    let runs = await runBenchmark([VocabularySpy(name: "a", conditions: "chrono A : réseau compris"),
+                                   VocabularySpy(name: "b", acceptsVocabulary: false, conditions: "chrono B : analyseur neuf")],
+                                  corpus: corpus, audio: clipFromID, hasSpeech: { _ in true }, vocabulary: ["K"])
+    let report = Reports.markdownReport(corpus: corpus, runs: runs, vocabulary: ["K"])
+    #expect(report.components(separatedBy: "chrono A : réseau compris").count == 2)   // une fois, pas pour a+vocab aussi
+    #expect(report.contains("chrono B : analyseur neuf"))
+    #expect(!report.contains("non décrites"))
+}
+
 @Test func withoutVocabularyEachEngineRunsOnce() async {
     let spy = VocabularySpy(name: "spy", acceptsVocabulary: true)
     let rows = await runBenchmark([spy], corpus: [CorpusItem(id: "16000", text: "bonjour", terms: [])],
@@ -259,4 +316,15 @@ private func clipFromID(_ id: String) -> AudioClip { AudioClip(samples: [0.1], s
     #expect(throws: TranscribeError.emptyAudio("a")) {
         try CorpusAudio.load([CorpusItem(id: "a", text: "x", terms: [])], from: dir)
     }
+}
+
+// MARK: - Budget d'amorce de WhisperKit
+
+@Test func promptBudgetRefusesOverLimitWithoutTruncating() async throws {
+    await #expect(throws: TranscribeError.vocabularyTooLong(tokens: 112, limit: 111)) {
+        try await PromptBudget.check(["x"], limit: 111) { _ in 112 }
+    }
+    #expect(try await PromptBudget.check(["x"], limit: 111) { _ in 111 } == 111)   // la limite elle-même passe
+    #expect(try await PromptBudget.check(["x"], limit: 111) { _ in nil } == nil)   // incalculable : pas de refus
+    #expect(TranscribeError.vocabularyTooLong(tokens: 112, limit: 111).description.contains("112 jetons"))
 }

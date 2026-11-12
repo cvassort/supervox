@@ -8,6 +8,12 @@ import SupervoxCore
 public struct EndpointTranscriber: Transcriber {
     public let name = "endpoint"
     public var acceptsVocabulary: Bool { true }
+    public var measurementConditions: String {
+        "aucun préchauffage. Durée mesurée : écriture et relecture d'un WAV temporaire, requête HTTP multipart et "
+            + "réponse (réseau, file d'attente du serveur ; ouverture de la connexion sur la première phrase). Une "
+            + "requête identique déjà envoyée peut être servie par un cache : ne pas comparer ces durées d'une "
+            + "relance à l'autre."
+    }
     private let client: OpenAICompatibleClient
     private let model: String
 

@@ -2,16 +2,21 @@ import Foundation
 
 /// Un moteur de transcription en bloc : une phrase entière entre, son texte sort.
 ///
-/// Contrat de mesure : `prepare()` charge le modèle (téléchargement, compilation, premier passage à vide) et n'est
-/// jamais chronométré ; seul `transcribe` l'est. `prepare()` peut être appelé plusieurs fois : les appels suivants ne
-/// rechargent rien.
+/// Contrat de mesure : `prepare()` charge le modèle (téléchargement, compilation) ; `warmUp(vocabulary:)` fait un
+/// passage à vide avant chaque passe, avec le vocabulaire de cette passe. Ni l'un ni l'autre n'est chronométré ;
+/// seul `transcribe` l'est. `prepare()` peut être appelé plusieurs fois : les appels suivants ne rechargent rien.
 public protocol Transcriber: Sendable {
     /// Nom court et unique du moteur dans un passage du banc (`whisperkit`, `parakeet`…).
     var name: String { get }
     /// `true` si le moteur sait tirer parti d'une liste de termes (amorce, contexte). Un moteur qui répond `false`
     /// reçoit quand même le paramètre `vocabulary` mais l'ignore ; le banc ne le mesure alors qu'une fois.
     var acceptsVocabulary: Bool { get }
+    /// Ce que contient la durée mesurée de ce moteur et ce qui est fait hors chrono (préchauffage, chargement).
+    /// Reproduit tel quel dans le rapport : c'est le moteur qui sait ce qu'il fait.
+    var measurementConditions: String { get }
     func prepare() async throws
+    /// Passage à vide avant une passe, après `prepare()`. `vocabulary` est celui de la passe qui suit.
+    func warmUp(vocabulary: [String]) async throws
     /// `clip` est à 16 kHz mono. `language` est un code ISO 639-1 (`fr`). `vocabulary` est la liste globale du banc,
     /// la même pour toutes les phrases, jamais les termes attendus d'une phrase.
     func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String
@@ -20,6 +25,10 @@ public protocol Transcriber: Sendable {
 extension Transcriber {
     /// Par défaut un moteur n'annonce pas de vocabulaire : l'annoncer à tort créerait une ligne « +vocab » trompeuse.
     public var acceptsVocabulary: Bool { false }
+    /// Un moteur qui ne se décrit pas est signalé comme tel dans le rapport.
+    public var measurementConditions: String { "conditions de mesure non décrites par l'adaptateur" }
+    /// Par défaut, pas de passage à vide.
+    public func warmUp(vocabulary: [String]) async throws {}
 }
 
 /// Fréquence attendue par tous les moteurs du banc.

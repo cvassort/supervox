@@ -12,7 +12,8 @@ import SupervoxEngines
 ///   reçoivent exactement le même clip et la même décision.
 /// - Une phrase sans voix n'est envoyée à aucun moteur (`hasSpeech: false`).
 /// - Un audio illisible est un échec de la phrase pour chaque moteur.
-/// - `prepare()` n'est pas chronométré ; s'il échoue, chaque phrase parlée porte son erreur.
+/// - `prepare()` puis `warmUp(vocabulary:)` ne sont pas chronométrés ; si l'un échoue, chaque phrase parlée porte
+///   son erreur.
 /// - Seul l'appel à `transcribe` est chronométré, avec une horloge monotone.
 /// - `vocabulary` est passé tel quel à chaque appel : c'est la liste globale, jamais les termes d'une phrase.
 /// - Deux moteurs du même nom s'écraseraient dans le dictionnaire : c'est une erreur de programmation (`precondition`) ;
@@ -20,14 +21,69 @@ import SupervoxEngines
 func runEngines(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
                 hasSpeech: (AudioClip) async -> Bool, vocabulary: [String] = [],
                 language: String = "fr", progress: (String) -> Void = { _ in }) async -> [String: [ItemResult]] {
+    requireUniqueNames(engines)
+    let inputs = await loadInputs(corpus, audio: audio, hasSpeech: hasSpeech)
+    var out: [String: [ItemResult]] = [:]
+    for engine in engines {
+        out[engine.name] = await runPass(engine, label: engine.name, corpus: corpus, inputs: inputs,
+                                         vocabulary: vocabulary, language: language, progress: progress)
+    }
+    return out
+}
+
+/// Une ligne du rapport : un moteur, mesuré avec ou sans le vocabulaire global.
+struct EngineRun {
+    let engine: String
+    let label: String
+    let results: [ItemResult]
+    let note: String?
+    /// `Transcriber.measurementConditions` du moteur.
+    let conditions: String
+}
+
+/// Passage complet du banc. Pour chaque moteur, dans l'ordre : passe sans vocabulaire, puis, si une liste globale est
+/// donnée et que le moteur l'accepte, passe avec elle sous l'étiquette `<nom>+vocab`. Les deux passes d'un moteur
+/// s'enchaînent avant le moteur suivant, et chacune est précédée de son passage à vide : la passe « +vocab » ne
+/// démarre pas sur un modèle refroidi par les autres moteurs. Un moteur qui n'accepte pas de vocabulaire porte une
+/// remarque.
+func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
+                  hasSpeech: (AudioClip) async -> Bool, vocabulary: [String], language: String = "fr",
+                  progress: (String) -> Void = { _ in }) async -> [EngineRun] {
+    requireUniqueNames(engines)
+    let inputs = await loadInputs(corpus, audio: audio, hasSpeech: hasSpeech)
+    var runs: [EngineRun] = []
+    for engine in engines {
+        let note = (!vocabulary.isEmpty && !engine.acceptsVocabulary)
+            ? "mesuré sans vocabulaire : l'adaptateur de ce moteur ne lui transmet pas de liste de termes" : nil
+        let plain = await runPass(engine, label: engine.name, corpus: corpus, inputs: inputs, vocabulary: [],
+                                  language: language, progress: progress)
+        runs.append(EngineRun(engine: engine.name, label: engine.name, results: plain, note: note,
+                              conditions: engine.measurementConditions))
+        if !vocabulary.isEmpty && engine.acceptsVocabulary {
+            let label = engine.name + "+vocab"
+            let primed = await runPass(engine, label: label, corpus: corpus, inputs: inputs, vocabulary: vocabulary,
+                                       language: language, progress: progress)
+            runs.append(EngineRun(engine: engine.name, label: label, results: primed, note: nil,
+                                  conditions: engine.measurementConditions))
+        }
+    }
+    return runs
+}
+
+private func requireUniqueNames(_ engines: [any Transcriber]) {
     let names = engines.map(\.name)
     precondition(Set(names).count == names.count, "deux moteurs portent le même nom : \(names)")
+}
 
-    enum Input {
-        case clip(AudioClip, hasSpeech: Bool)
-        case unreadable(String)
-    }
-    var inputs: [Input] = []
+/// Entrée d'une phrase, préparée une fois pour tous les moteurs.
+private enum PassInput {
+    case clip(AudioClip, hasSpeech: Bool)
+    case unreadable(String)
+}
+
+private func loadInputs(_ corpus: [CorpusItem], audio: (String) throws -> AudioClip,
+                        hasSpeech: (AudioClip) async -> Bool) async -> [PassInput] {
+    var inputs: [PassInput] = []
     for item in corpus {
         do {
             let clip = try audio(item.id)
@@ -36,74 +92,46 @@ func runEngines(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (Stri
             inputs.append(.unreadable("audio illisible : \(describe(error))"))
         }
     }
+    return inputs
+}
+
+/// Une passe d'un moteur sur tout le corpus : chargement, passage à vide avec le vocabulaire de la passe, puis une
+/// transcription chronométrée par phrase parlée.
+private func runPass(_ engine: any Transcriber, label: String, corpus: [CorpusItem], inputs: [PassInput],
+                     vocabulary: [String], language: String, progress: (String) -> Void) async -> [ItemResult] {
+    progress("\(label) : chargement et préchauffage…")
+    var setupFailure: String?
+    do { try await engine.prepare() } catch { setupFailure = "chargement : \(describe(error))" }
+    if setupFailure == nil {
+        do { try await engine.warmUp(vocabulary: vocabulary) } catch { setupFailure = "préchauffage : \(describe(error))" }
+    }
+    if let setupFailure { progress("\(label) : \(setupFailure)") }
+    else { progress("\(label) : transcription de \(corpus.count) phrase(s)…") }
 
     let clock = ContinuousClock()
-    var out: [String: [ItemResult]] = [:]
-    let pass = vocabulary.isEmpty ? "" : " (avec vocabulaire)"
-    for engine in engines {
-        progress("\(engine.name)\(pass) : chargement…")
-        var prepareFailure: String?
-        do { try await engine.prepare() } catch { prepareFailure = "chargement : \(describe(error))" }
-        if let prepareFailure { progress("\(engine.name) : \(prepareFailure)") }
-        else { progress("\(engine.name)\(pass) : transcription de \(corpus.count) phrase(s)…") }
-
-        var rows: [ItemResult] = []
-        for (item, input) in zip(corpus, inputs) {
-            switch input {
-            case .unreadable(let message):
-                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: message, hasSpeech: true))
-            case .clip(_, hasSpeech: false):
-                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: nil, hasSpeech: false))
-            case .clip(let clip, hasSpeech: true):
-                if let prepareFailure {
-                    rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: prepareFailure, hasSpeech: true))
-                    continue
-                }
-                let start = clock.now
-                do {
-                    let text = try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
-                    let elapsed = start.duration(to: clock.now)
-                    rows.append(ItemResult(id: item.id, hypothesis: text, seconds: seconds(elapsed), failure: nil, hasSpeech: true))
-                } catch {
-                    rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: describe(error), hasSpeech: true))
-                }
+    var rows: [ItemResult] = []
+    for (item, input) in zip(corpus, inputs) {
+        switch input {
+        case .unreadable(let message):
+            rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: message, hasSpeech: true))
+        case .clip(_, hasSpeech: false):
+            rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: nil, hasSpeech: false))
+        case .clip(let clip, hasSpeech: true):
+            if let setupFailure {
+                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: setupFailure, hasSpeech: true))
+                continue
+            }
+            let start = clock.now
+            do {
+                let text = try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
+                let elapsed = start.duration(to: clock.now)
+                rows.append(ItemResult(id: item.id, hypothesis: text, seconds: seconds(elapsed), failure: nil, hasSpeech: true))
+            } catch {
+                rows.append(ItemResult(id: item.id, hypothesis: nil, seconds: nil, failure: describe(error), hasSpeech: true))
             }
         }
-        out[engine.name] = rows
     }
-    return out
-}
-
-/// Une ligne du rapport : un moteur, mesuré avec ou sans le vocabulaire global.
-struct EngineRun {
-    let label: String
-    let results: [ItemResult]
-    let note: String?
-}
-
-/// Passage complet du banc. Chaque moteur est mesuré sans vocabulaire ; si une liste globale est donnée, chaque moteur
-/// qui l'accepte est mesuré une seconde fois avec elle, sous l'étiquette `<nom>+vocab`, et chaque moteur qui ne
-/// l'accepte pas porte une remarque. Lignes dans l'ordre des moteurs, la ligne `+vocab` juste après la sienne.
-func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (String) throws -> AudioClip,
-                  hasSpeech: (AudioClip) async -> Bool, vocabulary: [String], language: String = "fr",
-                  progress: (String) -> Void = { _ in }) async -> [EngineRun] {
-    let plain = await runEngines(engines, corpus: corpus, audio: audio, hasSpeech: hasSpeech, vocabulary: [],
-                                 language: language, progress: progress)
-    let capable = vocabulary.isEmpty ? [] : engines.filter(\.acceptsVocabulary)
-    let withVocabulary = capable.isEmpty ? [:]
-        : await runEngines(capable, corpus: corpus, audio: audio, hasSpeech: hasSpeech, vocabulary: vocabulary,
-                           language: language, progress: progress)
-
-    var runs: [EngineRun] = []
-    for engine in engines {
-        let note = (!vocabulary.isEmpty && !engine.acceptsVocabulary)
-            ? "mesuré sans vocabulaire : l'adaptateur de ce moteur ne lui transmet pas de liste de termes" : nil
-        runs.append(EngineRun(label: engine.name, results: plain[engine.name] ?? [], note: note))
-        if let results = withVocabulary[engine.name] {
-            runs.append(EngineRun(label: engine.name + "+vocab", results: results, note: nil))
-        }
-    }
-    return runs
+    return rows
 }
 
 private func seconds(_ duration: Duration) -> Double {
@@ -128,6 +156,7 @@ enum TranscribeError: Error, Equatable, CustomStringConvertible {
     case emptyAudio(String)
     case missingEndpointModel
     case emptyVocabulary(String)
+    case vocabularyTooLong(tokens: Int, limit: Int)
 
     var description: String {
         switch self {
@@ -139,6 +168,9 @@ enum TranscribeError: Error, Equatable, CustomStringConvertible {
         case .emptyAudio(let id): "audio de « \(id) » vide"
         case .missingEndpointModel: "le moteur endpoint demande --endpoint-model"
         case .emptyVocabulary(let path): "le fichier de vocabulaire \(path) ne contient aucun terme"
+        case .vocabularyTooLong(let tokens, let limit):
+            "le vocabulaire fait \(tokens) jetons d'amorce pour WhisperKit, \(limit) au plus : retirer des termes "
+                + "(WhisperKit ne garderait que les \(limit) derniers jetons, en silence)"
         }
     }
 }
@@ -170,6 +202,19 @@ enum VocabularyFile {
             terms.append(term)
         }
         return terms
+    }
+}
+
+/// Budget d'amorce de WhisperKit : contrôlé avant tout chargement de modèle, pour qu'un vocabulaire trop long n'envoie
+/// pas toute la ligne « whisperkit+vocab » en échec après des minutes de passes sans vocabulaire.
+enum PromptBudget {
+    /// `count` rend le nombre de jetons de l'amorce, ou `nil` s'il ne peut pas être calculé. Rend ce nombre ; lève
+    /// `vocabularyTooLong` au-delà de `limit`. Aucune troncature.
+    @discardableResult
+    static func check(_ vocabulary: [String], limit: Int, count: ([String]) async throws -> Int?) async throws -> Int? {
+        guard let tokens = try await count(vocabulary) else { return nil }
+        guard tokens <= limit else { throw TranscribeError.vocabularyTooLong(tokens: tokens, limit: limit) }
+        return tokens
     }
 }
 
@@ -225,7 +270,10 @@ struct TranscribeCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Variante du modèle WhisperKit.")
     var whisperkitModel = "large-v3-v20240930_turbo"
 
-    @Option(name: .long, help: "Vocabulaire global, un terme par ligne. Les moteurs qui l'acceptent sont mesurés sans puis avec.")
+    @Option(name: .long, help: ArgumentHelp(
+        "Vocabulaire global, un terme par ligne. Les moteurs qui l'acceptent sont mesurés sans puis avec.",
+        discussion: "Avec WhisperKit, la liste devient une amorce de \(WhisperKitTranscriber.promptTokenLimit) jetons au plus ; "
+            + "le compte est vérifié avant tout chargement de modèle, et un dépassement arrête la commande."))
     var vocabulary: String?
 
     @Option(name: .long, help: "Dossier de sortie : transcription.md et transcription.json.")
@@ -241,6 +289,18 @@ struct TranscribeCommand: AsyncParsableCommand {
         if let vocabulary {
             terms = VocabularyFile.parse(try String(contentsOf: URL(fileURLWithPath: vocabulary), encoding: .utf8))
             if terms.isEmpty { throw TranscribeError.emptyVocabulary(vocabulary) }
+        }
+        if names.contains("whisperkit") && !terms.isEmpty {
+            let model = whisperkitModel
+            let tokens = try await PromptBudget.check(terms, limit: WhisperKitTranscriber.promptTokenLimit) {
+                try await WhisperKitTranscriber.promptTokenCount($0, model: model)
+            }
+            if let tokens {
+                print("Amorce WhisperKit : \(tokens) jetons sur \(WhisperKitTranscriber.promptTokenLimit).")
+            } else {
+                print("Attention : tokenizer du modèle WhisperKit « \(model) » non identifié, amorce non contrôlée "
+                      + "avant le chargement ; un dépassement fera échouer la ligne whisperkit+vocab.")
+            }
         }
         let clips = try CorpusAudio.load(items, from: URL(fileURLWithPath: audio, isDirectory: true))
         let transcribers: [any Transcriber] = try names.map { name in

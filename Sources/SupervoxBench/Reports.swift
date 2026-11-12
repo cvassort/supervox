@@ -152,9 +152,16 @@ enum Reports {
             ? "Sans vocabulaire global.\n\n"
             : "Vocabulaire global (\(vocabulary.count) terme(s)) : \(vocabulary.joined(separator: ", ")).\n\n"
         text += markdownTable(summaries(corpus: corpus, runs: runs))
-        text += "\nTaux d'erreur agrégé sur tous les mots du corpus ; phrases en échec ou sans voix hors de tout taux. "
-        text += "Les durées de l'endpoint comprennent le réseau, et une requête identique déjà envoyée peut être servie "
-        text += "par un cache : ne pas comparer ses durées d'une relance à l'autre.\n"
+        text += "\nTaux d'erreur agrégé sur tous les mots du corpus ; phrases en échec ou sans voix hors de tout taux.\n"
+
+        // Conditions de mesure, une fois par moteur, telles que chaque moteur les décrit.
+        text += "\n## Conditions de mesure\n\n"
+        text += "Chaque moteur est mesuré seul, phrase après phrase ; ses passes (sans puis avec vocabulaire) s'enchaînent "
+        text += "avant le moteur suivant. Seul l'appel de transcription est chronométré.\n"
+        var described: Set<String> = []
+        for run in runs where described.insert(run.engine).inserted {
+            text += "\n- **\(run.engine)** : \(oneLine(run.conditions))\n"
+        }
 
         for run in runs {
             text += "\n## \(run.label)\n\n"
