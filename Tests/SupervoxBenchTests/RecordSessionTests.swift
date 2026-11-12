@@ -10,12 +10,16 @@ private final class ScriptedRecorder: ClipRecorder, @unchecked Sendable {
     private var clips: [AudioClip]
     private(set) var starts = 0
     private(set) var stops = 0
+    /// Journal ordonné : « start », « wait(d) », « stop ».
+    private(set) var events: [String] = []
+    func note(_ e: String) { events.append(e) }
     var inputDescription: String { "micro de test" }
 
     init(_ clips: [AudioClip]) { self.clips = clips }
-    func start() throws { starts += 1 }
+    func start() throws { starts += 1; events.append("start") }
     func stop() -> AudioClip {
         stops += 1
+        events.append("stop")
         return clips.isEmpty ? AudioClip(samples: [], sampleRate: 48000) : clips.removeFirst()
     }
 }
@@ -42,13 +46,13 @@ private let items = [CorpusItem(id: "p01", text: "Le worker Celery plante.", ter
 
 /// Lance une session avec `enters` appuis sur Entrée disponibles (`nil` ensuite : fin d'entrée).
 private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRecorder, enters: Int,
-                 overwrite: Bool = false) throws -> (RecordSession.Summary, [String]) {
+                 overwrite: Bool = false, tailDelay: Double = 0) throws -> (RecordSession.Summary, [String]) {
     var remaining = enters
     var output: [String] = []
     let session = RecordSession(
         items: items, outputDirectory: h.dir, overwrite: overwrite, recorder: recorder,
         readLine: { if remaining > 0 { remaining -= 1; return "" } else { return nil } },
-        say: { output.append($0) })
+        say: { output.append($0) }, tailDelay: tailDelay, wait: { recorder.note("wait(\($0))") })
     let summary = try session.run()
     return (summary, output)
 }
@@ -157,4 +161,22 @@ private func run(_ h: Harness, items: [CorpusItem] = items, recorder: ScriptedRe
     #expect(!FileManager.default.fileExists(atPath: h.dir.path))
     _ = try run(h, items: [items[0]], recorder: ScriptedRecorder([take(seconds: 1, amplitude: 0.5)]), enters: 2)
     #expect(FileManager.default.fileExists(atPath: h.file("p01").path))
+}
+
+/// La fin de prise est protégée : après la 2e Entrée la capture continue `tailDelay` avant `stop()`.
+/// Un `stop()` immédiat perdrait jusqu'à une fenêtre de tap (100 à 400 ms) de la fin de la phrase.
+@Test func captureKeepsRunningForTheTailDelayBeforeStop() throws {
+    let h = Harness(); defer { h.cleanup() }
+    let recorder = ScriptedRecorder([take(seconds: 1, amplitude: 0.5)])
+    _ = try run(h, items: [items[0]], recorder: recorder, enters: 2, tailDelay: RecordSession.defaultTailDelay)
+    #expect(recorder.events == ["start", "wait(0.4)", "stop"])
+    #expect(RecordSession.defaultTailDelay >= 0.4, "au moins la fenêtre maximale admise par le SDK (400 ms)")
+}
+
+/// Pas d'attente inutile quand l'entrée se ferme : la prise est jetée de toute façon.
+@Test func noTailDelayWhenInputClosesWhileRecording() throws {
+    let h = Harness(); defer { h.cleanup() }
+    let recorder = ScriptedRecorder([take(seconds: 1, amplitude: 0.5)])
+    _ = try run(h, items: [items[0]], recorder: recorder, enters: 1, tailDelay: 0.4)
+    #expect(recorder.events == ["start", "stop"])
 }

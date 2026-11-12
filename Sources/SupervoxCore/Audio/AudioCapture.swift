@@ -25,7 +25,16 @@ public final class AudioCapture {
         var samples: [Float] = []
         var sampleRate: Double = 0
         var accepting = false
+        /// Horloge monotone (`DispatchTime.now().uptimeNanoseconds`) à l'appel de `engine.start()`, puis à la 1re livraison.
+        var engineStartedAt: UInt64 = 0
+        var firstBufferAt: UInt64?
+        /// Instant de capture (`AVAudioTime.hostTime`, ticks mach) du premier échantillon de la prise, tel que le tap le déclare.
+        var firstSampleHostTime: UInt64?
     }
+
+    /// Durée de la fenêtre demandée au tap : le SDK annonce une plage de 100 à 400 ms (AVAudioNode.h), en dessous
+    /// de laquelle le système ajuste en silence. On demande donc 100 ms, soit le plus court délai de livraison admis.
+    private static let tapBufferSeconds = 0.1
 
     private let engine = AVAudioEngine()
     // Attaché et connecté avant l'activation du voice processing, même s'il ne joue rien : c'est le montage
@@ -61,9 +70,11 @@ public final class AudioCapture {
             $0.samples.reserveCapacity(Int(format.sampleRate) * 30)
             $0.sampleRate = format.sampleRate
             $0.accepting = true
+            $0.firstBufferAt = nil
+            $0.firstSampleHostTime = nil
         }
         // Fil audio temps réel : un verrou et un ajout, rien d'autre.
-        let tap: AVAudioNodeTapBlock = { pcm, _ in
+        let tap: AVAudioNodeTapBlock = { pcm, when in
             guard let channels = pcm.floatChannelData else { return }
             let n = Int(pcm.frameLength)
             guard n > 0 else { return }
@@ -74,12 +85,18 @@ public final class AudioCapture {
                 guard $0.accepting else { return }
                 $0.samples.append(contentsOf: first)
                 $0.sampleRate = rate
+                if $0.firstBufferAt == nil {
+                    $0.firstBufferAt = DispatchTime.now().uptimeNanoseconds
+                    $0.firstSampleHostTime = when.isHostTimeValid ? when.hostTime : nil
+                }
             }
         }
 
         do {
-            try installTap(on: input, format: format, block: tap)
+            let frames = AVAudioFrameCount((format.sampleRate * Self.tapBufferSeconds).rounded(.up))
+            try installTap(on: input, bufferSize: frames, format: format, block: tap)
             engine.prepare()
+            store.withLock { $0.engineStartedAt = DispatchTime.now().uptimeNanoseconds }
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
@@ -89,6 +106,26 @@ public final class AudioCapture {
         running = true
     }
 
+    /// Délai (secondes) entre l'appel de `engine.start()` et la livraison du premier buffer du tap, au dernier
+    /// `start()` ; `nil` si rien n'a été livré. Un tap livre par fenêtres : tant que la première n'est pas pleine,
+    /// rien n'arrive, et les premiers instants d'une prise ne sont pas dans le clip.
+    public var startLatency: Double? {
+        buffer.withLock { state in
+            state.firstBufferAt.map { Double($0 &- state.engineStartedAt) / 1e9 }
+        }
+    }
+
+    /// Pour les tests : instant de capture du premier échantillon (ticks mach), à comparer à `mach_absolute_time()`.
+    var firstSampleHostTime: UInt64? { buffer.withLock { $0.firstSampleHostTime } }
+
+    /// Arrête la capture et rend ce qui a été **livré** par le tap.
+    ///
+    /// Contrat sur la fin de prise : le tap livre par fenêtres de `tapBufferSeconds` (100 ms demandées ; le SDK
+    /// admet 100 à 400 ms et peut ajuster). `stop()` arrête le moteur sans vider la fenêtre en cours : tout ce qui
+    /// a été capté depuis la dernière livraison est perdu, soit jusqu'à une fenêtre, **100 ms demandées et jusqu'à
+    /// 400 ms au pire** si le système élargit. Un appelant qui ne peut pas perdre la fin d'une phrase doit laisser
+    /// tourner la capture au moins 400 ms après le dernier son voulu avant d'appeler `stop()` (c'est ce que fait
+    /// `RecordSession`).
     public func stop() -> AudioClip {
         if running {
             engine.stop()
@@ -107,7 +144,7 @@ public final class AudioCapture {
         guard !wired else { return }
         if voiceProcessing {
             engine.attach(anchorPlayer)
-            engine.connect(anchorPlayer, to: engine.mainMixerNode, format: nil)
+            try connectAnchorPlayer()
             do { try engine.inputNode.setVoiceProcessingEnabled(true) }
             catch { throw AudioCaptureError.engineFailed("voice processing : \(error)") }
             // Ducking au minimum : on ne veut pas baisser le volume des autres applications pendant la dictée.
@@ -117,13 +154,26 @@ public final class AudioCapture {
         wired = true
     }
 
-    private func installTap(on node: AVAudioInputNode, format: AVAudioFormat, block: @escaping AVAudioNodeTapBlock) throws {
+    /// `connect(_:to:format:)` est dépréciée en macOS 27 au profit de `connectNode(_:to:format:)` qui lève une erreur
+    /// (AVAudioEngine.h : `NS_SWIFT_NAME(connectNode(_:to:format:))`). Le déploiement minimal étant macOS 26,
+    /// le compilateur ne signale pas cette dépréciation : on aiguille à la main.
+    private func connectAnchorPlayer() throws {
+        if #available(macOS 27, *) {
+            do { try engine.connectNode(anchorPlayer, to: engine.mainMixerNode, format: nil) }
+            catch { throw AudioCaptureError.engineFailed("connexion du nœud de lecture : \(error)") }
+        } else {
+            engine.connect(anchorPlayer, to: engine.mainMixerNode, format: nil)
+        }
+    }
+
+    private func installTap(on node: AVAudioInputNode, bufferSize: AVAudioFrameCount, format: AVAudioFormat,
+                            block: @escaping AVAudioNodeTapBlock) throws {
         if #available(macOS 27, *) {
             // La variante qui lève une erreur est importée sous son nom brut (`__installTap`, déclarée
             // NS_REFINED_FOR_SWIFT, sans surcharge Swift dans le SDK 27.2) avec un paramètre `error: ()`.
-            try node.__installTap(onBus: 0, bufferSize: 4096, format: format, error: (), block: block)
+            try node.__installTap(onBus: 0, bufferSize: bufferSize, format: format, error: (), block: block)
         } else {
-            node.installTap(onBus: 0, bufferSize: 4096, format: format, block: block)
+            node.installTap(onBus: 0, bufferSize: bufferSize, format: format, block: block)
         }
     }
 

@@ -35,6 +35,7 @@ struct RecordSession {
     /// En dessous, on suppose un faux départ (Entrée pressée trop tôt) : la phrase est redemandée.
     static let minimumDuration = 0.5
     static let targetSampleRate = 16000.0
+    static let defaultTailDelay = 0.4
 
     let items: [CorpusItem]
     let outputDirectory: URL
@@ -42,6 +43,11 @@ struct RecordSession {
     let recorder: any ClipRecorder
     let readLine: () -> String?
     let say: (String) -> Void
+    /// Durée pendant laquelle la capture continue après la 2e Entrée, avant `stop()` : le tap livre par fenêtres
+    /// (100 ms demandées, jusqu'à 400 ms admises par le SDK) et `stop()` jette la fenêtre en cours ; sans cette
+    /// marge, la fin de la phrase lue serait coupée et fausserait la transcription. Injectable : les tests la mettent à 0.
+    var tailDelay = RecordSession.defaultTailDelay
+    var wait: (Double) -> Void = { Thread.sleep(forTimeInterval: $0) }
 
     func run() throws -> Summary {
         // L'identifiant devient un nom de fichier : on refuse tout le corpus d'emblée plutôt qu'à la 20e phrase.
@@ -76,6 +82,7 @@ struct RecordSession {
                     summary.interrupted = true
                     return summary
                 }
+                wait(tailDelay)
                 let clip = recorder.stop()
 
                 guard clip.duration >= Self.minimumDuration else {
