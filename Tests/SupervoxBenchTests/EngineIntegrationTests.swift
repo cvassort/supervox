@@ -148,13 +148,13 @@ struct EngineIntegrationTests {
             if !text.contains("Keycloak") { #expect(primed == plain, "« \(text) »") }
         }
         let conditions = await engine.measurementConditions
-        #expect(conditions.contains("15 termes, sans passe de sauvetage") && conditions.contains("aucun terme ignoré"))
+        #expect(conditions.contains("15 termes retenus sur 15, sans passe de sauvetage") && conditions.contains("aucun terme ignoré"))
 
         // Un terme de 2 caractères n'est pas vu par le recalage, et le rapport le dit.
         try await engine.warmUp(vocabulary: ["CI", "Keycloak"])
         let short = await engine.measurementConditions
         print("[intégration] conditions avec [CI, Keycloak] : …\(short.suffix(110))")
-        #expect(short.contains("2 termes, passe de sauvetage active") && short.contains("ignorés par le recalage : CI."))
+        #expect(short.contains("2 termes retenus sur 2, passe de sauvetage active") && short.contains("ignorés par le recalage : CI."))
     }
 
     @Test func appleSpeech() async throws {

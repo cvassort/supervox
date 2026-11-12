@@ -35,9 +35,10 @@ public actor ParakeetTranscriber: Transcriber {
             + "termes). Les termes de moins de 3 caractères et ceux sans jeton CTC sont ignorés par le recalage "
             + "(WhisperKit les reçoit) : les deux lignes +vocab ne voient pas forcément la même liste."
         if let boosting {
-            let regime = boosting.terms.count <= ContextBiasingConstants.largeVocabThreshold
+            // Le régime dépend de la liste gardée par la session (termes sans jeton CTC retirés), pas de la liste reçue.
+            let regime = boosting.retained <= ContextBiasingConstants.largeVocabThreshold
                 ? "passe de sauvetage active" : "sans passe de sauvetage"
-            text += " Ce passage : \(boosting.terms.count) termes, \(regime) ; "
+            text += " Ce passage : \(boosting.retained) termes retenus sur \(boosting.terms.count), \(regime) ; "
             text += boosting.ignored.isEmpty
                 ? "aucun terme ignoré."
                 : "termes ignorés par le recalage : \(boosting.ignored.joined(separator: ", "))."
@@ -46,7 +47,7 @@ public actor ParakeetTranscriber: Transcriber {
     }
     private var manager: AsrManager?
     private var ctcModels: CtcModels?
-    private var boosting: (terms: [String], session: VocabularyBoostingSession, ignored: [String])?
+    private var boosting: (terms: [String], session: VocabularyBoostingSession, retained: Int, ignored: [String])?
 
     public init() {}
 
@@ -87,7 +88,7 @@ public actor ParakeetTranscriber: Transcriber {
         // repérage (`minTermLength`).
         let kept = Set(session.vocabulary.terms.map(\.text))
         let ignored = vocabulary.filter { !kept.contains($0) || $0.count < session.vocabulary.minTermLength }
-        boosting = (vocabulary, session, ignored)
+        boosting = (vocabulary, session, session.vocabulary.terms.count, ignored)
         return session
     }
 
