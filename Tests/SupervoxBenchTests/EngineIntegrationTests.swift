@@ -66,6 +66,9 @@ private func measure(_ engine: any Transcriber, label: String, clip: AudioClip, 
 /// mais pas dans la phrase : il ne doit jamais ressortir.
 private let technicalSentence = "Le worker Celery redémarre après la mise à jour de Keycloak."
 private let technicalVocabulary = ["Celery", "Keycloak", "PostgreSQL"]
+/// 15 termes techniques : une taille réaliste (50 jetons d'amorce pour WhisperKit, sur 111).
+private let largeVocabulary = ["Kubernetes", "PostgreSQL", "Celery", "Keycloak", "Terraform", "Ansible", "Grafana",
+                               "Prometheus", "Redis", "RabbitMQ", "OpenSearch", "Kafka", "Nginx", "GitLab", "Helm"]
 
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["SUPERVOX_INTEGRATION"] == "1"))
 struct EngineIntegrationTests {
@@ -127,6 +130,31 @@ struct EngineIntegrationTests {
         let unrelatedPrimed = try await engine.transcribe(unrelated, language: "fr", vocabulary: technicalVocabulary + ["Kubernetes"])
         print("[intégration] parakeet / parakeet+vocab, phrase sans terme : « \(unrelatedPlain) » / « \(unrelatedPrimed) »")
         #expect(unrelatedPrimed == unrelatedPlain)
+    }
+
+    /// Au-delà de 10 termes, FluidAudio change de régime (pas de passe de sauvetage, similarité 0,55) : les seuils
+    /// relevés n'y jouent plus. Garde du même type avec une liste réaliste de 15 termes : une phrase sans aucun terme
+    /// sort inchangée. Montre aussi la phrase qui contient un terme, et les conditions telles que le rapport les donne.
+    @Test func parakeetLargeVocabulary() async throws {
+        let engine = ParakeetTranscriber()
+        try await engine.prepare()
+        try await engine.warmUp(vocabulary: largeVocabulary)
+        for text in ["Le serveur web redémarre tous les matins.", "Il faut relire le fichier de configuration avant demain.",
+                     "Ce soir, nous verrons notamment la soirée.", "La mise à jour de Keycloak est prévue demain."] {
+            let clip = try synthesizedSentence(text)
+            let plain = try await engine.transcribe(clip, language: "fr", vocabulary: [])
+            let primed = try await engine.transcribe(clip, language: "fr", vocabulary: largeVocabulary)
+            print("[intégration] parakeet / parakeet+vocab (15 termes) : « \(plain) » / « \(primed) »")
+            if !text.contains("Keycloak") { #expect(primed == plain, "« \(text) »") }
+        }
+        let conditions = await engine.measurementConditions
+        #expect(conditions.contains("15 termes, sans passe de sauvetage") && conditions.contains("aucun terme ignoré"))
+
+        // Un terme de 2 caractères n'est pas vu par le recalage, et le rapport le dit.
+        try await engine.warmUp(vocabulary: ["CI", "Keycloak"])
+        let short = await engine.measurementConditions
+        print("[intégration] conditions avec [CI, Keycloak] : …\(short.suffix(110))")
+        #expect(short.contains("2 termes, passe de sauvetage active") && short.contains("ignorés par le recalage : CI."))
     }
 
     @Test func appleSpeech() async throws {

@@ -328,3 +328,21 @@ private func clipFromID(_ id: String) -> AudioClip { AudioClip(samples: [0.1], s
     #expect(try await PromptBudget.check(["x"], limit: 111) { _ in nil } == nil)   // incalculable : pas de refus
     #expect(TranscribeError.vocabularyTooLong(tokens: 112, limit: 111).description.contains("112 jetons"))
 }
+
+/// Les conditions sont lues après les passes du moteur : il peut y décrire ce qui s'est réellement appliqué.
+actor SelfDescribingSpy: Transcriber {
+    nonisolated let name = "auto"
+    nonisolated var acceptsVocabulary: Bool { true }
+    private var lastWarmUp: [String] = []
+    var measurementConditions: String { "dernier préchauffage avec \(lastWarmUp)" }
+    func prepare() async throws {}
+    func warmUp(vocabulary: [String]) async throws { lastWarmUp = vocabulary }
+    func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String { "" }
+}
+
+@Test func conditionsAreReadAfterTheEnginePasses() async {
+    let corpus = [CorpusItem(id: "16000", text: "bonjour", terms: [])]
+    let runs = await runBenchmark([SelfDescribingSpy()], corpus: corpus, audio: clipFromID, hasSpeech: { _ in true },
+                                  vocabulary: ["Keycloak"])
+    #expect(runs.map(\.conditions) == ["dernier préchauffage avec [\"Keycloak\"]", "dernier préchauffage avec [\"Keycloak\"]"])
+}

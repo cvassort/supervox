@@ -57,14 +57,17 @@ func runBenchmark(_ engines: [any Transcriber], corpus: [CorpusItem], audio: (St
             ? "mesuré sans vocabulaire : l'adaptateur de ce moteur ne lui transmet pas de liste de termes" : nil
         let plain = await runPass(engine, label: engine.name, corpus: corpus, inputs: inputs, vocabulary: [],
                                   language: language, progress: progress)
-        runs.append(EngineRun(engine: engine.name, label: engine.name, results: plain, note: note,
-                              conditions: engine.measurementConditions))
+        var primed: [ItemResult]?
         if !vocabulary.isEmpty && engine.acceptsVocabulary {
-            let label = engine.name + "+vocab"
-            let primed = await runPass(engine, label: label, corpus: corpus, inputs: inputs, vocabulary: vocabulary,
-                                       language: language, progress: progress)
-            runs.append(EngineRun(engine: engine.name, label: label, results: primed, note: nil,
-                                  conditions: engine.measurementConditions))
+            primed = await runPass(engine, label: engine.name + "+vocab", corpus: corpus, inputs: inputs,
+                                   vocabulary: vocabulary, language: language, progress: progress)
+        }
+        // Lu après les passes : le moteur peut y dire ce qui s'est réellement appliqué.
+        let conditions = await engine.measurementConditions
+        runs.append(EngineRun(engine: engine.name, label: engine.name, results: plain, note: note, conditions: conditions))
+        if let primed {
+            runs.append(EngineRun(engine: engine.name, label: engine.name + "+vocab", results: primed, note: nil,
+                                  conditions: conditions))
         }
     }
     return runs

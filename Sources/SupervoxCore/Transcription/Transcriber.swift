@@ -12,8 +12,9 @@ public protocol Transcriber: Sendable {
     /// reçoit quand même le paramètre `vocabulary` mais l'ignore ; le banc ne le mesure alors qu'une fois.
     var acceptsVocabulary: Bool { get }
     /// Ce que contient la durée mesurée de ce moteur et ce qui est fait hors chrono (préchauffage, chargement).
-    /// Reproduit tel quel dans le rapport : c'est le moteur qui sait ce qu'il fait.
-    var measurementConditions: String { get }
+    /// Reproduit tel quel dans le rapport : c'est le moteur qui sait ce qu'il fait. Lu après les passes du moteur :
+    /// il peut donc dire ce qui s'est réellement appliqué (ex. termes écartés par la bibliothèque).
+    var measurementConditions: String { get async }
     func prepare() async throws
     /// Passage à vide avant une passe, après `prepare()`. `vocabulary` est celui de la passe qui suit.
     func warmUp(vocabulary: [String]) async throws
@@ -34,7 +35,8 @@ extension Transcriber {
 /// Fréquence attendue par tous les moteurs du banc.
 public let transcriberSampleRate = 16000.0
 
-/// Signal du passage à vide fait par les moteurs locaux dans `prepare()` : 2 s de bruit faible, toujours le même.
+/// Signal du passage à vide fait par les moteurs locaux dans `warmUp(vocabulary:)`, avant chaque passe : 2 s de bruit
+/// faible, toujours le même.
 /// Mesuré avec WhisperKit : après un passage à vide sur du silence, la première phrase chronométrée prenait encore
 /// ~0,1 s de plus que les suivantes (0,56 s contre 0,45 s) ; avec ce bruit, l'écart disparaît. Le silence fait
 /// sortir le décodeur presque tout de suite et laisse froide une partie du chemin.
