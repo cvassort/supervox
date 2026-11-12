@@ -10,8 +10,9 @@ la qualité de transcription de plusieurs moteurs et le délai de réponse de bo
 
 - macOS 26 ou plus (version minimale déclarée par le paquet) et Xcode 27 (le code utilise des API de macOS 27,
   sous `if #available`, et il faut le SDK 27 pour compiler).
-- État de la vérification : testé sous macOS 27 avec Xcode 27, en local et dans le pipeline GitHub Actions.
-  macOS 26 est la version minimale déclarée, mais elle n'est pas vérifiée.
+- État de la vérification : testé en local sous macOS 27 avec Xcode 27. Le pipeline GitHub Actions (étiquette
+  `xcode-27`, image en préversion) n'a pas encore été exécuté. macOS 26 est la version minimale déclarée, mais
+  elle n'est pas vérifiée.
 
 ## Tests
 
@@ -23,7 +24,8 @@ Les tests d'intégration sont désactivés par défaut, parce qu'ils télécharg
 Ils ne tournent pas dans le pipeline.
 
 - `SUPERVOX_INTEGRATION=1 swift test` : vrais moteurs de transcription et vrai détecteur de voix. Les modèles sont
-  téléchargés au premier passage (de quelques centaines de Mo à quelques Go).
+  téléchargés au premier passage (leur taille dépend du moteur et n'a pas été mesurée pour ce README). Ces tests
+  fabriquent leur audio avec la voix française `Thomas` de macOS (commande `say`) : elle doit être installée.
 - `SUPERVOX_MIC=1 swift test` : capture d'environ une seconde de bruit ambiant avec le vrai micro (en mémoire,
   rien n'est écrit sur disque).
 
@@ -38,6 +40,8 @@ swift run supervox-bench <commande> --help
 - `transcribe` : fait transcrire les enregistrements par chaque moteur et compare les taux d'erreur
   (`--corpus`, `--audio`, `--engines`, `--out`, et d'autres options). Le moteur `endpoint` demande
   `--endpoint-model` et lit l'endpoint dans l'environnement ; les moteurs locaux n'en ont pas besoin.
+  La commande charge un modèle de détection de voix avant tout moteur : il est téléchargé au premier lancement,
+  même avec le seul moteur du système (`--engines apple`).
 - `latency` : mesure le délai entre la fin de la parole et la première phrase synthétisée de la réponse
   (`--audio`, `--engine`, `--chat-model`, `--tts-model`, `--voice`, `--out`, et d'autres options).
   Elle lit toujours l'endpoint dans l'environnement.
