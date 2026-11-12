@@ -1,0 +1,47 @@
+# Tests unitaires sur une machine hébergée par GitHub.
+#
+# Étiquette `xcode-27` et non `macos-26` : le code exige le SDK de Xcode 27, et l'image `macos-26` n'en
+# contient pas (lecture de actions/runner-images le 2026-11-12 : Xcode 26.0.1 à 26.6 seulement). Le
+# README d'`actions/runner-images` associe Xcode 27 à l'étiquette `xcode-27` (Apple Silicon), dont l'image
+# repose sur macOS 27. Cette image est en préversion (instabilité et files d'attente possibles).
+# Rien n'est vérifié sous macOS 26, version minimale déclarée par le paquet.
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: xcode-27
+    timeout-minutes: 45
+    steps:
+      - name: Récupération du dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Xcode 27.2 est installé à ce chemin sur l'image (lu dans xcode-27-arm64-Readme.md le 2026-11-12).
+      - name: Sélection de Xcode 27.2
+        run: sudo xcode-select --switch /Applications/Xcode_27.2.app/Contents/Developer
+
+      - name: Versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      # Les tests d'intégration (modèles à télécharger, micro) restent désactivés : ni SUPERVOX_INTEGRATION
+      # ni SUPERVOX_MIC ne sont définies ici.
+      - name: Compilation
+        run: swift build --build-tests
+
+      - name: Tests unitaires
+        run: swift test
