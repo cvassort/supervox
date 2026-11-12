@@ -19,8 +19,9 @@ private func spoken(_ text: String) throws -> AudioClip {
     return clip.sampleRate == transcriberSampleRate ? clip : Resampler.resample(clip, to: transcriberSampleRate)
 }
 
-/// Seuil de la fin de voix de référence : −60 dBFS. Mesuré sur une phrase de `say` : les seuils de −70 à −40 dBFS
-/// placent la fin à 8 ms près ; `say` ajoute ensuite ~0,2 s de souffle à −88 dBFS, retiré ici.
+/// Seuil de la fin de voix de référence : −60 dBFS. Mesuré sur une phrase de `say` : les seuils de −60 à −40 dBFS
+/// placent la fin à 8 ms près (−70 dBFS : 16 ms plus tard) ; `say` ajoute ensuite ~0,2 s de souffle à −88 dBFS,
+/// retiré ici.
 private let referenceFloor: Float = 0.001
 
 /// Clip de test : `lead` secondes de silence, la phrase coupée à son dernier échantillon d'au moins −60 dBFS, puis
