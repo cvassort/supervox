@@ -177,10 +177,11 @@ import Testing
         #expect(HotKey(keyCode: 0x00, modifiers: []).label(layout: silent) == "A")
         #expect(HotKey(keyCode: 0x0A, modifiers: []).label(layout: silent) == "Touche 10")
         // Un résultat vide ou de contrôle n'est pas un caractère imprimable : même repli.
-        let junk = StubLayout(characters: [0x00: "", 0x0B: "\u{7F}", 0x08: "\u{F704}"])
+        let junk = StubLayout(characters: [0x00: "", 0x0B: "\u{7F}", 0x08: "\u{F704}", 0x0D: " "])
         #expect(HotKey(keyCode: 0x00, modifiers: []).label(layout: junk) == "A")
         #expect(HotKey(keyCode: 0x0B, modifiers: []).label(layout: junk) == "B")
         #expect(HotKey(keyCode: 0x08, modifiers: []).label(layout: junk) == "C")
+        #expect(HotKey(keyCode: 0x0D, modifiers: []).label(layout: junk) == "W")
     }
 
     @Test func layoutCanNameKeysTheAnsiTableDoesNotKnow() {
