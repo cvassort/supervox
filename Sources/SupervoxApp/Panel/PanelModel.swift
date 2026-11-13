@@ -22,6 +22,20 @@ public struct ModeChip: Equatable, Identifiable, Sendable {
     public static let fallbackID = "dictee-brute"
 }
 
+/// D'où vient un avis. L'ordre des cas est l'ordre d'affichage.
+public enum NoticeOrigin: Int, CaseIterable, Comparable, Sendable {
+    /// Le fichier de réglages n'a pas pu être repris au lancement.
+    case settingsLoad
+    /// Le raccourci global n'a pas pu être enregistré.
+    case hotKey
+    /// Échap n'a pas pu être réservé pendant que le panneau est ouvert.
+    case escape
+    /// La dernière sauvegarde des réglages a échoué.
+    case save
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
 /// État du panneau : ouvert ou fermé, mode choisi. Ne connaît ni AppKit ni le disque.
 @MainActor @Observable
 public final class PanelModel {
@@ -31,8 +45,16 @@ public final class PanelModel {
 
     /// Libellé du raccourci global effectivement enregistré, `nil` s'il n'y en a aucun.
     public var hotKeyLabel: String?
-    /// Une ligne à montrer à l'utilisateur (réglages illisibles, raccourci refusé…), ou `nil`.
-    public var notice: String?
+    /// Avis à montrer à l'utilisateur, un par origine.
+    public private(set) var notices: [NoticeOrigin: String] = [:]
+
+    /// Pose l'avis de cette origine, ou l'efface avec `nil`. Les autres origines ne bougent pas.
+    public func setNotice(_ text: String?, for origin: NoticeOrigin) {
+        notices[origin] = text
+    }
+
+    /// Les avis, dans l'ordre des origines.
+    public var noticeLines: [String] { notices.sorted { $0.key < $1.key }.map(\.value) }
 
     /// Appelé à chaque ouverture, avant l'affichage : l'état des permissions y est relu.
     @ObservationIgnored public var onOpen: (@MainActor () -> Void)?
@@ -45,12 +67,13 @@ public final class PanelModel {
         selectedModeID = modes.contains { $0.id == lastModeID } ? lastModeID : ModeChip.fallbackID
     }
 
-    public func toggle() {
+    /// Réservé à `PanelController`, qui montre et cache la fenêtre en même temps.
+    func toggle() {
         isOpen.toggle()
         if isOpen { onOpen?() }
     }
 
-    public func close() {
+    func close() {
         isOpen = false
     }
 

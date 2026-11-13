@@ -31,6 +31,7 @@ public final class AppController {
     private let panel: PanelController
     private let settingsView: SettingsViewProvider
     private var statusItem: NSStatusItem?
+    private var statusMenuRefresher: MenuRefresher?
     private var settingsWindow: NSWindow?
     private let log = Logger(subsystem: "dev.supervox.app", category: "app")
 
@@ -40,7 +41,9 @@ public final class AppController {
         hotKeyRegistrar: any HotKeyRegistrar,
         escapeRegistrar: any HotKeyRegistrar,
         permissionsProbe: any PermissionsProbe,
-        settingsView: @escaping SettingsViewProvider = AppController.emptySettings
+        settingsView: @escaping SettingsViewProvider = AppController.emptySettings,
+        makePanelSurface: @MainActor (AnyView) -> any PanelSurface = { FloatingPanelSurface(content: $0) },
+        clickMonitor: any OutsideClickMonitor = GlobalClickMonitor()
     ) {
         self.settingsStore = settingsStore
         self.secrets = secrets
@@ -51,17 +54,18 @@ public final class AppController {
         settings = loaded.settings
 
         let panelModel = PanelModel(lastModeID: loaded.settings.lastModeID)
-        panelModel.notice = loaded.notice
+        panelModel.setNotice(loaded.notice, for: .settingsLoad)
         self.panelModel = panelModel
         permissions = PermissionsModel(probe: permissionsProbe)
 
         // Le contenu du panneau appelle le contrôleur, qui n'existe pas encore : relais.
         let relay = ActionRelay()
+        let content = PanelView(
+            model: panelModel, permissions: permissions,
+            openSettings: { relay.openSettings?() }, quit: { relay.quit?() })
         panel = PanelController(
-            model: panelModel, escapeRegistrar: escapeRegistrar,
-            content: PanelView(
-                model: panelModel, permissions: permissions,
-                openSettings: { relay.openSettings?() }, quit: { relay.quit?() }))
+            model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
+            surface: makePanelSurface(AnyView(content)))
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
 
@@ -89,24 +93,33 @@ public final class AppController {
     /// l'application déjà en politique `.accessory`.
     public func start() {
         installStatusItem()
-        applyHotKey()
+        applyHotKeyAtLaunch()
+    }
+
+    /// Enregistre le raccourci des réglages. S'il est refusé, le panneau s'ouvre de lui-même pour le
+    /// dire : sans raccourci, l'utilisateur pourrait ne jamais trouver le panneau.
+    func applyHotKeyAtLaunch() {
+        if !applyHotKey() { panel.open() }
     }
 
     // MARK: - Raccourci
 
     /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :
     /// le raccourci bascule toujours.
-    private func applyHotKey() {
+    private func applyHotKey() -> Bool {
         let hotKey = settings.hotKey
         switch hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() }) {
         case .success:
             panelModel.hotKeyLabel = hotKey.label
+            panelModel.setNotice(nil, for: .hotKey)
             log.notice("raccourci enregistré : \(hotKey.label, privacy: .public)")
+            return true
         case .failure(let error):
             panelModel.hotKeyLabel = hotKeys.active?.label
             let message = Self.message(for: error, label: hotKey.label)
-            panelModel.notice = [panelModel.notice, message].compactMap { $0 }.joined(separator: " ")
+            panelModel.setNotice(message, for: .hotKey)
             log.notice("raccourci refusé : \(message, privacy: .public)")
+            return false
         }
     }
 
@@ -126,6 +139,7 @@ public final class AppController {
         change(&updated)
         try settingsStore.save(updated)
         settings = updated
+        panelModel.setNotice(nil, for: .save)
     }
 
     /// Enregistre `hotKey` comme raccourci global, avec le même effet que celui du lancement, et met à
@@ -133,6 +147,7 @@ public final class AppController {
     public func changeHotKey(_ hotKey: HotKey) -> Result<Void, HotKeyError> {
         let result = hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() })
         panelModel.hotKeyLabel = hotKeys.active?.label
+        if case .success = result { panelModel.setNotice(nil, for: .hotKey) }
         return result
     }
 
@@ -143,12 +158,19 @@ public final class AppController {
         panel.toggle()
     }
 
+    /// Titre de l'entrée de barre de menus qui ouvre ou ferme le panneau.
+    var panelMenuTitle: String { panelModel.isOpen ? "Fermer le panneau" : "Ouvrir le panneau" }
+
+    func togglePanelFromMenu() {
+        panel.toggle()
+    }
+
+    /// Par `updateSettings`, comme la fenêtre de réglages : une seule copie vivante des réglages.
     private func saveLastMode(_ id: String) {
-        settings.lastModeID = id
         do {
-            try settingsStore.save(settings)
+            try updateSettings { $0.lastModeID = id }
         } catch {
-            panelModel.notice = error.localizedDescription
+            panelModel.setNotice(error.localizedDescription, for: .save)
             log.error("réglages non enregistrés : \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -159,10 +181,18 @@ public final class AppController {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Supervox")
         let menu = NSMenu()
-        menu.addItem(MenuAction.item("Ouvrir le panneau", key: "") { [weak self] in self?.panel.open() })
+        let panelItem = MenuAction.item(panelMenuTitle, key: "") { [weak self] in self?.togglePanelFromMenu() }
+        menu.addItem(panelItem)
         menu.addItem(MenuAction.item("Réglages…", key: ",") { [weak self] in self?.openSettings() })
         menu.addItem(.separator())
         menu.addItem(MenuAction.item("Quitter Supervox", key: "q") { [weak self] in self?.quit() })
+        // Le titre suit l'état du panneau à chaque ouverture du menu.
+        let delegate = MenuRefresher { [weak self, weak panelItem] in
+            guard let self, let panelItem else { return }
+            panelItem.title = self.panelMenuTitle
+        }
+        menu.delegate = delegate
+        statusMenuRefresher = delegate
         item.menu = menu
         statusItem = item
         log.notice("élément de barre de menus installé : \(item.button != nil, privacy: .public)")
@@ -203,6 +233,18 @@ public final class AppController {
 private final class ActionRelay {
     var openSettings: (@MainActor () -> Void)?
     var quit: (@MainActor () -> Void)?
+}
+
+/// Délégué de menu qui rafraîchit les titres juste avant l'affichage.
+@MainActor
+private final class MenuRefresher: NSObject, NSMenuDelegate {
+    private let refresh: @MainActor () -> Void
+
+    init(_ refresh: @escaping @MainActor () -> Void) {
+        self.refresh = refresh
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) { refresh() }
 }
 
 /// Élément de menu qui appelle une fermeture.

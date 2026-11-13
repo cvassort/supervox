@@ -24,6 +24,8 @@ public final class PermissionsModel {
 
     public private(set) var microphone: PermissionState
     public private(set) var accessibility: PermissionState
+    /// Vrai pendant qu'une demande attend la réponse de l'utilisateur.
+    public private(set) var isRequesting = false
 
     /// Lit l'état courant, sans rien demander.
     public init(probe: any PermissionsProbe) {
@@ -39,8 +41,11 @@ public final class PermissionsModel {
 
     /// Une demande par appel, dans l'ordre du design : le micro tant qu'il n'est pas décidé,
     /// ensuite l'Accessibilité si elle manque. Un micro refusé ne se redemande pas : le système
-    /// n'afficherait plus l'invite.
+    /// n'afficherait plus l'invite. Un appel fait pendant qu'une demande est en cours est ignoré.
     public func requestNext() async {
+        guard !isRequesting else { return }
+        isRequesting = true
+        defer { isRequesting = false }
         refresh()
         if microphone == .notDetermined {
             _ = await probe.requestMicrophone()
@@ -50,9 +55,9 @@ public final class PermissionsModel {
         refresh()
     }
 
-    /// Vrai si `requestNext` a quelque chose à demander.
+    /// Vrai si `requestNext` a quelque chose à demander et qu'aucune demande n'est en cours.
     public var canRequest: Bool {
-        microphone == .notDetermined || accessibility != .granted
+        !isRequesting && (microphone == .notDetermined || accessibility != .granted)
     }
 
     /// `nil` quand tout est accordé ; sinon une phrase qui dit ce qui manque et ce que cela empêche.

@@ -77,6 +77,33 @@ import Testing
         #expect(reported.isEmpty)
     }
 
+    // MARK: - Avis
+
+    @Test func noticesFromDifferentOriginsCoexistInAFixedOrder() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setNotice("sauvegarde", for: .save)
+        model.setNotice("chargement", for: .settingsLoad)
+        model.setNotice("raccourci", for: .hotKey)
+
+        #expect(model.notices.count == 3)
+        // Ordre d'affichage stable, quel que soit l'ordre d'arrivée.
+        #expect(model.noticeLines == ["chargement", "raccourci", "sauvegarde"])
+    }
+
+    @Test func clearingOneOriginLeavesTheOthers() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setNotice("chargement", for: .settingsLoad)
+        model.setNotice("Échap", for: .escape)
+
+        model.setNotice(nil, for: .escape)
+        #expect(model.notices == [.settingsLoad: "chargement"])
+
+        // Un nouvel avis de la même origine remplace l'ancien, sans toucher aux autres.
+        model.setNotice("raccourci 1", for: .hotKey)
+        model.setNotice("raccourci 2", for: .hotKey)
+        #expect(model.noticeLines == ["chargement", "raccourci 2"])
+    }
+
     // MARK: - Placement
 
     /// Écran fictif dont la zone utile commence à (100, 50) : la position ne doit pas supposer

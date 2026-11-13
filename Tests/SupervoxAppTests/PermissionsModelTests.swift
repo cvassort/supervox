@@ -147,4 +147,78 @@ final class FakePermissionsProbe: PermissionsProbe {
         model.refresh()
         #expect(model.canRequest)
     }
+
+    /// Deux clics sur « Autoriser… » : la seconde demande, faite pendant que la première attend la
+    /// réponse de l'utilisateur, est ignorée.
+    @Test func secondRequestWhileOneIsPendingIsIgnored() async throws {
+        let probe = GatedPermissionsProbe()
+        let model = PermissionsModel(probe: probe)
+
+        let first = Task { await model.requestNext() }
+        // Attend que la première demande soit en cours (pas de borne de durée : un nombre de tours).
+        var turns = 0
+        while probe.microphoneRequests == 0, turns < 100_000 {
+            await Task.yield()
+            turns += 1
+        }
+        try #require(probe.microphoneRequests == 1)
+        #expect(!model.canRequest)
+
+        // Lancée à part : si elle n'était pas ignorée, elle attendrait elle aussi la réponse.
+        let second = Task { await model.requestNext() }
+        for _ in 0..<1_000 { await Task.yield() }
+        #expect(probe.microphoneRequests == 1)
+        #expect(probe.accessibilityPrompts == 0)
+
+        probe.answer()
+        await first.value
+        await second.value
+        #expect(model.microphone == .granted)
+        #expect(model.canRequest)
+    }
 }
+
+/// Sonde dont la demande de micro attend que le test réponde, comme une invite restée ouverte.
+final class GatedPermissionsProbe: PermissionsProbe {
+    private struct State {
+        var microphone = PermissionState.notDetermined
+        var microphoneRequests = 0
+        var accessibilityPrompts = 0
+        var pending: [CheckedContinuation<Void, Never>] = []
+        var answered = false
+    }
+
+    private let state = Mutex(State())
+
+    var microphoneRequests: Int { state.withLock { $0.microphoneRequests } }
+    var accessibilityPrompts: Int { state.withLock { $0.accessibilityPrompts } }
+
+    func microphone() -> PermissionState { state.withLock { $0.microphone } }
+    func accessibility() -> PermissionState { .denied }
+    func promptAccessibility() { state.withLock { $0.accessibilityPrompts += 1 } }
+
+    func requestMicrophone() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let resumeNow = state.withLock { state -> Bool in
+                state.microphoneRequests += 1
+                if state.answered { return true }
+                state.pending.append(continuation)
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+        return true
+    }
+
+    /// L'utilisateur accepte : le micro est accordé et toute demande en attente se termine.
+    func answer() {
+        let pending = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.answered = true
+            state.microphone = .granted
+            defer { state.pending = [] }
+            return state.pending
+        }
+        for continuation in pending { continuation.resume() }
+    }
+}
+
