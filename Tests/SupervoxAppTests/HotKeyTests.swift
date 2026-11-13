@@ -74,9 +74,7 @@ import Testing
     }
 
     /// Valeurs relevées à la main dans `HIToolbox/Events.h` du SDK (`kVK_*`), pas dans le code testé.
-    /// Limite connue : ce sont des codes de touches physiques, désignées par leur nom sur une
-    /// disposition ANSI/QWERTY. Sur un clavier AZERTY, le code 0x00 porte la lettre Q mais est
-    /// étiqueté « A ».
+    /// Ce sont les noms de touches d'une disposition ANSI/QWERTY, ceux de la table de repli du code.
     static let expectedKeyNames: [(UInt32, String)] = [
         (0x00, "A"), (0x0B, "B"), (0x08, "C"), (0x02, "D"), (0x0E, "E"), (0x03, "F"), (0x05, "G"),
         (0x04, "H"), (0x22, "I"), (0x26, "J"), (0x28, "K"), (0x25, "L"), (0x2E, "M"), (0x2D, "N"),
@@ -118,8 +116,17 @@ import Testing
             0x00: "q", 0x0C: "a", 0x0D: "z", 0x06: "w", 0x29: "m", 0x2E: ",", 0x0A: "²", 0x12: "&",
         ]) { _, new in new })
 
+    /// Disposition muette : chaque nom vient de la table de repli du code, vérifiée ici contre les
+    /// valeurs relevées dans l'en-tête (et non contre une disposition dérivée de ces valeurs).
     @Test(arguments: expectedKeyNames)
     func keyLabelMatchesTheCarbonVirtualKeyCode(keyCode: UInt32, name: String) {
+        let silent = StubLayout(characters: [:])
+        #expect(HotKey(keyCode: keyCode, modifiers: [.control]).label(layout: silent) == "⌃" + name)
+    }
+
+    /// Avec une disposition ANSI qui répond, le libellé est le même (lettres en majuscule).
+    @Test(arguments: expectedKeyNames)
+    func keyLabelFromAnAnsiLayoutIsTheSame(keyCode: UInt32, name: String) {
         #expect(HotKey(keyCode: keyCode, modifiers: [.control]).label(layout: Self.ansi) == "⌃" + name)
     }
 
@@ -235,7 +242,12 @@ import Testing
     }
 
     @Test func shiftAloneOrOptionAloneIsFineOnAFunctionKey() {
-        for code: UInt32 in [0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F] {
+        // F1 à F12, puis F13 à F20 (0x69, 0x6B, 0x71, 0x6A, 0x40, 0x4F, 0x50, 0x5A).
+        let codes: [UInt32] = [
+            0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F,
+            0x69, 0x6B, 0x71, 0x6A, 0x40, 0x4F, 0x50, 0x5A,
+        ]
+        for code in codes {
             #expect(HotKey(keyCode: code, modifiers: [.shift]).validate(layout: Self.ansi) == .valid)
             #expect(HotKey(keyCode: code, modifiers: [.option]).validate(layout: Self.ansi) == .valid)
         }
@@ -246,6 +258,22 @@ import Testing
         #expect(HotKey(keyCode: 0x00, modifiers: [.command]).validate(layout: Self.ansi) == .valid)
         #expect(HotKey(keyCode: 0x00, modifiers: [.shift, .option]).validate(layout: Self.ansi) == .valid)
         #expect(HotKey(keyCode: 0x00, modifiers: [.shift, .control]).validate(layout: Self.ansi) == .valid)
+    }
+
+    @Test func unknownModifierBitsAreRejected() {
+        // Un fichier de réglages écrit à la main peut porter un bit que Carbon ne connaît pas.
+        let unknown = Modifiers(rawValue: 1 << 10)
+        #expect(
+            HotKey(keyCode: 0x00, modifiers: [.control, unknown]).validate(layout: Self.ansi)
+                == .needsModifier)
+        #expect(HotKey(keyCode: 0x00, modifiers: unknown).validate(layout: Self.ansi) == .needsModifier)
+        #expect(
+            HotKey(keyCode: 0x7A, modifiers: [.command, Modifiers(rawValue: 1)])
+                .validate(layout: Self.ansi) == .needsModifier)
+        // Les quatre bits connus, ensemble, restent acceptables.
+        #expect(
+            HotKey(keyCode: 0x00, modifiers: [.control, .option, .shift, .command])
+                .validate(layout: Self.ansi) == .valid)
     }
 
     @MainActor @Test func centerValidatesWithItsOwnLayout() {

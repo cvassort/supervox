@@ -13,8 +13,12 @@ public protocol KeyboardLayout: Sendable {
 /// La disposition de clavier active du système (`UCKeyTranslate` sur les données de la source
 /// d'entrée de type disposition). Sans modificateur, touches mortes ignorées.
 ///
-/// L'interface de saisie du système (TIS) doit être interrogée depuis le fil principal : depuis
-/// un autre fil, l'appel est transféré au fil principal de façon synchrone.
+/// L'interface de saisie du système (TIS) doit être interrogée depuis le fil principal. Depuis le
+/// fil principal, l'appel est direct (pas d'auto-interblocage). Depuis un autre fil, il est transféré
+/// au fil principal avec `DispatchQueue.main.sync` : le fil appelant est bloqué jusqu'à ce que le
+/// fil principal soit libre. Risque : interblocage si le fil principal attend lui-même ce fil appelant
+/// (verrou, sémaphore, `sync` croisé) ; ne pas appeler `character(forKeyCode:)` depuis un contexte
+/// que le fil principal attend.
 public struct SystemKeyboardLayout: KeyboardLayout {
     public init() {}
 
@@ -36,11 +40,15 @@ public struct SystemKeyboardLayout: KeyboardLayout {
         var deadKeyState: UInt32 = 0
         var length = 0
         var characters = [UniChar](repeating: 0, count: 4)
-        let status = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { layout in
-            UCKeyTranslate(
-                layout, UInt16(keyCode), UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
-                OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeyState, characters.count,
-                &length, &characters)
+        // `bytes` pointe dans `layoutData`, que `source` possède : les deux doivent rester vivants
+        // pendant toute la lecture de `UCKeyTranslate`, sans quoi rien ne les retient.
+        let status = withExtendedLifetime((source, layoutData)) {
+            bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { layout in
+                UCKeyTranslate(
+                    layout, UInt16(keyCode), UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+                    OptionBits(kUCKeyTranslateNoDeadKeysMask), &deadKeyState, characters.count,
+                    &length, &characters)
+            }
         }
         guard status == noErr, length > 0 else { return nil }
         return String(utf16CodeUnits: characters, count: length)

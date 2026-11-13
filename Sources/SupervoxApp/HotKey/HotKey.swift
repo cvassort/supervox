@@ -18,15 +18,18 @@ public struct HotKey: Codable, Equatable, Sendable {
 
     /// Dit si la combinaison peut être proposée à l'utilisateur. Règles, dans cet ordre :
     /// 1. la touche est elle-même un modificateur : `.modifierOnly` ;
-    /// 2. aucun modificateur, ou majuscule seule, ou option seule sur une touche qui n'est pas
+    /// 2. aucun modificateur, ou un bit de modificateur inconnu (fichier de réglages écrit à la main :
+    ///    on ne le transmet pas tel quel au système), ou majuscule seule, ou option seule sur une touche qui n'est pas
     ///    une touche de fonction : `.needsModifier` (ces combinaisons tapent un caractère) ;
     /// 3. combinaison que le système s'est réservée : `.reserved`. ⌘Espace, ⌘Tab et ⇧⌘Tab sont
     ///    reconnus par code de touche ; ⌘Q, ⌘W, ⌘H et ⌘M par le caractère que la touche produit
     ///    dans `layout` (le système réserve la lettre, où qu'elle soit sur le clavier).
     /// Les règles sont volontairement étroites : rien d'autre n'est déclaré réservé.
+    /// Limite : dans une disposition sans lettres latines (cyrillique, par exemple), ⌘Q n'est pas
+    /// déclaré réservé.
     public func validate(layout: any KeyboardLayout) -> HotKeyValidation {
         if Self.modifierKeyCodes.contains(keyCode) { return .modifierOnly }
-        if modifiers.isEmpty { return .needsModifier }
+        if modifiers.isEmpty || !Modifiers.known.contains(modifiers) { return .needsModifier }
         if modifiers == [.shift] || modifiers == [.option], !Self.functionKeyCodes.contains(keyCode) {
             return .needsModifier
         }
@@ -175,4 +178,7 @@ public struct Modifiers: OptionSet, Codable, Sendable {
     public static let shift = Modifiers(rawValue: 1 << 9)
     public static let option = Modifiers(rawValue: 1 << 11)
     public static let control = Modifiers(rawValue: 1 << 12)
+
+    /// Les quatre modificateurs que Carbon connaît pour un raccourci.
+    static let known: Modifiers = [.command, .shift, .option, .control]
 }
