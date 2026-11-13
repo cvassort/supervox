@@ -1,0 +1,5 @@
+# Corpus d'exemple : id<TAB>texte<TAB>terme1|terme2 (termes techniques dont on mesure le rappel, 3e colonne facultative)
+# Copier ce fichier vers bench-data/corpus.tsv (dossier ignoré par git) et le remplacer par ses propres phrases.
+ex01	Le pipeline CI échoue parce que le cache Docker n'est pas invalidé après le merge.	pipeline CI|cache Docker|merge
+ex02	Pense à relancer le job de build avant d'ouvrir la pull request.	job de build|pull request
+ex03	Merci de vérifier que le service répond bien après le déploiement.	

@@ -1,0 +1,7 @@
+# Étiquettes de machines que actionlint ne connaît pas encore dans sa liste intégrée.
+# `xcode-27` (Apple Silicon, macOS 27 et Xcode 27) figure dans le README d'actions/runner-images mais
+# actionlint 1.7.12 la rejette (« label "xcode-27" is unknown »). Sans cette déclaration, le contrôle de
+# syntaxe échoue alors que le workflow est valide.
+self-hosted-runner:
+  labels:
+    - xcode-27
