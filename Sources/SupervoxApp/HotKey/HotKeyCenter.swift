@@ -27,7 +27,40 @@ public final class HotKeyCenter {
     private let layout: any KeyboardLayout
     private var activeOnPress: (@MainActor () -> Void)?
 
-    /// Le raccourci réellement enregistré auprès du système, ou `nil`.
+    /// Vrai entre `suspend` et `resume` (ou le prochain `apply`) : `active` est gardé mais pas enregistré.
+    public private(set) var isSuspended = false
+
+    /// Rend la combinaison au système le temps d'une capture, sans oublier le raccourci actif.
+    public func suspend() {
+        guard active != nil, !isSuspended else { return }
+        registrar.unregister()
+        isSuspended = true
+    }
+
+    /// Réenregistre le raccourci suspendu avec son rappel. Rend faux si le système le refuse : il n'y a
+    /// alors plus de raccourci actif. Sans suspension en cours, ne fait rien.
+    @discardableResult
+    public func resume() -> Bool {
+        guard isSuspended else { return true }
+        isSuspended = false
+        guard let active, let activeOnPress, registrar.register(active, onPress: activeOnPress) else {
+            self.active = nil
+            activeOnPress = nil
+            return false
+        }
+        return true
+    }
+
+    /// Retire tout raccourci : plus rien n'est enregistré ni actif.
+    public func clear() {
+        registrar.unregister()
+        active = nil
+        activeOnPress = nil
+        isSuspended = false
+    }
+
+    /// Le raccourci réellement enregistré auprès du système, ou `nil` ; pendant une suspension, celui qui
+    /// sera réenregistré.
     public private(set) var active: HotKey?
 
     /// `layout` sert à reconnaître les combinaisons réservées par caractère (⌘Q, ⌘W, ⌘H, ⌘M).
@@ -38,7 +71,7 @@ public final class HotKeyCenter {
 
     /// Enregistre `hotKey` à la place du précédent. Si la combinaison est invalide, le système n'est
     /// pas sollicité. Si le système la refuse, le précédent raccourci est de nouveau enregistré avec
-    /// son propre rappel ; `active` ne nomme jamais un raccourci qui n'est pas enregistré.
+    /// son propre rappel ; hors suspension, `active` ne nomme jamais un raccourci qui n'est pas enregistré.
     public func apply(
         _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void
     ) -> Result<Void, HotKeyError> {
@@ -47,6 +80,8 @@ public final class HotKeyCenter {
 
         let previous = active
         let previousOnPress = activeOnPress
+        // Un essai met fin à une suspension : en cas de refus, le précédent est réenregistré ci-dessous.
+        isSuspended = false
         // Retiré pour l'essai : le système refuserait une combinaison déjà tenue par l'ancienne.
         registrar.unregister()
         if registrar.register(hotKey, onPress: onPress) {

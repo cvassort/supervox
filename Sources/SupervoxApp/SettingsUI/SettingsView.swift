@@ -42,7 +42,7 @@ public struct SettingsView: View {
                 openSystemSettings: { NSWorkspace.shared.open($0.url) }))
     }
 
-    /// Construit sans lire aucune clé.
+    /// Construit sans appeler le magasin de secrets.
     static func makeProvidersModel(_ controller: AppController) -> ProvidersModel {
         ProvidersModel(
             providers: controller.settings.providers, secrets: controller.secrets,
@@ -56,7 +56,11 @@ public struct SettingsView: View {
         HotKeySettingsModel(
             hotKey: controller.settings.hotKey, active: controller.hotKeys.active,
             behavior: controller.settings.hotKeyBehavior, layout: layout,
-            apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.taken) },
+            control: GlobalHotKeyControl(
+                apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.taken) },
+                suspend: { [weak controller] in controller?.suspendHotKeysForCapture() },
+                resume: { [weak controller] in controller?.resumeHotKeys() },
+                clear: { [weak controller] in controller?.clearHotKey() }),
             save: { [weak controller] hotKey, behavior in
                 try controller?.updateSettings {
                     $0.hotKey = hotKey
@@ -92,6 +96,14 @@ private func kindLabel(_ kind: ProviderKind) -> String {
     }
 }
 
+private func keyLabel(_ state: KeyState) -> String {
+    switch state {
+    case .present: "Enregistrée"
+    case .absent: "Aucune"
+    case .unknown: "État inconnu"
+    }
+}
+
 private struct ProvidersPane: View {
     let model: ProvidersModel
     @State private var draft: ProviderDraft?
@@ -101,14 +113,15 @@ private struct ProvidersPane: View {
     var body: some View {
         Form {
             if model.providers.isEmpty {
-                Text("Aucun fournisseur.")
+                Text("Aucun fournisseur. Ajoutez-en un pour lister ses modèles.")
                     .foregroundStyle(.secondary)
             }
             ForEach(model.providers) { provider in
                 Section {
                     LabeledContent("Adresse", value: provider.baseURL)
                     LabeledContent("Type", value: kindLabel(provider.kind))
-                    modelsRow(provider)
+                    LabeledContent("Clé", value: keyLabel(model.keyState(provider.id)))
+                    ModelsRow(model: model, provider: provider)
                 } header: {
                     HStack {
                         Text(provider.name)
@@ -121,12 +134,16 @@ private struct ProvidersPane: View {
             }
         }
         .formStyle(.grouped)
+        // Présence des clés demandée (sans les lire) quand la liste s'affiche.
+        .task { await model.checkKeys() }
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
                 Button("Ajouter un fournisseur…") { draft = ProviderDraft(existing: nil) }
             }
-            .padding([.horizontal, .bottom], 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(.bar)
         }
         .sheet(item: $draft) { draft in
             ProviderEditor(model: model, existing: draft.existing)
@@ -143,15 +160,26 @@ private struct ProvidersPane: View {
             }
         }
         .alert(
-            failure ?? "",
+            "Suppression incomplète",
             isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })
         ) {
             Button("OK") { failure = nil }
+        } message: {
+            Text(failure ?? "")
         }
     }
+}
 
-    @ViewBuilder
-    private func modelsRow(_ provider: Provider) -> some View {
+/// État de la liste des modèles d'un fournisseur, bouton de lecture, liste repliable filtrée et paresseuse.
+private struct ModelsRow: View {
+    let model: ProvidersModel
+    let provider: Provider
+    @State private var query = ""
+
+    /// Au-delà, un champ de filtre apparaît.
+    private static let filterThreshold = 20
+
+    var body: some View {
         let status = model.status(of: provider.id)
         HStack(alignment: .firstTextBaseline) {
             switch status {
@@ -161,8 +189,11 @@ private struct ProvidersPane: View {
                 Text(message)
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
-            case .idle, .ok:
-                Text(provider.models.isEmpty ? "Aucun modèle listé" : "\(provider.models.count) modèle(s)")
+            case .ok:
+                Label(ProvidersModel.modelCountLabel(provider.models.count) + ", liste à jour", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .idle:
+                Text(ProvidersModel.modelCountLabel(provider.models.count))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -171,11 +202,21 @@ private struct ProvidersPane: View {
         }
         if !provider.models.isEmpty {
             DisclosureGroup("Modèles") {
-                ForEach(provider.models, id: \.self) { id in
-                    Text(id)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
+                if provider.models.count > Self.filterThreshold {
+                    TextField("Filtrer", text: $query)
+                        .textFieldStyle(.roundedBorder)
                 }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(ProvidersModel.filter(provider.models, query: query), id: \.self) { id in
+                            Text(id)
+                                .font(.callout.monospaced())
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
             }
         }
     }
@@ -183,7 +224,7 @@ private struct ProvidersPane: View {
 
 /// Feuille d'ajout ou de modification. Le champ de clé est vide à l'ouverture : la clé n'est jamais
 /// relue pour être affichée.
-private struct ProviderEditor: View {
+struct ProviderEditor: View {
     let model: ProvidersModel
     let existing: Provider?
     @Environment(\.dismiss) private var dismiss
@@ -226,9 +267,11 @@ private struct ProviderEditor: View {
             }
             .formStyle(.grouped)
             HStack {
+                if isSaving { ProgressView().controlSize(.small) }
                 Spacer()
                 Button("Annuler", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(isSaving)
                 Button(existing == nil ? "Ajouter" : "Enregistrer") { submit() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(isSaving)
@@ -236,16 +279,16 @@ private struct ProviderEditor: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 460)
+        .frame(minHeight: 360)
+        // Une erreur arrivée après fermeture serait perdue : la feuille reste ouverte pendant l'enregistrement.
+        .interactiveDismissDisabled(isSaving)
     }
 
     /// Ce qu'on sait de la clé enregistrée, sans la lire.
     private var keyNote: String? {
         guard let existing else { return nil }
-        switch model.keyState(existing.id) {
-        case .present: return "Une clé est enregistrée. Laissez vide pour la garder."
-        case .absent: return "Aucune clé enregistrée."
-        case .unknown: return "Laissez vide pour ne pas changer la clé."
-        }
+        let newOrigin = !ProvidersModel.sameOrigin(existing.baseURL, baseURL)
+        return ProvidersModel.keyNote(for: model.keyState(existing.id), newOrigin: newOrigin)
     }
 
     private func submit() {
@@ -290,9 +333,9 @@ private struct HotKeyPane: View {
                     "Touche",
                     selection: Binding(get: { model.behavior }, set: { model.setBehavior($0) })
                 ) {
-                    Text("Appuyer pour ouvrir ou fermer le panneau").tag(HotKeyBehavior.toggle)
-                    Text("Maintenir pour dicter (à venir)").tag(HotKeyBehavior.hold)
-                        .disabled(!HotKeySettingsModel.isAvailable(.hold))
+                    ForEach(HotKeySettingsModel.behaviorOptions, id: \.behavior) { option in
+                        Text(option.label).tag(option.behavior).disabled(!option.isEnabled)
+                    }
                 }
                 .pickerStyle(.radioGroup)
             }
@@ -349,6 +392,29 @@ private final class KeyDownMonitor {
 
 // MARK: - Permissions
 
+/// Une ligne de l'onglet Permissions. `openSystemSettings` n'existe que pour une permission refusée, et
+/// ouvre le panneau des Réglages Système de cette permission.
+struct PermissionRow {
+    let title: String
+    let state: PermissionState
+    let openSystemSettings: (@MainActor () -> Void)?
+
+    @MainActor
+    static func rows(
+        for model: PermissionsModel, open: @escaping @MainActor (SystemSettingsPane) -> Void
+    ) -> [PermissionRow] {
+        func row(_ title: String, _ state: PermissionState, _ pane: SystemSettingsPane) -> PermissionRow {
+            var action: (@MainActor () -> Void)?
+            if state == .denied { action = { open(pane) } }
+            return PermissionRow(title: title, state: state, openSystemSettings: action)
+        }
+        return [
+            row("Micro", model.microphone, .microphone),
+            row("Accessibilité", model.accessibility, .accessibility),
+        ]
+    }
+}
+
 private struct PermissionsPane: View {
     let model: PermissionsModel
     let openSystemSettings: @MainActor (SystemSettingsPane) -> Void
@@ -356,8 +422,16 @@ private struct PermissionsPane: View {
     var body: some View {
         Form {
             Section {
-                row("Micro", state: model.microphone, pane: .microphone)
-                row("Accessibilité", state: model.accessibility, pane: .accessibility)
+                ForEach(PermissionRow.rows(for: model, open: openSystemSettings), id: \.title) { row in
+                    LabeledContent(row.title) {
+                        HStack(spacing: 8) {
+                            stateLabel(row.state)
+                            if let open = row.openSystemSettings {
+                                Button("Ouvrir les réglages du système", action: open)
+                            }
+                        }
+                    }
+                }
             }
             if model.canRequest {
                 Section {
@@ -376,19 +450,15 @@ private struct PermissionsPane: View {
         }
     }
 
-    private func row(_ title: String, state: PermissionState, pane: SystemSettingsPane) -> some View {
-        LabeledContent(title) {
-            HStack(spacing: 8) {
-                switch state {
-                case .granted:
-                    Label("Autorisé", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                case .notDetermined:
-                    Label("Pas encore demandé", systemImage: "questionmark.circle").foregroundStyle(.secondary)
-                case .denied:
-                    Label("Non autorisé", systemImage: "xmark.circle.fill").foregroundStyle(.red)
-                    Button("Ouvrir les réglages du système") { openSystemSettings(pane) }
-                }
-            }
+    @ViewBuilder
+    private func stateLabel(_ state: PermissionState) -> some View {
+        switch state {
+        case .granted:
+            Label("Autorisé", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+        case .notDetermined:
+            Label("Pas encore demandé", systemImage: "questionmark.circle").foregroundStyle(.secondary)
+        case .denied:
+            Label("Non autorisé", systemImage: "xmark.circle.fill").foregroundStyle(.red)
         }
     }
 }

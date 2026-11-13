@@ -28,4 +28,16 @@ struct KeychainIntegrationTests {
         // Supprimer une entrée absente n'est pas une erreur.
         try store.delete(account: account)
     }
+
+    @Test func containsSeesTheEntryWithoutReadingIt() throws {
+        let store = KeychainSecretStore(service: "dev.supervox.tests")
+        let account = "test-\(UUID().uuidString)"
+        defer { try? store.delete(account: account) }
+
+        #expect(try !store.contains(account: account))
+        try store.write("valeur", account: account)
+        #expect(try store.contains(account: account))
+        try store.delete(account: account)
+        #expect(try !store.contains(account: account))
+    }
 }

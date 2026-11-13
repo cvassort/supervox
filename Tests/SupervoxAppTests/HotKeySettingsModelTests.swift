@@ -33,7 +33,9 @@ import Testing
         let saves = saves
         return HotKeySettingsModel(
             hotKey: hotKey, active: center.active, behavior: behavior, layout: layout,
-            apply: { center.apply($0, onPress: {}) },
+            control: GlobalHotKeyControl(
+                apply: { center.apply($0, onPress: {}) }, suspend: { center.suspend() },
+                resume: { center.resume() }, clear: { center.clear() }),
             save: { hotKey, behavior in
                 if let failure = saves.failure { throw failure }
                 saves.values.append((hotKey, behavior))
@@ -170,5 +172,64 @@ import Testing
         #expect(hotKey == HotKey(keyCode: 0x7A, modifiers: [.command, .shift, .option, .control]))
         #expect(HotKeySettingsModel.hotKey(keyCode: 0x31, flags: [.control]).modifiers == [.control])
         #expect(HotKeySettingsModel.hotKey(keyCode: 0x31, flags: [.capsLock, .function]).modifiers == [])
+    }
+
+    // MARK: - Capture : raccourci global suspendu
+
+    @Test func recordingSuspendsTheGlobalHotKeyAndCancellingRestoresIt() {
+        let model = makeModel()
+        model.startRecording()
+        #expect(registrar.registered == nil)
+        #expect(center.active == Self.keyA)
+
+        model.cancelRecording()
+        #expect(registrar.registered == Self.keyA)
+        #expect(!model.isRecording)
+    }
+
+    @Test func refusedCombinationDuringRecordingRestoresThePreviousHotKey() {
+        let model = makeModel()
+        model.startRecording()
+        model.record(HotKey(keyCode: 0x00, modifiers: []))  // sans modificateur : refusé avant le système
+        #expect(registrar.registered == Self.keyA)
+
+        model.startRecording()
+        registrar.refused = [Self.keyB]
+        model.record(Self.keyB)  // déjà pris
+        #expect(registrar.registered == Self.keyA)
+    }
+
+    @Test func escapeWhileRecordingRestoresThePreviousHotKey() {
+        let model = makeModel()
+        model.startRecording()
+        model.keyDown(keyCode: 0x35, flags: [])
+        #expect(registrar.registered == Self.keyA)
+    }
+
+    /// Le raccourci du fichier n'était pas actif (refusé au lancement), puis l'enregistrement du nouveau échoue :
+    /// aucun raccourci actif plutôt qu'un raccourci absent du fichier.
+    @Test func failedSaveNeverLeavesAHotKeyThatIsNotInTheFile() {
+        registrar.refused = [Self.keyA]
+        let model = makeModel()
+        #expect(center.active == nil)
+        saves.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+
+        model.record(Self.keyB)
+
+        #expect(model.hotKey == Self.keyA)
+        #expect(center.active == nil)
+        #expect(registrar.registered == nil)
+        #expect(model.message?.contains("Aucun raccourci") == true)
+    }
+
+    // MARK: - Options du comportement
+
+    @Test func holdIsListedDisabledAndAnnouncedAsComing() throws {
+        let options = HotKeySettingsModel.behaviorOptions
+        #expect(options.map(\.behavior) == [.toggle, .hold])
+        let hold = try #require(options.first { $0.behavior == .hold })
+        #expect(!hold.isEnabled)
+        #expect(hold.label.contains("à venir"))
+        #expect(options.first { $0.behavior == .toggle }?.isEnabled == true)
     }
 }

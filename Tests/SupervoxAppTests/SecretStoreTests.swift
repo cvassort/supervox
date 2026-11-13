@@ -18,6 +18,7 @@ private struct SlowReadStore: SecretStore {
     }
     func write(_ secret: String, account: String) throws { try base.write(secret, account: account) }
     func delete(account: String) throws { try base.delete(account: account) }
+    func contains(account: String) throws -> Bool { try base.contains(account: account) }
 }
 
 /// Magasin sonde : compte les appels simultanés qu'il reçoit. Le délai dans chaque appel élargit la
@@ -41,6 +42,7 @@ private final class ProbeStore: SecretStore {
     func read(account: String) throws -> String? { try tracked { try base.read(account: account) } }
     func write(_ secret: String, account: String) throws { try tracked { try base.write(secret, account: account) } }
     func delete(account: String) throws { try tracked { try base.delete(account: account) } }
+    func contains(account: String) throws -> Bool { try tracked { try base.contains(account: account) } }
 }
 
 @Suite struct SecretStoreTests {
@@ -297,5 +299,73 @@ private final class ProbeStore: SecretStore {
     ])
     func keychainStatusesMapToSecretErrors(status: Int32, expected: SecretOutcome) {
         #expect(KeychainSecretStore.outcome(forStatus: status) == expected)
+    }
+
+    // MARK: - Existence sans lecture
+
+    @Test func inMemoryContainsDoesNotCountAsARead() throws {
+        let store = InMemorySecretStore(secrets: ["compte": canary])
+        #expect(try store.contains(account: "compte"))
+        #expect(try !store.contains(account: "autre"))
+        #expect(store.readCount == 0)
+        #expect(store.containsCount == 2)
+
+        store.failure = .denied
+        #expect(throws: SecretError.denied) { try store.contains(account: "compte") }
+        #expect(store.readCount == 0)
+    }
+
+    @Test func cachedContainsNeverReadsTheUnderlyingSecret() throws {
+        let underlying = InMemorySecretStore(secrets: ["compte": canary])
+        let store = CachedSecretStore(underlying)
+
+        #expect(try store.contains(account: "compte"))
+        #expect(try !store.contains(account: "autre"))
+        #expect(underlying.readCount == 0)
+        #expect(underlying.containsCount == 2)
+    }
+
+    @Test func cachedContainsAnswersFromWhatTheCacheAlreadyKnows() throws {
+        let underlying = InMemorySecretStore()
+        let store = CachedSecretStore(underlying)
+        try store.write(canary, account: "écrit")
+        try store.delete(account: "supprimé")
+
+        #expect(try store.contains(account: "écrit"))
+        #expect(try !store.contains(account: "supprimé"))
+        #expect(underlying.containsCount == 0)
+        #expect(underlying.readCount == 0)
+    }
+
+    @Test func absenceSeenByContainsIsRememberedAndAWriteReplacesIt() throws {
+        let underlying = InMemorySecretStore()
+        let store = CachedSecretStore(underlying)
+        #expect(try !store.contains(account: "compte"))
+        #expect(try store.read(account: "compte") == nil)
+        #expect(underlying.readCount == 0)
+
+        try store.write(canary, account: "compte")
+        #expect(try store.contains(account: "compte"))
+        #expect(underlying.containsCount == 1)
+    }
+
+    @Test func failedContainsIsNotCached() throws {
+        let underlying = InMemorySecretStore(secrets: ["compte": canary])
+        let store = CachedSecretStore(underlying)
+        underlying.failure = .denied
+        #expect(throws: SecretError.denied) { try store.contains(account: "compte") }
+        underlying.failure = nil
+        #expect(try store.contains(account: "compte"))
+        #expect(underlying.containsCount == 2)
+    }
+
+    /// La requête d'existence du trousseau demande les attributs, jamais la donnée.
+    @Test func keychainExistenceQueryAsksForAttributesNotData() {
+        let query = KeychainSecretStore(service: "dev.supervox.tests").existenceQuery(account: "compte")
+        #expect(query[kSecReturnData] == nil)
+        #expect(query[kSecReturnAttributes] as? Bool == true)
+        #expect(query[kSecAttrAccount] as? String == "compte")
+        #expect(query[kSecAttrService] as? String == "dev.supervox.tests")
+        #expect((query[kSecClass] as? String) == (kSecClassGenericPassword as String))
     }
 }

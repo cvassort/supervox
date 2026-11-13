@@ -80,9 +80,10 @@ public struct PanelView: View {
             // Avis en entier, sur autant de lignes qu'il faut : pas d'infobulle, l'application
             // n'est jamais active pendant que le panneau est ouvert.
             VStack(alignment: .leading, spacing: 4) {
-                // Identifiés par origine : deux avis au texte identique restent deux lignes.
-                ForEach(NoticeOrigin.allCases.filter { model.notices[$0] != nil }, id: \.self) { origin in
-                    Text(model.notices[origin] ?? "")
+                // `noticeLines` donne l'ordre testé ; identifiés par rang, deux avis au texte identique
+                // restent deux lignes.
+                ForEach(Array(model.noticeLines.enumerated()), id: \.offset) { _, line in
+                    Text(line)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

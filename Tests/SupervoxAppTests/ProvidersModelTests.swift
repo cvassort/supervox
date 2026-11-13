@@ -17,6 +17,7 @@ final class RecordingSecretStore: SecretStore {
     struct State {
         var calls: [Call] = []
         var deleteFailure: SecretError?
+        var writeFailure: SecretError?
     }
 
     let inner: InMemorySecretStore
@@ -32,6 +33,10 @@ final class RecordingSecretStore: SecretStore {
     var deleteFailure: SecretError? {
         get { state.withLock { $0.deleteFailure } }
         set { state.withLock { $0.deleteFailure = newValue } }
+    }
+    var writeFailure: SecretError? {
+        get { state.withLock { $0.writeFailure } }
+        set { state.withLock { $0.writeFailure = newValue } }
     }
 
     /// Valeur actuelle, lue sans compter comme une lecture de l'application.
@@ -51,7 +56,13 @@ final class RecordingSecretStore: SecretStore {
 
     func write(_ secret: String, account: String) throws {
         note("write", account)
+        if let failure = writeFailure { throw failure }
         try inner.write(secret, account: account)
+    }
+
+    func contains(account: String) throws -> Bool {
+        note("contains", account)
+        return try inner.contains(account: account)
     }
 
     func delete(account: String) throws {
@@ -364,6 +375,145 @@ struct SaveFailure: Error, LocalizedError {
         #expect(model.status(of: Self.existing.id) == .ok(count: 1))
     }
 
+    // MARK: - Nouvelle origine
+
+    static let remote = Provider(
+        id: UUID(), name: "Distant", baseURL: "https://models.invalid/v1", kind: .anthropic, models: ["m"])
+
+    @Test func newOriginWithEmptyKeyDeletesTheOldKeyBeforeSaving() async throws {
+        let store = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
+        let model = makeModel(providers: [Self.remote], secrets: store)
+        var moved = Self.remote
+        moved.baseURL = "https://elsewhere.invalid/v1"
+
+        try await model.update(moved, newKey: "")
+
+        #expect(store.peek(Self.remote.id.uuidString) == nil)
+        #expect(store.calls.map(\.name) == ["delete"])
+        #expect(model.providers.first?.baseURL == "https://elsewhere.invalid/v1")
+        #expect(model.keyState(Self.remote.id) == .absent)
+        // Aucune clé ne part vers le nouvel hôte.
+        await model.refreshModels(Self.remote.id)
+        #expect(lister.calls.isEmpty)
+    }
+
+    @Test(arguments: [
+        ("https://models.invalid/v1", "https://models.invalid/api"),
+        ("https://models.invalid", "https://MODELS.invalid:443/v1"),
+        ("http://localhost:8080", "http://localhost:8080/v1"),
+    ])
+    func pathChangeKeepsTheKey(before: String, after: String) async throws {
+        var provider = Self.remote
+        provider.baseURL = before
+        let store = RecordingSecretStore(secrets: [provider.id.uuidString: "sk-remote"])
+        let model = makeModel(providers: [provider], secrets: store)
+        var moved = provider
+        moved.baseURL = after
+
+        try await model.update(moved, newKey: nil)
+
+        #expect(store.peek(provider.id.uuidString) == "sk-remote")
+        #expect(!store.calls.contains { $0.name == "delete" })
+        #expect(model.providers.first?.baseURL == after)
+    }
+
+    @Test(arguments: [
+        ("https://models.invalid", "http://models.invalid"),
+        ("https://models.invalid", "https://models.invalid:8443"),
+        ("http://localhost:8080", "http://127.0.0.1:8080"),
+        ("https://models.invalid", "https://models.invalid.evil.invalid"),
+    ])
+    func schemeHostOrPortChangeIsANewOrigin(before: String, after: String) {
+        #expect(!ProvidersModel.sameOrigin(before, after))
+    }
+
+    @Test func failedDeletionOnANewOriginChangesNothing() async throws {
+        let store = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
+        store.deleteFailure = .denied
+        let model = makeModel(providers: [Self.remote], secrets: store)
+        var moved = Self.remote
+        moved.baseURL = "https://elsewhere.invalid"
+
+        await #expect(throws: (any Error).self) { try await model.update(moved, newKey: nil) }
+
+        #expect(model.providers == [Self.remote])
+        #expect(saver.saved.isEmpty)
+        #expect(store.peek(Self.remote.id.uuidString) == "sk-remote")
+    }
+
+    @Test func failedSaveAfterTheOldKeyWasRemovedSaysSo() async throws {
+        let store = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
+        let model = makeModel(providers: [Self.remote], secrets: store)
+        saver.failure = SaveFailure()
+        var moved = Self.remote
+        moved.baseURL = "https://elsewhere.invalid"
+
+        let error = await #expect(throws: ProvidersError.self) { try await model.update(moved, newKey: nil) }
+        guard case .oldKeyRemovedButNotSaved = error else {
+            Issue.record("erreur inattendue : \(String(describing: error))")
+            return
+        }
+        #expect(model.providers == [Self.remote])
+        #expect(store.peek(Self.remote.id.uuidString) == nil)
+        #expect(model.keyState(Self.remote.id) == .absent)
+    }
+
+    @Test func newOriginWithANewKeyNeverLeavesTheOldOneBehind() async throws {
+        let store = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
+        let model = makeModel(providers: [Self.remote], secrets: store)
+        var moved = Self.remote
+        moved.baseURL = "https://elsewhere.invalid"
+
+        try await model.update(moved, newKey: "sk-elsewhere")
+        #expect(store.peek(Self.remote.id.uuidString) == "sk-elsewhere")
+
+        // L'écriture de la nouvelle clé échoue : il ne reste aucune clé, surtout pas l'ancienne.
+        let store2 = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
+        let model2 = makeModel(providers: [Self.remote], secrets: store2)
+        store2.writeFailure = .denied
+        await #expect(throws: ProvidersError.self) { try await model2.update(moved, newKey: "sk-elsewhere") }
+        #expect(store2.peek(Self.remote.id.uuidString) == nil)
+        #expect(model2.keyState(Self.remote.id) == .absent)
+        #expect(model2.providers.first?.baseURL == "https://elsewhere.invalid")
+    }
+
+    // MARK: - Clés orphelines
+
+    @Test func keyThatCannotBeDeletedIsRetriedOnTheNextSave() async throws {
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        store.deleteFailure = .denied
+        let model = makeModel(providers: [Self.existing], secrets: store)
+
+        let error = await #expect(throws: ProvidersError.self) { try await model.remove(Self.existing.id) }
+        #expect(error?.errorDescription?.contains(Self.existing.id.uuidString) == true)
+        #expect(store.peek(Self.existing.id.uuidString) == "sk-local")
+
+        store.deleteFailure = nil
+        try await model.add(name: "Autre", baseURL: "https://other.invalid", kind: .anthropic, key: "sk-2")
+        #expect(store.peek(Self.existing.id.uuidString) == nil)
+    }
+
+    @Test func keyLeftBehindByAFailedAddIsSignalledAndRetried() async throws {
+        let model = makeModel()
+        saver.failure = SaveFailure()
+        secrets.deleteFailure = .denied
+
+        let error = await #expect(throws: ProvidersError.self) {
+            try await model.add(name: "Distant", baseURL: "https://models.invalid", kind: .anthropic, key: "sk-orphan")
+        }
+        guard case .notSavedKeyLeft = error else {
+            Issue.record("erreur inattendue : \(String(describing: error))")
+            return
+        }
+        let account = try #require(secrets.calls.first?.account)
+        #expect(secrets.peek(account) == "sk-orphan")
+
+        saver.failure = nil
+        secrets.deleteFailure = nil
+        try await model.add(name: "Autre", baseURL: "https://other.invalid", kind: .anthropic, key: "sk-2")
+        #expect(secrets.peek(account) == nil)
+    }
+
     @Test func updateValidatesTheAddressToo() async throws {
         let model = makeModel(providers: [Self.existing])
         var remote = Self.existing
@@ -488,6 +638,7 @@ struct SaveFailure: Error, LocalizedError {
             return
         }
         #expect(keyless.contains("sans clé"))
+        #expect(keyless.contains("clé quelconque"))
         #expect(missing.contains("Aucune clé"))
         #expect(model.providers.map(\.models) == [["model-a"], ["m"]])
     }
@@ -529,6 +680,19 @@ struct SaveFailure: Error, LocalizedError {
         #expect(model.providers.first?.models == ["model-a"])
     }
 
+    @Test func modelFilterIgnoresCaseAndKeepsOrder() {
+        let models = ["alpha-small", "Beta-large", "gamma-small"]
+        #expect(ProvidersModel.filter(models, query: "SMALL") == ["alpha-small", "gamma-small"])
+        #expect(ProvidersModel.filter(models, query: "  ") == models)
+        #expect(ProvidersModel.filter(models, query: "zeta").isEmpty)
+    }
+
+    @Test func modelCountIsWrittenInPlainFrench() {
+        #expect(ProvidersModel.modelCountLabel(0) == "Aucun modèle listé")
+        #expect(ProvidersModel.modelCountLabel(1) == "1 modèle")
+        #expect(ProvidersModel.modelCountLabel(2) == "2 modèles")
+    }
+
     // MARK: - Lecture en cours
 
     func makeGatedModel(_ gate: Gate) -> (ProvidersModel, RecordingSecretStore) {
@@ -544,11 +708,23 @@ struct SaveFailure: Error, LocalizedError {
         return (model, store)
     }
 
+    /// Lance `refreshModels` et attend qu'il soit suspendu dans la liste des modèles, ou terminé : une
+    /// régression fait échouer le `#require` au lieu de bloquer.
+    func startRefresh(_ model: ProvidersModel, _ gate: Gate) async throws -> Task<Void, Never> {
+        let done = Gate()
+        let refresh = Task {
+            await model.refreshModels(Self.existing.id)
+            done.open()
+        }
+        while !gate.isWaiting, !done.isOpen { await Task.yield() }
+        try #require(gate.isWaiting, "la lecture aurait dû attendre le serveur")
+        return refresh
+    }
+
     @Test func secondRefreshWhileOneIsRunningIsIgnored() async throws {
         let gate = Gate()
         let (model, _) = makeGatedModel(gate)
-        let first = Task { await model.refreshModels(Self.existing.id) }
-        while !gate.isWaiting { await Task.yield() }
+        let first = try await startRefresh(model, gate)
         #expect(model.status(of: Self.existing.id) == .loading)
 
         // Lancée pendant la première. On attend qu'elle ait rendu la main, ou qu'elle soit arrivée au serveur
@@ -570,8 +746,7 @@ struct SaveFailure: Error, LocalizedError {
     @Test func resultIsDroppedAfterTheProviderWasRemoved() async throws {
         let gate = Gate()
         let (model, _) = makeGatedModel(gate)
-        let refresh = Task { await model.refreshModels(Self.existing.id) }
-        while !gate.isWaiting { await Task.yield() }
+        let refresh = try await startRefresh(model, gate)
 
         try await model.remove(Self.existing.id)
         gate.open()
@@ -585,8 +760,7 @@ struct SaveFailure: Error, LocalizedError {
     @Test func resultIsDroppedWhenTheAddressChangedMeanwhile() async throws {
         let gate = Gate()
         let (model, _) = makeGatedModel(gate)
-        let refresh = Task { await model.refreshModels(Self.existing.id) }
-        while !gate.isWaiting { await Task.yield() }
+        let refresh = try await startRefresh(model, gate)
 
         var moved = Self.existing
         moved.baseURL = "http://localhost:9999"
@@ -598,7 +772,86 @@ struct SaveFailure: Error, LocalizedError {
         #expect(model.status(of: Self.existing.id) == .idle)
     }
 
+    /// Lecture A en cours, l'adresse change, lecture B lancée : la fin de A ne doit pas effacer le
+    /// « en cours » de B.
+    @Test func staleRefreshDoesNotOverwriteTheStatusOfANewerOne() async throws {
+        let gates = [Gate(), Gate()]
+        let calls = Mutex(0)
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        let saver = saver
+        let model = ProvidersModel(
+            providers: [Self.existing], secrets: store,
+            listModels: { _, _ in
+                let index = calls.withLock { count in
+                    defer { count += 1 }
+                    return count
+                }
+                await gates[min(index, 1)].wait()
+                return ["model-\(index)"]
+            },
+            save: { try saver.save($0) })
+
+        let first = try await startRefresh(model, gates[0])
+        var renamedPath = Self.existing
+        renamedPath.baseURL = "http://localhost:8080/v1"  // même origine : la clé reste
+        try await model.update(renamedPath, newKey: nil)
+        let second = try await startRefresh(model, gates[1])
+
+        gates[0].open()
+        await first.value
+        #expect(model.status(of: Self.existing.id) == .loading)
+
+        gates[1].open()
+        await second.value
+        #expect(model.status(of: Self.existing.id) == .ok(count: 1))
+        #expect(model.providers.first?.models == ["model-1"])
+    }
+
     // MARK: - Ouverture
+
+    @Test func keyPresenceIsCheckedWithoutReadingAnyKey() async throws {
+        let keyless = Provider(id: UUID(), name: "Sans clé", baseURL: "https://other.invalid", kind: .anthropic, models: [])
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        let model = makeModel(providers: [Self.existing, keyless], secrets: store)
+
+        await model.checkKeys()
+
+        #expect(model.keyState(Self.existing.id) == .present)
+        #expect(model.keyState(keyless.id) == .absent)
+        #expect(store.readCount == 0)
+        #expect(store.inner.readCount == 0)
+        #expect(store.calls.map(\.name) == ["contains", "contains"])
+        #expect(store.calls.allSatisfy { !$0.onMainThread })
+    }
+
+    @Test func failedPresenceCheckLeavesTheStateUnknown() async throws {
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        store.inner.failure = .denied
+        let model = makeModel(providers: [Self.existing], secrets: store)
+
+        await model.checkKeys()
+
+        #expect(model.keyState(Self.existing.id) == .unknown)
+        #expect(store.readCount == 0)
+    }
+
+    @Test func knownKeyStateIsNotAskedAgain() async throws {
+        let model = makeModel()
+        try await model.add(name: "Distant", baseURL: "https://models.invalid", kind: .anthropic, key: "sk")
+        await model.checkKeys()
+        #expect(!secrets.calls.contains { $0.name == "contains" })
+        #expect(model.keyState(try #require(model.providers.first).id) == .present)
+    }
+
+    @Test func editorNoteSaysWhatIsKnownAboutTheKey() {
+        #expect(ProvidersModel.keyNote(for: .present, newOrigin: false).contains("Une clé est enregistrée"))
+        #expect(ProvidersModel.keyNote(for: .absent, newOrigin: false).contains("Aucune clé enregistrée"))
+        #expect(ProvidersModel.keyNote(for: .unknown, newOrigin: false).contains("inconnu"))
+        // Nouvel hôte : quel que soit l'état, l'ancienne clé ne partira pas.
+        for state in [KeyState.present, .absent, .unknown] {
+            #expect(ProvidersModel.keyNote(for: state, newOrigin: true).contains("ressaisissez"))
+        }
+    }
 
     @Test func openingSettingsNeverReadsAnyKey() {
         let model = makeModel(providers: [Self.existing])

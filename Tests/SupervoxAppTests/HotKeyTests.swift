@@ -461,4 +461,63 @@ import Testing
         registrar.press()
         #expect(presses == 1)
     }
+
+    // MARK: - Suspension
+
+    @MainActor @Test func suspendUnregistersAndResumeRegistersTheSameHotKeyWithItsCallback() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        var presses = 0
+        _ = center.apply(Self.keyA, onPress: { presses += 1 })
+
+        center.suspend()
+        #expect(registrar.registered == nil)
+        #expect(center.active == Self.keyA)
+        #expect(center.isSuspended)
+
+        center.resume()
+        #expect(registrar.registered == Self.keyA)
+        #expect(!center.isSuspended)
+        registrar.press()
+        #expect(presses == 1)
+
+        // Hors suspension, `resume` ne touche à rien.
+        let calls = registrar.registerCalls
+        center.resume()
+        #expect(registrar.registerCalls == calls)
+    }
+
+    @MainActor @Test func applyWhileSuspendedEndsTheSuspension() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        _ = center.apply(Self.keyA, onPress: {})
+        center.suspend()
+
+        registrar.refused = [Self.keyB]
+        #expect(Self.failure(center.apply(Self.keyB, onPress: {})) == .taken)
+        #expect(registrar.registered == Self.keyA)
+        #expect(!center.isSuspended)
+    }
+
+    @MainActor @Test func resumeThatTheSystemRefusesLeavesNoActiveHotKey() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        _ = center.apply(Self.keyA, onPress: {})
+        center.suspend()
+        registrar.refused = [Self.keyA]
+
+        #expect(!center.resume())
+        #expect(center.active == nil)
+    }
+
+    @MainActor @Test func clearLeavesNothingRegistered() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        _ = center.apply(Self.keyA, onPress: {})
+        center.clear()
+        #expect(registrar.registered == nil)
+        #expect(center.active == nil)
+        center.resume()
+        #expect(registrar.registered == nil)
+    }
 }

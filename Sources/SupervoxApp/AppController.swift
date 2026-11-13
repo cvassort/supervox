@@ -140,6 +140,8 @@ public final class AppController {
         try settingsStore.save(updated)
         settings = updated
         panelModel.setNotice(nil, for: .save)
+        // Le fichier mis de côté au lancement est remplacé par des réglages lisibles : l'avis n'a plus d'objet.
+        panelModel.setNotice(nil, for: .settingsLoad)
     }
 
     /// Enregistre `hotKey` comme raccourci global, avec le même effet que celui du lancement, et met à
@@ -149,6 +151,24 @@ public final class AppController {
         panelModel.hotKeyLabel = hotKeys.active?.label
         if case .success = result { panelModel.setNotice(nil, for: .hotKey) }
         return result
+    }
+
+    /// Le temps d'une capture de raccourci : panneau fermé (Échap rendu) et raccourci global rendu au système.
+    func suspendHotKeysForCapture() {
+        panel.close()
+        hotKeys.suspend()
+    }
+
+    /// Fin de capture : le raccourci suspendu est réenregistré, s'il l'est encore.
+    func resumeHotKeys() {
+        hotKeys.resume()
+        panelModel.hotKeyLabel = hotKeys.active?.label
+    }
+
+    /// Plus aucun raccourci global.
+    func clearHotKey() {
+        hotKeys.clear()
+        panelModel.hotKeyLabel = nil
     }
 
     // MARK: - Panneau
@@ -200,31 +220,38 @@ public final class AppController {
 
     // MARK: - Actions
 
-    private func openSettings() {
+    /// Met la fenêtre de réglages au premier plan ; remplacé dans les tests, où rien ne doit s'afficher.
+    var presentSettingsWindow: @MainActor (NSWindow) -> Void = { window in
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+    }
+    /// Fin de l'application ; remplacé dans les tests.
+    var terminate: @MainActor () -> Void = { NSApp.terminate(nil) }
+
+    func openSettings() {
         panel.close()
         let window = settingsWindow ?? makeSettingsWindow()
         settingsWindow = window
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
+        presentSettingsWindow(window)
         log.notice("réglages ouverts")
     }
 
-    private func makeSettingsWindow() -> NSWindow {
+    func makeSettingsWindow() -> NSWindow {
         let hosting = NSHostingController(rootView: settingsView(self))
         let window = NSWindow(contentViewController: hosting)
         window.title = "Réglages"
         // Sans menu principal, ⌘X, ⌘C, ⌘V et ⌘A ne font rien dans les champs de la fenêtre.
-        NSApp.mainMenu = MainMenu.make()
+        NSApp.mainMenu = MainMenu.make(quit: { [weak self] in self?.quit() })
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.center()
         return window
     }
 
-    private func quit() {
+    func quit() {
         panel.close()
         log.notice("quitter")
-        NSApp.terminate(nil)
+        terminate()
     }
 }
 

@@ -75,6 +75,24 @@ public struct KeychainSecretStore: SecretStore {
         }
     }
 
+    /// Recherche des attributs seulement : la donnée (la clé) n'est ni demandée ni déchiffrée.
+    public func contains(account: String) throws -> Bool {
+        var result: CFTypeRef?
+        switch Self.outcome(forStatus: SecItemCopyMatching(existenceQuery(account: account) as CFDictionary, &result)) {
+        case .success: return true
+        case .notFound: return false
+        case .failure(let error): throw error
+        }
+    }
+
+    /// Requête de `contains` : attributs demandés, jamais `kSecReturnData`.
+    func existenceQuery(account: String) -> [CFString: Any] {
+        var query = identity(account: account)
+        query[kSecReturnAttributes] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        return query
+    }
+
     private func identity(account: String) -> [CFString: Any] {
         [
             kSecClass: kSecClassGenericPassword,

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -153,5 +154,92 @@ import Testing
         #expect(!controller.panelModel.isOpen)
         #expect(!surface.isShown)
         #expect(controller.panelMenuTitle == "Ouvrir le panneau")
+    }
+
+    // MARK: - Réglages et Quitter
+
+    /// Fenêtres présentées et demandes de fin, à la place de l'écran et de `NSApp.terminate`.
+    @MainActor final class Presenter {
+        var windows: [NSWindow] = []
+        var terminations = 0
+    }
+
+    func makeOpenPanel(_ presenter: Presenter) -> AppController {
+        _ = NSApplication.shared  // `NSApp` doit exister pour le menu principal ; rien n'est affiché.
+        let controller = makeController()
+        controller.presentSettingsWindow = { presenter.windows.append($0) }
+        controller.terminate = { presenter.terminations += 1 }
+        controller.applyHotKeyAtLaunch()
+        hotKeys.press()
+        return controller
+    }
+
+    @Test func openingSettingsClosesThePanel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let presenter = Presenter()
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let controller = makeOpenPanel(presenter)
+        #expect(escape.registered != nil)
+        #expect(clicks.isWatching)
+
+        controller.openSettings()
+
+        #expect(!controller.panelModel.isOpen)
+        #expect(!surface.isShown)
+        #expect(escape.registered == nil)
+        #expect(!clicks.isWatching)
+        #expect(presenter.windows.count == 1)
+        // Fenêtre gardée : une seconde ouverture présente la même.
+        controller.openSettings()
+        #expect(presenter.windows.count == 2)
+        try #require(presenter.windows.count == 2)
+        #expect(presenter.windows[0] === presenter.windows[1])
+    }
+
+    @Test func settingsWindowInstallsTheMainMenu() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let presenter = Presenter()
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        NSApplication.shared.mainMenu = nil
+        let controller = makeOpenPanel(presenter)
+
+        controller.openSettings()
+
+        let titles = NSApplication.shared.mainMenu?.items.map(\.title) ?? []
+        #expect(titles.contains("Édition"))
+        // ⌘Q du menu principal passe par `quit()` : panneau fermé, puis fin demandée.
+        let quit = try #require(NSApplication.shared.mainMenu?.items.first?.submenu?.items.first { $0.keyEquivalent == "q" })
+        hotKeys.press()
+        #expect(controller.panelModel.isOpen)
+        (quit.target as? NSObject)?.perform(quit.action!, with: quit)
+        #expect(presenter.terminations == 1)
+        #expect(!controller.panelModel.isOpen)
+    }
+
+    @Test func quittingClosesThePanel() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let presenter = Presenter()
+        let controller = makeOpenPanel(presenter)
+
+        controller.quit()
+
+        #expect(presenter.terminations == 1)
+        #expect(!controller.panelModel.isOpen)
+        #expect(escape.registered == nil)
+        #expect(!clicks.isWatching)
+    }
+
+    @Test func successfulSaveClearsTheLoadNotice() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try corruptTheSettingsFile()
+        let controller = makeController()
+        #expect(controller.panelModel.notices[.settingsLoad] != nil)
+
+        // Le fichier illisible a été mis de côté : la sauvegarde suivante réussit.
+        controller.panelModel.select("prompt")
+        #expect(controller.panelModel.notices[.settingsLoad] == nil)
+        #expect(store.load().settings.lastModeID == "prompt")
     }
 }

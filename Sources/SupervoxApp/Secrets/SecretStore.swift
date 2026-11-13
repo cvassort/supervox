@@ -48,6 +48,8 @@ public protocol SecretStore: Sendable {
     func write(_ secret: String, account: String) throws
     /// Supprimer un secret absent n'est pas une erreur.
     func delete(account: String) throws
+    /// Dit si un secret existe pour ce compte, sans lire sa valeur. Peut bloquer comme `read` : même contrat.
+    func contains(account: String) throws -> Bool
 }
 
 /// Magasin en mémoire, pour les tests. Sûr en accès concurrent.
@@ -55,6 +57,7 @@ public final class InMemorySecretStore: SecretStore {
     private struct State {
         var secrets: [String: String]
         var readCount = 0
+        var containsCount = 0
         var failure: SecretError?
     }
 
@@ -62,6 +65,17 @@ public final class InMemorySecretStore: SecretStore {
 
     public init(secrets: [String: String] = [:]) {
         state = Mutex(State(secrets: secrets))
+    }
+
+    /// Nombre d'appels à `contains`, ceux qui échouent compris. Ils ne comptent pas dans `readCount`.
+    public var containsCount: Int { state.withLock { $0.containsCount } }
+
+    public func contains(account: String) throws -> Bool {
+        try state.withLock { state in
+            state.containsCount += 1
+            if let failure = state.failure { throw failure }
+            return state.secrets[account] != nil
+        }
     }
 
     /// Nombre d'appels à `read`, ceux qui échouent compris.
@@ -140,6 +154,21 @@ public final class CachedSecretStore: SecretStore {
             cache[account] = nil
             try underlying.write(secret, account: account)
             cache[account] = .present(secret)
+        }
+    }
+
+    /// Répond d'après le cache s'il connaît ce compte ; sinon demande au magasin dessous, sans lire la valeur.
+    /// Une absence est gardée (comme celle vue par `read`) ; une présence ne l'est pas, faute de valeur.
+    public func contains(account: String) throws -> Bool {
+        try cache.withLock { cache in
+            switch cache[account] {
+            case .present: return true
+            case .absent: return false
+            case nil: break
+            }
+            let exists = try underlying.contains(account: account)
+            if !exists { cache[account] = .absent }
+            return exists
         }
     }
 
