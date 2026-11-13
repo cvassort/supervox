@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "SupervoxCore", targets: ["SupervoxCore"]),
         .library(name: "SupervoxEngines", targets: ["SupervoxEngines"]),
         .library(name: "SupervoxApp", targets: ["SupervoxApp"]),
+        .executable(name: "Supervox", targets: ["Supervox"]),
         .executable(name: "supervox-bench", targets: ["SupervoxBench"]),
     ],
     dependencies: [
@@ -29,6 +30,7 @@ let package = Package(
             name: "SupervoxApp",
             dependencies: ["SupervoxCore"]
         ),
+        .executableTarget(name: "Supervox", dependencies: ["SupervoxApp"]),
         .executableTarget(
             name: "SupervoxBench",
             dependencies: [
