@@ -24,14 +24,14 @@ import Testing
     // MARK: - Validation et libellé
 
     @Test func standardHotKeyIsValidAndLabelled() {
-        #expect(HotKey.standard.validate() == .valid)
+        #expect(HotKey.standard.validate(layout: Self.ansi) == .valid)
         #expect(HotKey.standard.label == "⌃⌥Espace")
     }
 
     @Test func keyWithoutModifierIsRejected() {
-        #expect(HotKey(keyCode: 49, modifiers: []).validate() == .needsModifier)
-        #expect(HotKey(keyCode: 0x00, modifiers: []).validate() == .needsModifier)
-        #expect(HotKey(keyCode: 0x7A, modifiers: []).validate() == .needsModifier)
+        #expect(HotKey(keyCode: 49, modifiers: []).validate(layout: Self.ansi) == .needsModifier)
+        #expect(HotKey(keyCode: 0x00, modifiers: []).validate(layout: Self.ansi) == .needsModifier)
+        #expect(HotKey(keyCode: 0x7A, modifiers: []).validate(layout: Self.ansi) == .needsModifier)
     }
 
     /// Codes de touches qui sont elles-mêmes des modificateurs (`kVK_Command` 0x37, `kVK_Shift` 0x38,
@@ -39,38 +39,38 @@ import Testing
     /// `kVK_RightShift` 0x3C, `kVK_RightOption` 0x3D, `kVK_RightControl` 0x3E, `kVK_Function` 0x3F).
     @Test(arguments: [UInt32(0x36), 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F])
     func modifierKeyAloneIsRejected(keyCode: UInt32) {
-        #expect(HotKey(keyCode: keyCode, modifiers: [.command]).validate() == .modifierOnly)
+        #expect(HotKey(keyCode: keyCode, modifiers: [.command]).validate(layout: Self.ansi) == .modifierOnly)
         // Sans modificateur non plus : la touche seule est d'abord un modificateur.
-        #expect(HotKey(keyCode: keyCode, modifiers: []).validate() == .modifierOnly)
+        #expect(HotKey(keyCode: keyCode, modifiers: []).validate(layout: Self.ansi) == .modifierOnly)
     }
 
     @Test func keysNextToTheModifierKeysAreNotMistakenForModifiers() {
         // 0x35 = Échap, 0x40 = F17 : de part et d'autre de la plage 0x36...0x3F.
-        #expect(HotKey(keyCode: 0x35, modifiers: [.control]).validate() == .valid)
-        #expect(HotKey(keyCode: 0x40, modifiers: [.control]).validate() == .valid)
+        #expect(HotKey(keyCode: 0x35, modifiers: [.control]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x40, modifiers: [.control]).validate(layout: Self.ansi) == .valid)
     }
 
     @Test func reservedCombinationsAreRejected() {
-        #expect(HotKey(keyCode: 0x31, modifiers: [.command]).validate() == .reserved("⌘Espace"))
-        #expect(HotKey(keyCode: 0x30, modifiers: [.command]).validate() == .reserved("⌘Tab"))
-        #expect(HotKey(keyCode: 0x0C, modifiers: [.command]).validate() == .reserved("⌘Q"))
+        #expect(HotKey(keyCode: 0x31, modifiers: [.command]).validate(layout: Self.ansi) == .reserved("⌘Espace"))
+        #expect(HotKey(keyCode: 0x30, modifiers: [.command]).validate(layout: Self.ansi) == .reserved("⌘Tab"))
+        #expect(HotKey(keyCode: 0x0C, modifiers: [.command]).validate(layout: Self.ansi) == .reserved("⌘Q"))
     }
 
     @Test func combinationsCloseToReservedOnesAreAccepted() {
         // Même touche avec un autre modificateur, ou autre touche avec commande : pas réservés.
-        #expect(HotKey(keyCode: 0x31, modifiers: [.command, .option]).validate() == .valid)
-        #expect(HotKey(keyCode: 0x31, modifiers: [.option]).validate() == .valid)
-        #expect(HotKey(keyCode: 0x30, modifiers: [.command, .shift]).validate() == .valid)
-        #expect(HotKey(keyCode: 0x0C, modifiers: [.command, .control]).validate() == .valid)
-        #expect(HotKey(keyCode: 0x00, modifiers: [.command]).validate() == .valid)  // ⌘A
+        #expect(HotKey(keyCode: 0x31, modifiers: [.command, .option]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x31, modifiers: [.control]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x30, modifiers: [.command, .option]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x0C, modifiers: [.command, .control]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x00, modifiers: [.command]).validate(layout: Self.ansi) == .valid)  // ⌘A
     }
 
     @Test func labelListsModifiersInControlOptionShiftCommandOrder() {
         let all: Modifiers = [.command, .shift, .option, .control]
-        #expect(HotKey(keyCode: 0x00, modifiers: all).label == "⌃⌥⇧⌘A")
-        #expect(HotKey(keyCode: 0x7A, modifiers: [.shift, .command]).label == "⇧⌘F1")
-        #expect(HotKey(keyCode: 0x24, modifiers: [.option]).label == "⌥Retour")
-        #expect(HotKey(keyCode: 0x00, modifiers: []).label == "A")
+        #expect(HotKey(keyCode: 0x00, modifiers: all).label(layout: Self.ansi) == "⌃⌥⇧⌘A")
+        #expect(HotKey(keyCode: 0x7A, modifiers: [.shift, .command]).label(layout: Self.ansi) == "⇧⌘F1")
+        #expect(HotKey(keyCode: 0x24, modifiers: [.option]).label(layout: Self.ansi) == "⌥Retour")
+        #expect(HotKey(keyCode: 0x00, modifiers: []).label(layout: Self.ansi) == "A")
     }
 
     /// Valeurs relevées à la main dans `HIToolbox/Events.h` du SDK (`kVK_*`), pas dans le code testé.
@@ -99,26 +99,162 @@ import Testing
         (0x4C, "Entrée"),
     ]
 
+    /// Disposition à partir d'une table « code -> caractère » (minuscules, comme le rend le système).
+    struct StubLayout: KeyboardLayout {
+        var characters: [UInt32: String]
+        func character(forKeyCode keyCode: UInt32) -> String? { characters[keyCode] }
+    }
+
+    /// Ce que rend une disposition ANSI : les caractères d'un seul signe ASCII de `expectedKeyNames`.
+    static let ansi = StubLayout(
+        characters: Dictionary(
+            uniqueKeysWithValues: expectedKeyNames
+                .filter { $0.1.count == 1 && $0.1.unicodeScalars.allSatisfy(\.isASCII) }
+                .map { ($0.0, $0.1.lowercased()) }))
+
+    /// AZERTY français : A/Q, Z/W et M/; échangés, « ² » sur le code ISO 0x0A, « & » sur le 1.
+    static let azerty = StubLayout(
+        characters: ansi.characters.merging([
+            0x00: "q", 0x0C: "a", 0x0D: "z", 0x06: "w", 0x29: "m", 0x2E: ",", 0x0A: "²", 0x12: "&",
+        ]) { _, new in new })
+
     @Test(arguments: expectedKeyNames)
     func keyLabelMatchesTheCarbonVirtualKeyCode(keyCode: UInt32, name: String) {
-        #expect(HotKey(keyCode: keyCode, modifiers: [.control]).label == "⌃" + name)
+        #expect(HotKey(keyCode: keyCode, modifiers: [.control]).label(layout: Self.ansi) == "⌃" + name)
     }
 
     @Test func unknownKeyCodeGetsAReadableFallbackLabel() {
-        #expect(HotKey(keyCode: 123 + 1000, modifiers: [.control]).label == "⌃Touche 1123")
-        #expect(HotKey(keyCode: 0x0A, modifiers: []).label == "Touche 10")  // kVK_ISO_Section, non nommé
+        #expect(HotKey(keyCode: 123 + 1000, modifiers: [.control]).label(layout: Self.ansi) == "⌃Touche 1123")
+        #expect(HotKey(keyCode: 0x0A, modifiers: []).label(layout: Self.ansi) == "Touche 10")  // kVK_ISO_Section, non nommé
     }
 
     @Test func everyKeyCodeHasANonEmptyLabelAndLabelsAreDistinct() {
         var seen: [String: UInt32] = [:]
         for code in UInt32(0)...255 {
-            let label = HotKey(keyCode: code, modifiers: []).label
+            let label = HotKey(keyCode: code, modifiers: []).label(layout: Self.ansi)
             #expect(!label.isEmpty, "code \(code) : libellé vide")
             if let other = seen[label] {
                 Issue.record("codes \(other) et \(code) ont le même libellé « \(label) »")
             }
             seen[label] = code
         }
+    }
+
+    // MARK: - Disposition du clavier
+
+    @Test func labelFollowsTheActiveLayout() {
+        // Même code physique, caractères différents selon la disposition.
+        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).label(layout: Self.ansi) == "⌃A")
+        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).label(layout: Self.azerty) == "⌃Q")
+        #expect(HotKey(keyCode: 0x0C, modifiers: [.control]).label(layout: Self.ansi) == "⌃Q")
+        #expect(HotKey(keyCode: 0x0C, modifiers: [.control]).label(layout: Self.azerty) == "⌃A")
+        #expect(HotKey(keyCode: 0x29, modifiers: []).label(layout: Self.azerty) == "M")
+        #expect(HotKey(keyCode: 0x12, modifiers: []).label(layout: Self.azerty) == "&")
+    }
+
+    @Test func layoutCharactersAreShownInUppercase() {
+        let layout = StubLayout(characters: [0x00: "é", 0x0B: "b"])
+        #expect(HotKey(keyCode: 0x00, modifiers: []).label(layout: layout) == "É")
+        #expect(HotKey(keyCode: 0x0B, modifiers: []).label(layout: layout) == "B")
+    }
+
+    @Test func nonPrintableKeysKeepTheirNamesWhateverTheLayoutSays() {
+        let everythingIsX = StubLayout(
+            characters: Dictionary(uniqueKeysWithValues: (UInt32(0)...255).map { ($0, "x") }))
+        let named: [(UInt32, String)] = [
+            (0x31, "Espace"), (0x24, "Retour"), (0x30, "Tab"), (0x35, "Échap"), (0x33, "Effacer"),
+            (0x75, "Suppr"), (0x7B, "←"), (0x7C, "→"), (0x7D, "↓"), (0x7E, "↑"), (0x7A, "F1"),
+            (0x6F, "F12"), (0x73, "Début"), (0x77, "Fin"), (0x74, "Page précédente"),
+            (0x79, "Page suivante"), (0x52, "Pavé 0"), (0x4C, "Entrée"),
+        ]
+        for (code, name) in named {
+            #expect(HotKey(keyCode: code, modifiers: []).label(layout: everythingIsX) == name)
+        }
+    }
+
+    @Test func layoutThatSaysNothingFallsBackToTheAnsiTableThenToTouche() {
+        let silent = StubLayout(characters: [:])
+        #expect(HotKey(keyCode: 0x00, modifiers: []).label(layout: silent) == "A")
+        #expect(HotKey(keyCode: 0x0A, modifiers: []).label(layout: silent) == "Touche 10")
+        // Un résultat vide ou de contrôle n'est pas un caractère imprimable : même repli.
+        let junk = StubLayout(characters: [0x00: "", 0x0B: "\u{7F}", 0x08: "\u{F704}"])
+        #expect(HotKey(keyCode: 0x00, modifiers: []).label(layout: junk) == "A")
+        #expect(HotKey(keyCode: 0x0B, modifiers: []).label(layout: junk) == "B")
+        #expect(HotKey(keyCode: 0x08, modifiers: []).label(layout: junk) == "C")
+    }
+
+    @Test func layoutCanNameKeysTheAnsiTableDoesNotKnow() {
+        #expect(HotKey(keyCode: 0x0A, modifiers: [.control]).label(layout: Self.azerty) == "⌃²")
+    }
+
+    @Test func reservedQuitFollowsTheCharacterNotTheKeyCode() {
+        let commandOn = { (code: UInt32, layout: StubLayout) in
+            HotKey(keyCode: code, modifiers: [.command]).validate(layout: layout)
+        }
+        // ANSI : « q » est au code 0x0C.
+        #expect(commandOn(0x0C, Self.ansi) == .reserved("⌘Q"))
+        #expect(commandOn(0x00, Self.ansi) == .valid)
+        // AZERTY : « q » est au code 0x00, et 0x0C porte « a ».
+        #expect(commandOn(0x00, Self.azerty) == .reserved("⌘Q"))
+        #expect(commandOn(0x0C, Self.azerty) == .valid)
+    }
+
+    @Test func closeWindowHideAndMinimizeAreReservedByCharacter() {
+        // ANSI : W 0x0D, H 0x04, M 0x2E.
+        #expect(HotKey(keyCode: 0x0D, modifiers: [.command]).validate(layout: Self.ansi) == .reserved("⌘W"))
+        #expect(HotKey(keyCode: 0x04, modifiers: [.command]).validate(layout: Self.ansi) == .reserved("⌘H"))
+        #expect(HotKey(keyCode: 0x2E, modifiers: [.command]).validate(layout: Self.ansi) == .reserved("⌘M"))
+        // AZERTY : « w » est au code 0x06, « m » au 0x29 ; 0x0D porte « z », 0x2E la virgule.
+        #expect(HotKey(keyCode: 0x06, modifiers: [.command]).validate(layout: Self.azerty) == .reserved("⌘W"))
+        #expect(HotKey(keyCode: 0x29, modifiers: [.command]).validate(layout: Self.azerty) == .reserved("⌘M"))
+        #expect(HotKey(keyCode: 0x0D, modifiers: [.command]).validate(layout: Self.azerty) == .valid)
+        #expect(HotKey(keyCode: 0x2E, modifiers: [.command]).validate(layout: Self.azerty) == .valid)
+        // Avec un autre modificateur en plus : pas réservé.
+        #expect(HotKey(keyCode: 0x0D, modifiers: [.command, .option]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x0C, modifiers: [.command, .shift]).validate(layout: Self.ansi) == .valid)
+    }
+
+    @Test func commandShiftTabIsReservedByKeyCode() {
+        #expect(
+            HotKey(keyCode: 0x30, modifiers: [.command, .shift]).validate(layout: Self.ansi)
+                == .reserved("⇧⌘Tab"))
+        // Le code, pas le caractère : même résultat quelle que soit la disposition.
+        #expect(
+            HotKey(keyCode: 0x30, modifiers: [.command, .shift]).validate(layout: Self.azerty)
+                == .reserved("⇧⌘Tab"))
+        #expect(HotKey(keyCode: 0x30, modifiers: [.command, .option]).validate(layout: Self.ansi) == .valid)
+    }
+
+    @Test func shiftAloneOrOptionAloneOnATypingKeyNeedsAModifier() {
+        // Ces combinaisons tapent un caractère : les prendre casserait la saisie.
+        for code: UInt32 in [0x00, 0x12, 0x31, 0x24, 0x7B, 0x18] {
+            #expect(HotKey(keyCode: code, modifiers: [.shift]).validate(layout: Self.ansi) == .needsModifier)
+            #expect(HotKey(keyCode: code, modifiers: [.option]).validate(layout: Self.ansi) == .needsModifier)
+        }
+    }
+
+    @Test func shiftAloneOrOptionAloneIsFineOnAFunctionKey() {
+        for code: UInt32 in [0x7A, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6D, 0x67, 0x6F] {
+            #expect(HotKey(keyCode: code, modifiers: [.shift]).validate(layout: Self.ansi) == .valid)
+            #expect(HotKey(keyCode: code, modifiers: [.option]).validate(layout: Self.ansi) == .valid)
+        }
+    }
+
+    @Test func strongOrCombinedModifiersOnATypingKeyStayValid() {
+        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x00, modifiers: [.command]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x00, modifiers: [.shift, .option]).validate(layout: Self.ansi) == .valid)
+        #expect(HotKey(keyCode: 0x00, modifiers: [.shift, .control]).validate(layout: Self.ansi) == .valid)
+    }
+
+    @MainActor @Test func centerValidatesWithItsOwnLayout() {
+        let command0 = HotKey(keyCode: 0x00, modifiers: [.command])
+        let ansiCenter = HotKeyCenter(registrar: FakeRegistrar(), layout: Self.ansi)
+        #expect(Self.failure(ansiCenter.apply(command0) {}) == nil)
+        let registrar = FakeRegistrar()
+        let azertyCenter = HotKeyCenter(registrar: registrar, layout: Self.azerty)
+        #expect(Self.failure(azertyCenter.apply(command0) {}) == .invalid(.reserved("⌘Q")))
+        #expect(registrar.registerCalls == 0)
     }
 
     @Test func hotKeyRoundTripsThroughJSON() throws {
@@ -183,7 +319,7 @@ import Testing
 
     @MainActor @Test func applyRegistersAndRemembers() {
         let registrar = FakeRegistrar()
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         #expect(center.active == nil)
         var presses = 0
         let result = center.apply(Self.keyA) { presses += 1 }
@@ -197,7 +333,7 @@ import Testing
     @MainActor @Test func failedRegistrationKeepsThePreviousHotKey() {
         let registrar = FakeRegistrar()
         registrar.refused = [Self.keyB]
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         var pressesA = 0
         var pressesB = 0
         #expect(Self.failure(center.apply(Self.keyA) { pressesA += 1 }) == nil)
@@ -213,7 +349,7 @@ import Testing
     @MainActor @Test func failedRegistrationWithNothingBeforeLeavesNothingActive() {
         let registrar = FakeRegistrar()
         registrar.refused = [Self.keyB]
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         #expect(Self.failure(center.apply(Self.keyB) {}) == .taken)
         #expect(center.active == nil)
         #expect(registrar.registered == nil)
@@ -221,7 +357,7 @@ import Testing
 
     @MainActor @Test func activeNeverNamesAHotKeyThatCouldNotBeRestored() {
         let registrar = FakeRegistrar()
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         #expect(Self.failure(center.apply(Self.keyA) {}) == nil)
         // Le système refuse désormais tout, y compris de reprendre l'ancien raccourci.
         registrar.refused = [Self.keyA, Self.keyB]
@@ -232,7 +368,7 @@ import Testing
 
     @MainActor @Test func applyingAgainReplacesTheCallback() {
         let registrar = FakeRegistrar()
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         var first = 0
         var second = 0
         #expect(Self.failure(center.apply(Self.keyA) { first += 1 }) == nil)
@@ -245,7 +381,7 @@ import Testing
 
     @MainActor @Test func successfulChangeMovesToTheNewHotKeyWithItsCallback() {
         let registrar = FakeRegistrar()
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         var pressesA = 0
         var pressesB = 0
         #expect(Self.failure(center.apply(Self.keyA) { pressesA += 1 }) == nil)
@@ -261,7 +397,7 @@ import Testing
         let registrar = FakeRegistrar()
         registrar.refusesWhileOccupied = true
         registrar.refused = [Self.keyB]
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         var presses = 0
         #expect(Self.failure(center.apply(Self.keyA) { presses += 1 }) == nil)
         // Même combinaison redemandée : acceptée seulement si l'ancienne a été libérée d'abord.
@@ -276,7 +412,7 @@ import Testing
 
     @MainActor @Test func invalidHotKeyNeverReachesTheRegistrar() {
         let registrar = FakeRegistrar()
-        let center = HotKeyCenter(registrar: registrar)
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
         let invalid = HotKey(keyCode: 0x00, modifiers: [])
         #expect(Self.failure(center.apply(invalid) {}) == .invalid(.needsModifier))
         let reserved = HotKey(keyCode: 0x0C, modifiers: [.command])

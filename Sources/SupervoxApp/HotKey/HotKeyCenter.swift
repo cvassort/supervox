@@ -24,13 +24,16 @@ public enum HotKeyError: Error, Equatable, Sendable {
 @MainActor
 public final class HotKeyCenter {
     private let registrar: any HotKeyRegistrar
+    private let layout: any KeyboardLayout
     private var activeOnPress: (@MainActor () -> Void)?
 
     /// Le raccourci réellement enregistré auprès du système, ou `nil`.
     public private(set) var active: HotKey?
 
-    public init(registrar: any HotKeyRegistrar) {
+    /// `layout` sert à reconnaître les combinaisons réservées par caractère (⌘Q, ⌘W, ⌘H, ⌘M).
+    public init(registrar: any HotKeyRegistrar, layout: any KeyboardLayout = SystemKeyboardLayout()) {
         self.registrar = registrar
+        self.layout = layout
     }
 
     /// Enregistre `hotKey` à la place du précédent. Si la combinaison est invalide, le système n'est
@@ -39,7 +42,7 @@ public final class HotKeyCenter {
     public func apply(
         _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void
     ) -> Result<Void, HotKeyError> {
-        let validation = hotKey.validate()
+        let validation = hotKey.validate(layout: layout)
         guard validation == .valid else { return .failure(.invalid(validation)) }
 
         let previous = active
