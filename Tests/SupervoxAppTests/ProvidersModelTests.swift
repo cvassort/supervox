@@ -92,6 +92,41 @@ final class FakeLister: Sendable {
     }
 }
 
+/// Barrière : `wait` reste suspendu jusqu'à `open` ; une fois ouverte, elle ne retient plus personne.
+final class Gate: Sendable {
+    private struct State {
+        var waiting: [CheckedContinuation<Void, Never>] = []
+        var isOpen = false
+        var calls = 0
+    }
+
+    private let state = Mutex(State())
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let passThrough = state.withLock { state in
+                state.calls += 1
+                if !state.isOpen { state.waiting.append(continuation) }
+                return state.isOpen
+            }
+            if passThrough { continuation.resume() }
+        }
+    }
+
+    var isWaiting: Bool { state.withLock { !$0.waiting.isEmpty } }
+    var isOpen: Bool { state.withLock { $0.isOpen } }
+    var calls: Int { state.withLock { $0.calls } }
+
+    func open() {
+        let waiting = state.withLock { state in
+            state.isOpen = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        waiting.forEach { $0.resume() }
+    }
+}
+
 struct SaveFailure: Error, LocalizedError {
     var errorDescription: String? { "disque plein" }
 }
@@ -136,6 +171,8 @@ struct SaveFailure: Error, LocalizedError {
         let json = String(decoding: try JSONEncoder().encode(saved), as: UTF8.self)
         #expect(!json.contains("sk-secret-1"))
         #expect(model.keyState(provider.id) == .present)
+        #expect(secrets.calls.map(\.name) == ["write"])
+        #expect(secrets.calls.allSatisfy { !$0.onMainThread })
     }
 
     @Test func keyIsTrimmedBeforeBeingStored() async throws {
@@ -228,6 +265,7 @@ struct SaveFailure: Error, LocalizedError {
         let account = try #require(secrets.calls.first?.account)
         #expect(secrets.calls.last?.account == account)
         #expect(secrets.peek(account) == nil)
+        #expect(secrets.calls.allSatisfy { !$0.onMainThread })
     }
 
     @Test func unreadableSettingsFileIsNamedInTheMessage() async throws {
@@ -265,6 +303,23 @@ struct SaveFailure: Error, LocalizedError {
 
         #expect(store.peek(Self.existing.id.uuidString) == "sk-new")
         #expect(model.keyState(Self.existing.id) == .present)
+    }
+
+    @Test func keyThatCannotBeWrittenOnUpdateIsReportedAfterTheSettingsAreSaved() async throws {
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        let model = makeModel(providers: [Self.existing], secrets: store)
+        store.inner.failure = .denied
+        var renamed = Self.existing
+        renamed.name = "Renommé"
+
+        let error = await #expect(throws: ProvidersError.self) { try await model.update(renamed, newKey: "sk-new") }
+        guard case .keyNotSaved = error else {
+            Issue.record("erreur inattendue : \(String(describing: error))")
+            return
+        }
+        #expect(model.providers == [renamed])
+        #expect(saver.saved.last == [renamed])
+        #expect(model.keyState(Self.existing.id) == .unknown)
     }
 
     @Test func failedSaveOnUpdateChangesNeitherTheProviderNorTheKey() async throws {
@@ -472,6 +527,75 @@ struct SaveFailure: Error, LocalizedError {
         await model.refreshModels(Self.existing.id)
         #expect(model.status(of: Self.existing.id) == .idle)
         #expect(model.providers.first?.models == ["model-a"])
+    }
+
+    // MARK: - Lecture en cours
+
+    func makeGatedModel(_ gate: Gate) -> (ProvidersModel, RecordingSecretStore) {
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        let saver = saver
+        let model = ProvidersModel(
+            providers: [Self.existing], secrets: store,
+            listModels: { _, _ in
+                await gate.wait()
+                return ["model-late"]
+            },
+            save: { try saver.save($0) })
+        return (model, store)
+    }
+
+    @Test func secondRefreshWhileOneIsRunningIsIgnored() async throws {
+        let gate = Gate()
+        let (model, _) = makeGatedModel(gate)
+        let first = Task { await model.refreshModels(Self.existing.id) }
+        while !gate.isWaiting { await Task.yield() }
+        #expect(model.status(of: Self.existing.id) == .loading)
+
+        // Lancée pendant la première. On attend qu'elle ait rendu la main, ou qu'elle soit arrivée au serveur
+        // si la garde disparaissait ; la barrière, ouverte ensuite, ne retient plus personne.
+        let secondDone = Gate()
+        let second = Task {
+            await model.refreshModels(Self.existing.id)
+            secondDone.open()
+        }
+        while !secondDone.isOpen, gate.calls < 2 { await Task.yield() }
+        gate.open()
+        await first.value
+        await second.value
+
+        #expect(gate.calls == 1)
+        #expect(model.providers.first?.models == ["model-late"])
+    }
+
+    @Test func resultIsDroppedAfterTheProviderWasRemoved() async throws {
+        let gate = Gate()
+        let (model, _) = makeGatedModel(gate)
+        let refresh = Task { await model.refreshModels(Self.existing.id) }
+        while !gate.isWaiting { await Task.yield() }
+
+        try await model.remove(Self.existing.id)
+        gate.open()
+        await refresh.value
+
+        #expect(model.providers.isEmpty)
+        #expect(model.status[Self.existing.id] == nil)
+        #expect(saver.saved.last == [])
+    }
+
+    @Test func resultIsDroppedWhenTheAddressChangedMeanwhile() async throws {
+        let gate = Gate()
+        let (model, _) = makeGatedModel(gate)
+        let refresh = Task { await model.refreshModels(Self.existing.id) }
+        while !gate.isWaiting { await Task.yield() }
+
+        var moved = Self.existing
+        moved.baseURL = "http://localhost:9999"
+        try await model.update(moved, newKey: nil)
+        gate.open()
+        await refresh.value
+
+        #expect(model.providers.first?.models == [])
+        #expect(model.status(of: Self.existing.id) == .idle)
     }
 
     // MARK: - Ouverture

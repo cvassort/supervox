@@ -108,6 +108,7 @@ import Testing
     }
 
     @Test func mainMenuGivesTheEditingShortcutsAndQuit() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
         let menu = MainMenu.make()
         let items = menu.items.flatMap { $0.submenu?.items ?? [] }
         let byKey = Dictionary(uniqueKeysWithValues: items.map { ($0.keyEquivalent, $0) })
@@ -121,6 +122,7 @@ import Testing
     }
 
     @Test func eachDeniedPermissionOpensItsOwnPane() {
+        defer { try? FileManager.default.removeItem(at: directory) }
         #expect(SystemSettingsPane.microphone.url.absoluteString.hasSuffix("?Privacy_Microphone"))
         #expect(SystemSettingsPane.accessibility.url.absoluteString.hasSuffix("?Privacy_Accessibility"))
         #expect(SystemSettingsPane.microphone.url.scheme == "x-apple.systempreferences")
