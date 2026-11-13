@@ -259,17 +259,25 @@ private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
 
 /// Ce qui est chronométré : la transcription, l'attente de la première phrase (dès l'envoi), la synthèse ; le
 /// silence est la constante donnée. Les durées simulées sont des bornes basses (l'horloge ne peut que les dépasser).
+/// Aucune borne haute absolue : sur une machine chargée, une attente de 40 ms peut durer plus d'une demi-seconde.
+/// À la place, un invariant : les trois maillons s'enchaînent, donc leur somme ne peut pas dépasser la durée
+/// réelle de tout l'essai. Un maillon qui chronométrerait aussi l'étape voisine la compterait deux fois.
 @Test func eachLinkTimesItsOwnStep() async throws {
+    let clock = ContinuousClock()
+    let start = clock.now
     let out = try await trials(
         runs: 1,
-        transcript: { _ in try await Task.sleep(for: .milliseconds(40)); return "je veux refactorer" },
-        chat: { _ in stream(streamed, delay: .milliseconds(60)) },
-        speak: { _, _ in try await Task.sleep(for: .milliseconds(30)); return Data([1]) })
+        transcript: { _ in try await Task.sleep(for: .milliseconds(100)); return "je veux refactorer" },
+        chat: { _ in stream(streamed, delay: .milliseconds(150)) },
+        speak: { _, _ in try await Task.sleep(for: .milliseconds(80)); return Data([1]) })
+    let elapsed = clock.now - start
+    let wall = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
     guard case .measured(let t) = out[0].outcome else { Issue.record("essai non mesuré : \(out[0].outcome)"); return }
     #expect(abs(t.silence - 0.6) < 1e-9)
-    #expect(t.transcription >= 0.04 && t.transcription < 0.5)
-    #expect(t.firstSentence! >= 0.06 && t.firstSentence! < 0.5)
-    #expect(t.synthesis! >= 0.03 && t.synthesis! < 0.5)
+    #expect(t.transcription >= 0.1)
+    #expect(t.firstSentence! >= 0.15)
+    #expect(t.synthesis! >= 0.08)
+    #expect(t.transcription + t.firstSentence! + t.synthesis! <= wall)
     #expect(out[0].sentence == "Quel est l'objectif ?" && out[0].transcript == "je veux refactorer")
     #expect(out[0].contentChunks == 4)
 }
