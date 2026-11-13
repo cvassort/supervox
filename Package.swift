@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "SupervoxCore", targets: ["SupervoxCore"]),
         .library(name: "SupervoxEngines", targets: ["SupervoxEngines"]),
+        .library(name: "SupervoxApp", targets: ["SupervoxApp"]),
         .executable(name: "supervox-bench", targets: ["SupervoxBench"]),
     ],
     dependencies: [
@@ -24,6 +25,10 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ]
         ),
+        .target(
+            name: "SupervoxApp",
+            dependencies: ["SupervoxCore"]
+        ),
         .executableTarget(
             name: "SupervoxBench",
             dependencies: [
@@ -37,6 +42,7 @@ let package = Package(
             dependencies: ["SupervoxCore"],
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(name: "SupervoxAppTests", dependencies: ["SupervoxApp"]),
         .testTarget(name: "SupervoxBenchTests", dependencies: ["SupervoxBench", "SupervoxEngines"]),
     ]
 )
