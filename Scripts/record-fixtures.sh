@@ -5,6 +5,12 @@
 # Arguments     : <modele-transcription> <modele-chat> <modele-raisonnement> <modele-voix> <voix> <champ=valeur>
 #   <champ=valeur> : champ supplémentaire ajouté au niveau supérieur du corps JSON de la synthèse vocale.
 #
+# Mode « models » (un seul argument : `models`) : enregistre seulement la liste des modèles (GET /v1/models), brute.
+#   Ce mode n'applique pas `sanitize` (il réécrirait tous les "id" en une seule valeur) et exige SUPERVOX_FIXTURES_DIR,
+#   un dossier HORS du dépôt : la réponse brute contient les identifiants réels et ne doit jamais être versionnée.
+#   La fixture versionnée (models-openai-200.json) s'écrit à la main d'après cette réponse : même forme, trois
+#   modèles aux identifiants neutres, tout champ propre au serveur ou à son propriétaire neutralisé.
+#
 # Le script n'écrit que des corps de réponse et affiche les codes de statut. Il n'enregistre jamais
 # d'en-tête ni la clé. Les identifiants de modèle et de voix passés en arguments sont remplacés dans les
 # fichiers écrits par des valeurs neutres. Relire chaque fichier avant de le versionner : ce remplacement
@@ -15,8 +21,19 @@
 # de chat plutôt que de relancer à l'identique.
 set -euo pipefail
 
+if [ "$#" -eq 1 ] && [ "$1" = "models" ]; then
+  : "${SUPERVOX_BASE_URL:?SUPERVOX_BASE_URL manquante}"
+  : "${SUPERVOX_API_KEY:?SUPERVOX_API_KEY manquante}"
+  : "${SUPERVOX_FIXTURES_DIR:?SUPERVOX_FIXTURES_DIR manquante : le mode models écrit une réponse brute, hors du dépôt}"
+  mkdir -p "$SUPERVOX_FIXTURES_DIR"
+  status=$(printf 'header = "Authorization: Bearer %s"\n' "$SUPERVOX_API_KEY" |
+    curl -sS -K - -o "$SUPERVOX_FIXTURES_DIR/models-openai-raw.json" -w '%{http_code}' "${SUPERVOX_BASE_URL%/}/v1/models")
+  echo "models-openai-raw.json : statut $status"
+  [ "$status" = "200" ] || { echo "statut inattendu (attendu 200)" >&2; exit 1; }
+  exit 0
+fi
 if [ "$#" -ne 6 ]; then
-  echo "usage : $0 <modele-transcription> <modele-chat> <modele-raisonnement> <modele-voix> <voix> <champ=valeur>" >&2
+  echo "usage : $0 models | $0 <modele-transcription> <modele-chat> <modele-raisonnement> <modele-voix> <voix> <champ=valeur>" >&2
   exit 64
 fi
 : "${SUPERVOX_BASE_URL:?SUPERVOX_BASE_URL manquante}"
