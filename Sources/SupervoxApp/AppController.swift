@@ -73,7 +73,7 @@ public final class AppController {
 
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
     /// AVFoundation et Accessibilité.
-    public convenience init(settingsView: @escaping SettingsViewProvider = AppController.emptySettings) {
+    public convenience init(settingsView: @escaping SettingsViewProvider = SettingsView.provider) {
         let file = (try? SettingsStore.defaultFile())
             ?? URL.applicationSupportDirectory.appending(path: "Supervox/settings.json")
         self.init(
@@ -115,6 +115,25 @@ public final class AppController {
         case .taken: "Le raccourci \(label) est déjà pris : ouvrez le panneau depuis la barre de menus."
         case .invalid: "Le raccourci \(label) n'est pas valide : ouvrez le panneau depuis la barre de menus."
         }
+    }
+
+    // MARK: - Réglages modifiés depuis la fenêtre
+
+    /// Seul chemin d'écriture des réglages depuis la fenêtre : `change` s'applique aux réglages en vigueur
+    /// (ceux que le panneau modifie aussi), qui ne changent en mémoire que si l'enregistrement réussit.
+    public func updateSettings(_ change: (inout AppSettings) -> Void) throws {
+        var updated = settings
+        change(&updated)
+        try settingsStore.save(updated)
+        settings = updated
+    }
+
+    /// Enregistre `hotKey` comme raccourci global, avec le même effet que celui du lancement, et met à
+    /// jour le libellé du panneau. N'enregistre pas les réglages. En cas de refus, l'ancien reste actif.
+    public func changeHotKey(_ hotKey: HotKey) -> Result<Void, HotKeyError> {
+        let result = hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() })
+        panelModel.hotKeyLabel = hotKeys.active?.label
+        return result
     }
 
     // MARK: - Panneau
@@ -164,6 +183,8 @@ public final class AppController {
         let hosting = NSHostingController(rootView: settingsView(self))
         let window = NSWindow(contentViewController: hosting)
         window.title = "Réglages"
+        // Sans menu principal, ⌘X, ⌘C, ⌘V et ⌘A ne font rien dans les champs de la fenêtre.
+        NSApp.mainMenu = MainMenu.make()
         window.styleMask = [.titled, .closable, .miniaturizable]
         window.isReleasedWhenClosed = false
         window.center()
