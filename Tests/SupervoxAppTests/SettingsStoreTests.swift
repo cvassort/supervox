@@ -30,6 +30,17 @@ private func allKeys(in json: Any) -> Set<String> {
     return []
 }
 
+/// Noms de clés qui évoquent un secret : recherche par sous-chaîne, sans tenir compte de la casse,
+/// avec une exemption explicite pour les noms légitimes qui contiennent « key ».
+private func suspiciousKeys(in keys: Set<String>) -> Set<String> {
+    let exempt: Set<String> = ["keycode", "hotkey", "hotkeybehavior"]
+    let fragments = ["key", "secret", "token", "password"]
+    return keys.filter { key in
+        let lowered = key.lowercased()
+        return !exempt.contains(lowered) && fragments.contains { lowered.contains($0) }
+    }
+}
+
 /// 2023-11-14 22:13:20 UTC.
 private let fixedInstant = Date(timeIntervalSince1970: 1_700_000_000)
 private let fixedClock: @Sendable () -> Date = { fixedInstant }
@@ -67,7 +78,6 @@ private func sampleSettings() -> AppSettings {
         #expect(AppSettings.current == 1)
         #expect(defaults.providers.isEmpty)
         #expect(defaults.hotKey == HotKey(keyCode: 49, modifiers: [.control, .option]))
-        #expect(defaults.hotKey == .standard)
         #expect(defaults.hotKeyBehavior == .toggle)
         #expect(defaults.lastModeID == "dictee-brute")
     }
@@ -84,7 +94,10 @@ private func sampleSettings() -> AppSettings {
         #expect(result.settings != .defaults)
     }
 
-    @Test func saveIsAtomicAndCreatesTheFolder() throws {
+    // L'écriture atomique repose sur `Data.write(options: .atomic)` (Foundation) ; elle n'est pas
+    // testée, car retirer `.atomic` laisse ce test vert. Ce test prouve seulement la création du
+    // dossier parent et l'absence de fichier temporaire après écriture.
+    @Test func saveCreatesTheFolderAndLeavesNoTemporaryFile() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let folder = directory.appendingPathComponent("Supervox", isDirectory: true)
@@ -182,8 +195,82 @@ private func sampleSettings() -> AppSettings {
 
         // Le parcours atteint bien les objets imbriqués dans les tableaux.
         #expect(keys.isSuperset(of: ["providers", "baseURL", "models", "hotKey", "keyCode"]))
-        let forbidden: Set<String> = ["key", "apikey", "secret", "token"]
-        #expect(keys.filter { forbidden.contains($0.lowercased()) }.isEmpty)
+        #expect(suspiciousKeys(in: keys).isEmpty)
+    }
+
+    @Test func secretKeyFilterFlagsSuspiciousNamesAndSparesLegitimateOnes() {
+        let secrets: Set<String> = ["apiKey", "api_key", "accessToken", "clientSecret", "PASSWORD", "key"]
+        let legitimate: Set<String> = [
+            "keyCode", "hotKey", "hotKeyBehavior", "providers", "baseURL", "models", "lastModeID",
+        ]
+        #expect(suspiciousKeys(in: secrets.union(legitimate)) == secrets)
+        #expect(suspiciousKeys(in: legitimate).isEmpty)
+    }
+
+    @Test(arguments: [0, -1])
+    func nonPositiveVersionIsTreatedAsUnknownAndKeptAside(version: Int) throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        var old = AppSettings.defaults
+        old.version = version
+        let original = try JSONEncoder().encode(old)
+        try original.write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        let result = store.load()
+        #expect(result.settings == .defaults)
+        let notice = try #require(result.notice)
+        #expect(notice.contains("inconnue"))
+        #expect(notice.contains(asideStem))
+        #expect(try Data(contentsOf: directory.appendingPathComponent(asideStem)) == original)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func failedMoveLeavesTheFileInPlaceAndSaveRefusesToOverwriteIt() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let original = Data("{pas du json".utf8)
+        try original.write(to: file)
+        struct MoveFailure: Error {}
+        let store = SettingsStore(file: file, now: fixedClock, moveItem: { _, _ in throw MoveFailure() })
+
+        let result = store.load()
+        #expect(result.settings == .defaults)
+        let notice = try #require(result.notice)
+        #expect(notice.contains("reste en place"))
+        #expect(notice.contains("settings.json"))
+
+        #expect(throws: SettingsError.unreadableFileKept(fileName: "settings.json")) {
+            try store.save(sampleSettings())
+        }
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try names(in: directory) == ["settings.json"])
+    }
+
+    @Test func saveRefusesToOverwriteAnUnreadableOrNewerFileEvenWithoutLoading() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file)
+        var future = AppSettings.defaults
+        future.version = 99
+        let contents = [Data("{pas du json".utf8), try JSONEncoder().encode(future)]
+
+        for original in contents {
+            try original.write(to: file)
+            #expect(throws: SettingsError.unreadableFileKept(fileName: "settings.json")) {
+                try store.save(sampleSettings())
+            }
+            #expect(try Data(contentsOf: file) == original)
+        }
+    }
+
+    @Test func unreadableFileErrorNamesTheFileWithoutItsFolder() {
+        let message = SettingsError.unreadableFileKept(fileName: "settings.json").localizedDescription
+        #expect(message.contains("settings.json"))
+        #expect(!message.contains("/"))
     }
 
     @Test func defaultFileIsInApplicationSupport() throws {
