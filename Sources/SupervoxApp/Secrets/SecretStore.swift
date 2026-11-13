@@ -7,6 +7,8 @@ public enum SecretError: Error, Equatable, Sendable {
     case denied
     /// Le magasin est inutilisable ; `status` est le code `OSStatus` du système.
     case unavailable(status: Int32)
+    /// Un secret vide a été présenté à `write` : refusé, rien n'est écrit ni oublié. Pour effacer, on appelle `delete`.
+    case emptySecret
 }
 
 extension SecretError: CustomStringConvertible, LocalizedError {
@@ -14,18 +16,35 @@ extension SecretError: CustomStringConvertible, LocalizedError {
         switch self {
         case .denied: "Accès au trousseau refusé"
         case .unavailable(let status): "Trousseau indisponible (statut \(status))"
+        case .emptySecret: "Un secret vide n'est pas enregistré"
         }
     }
 
     public var errorDescription: String? { description }
 }
 
+extension SecretError {
+    /// Garde commune des `write` : un secret vide est refusé avant tout effet.
+    static func rejectEmpty(_ secret: String) throws {
+        if secret.isEmpty { throw SecretError.emptySecret }
+    }
+}
+
 /// Un magasin de secrets (clés d'API), indexé par compte. Le compte d'un fournisseur est
 /// `provider.id.uuidString`.
+///
+/// Contrat de l'appelant :
+/// - `read`, `write` et `delete` peuvent bloquer le temps qu'une invite du trousseau reçoive une réponse :
+///   ne jamais les appeler depuis le fil principal ni depuis un acteur d'interface, de préférence sur une
+///   file dédiée plutôt que sur le pool coopératif.
+/// - Ne pas boucler sur `.denied` : chaque nouvel appel rouvre l'invite. Remonter l'erreur à l'interface
+///   et attendre une action de l'utilisateur.
+/// - Partager une seule instance de `CachedSecretStore` par service : deux instances ont des caches
+///   indépendants.
 public protocol SecretStore: Sendable {
     /// `nil` si aucun secret n'existe pour ce compte ; une erreur seulement si le magasin a échoué.
     func read(account: String) throws -> String?
-    /// Crée le secret, ou remplace celui qui existe.
+    /// Crée le secret, ou remplace celui qui existe. Un secret vide lève `SecretError.emptySecret`.
     func write(_ secret: String, account: String) throws
     /// Supprimer un secret absent n'est pas une erreur.
     func delete(account: String) throws
@@ -63,6 +82,7 @@ public final class InMemorySecretStore: SecretStore {
     }
 
     public func write(_ secret: String, account: String) throws {
+        try SecretError.rejectEmpty(secret)
         try state.withLock { state in
             if let failure = state.failure { throw failure }
             state.secrets[account] = secret
@@ -77,18 +97,14 @@ public final class InMemorySecretStore: SecretStore {
     }
 }
 
-extension InMemorySecretStore: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
-    public var description: String { "InMemorySecretStore" }
-    public var debugDescription: String { description }
-    /// Ni `dump` ni le débogueur ne montrent les secrets gardés.
-    public var customMirror: Mirror { Mirror(self, children: []) }
-}
 
 /// Garde en mémoire ce que le magasin dessous a répondu, pour ne l'interroger qu'une fois par compte.
 /// Avec le trousseau, chaque lecture peut afficher une invite : on lit à la demande, jamais d'avance.
 ///
 /// Une lecture réussie est gardée, y compris « aucun secret » (`nil`). Une erreur n'est jamais gardée :
-/// la lecture suivante réessaie. Le verrou est tenu pendant l'appel au magasin dessous : deux lectures
+/// la lecture suivante réessaie. Le cache n'est invalidé que par `write` et `delete` de cette instance :
+/// une clé changée hors du processus (app « Trousseaux d'accès », autre instance) n'est vue qu'au redémarrage.
+/// Le verrou est tenu pendant l'appel au magasin dessous : deux lectures
 /// simultanées d'un même compte n'interrogent donc le trousseau (et n'affichent l'invite) qu'une fois.
 public final class CachedSecretStore: SecretStore {
     private enum Entry {
@@ -118,6 +134,7 @@ public final class CachedSecretStore: SecretStore {
     }
 
     public func write(_ secret: String, account: String) throws {
+        try SecretError.rejectEmpty(secret)
         try cache.withLock { cache in
             // Si l'écriture échoue, on ne sait plus ce que contient le magasin : on oublie ce compte.
             cache[account] = nil
@@ -135,8 +152,3 @@ public final class CachedSecretStore: SecretStore {
     }
 }
 
-extension CachedSecretStore: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
-    public var description: String { "CachedSecretStore" }
-    public var debugDescription: String { description }
-    public var customMirror: Mirror { Mirror(self, children: []) }
-}

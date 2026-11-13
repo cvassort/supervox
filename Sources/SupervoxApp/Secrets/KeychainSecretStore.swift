@@ -45,28 +45,27 @@ public struct KeychainSecretStore: SecretStore {
     }
 
     public func write(_ secret: String, account: String) throws {
+        try SecretError.rejectEmpty(secret)
         let data = Data(secret.utf8)
         let update = [kSecValueData: data] as [CFString: Any]
 
-        switch Self.outcome(forStatus: SecItemUpdate(identity(account: account) as CFDictionary, update as CFDictionary)) {
-        case .success: return
-        case .failure(let error): throw error
-        case .notFound: break
-        }
-
-        var item = identity(account: account)
-        item[kSecValueData] = data
-        let added = SecItemAdd(item as CFDictionary, nil)
-        if added == errSecDuplicateItem {
-            // Une autre écriture a créé l'entrée entre la mise à jour et l'ajout : on met à jour.
-            if case .failure(let error) = Self.outcome(
-                forStatus: SecItemUpdate(identity(account: account) as CFDictionary, update as CFDictionary))
-            {
-                throw error
+        // Deux tours au plus : une écriture ou une suppression concurrente peut faire changer l'état
+        // de l'entrée entre la mise à jour et l'ajout. Au-delà, on le dit au lieu de n'avoir rien écrit.
+        for _ in 0..<2 {
+            switch Self.outcome(forStatus: SecItemUpdate(identity(account: account) as CFDictionary, update as CFDictionary)) {
+            case .success: return
+            case .failure(let error): throw error
+            case .notFound: break
             }
+
+            var item = identity(account: account)
+            item[kSecValueData] = data
+            let added = SecItemAdd(item as CFDictionary, nil)
+            if added == errSecDuplicateItem { continue }
+            if case .failure(let error) = Self.outcome(forStatus: added) { throw error }
             return
         }
-        if case .failure(let error) = Self.outcome(forStatus: added) { throw error }
+        throw SecretError.unavailable(status: errSecDuplicateItem)
     }
 
     public func delete(account: String) throws {

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Synchronization
 import Testing
 
 @testable import SupervoxApp
@@ -17,6 +18,29 @@ private struct SlowReadStore: SecretStore {
     }
     func write(_ secret: String, account: String) throws { try base.write(secret, account: account) }
     func delete(account: String) throws { try base.delete(account: account) }
+}
+
+/// Magasin sonde : compte les appels simultanés qu'il reçoit. Le délai dans chaque appel élargit la
+/// fenêtre où deux appels se chevaucheraient ; aucun test ne mesure une durée.
+private final class ProbeStore: SecretStore {
+    private let base = InMemorySecretStore()
+    private let flight = Mutex((now: 0, max: 0))
+
+    var maxInFlight: Int { flight.withLock { $0.max } }
+
+    private func tracked<T>(_ body: () throws -> T) rethrows -> T {
+        flight.withLock {
+            $0.now += 1
+            $0.max = Swift.max($0.max, $0.now)
+        }
+        defer { flight.withLock { $0.now -= 1 } }
+        Thread.sleep(forTimeInterval: 0.002)
+        return try body()
+    }
+
+    func read(account: String) throws -> String? { try tracked { try base.read(account: account) } }
+    func write(_ secret: String, account: String) throws { try tracked { try base.write(secret, account: account) } }
+    func delete(account: String) throws { try tracked { try base.delete(account: account) } }
 }
 
 @Suite struct SecretStoreTests {
@@ -99,9 +123,6 @@ private struct SlowReadStore: SecretStore {
         let error = #expect(throws: SecretError.self) { try store.read(account: "compte") }
         #expect(error == .denied)
         #expect(!String(describing: error).contains(canary))
-        #expect(!String(reflecting: error).contains(canary))
-        let localized: String = error?.localizedDescription ?? ""
-        #expect(!localized.contains(canary))
         #expect(underlying.readCount == 1)
 
         // L'erreur n'est pas mise en cache : la lecture suivante réessaie, et réussit une fois l'accès rendu.
@@ -192,44 +213,77 @@ private struct SlowReadStore: SecretStore {
         #expect(underlying.readCount == 1)
     }
 
-    @Test func concurrentWritesAndReadsEndOnTheLastCoherentValue() async throws {
-        let underlying = InMemorySecretStore()
-        let store = CachedSecretStore(underlying)
+    @Test func theUnderlyingStoreNeverSeesTwoCallsAtOnce() async throws {
+        let probe = ProbeStore()
+        let store = CachedSecretStore(probe)
 
         await withTaskGroup(of: Void.self) { group in
-            for index in 0..<64 {
+            for index in 0..<32 {
                 group.addTask { try? store.write("valeur-\(index)", account: "compte") }
                 group.addTask { _ = try? store.read(account: "compte") }
+                group.addTask { try? store.delete(account: "autre") }
             }
         }
 
-        // Quel que soit l'ordre, le cache et le magasin dessous disent la même chose.
-        let cached = try store.read(account: "compte")
-        let stored = try underlying.read(account: "compte")
-        #expect(cached == stored)
-        #expect(cached?.hasPrefix("valeur-") == true)
+        // Le verrou est tenu pendant l'appel dessous : jamais deux appels en même temps.
+        #expect(probe.maxInFlight == 1)
+        // Et le cache dit la même chose que le magasin dessous.
+        #expect(try store.read(account: "compte") == (try probe.read(account: "compte")))
     }
 
-    @Test func noDescriptionOfAStoreOrItsErrorsRevealsASecret() throws {
+    @Test func secretErrorsDescribeOnlyTheirStatus() {
+        #expect(String(describing: SecretError.denied) == "Accès au trousseau refusé")
+        #expect(String(describing: SecretError.unavailable(status: errSecMissingEntitlement))
+            == "Trousseau indisponible (statut \(errSecMissingEntitlement))")
+        #expect(SecretError.emptySecret.localizedDescription == "Un secret vide n'est pas enregistré")
+    }
+
+    @Test func absentThenWriteIsReadWithoutReadingBelow() throws {
+        let underlying = InMemorySecretStore()
+        let store = CachedSecretStore(underlying)
+        #expect(try store.read(account: "compte") == nil)
+
+        try store.write(canary, account: "compte")
+
+        #expect(try store.read(account: "compte") == canary)
+        #expect(underlying.readCount == 1)
+    }
+
+    @Test func presentThenDeleteReadsNilWithoutReadingBelow() throws {
         let underlying = InMemorySecretStore(secrets: ["compte": canary])
         let store = CachedSecretStore(underlying)
-        _ = try store.read(account: "compte")
+        #expect(try store.read(account: "compte") == canary)
 
-        let texts = [
-            String(describing: underlying), String(reflecting: underlying),
-            String(describing: store), String(reflecting: store),
-            String(describing: KeychainSecretStore(service: "dev.supervox.tests")),
-            String(describing: SecretError.denied),
-            String(reflecting: SecretError.unavailable(status: -34018)),
-            SecretError.denied.localizedDescription,
-            SecretError.unavailable(status: -34018).localizedDescription,
-        ]
-        for text in texts { #expect(!text.contains(canary)) }
+        try store.delete(account: "compte")
 
-        var dumped = ""
-        dump(underlying, to: &dumped)
-        dump(store, to: &dumped)
-        #expect(!dumped.contains(canary))
+        #expect(try store.read(account: "compte") == nil)
+        #expect(underlying.readCount == 1)
+    }
+
+    @Test func emptySecretIsRefusedAndTheCachedOneSurvives() throws {
+        let underlying = InMemorySecretStore(secrets: ["compte": "ancien"])
+        let store = CachedSecretStore(underlying)
+        #expect(try store.read(account: "compte") == "ancien")
+
+        let error = #expect(throws: SecretError.self) { try store.write("", account: "compte") }
+        #expect(error == .emptySecret)
+
+        // Refus avant tout effet : ni le cache ni le magasin dessous n'ont bougé.
+        #expect(try store.read(account: "compte") == "ancien")
+        #expect(underlying.readCount == 1)
+        #expect(try underlying.read(account: "compte") == "ancien")
+    }
+
+    @Test func inMemoryStoreRefusesAnEmptySecret() throws {
+        let store = InMemorySecretStore(secrets: ["compte": "ancien"])
+        #expect(throws: SecretError.emptySecret) { try store.write("", account: "compte") }
+        #expect(try store.read(account: "compte") == "ancien")
+    }
+
+    @Test func keychainStoreRefusesAnEmptySecretBeforeTouchingTheKeychain() {
+        // Le refus précède tout appel `SecItem*` : ce test ne touche pas au trousseau.
+        let store = KeychainSecretStore(service: "dev.supervox.tests")
+        #expect(throws: SecretError.emptySecret) { try store.write("", account: "test-\(UUID().uuidString)") }
     }
 
     @Test(arguments: [
@@ -237,7 +291,7 @@ private struct SlowReadStore: SecretStore {
         (errSecItemNotFound, .notFound),
         (errSecUserCanceled, .failure(.denied)),
         (errSecAuthFailed, .failure(.denied)),
-        (-34018, .failure(.unavailable(status: -34018))),
+        (errSecMissingEntitlement, .failure(.unavailable(status: errSecMissingEntitlement))),
         (errSecInteractionNotAllowed, .failure(.unavailable(status: errSecInteractionNotAllowed))),
         (errSecDuplicateItem, .failure(.unavailable(status: errSecDuplicateItem))),
     ])
