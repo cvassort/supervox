@@ -167,6 +167,14 @@ final class ProgressBox: Sendable {
         #expect(TranscriptionModel.whisperVariant(of: FakeModelCatalog.parakeet) == nil)
     }
 
+    /// Le bouton « Enregistrer le vocabulaire » s'éteint quand la saisie, mise en forme comme à l'enregistrement, est déjà enregistrée.
+    @Test func theSaveButtonIsOffOnlyWhenTheDraftEqualsTheSavedList() {
+        #expect(PendingVocabulary.isUnchanged(draft: "Docker\n\n  Sentry \nDocker", saved: ["Docker", "Sentry"]))
+        #expect(PendingVocabulary.isUnchanged(draft: "", saved: []))
+        #expect(!PendingVocabulary.isUnchanged(draft: "Docker", saved: ["Docker", "Sentry"]))
+        #expect(!PendingVocabulary.isUnchanged(draft: "Docker\nSentry", saved: []))
+    }
+
     // MARK: - Enregistrement des changements
 
     @Test func everyChangeIsSavedWithTheWholeSettings() async {
