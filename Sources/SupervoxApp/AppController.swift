@@ -131,17 +131,21 @@ public final class AppController {
     /// Au premier lancement, le panneau s'ouvre seul avec l'accueil et, s'il en manque, la ligne des permissions et
     /// son bouton « Autoriser… » : rien n'est demandé au système avant ce clic. Le fichier de réglages est créé à la
     /// fin de ce lancement, avec les réglages en vigueur : l'accueil ne revient pas.
+    ///
+    /// Le panneau ne s'ouvre qu'une fois tout son contenu posé (accueil, avis) : la vraie surface prend sa taille à
+    /// l'affichage.
     func launch() {
-        applyHotKeyAtLaunch()
-        guard isFirstLaunch else { return }
-        panelModel.welcome = Self.welcome(hotKeyLabel: panelModel.hotKeyLabel)
-        panel.open()
-        do {
-            try updateSettings { _ in }
-        } catch {
-            panelModel.setNotice(error.localizedDescription, for: .save)
-            log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
+        let hotKeyIsFine = applyHotKey()
+        if isFirstLaunch {
+            panelModel.welcome = Self.welcome(hotKeyLabel: panelModel.hotKeyLabel)
+            do {
+                try updateSettings { _ in }
+            } catch {
+                panelModel.setNotice(error.localizedDescription, for: .save)
+                log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
+            }
         }
+        if !hotKeyIsFine || isFirstLaunch { panel.open() }
     }
 
     /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.

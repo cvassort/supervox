@@ -6,10 +6,14 @@ import Testing
 @MainActor final class FakePanelSurface: PanelSurface {
     private(set) var isShown = false
     private(set) var showCount = 0
+    /// Appelé à chaque affichage : le test y lit ce que le panneau contient à ce moment-là (la vraie surface prend
+    /// sa taille à l'affichage).
+    var onShow: (@MainActor () -> Void)?
 
     func show() {
         isShown = true
         showCount += 1
+        onShow?()
     }
 
     func hide() { isShown = false }

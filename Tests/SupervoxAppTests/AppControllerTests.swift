@@ -157,8 +157,14 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         hotKeys.refused = [.standard]
         let controller = makeController()
+        // La vraie surface prend sa taille à l'affichage : l'accueil doit déjà être là quand le panneau s'ouvre, même
+        // quand c'est le refus du raccourci qui l'ouvre.
+        var welcomeAtShow: String?
+        surface.onShow = { welcomeAtShow = controller.panelModel.welcome }
 
         controller.launch()
+        #expect(welcomeAtShow != nil)
+        #expect(surface.showCount == 1)
         let welcome = try #require(controller.panelModel.welcome)
         #expect(!welcome.contains(HotKey.standard.label(layout: HotKeyTests.ansi)))
         #expect(welcome.contains("barre de menus"))
@@ -192,6 +198,20 @@ import Testing
         #expect(controller.panelModel.welcome == nil)
         #expect(try Data(contentsOf: store.file) == before)
         #expect(try FileManager.default.attributesOfItem(atPath: store.file.path)[.modificationDate] as? Date == modified)
+    }
+
+    /// Lancement ordinaire (fichier présent) avec un raccourci refusé : `launch()` ouvre le panneau, sans accueil.
+    @Test func refusedHotKeyOnAnOrdinaryLaunchOpensThePanelWithoutWelcome() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try store.save(.defaults)
+        hotKeys.refused = [.standard]
+        let controller = makeController()
+
+        controller.launch()
+        #expect(controller.panelModel.isOpen)
+        #expect(surface.showCount == 1)
+        #expect(controller.panelModel.welcome == nil)
+        #expect(controller.panelModel.notices[.hotKey] != nil)
     }
 
     /// I3 (b) : relancer l'application déjà ouverte ouvre le panneau, et ne le referme pas s'il l'est déjà.
