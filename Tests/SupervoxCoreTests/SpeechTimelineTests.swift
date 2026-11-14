@@ -14,17 +14,17 @@ private func timeline(receiving count: Int, blockSize: Int = 4096) -> SpeechTime
 }
 
 @Suite struct SpeechTimelineTests {
-    @Test func appendHandsOutCompleteBlocksInOrder() {
+    @Test func appendHandsOutCompleteBlocksInOrder() throws {
         var t = SpeechTimeline(blockSize: 4096)
         let first = t.append(ramp(10_000))
-        #expect(first.count == 2)
+        try #require(first.count == 2)
         #expect(first[0] == ramp(4096))
         #expect(first[1] == ramp(4096, from: 4096))
 
         // 3 × 4096 = 12 288 : il manque 2 288 échantillons. Avec un de moins, le troisième bloc n'est pas encore là.
         #expect(t.append(ramp(2_287, from: 10_000)).isEmpty)
         let second = t.append(ramp(1, from: 12_287))
-        #expect(second.count == 1)
+        try #require(second.count == 1)
         #expect(second[0] == ramp(4096, from: 8192))
 
         // Rien de plus tant qu'un bloc entier n'est pas complet, et un bloc n'est jamais rendu deux fois.
@@ -118,12 +118,49 @@ private func timeline(receiving count: Int, blockSize: Int = 4096) -> SpeechTime
         #expect(t.spokenClip(padding: 0)?.samples == ramp(38_000, from: 2000))
     }
 
-    @Test func closingASegmentEndsTheOpenOne() {
+    /// `.infinity` est la façon naturelle de dire « sans limite » : pas de plantage, la prise entière.
+    @Test func infiniteLimitsMeanNoLimit() {
         var t = timeline(receiving: 40_000)
         t.apply(.speechStart(sample: 8000))
-        t.apply(.speechEnd(sample: 16_000))
-        #expect(t.openSegmentStart == nil)
-        #expect(t.closedSegments == [8000..<16_000])
+        #expect(t.openClip(maxSeconds: .infinity)?.samples == ramp(32_000, from: 8000))
+        #expect(t.spokenClip(padding: .infinity)?.samples == ramp(40_000))
+        #expect(t.openClip(maxSeconds: .nan) == nil)
+    }
+
+    /// Un passage ouvert au tout dernier échantillon reçu ne contient encore aucun audio : ce n'est pas de la voix.
+    /// `hasSpeech`, `openClip` et `spokenClip` en disent la même chose, avec ou sans marge.
+    @Test func anOpenSegmentWithoutAnyAudioYetIsNotSpeech() {
+        var t = timeline(receiving: 100)
+        t.apply(.speechStart(sample: 100))
+        #expect(t.openSegmentStart == 100)
+        #expect(!t.hasSpeech)
+        #expect(t.openClip(maxSeconds: 1) == nil)
+        #expect(t.spokenClip(padding: 0) == nil)
+        #expect(t.spokenClip(padding: 0.2) == nil)
+
+        _ = t.append(ramp(50, from: 100))
+        #expect(t.hasSpeech)
+        #expect(t.openClip(maxSeconds: 1)?.samples == ramp(50, from: 100))
+        #expect(t.spokenClip(padding: 0)?.samples == ramp(50, from: 100))
+    }
+
+    @Test func aZeroLimitOnTheOpenSegmentIsNoAudio() {
+        var t = timeline(receiving: 40_000)
+        t.apply(.speechStart(sample: 8000))
+        #expect(t.openClip(maxSeconds: 0) == nil)
+    }
+
+    /// À 8 kHz : 16 000 échantillons = 2 s ; les secondes de `openClip` et de `spokenClip` suivent la fréquence.
+    @Test func secondsFollowTheSampleRate() {
+        var t = SpeechTimeline(blockSize: 1000, sampleRate: 8000)
+        _ = t.append(ramp(16_000))
+        #expect(t.duration == 2)
+        t.apply(.speechStart(sample: 8000))
+        #expect(t.openClip(maxSeconds: 0.5)?.samples == ramp(4000, from: 12_000))
+        #expect(t.openClip(maxSeconds: 0.5)?.sampleRate == 8000)
+        #expect(t.spokenClip(padding: 0.5)?.samples == ramp(12_000, from: 4000))
+        t.apply(.speechEnd(sample: 12_000))
+        #expect(t.spokenClip(padding: 0.25)?.samples == ramp(8000, from: 6000))
     }
 
     @Test func inconsistentEventsAreIgnored() {

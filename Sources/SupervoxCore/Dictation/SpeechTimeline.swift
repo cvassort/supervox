@@ -53,7 +53,13 @@ public struct SpeechTimeline: Sendable {
         }
     }
 
-    public var hasSpeech: Bool { !closedSegments.isEmpty || openSegmentStart != nil }
+    /// Vrai si le détecteur a signalé de la voix qui contient de l'audio : un passage clos, ou un passage ouvert avant
+    /// le dernier échantillon reçu. Un passage ouvert au tout dernier échantillon n'a encore rien à transcrire.
+    public var hasSpeech: Bool {
+        if !closedSegments.isEmpty { return true }
+        guard let start = openSegmentStart else { return false }
+        return start < audio.count
+    }
 
     /// Durée de l'audio reçu, en secondes.
     public var duration: Double { Double(audio.count) / sampleRate }
@@ -65,20 +71,31 @@ public struct SpeechTimeline: Sendable {
         return AudioClip(samples: Array(audio[lower..<upper]), sampleRate: sampleRate)
     }
 
-    /// Le passage ouvert, limité à ses `maxSeconds` dernières secondes ; `nil` sans passage ouvert.
+    /// Le passage ouvert, limité à ses `maxSeconds` dernières secondes ; `nil` sans passage ouvert ou sans audio à
+    /// rendre (passage ouvert au dernier échantillon, limite nulle). `.infinity` : le passage entier.
     public func openClip(maxSeconds: Double) -> AudioClip? {
         guard let start = openSegmentStart else { return nil }
-        let limit = Int((max(maxSeconds, 0) * sampleRate).rounded())
-        return clip(of: max(start, audio.count - limit)..<audio.count)
+        let result = clip(of: max(start, audio.count - sampleCount(seconds: maxSeconds))..<audio.count)
+        return result.samples.isEmpty ? nil : result
     }
 
     /// Du début du premier passage à la fin du dernier (ou à la fin de la prise si un passage est ouvert), élargi de
-    /// `padding` secondes de chaque côté et borné à la prise ; `nil` sans voix. Les silences intérieurs sont gardés :
-    /// le moteur final reçoit la parole avec son rythme.
+    /// `padding` secondes de chaque côté et borné à la prise ; `nil` sans voix (voir `hasSpeech`). Les silences
+    /// intérieurs sont gardés : le moteur final reçoit la parole avec son rythme.
     public func spokenClip(padding: Double) -> AudioClip? {
         guard let first = closedSegments.first?.lowerBound ?? openSegmentStart else { return nil }
         let last = openSegmentStart != nil ? audio.count : (closedSegments.last?.upperBound ?? audio.count)
-        let pad = Int((max(padding, 0) * sampleRate).rounded())
+        guard last > first else { return nil }
+        let pad = sampleCount(seconds: padding)
         return clip(of: max(first - pad, 0)..<min(last + pad, audio.count))
+    }
+
+    /// `seconds` en échantillons, borné à [0, audio reçu] : une durée infinie ou négative ne fait pas planter la
+    /// conversion en entier (NaN compte pour 0).
+    private func sampleCount(seconds: Double) -> Int {
+        let count = seconds * sampleRate
+        if count.isNaN || count <= 0 { return 0 }
+        if count >= Double(audio.count) { return audio.count }
+        return Int(count.rounded())
     }
 }
