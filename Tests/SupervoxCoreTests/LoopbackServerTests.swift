@@ -5,7 +5,8 @@ import Testing
 
 /// Les serveurs des tests n'écoutent que sur la boucle locale : un autre poste du réseau ne peut pas les joindre
 /// pendant la suite. Vérifié en se connectant à une adresse IPv4 de ce Mac hors de la boucle locale (la connexion
-/// reste sur la machine) : elle doit être refusée, et celle par 127.0.0.1 acceptée.
+/// reste sur la machine) : elle doit être refusée, et celle par 127.0.0.1 acceptée. Un Mac sans adresse IPv4 hors
+/// boucle locale ne fait que le second essai.
 @Suite struct LoopbackServerTests {
     @Test func localHTTPServerOnlyAcceptsLoopbackConnections() async throws {
         let server = try LocalHTTPServer { _ in .init(status: 204) }
@@ -13,7 +14,8 @@ import Testing
         defer { server.stop() }
 
         #expect(await Self.connects(to: .ipv4(.loopback), port: server.port))
-        let outside = try #require(Self.nonLoopbackIPv4(), "aucune adresse IPv4 hors boucle locale sur ce Mac")
+        // Sans aucune interface IPv4 active, rien d'autre à essayer : `SourceScanTests` garde alors seul la règle.
+        guard let outside = Self.nonLoopbackIPv4() else { return }
         #expect(await !Self.connects(to: .ipv4(outside), port: server.port))
     }
 
@@ -34,7 +36,8 @@ import Testing
         defer { listener.cancel() }
 
         #expect(await Self.connects(to: .ipv4(.loopback), port: port))
-        let outside = try #require(Self.nonLoopbackIPv4(), "aucune adresse IPv4 hors boucle locale sur ce Mac")
+        // Sans aucune interface IPv4 active, rien d'autre à essayer : `SourceScanTests` garde alors seul la règle.
+        guard let outside = Self.nonLoopbackIPv4() else { return }
         #expect(await !Self.connects(to: .ipv4(outside), port: port))
     }
 
