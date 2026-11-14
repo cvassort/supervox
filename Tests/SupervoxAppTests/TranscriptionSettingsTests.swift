@@ -51,6 +51,10 @@ import Testing
     @Test func parakeetIsKept() throws {
         let settings = try decode(#"{"version":1,"transcription":{"engine":"parakeet"}}"#)
         #expect(settings.transcription.engine == "parakeet")
+        // Un bloc qui ne dit que le moteur : tout le reste prend ses défauts.
+        #expect(settings.transcription.vocabulary == [])
+        #expect(settings.transcription.whisperModel == TranscriptionSettings.defaults.whisperModel)
+        #expect(settings.transcription.language == "fr")
     }
 
     @Test func missingTranscriptionFieldsTakeTheirDefaultsAndUnknownOnesAreIgnored() throws {
