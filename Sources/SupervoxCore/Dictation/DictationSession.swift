@@ -103,6 +103,17 @@ public actor DictationSession: DictationSessioning {
         await pump?.value
     }
 
+    /// Une session libérée sans phase terminale (ni `finish()`, ni `cancel()`) ne laisse ni micro ouvert ni lecteur du
+    /// flux d'instantanés pendu : le micro est arrêté, le travail en cours annulé, le flux clos.
+    deinit {
+        if captureRunning { feed.stop() }
+        chunkSink?.finish()
+        pump?.cancel()
+        previewTask?.cancel()
+        finalTask?.cancel()
+        snapshotSink.finish()
+    }
+
     /// Niveau affichable d'une tranche : RMS en décibels, ramené sur 0…1 (−60 dB → 0, 0 dB → 1). Une tranche vide ou
     /// non numérique donne 0.
     public static func level(of samples: [Float]) -> Float {

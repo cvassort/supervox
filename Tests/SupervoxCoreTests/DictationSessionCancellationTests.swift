@@ -143,3 +143,26 @@ struct DictationSessionCancelsWorkTests {
         #expect(await rig.outcome() == .cancelled)
     }
 }
+
+// MARK: - Session libérée
+
+@Suite(.timeLimit(.minutes(1)))
+struct DictationSessionReleaseTests {
+    /// Une session qu'on laisse partir sans `finish()` ni `cancel()` ne laisse ni micro ouvert ni lecteur pendu.
+    @Test func aSessionReleasedWhileRecordingStopsTheMicrophoneAndClosesTheStream() async {
+        let feed = TestFeed(chunks: [rampChunk(0..<2000)])
+        let clock = TestClock()
+        var session: DictationSession? = makeSession(
+            feed: feed, detector: ScriptedDetector(), preview: nil, final: ScriptedTranscriber(text: "x"),
+            config: DictationConfig(language: "fr"), clock: clock)
+        let log = SnapshotLog(session!.snapshots)
+        await session!.start()
+        #expect(feed.stops == 0)
+
+        session = nil
+
+        await log.waitForEnd()
+        #expect(feed.stops == 1)
+        #expect(log.items.last?.phase == .recording)   // aucune phase terminale n'a été inventée
+    }
+}
