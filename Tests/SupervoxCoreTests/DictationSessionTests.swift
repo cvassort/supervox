@@ -257,9 +257,9 @@ struct DictationSessionFlowTests {
         #expect(rig.log.phases == [.idle, .preparing, .recording, .finalizing, .finished("texte")])
     }
 
-    @Test func finishWhilePreparingHasNoEffect() async {
-        // Décision du brief : `finish()` ne vaut que depuis `recording`. La prise démarre donc quand même ; c'est à
-        // l'appelant (tâche 6) de rappeler `finish()` s'il l'a demandé trop tôt.
+    @Test func aFinishRequestedWhilePreparingEndsTheTakeWithoutEverOpeningTheMicrophone() async {
+        // `finish()` est retenu pendant `preparing` : la touche relâchée trop tôt n'est pas perdue. Le micro n'est pas
+        // ouvert pour une prise qui n'aurait duré que quelques millisecondes : fin directe, sans parole.
         let rig = makeRig(chunks: tenBlocks, events: [3: .speechStart(sample: 3000)])
         let release = Gate()
         rig.detector.prepareRelease = release
@@ -270,10 +270,43 @@ struct DictationSessionFlowTests {
         release.open()
         await starting.value
 
+        #expect(await rig.outcome() == .failed(.noSpeech))
+        #expect(rig.log.phases == [.idle, .preparing, .failed(.noSpeech)])
+        #expect(rig.feed.starts == 0)
+        #expect(rig.final.calls.isEmpty)
+    }
+
+    @Test func cancelAfterARetainedFinishIsCancelled() async {
+        let rig = makeRig(chunks: tenBlocks, events: [3: .speechStart(sample: 3000)])
+        let release = Gate()
+        rig.detector.prepareRelease = release
+        let starting = Task { await rig.session.start() }
+        await rig.detector.prepareEntered.wait()
+
+        await rig.session.finish()
         await rig.session.cancel()
-        // Pas de `finalizing` : le `finish()` du début n'a rien déclenché.
-        await rig.log.waitForEnd()
-        #expect(rig.log.phases == [.idle, .preparing, .recording, .cancelled])
+        release.open()
+        await starting.value
+
+        #expect(await rig.outcome() == .cancelled)
+        #expect(rig.log.phases == [.idle, .preparing, .cancelled])
+        #expect(rig.feed.starts == 0)
+    }
+
+    @Test func aFinishRetainedWhilePreparingAndARefusedMicrophoneStillFailsOnTheFinishRule() async {
+        // Le micro n'est même pas demandé : la panne de `feed.start` n'est pas atteinte.
+        let rig = makeRig(startError: .noInputDevice)
+        let release = Gate()
+        rig.detector.prepareRelease = release
+        let starting = Task { await rig.session.start() }
+        await rig.detector.prepareEntered.wait()
+
+        await rig.session.finish()
+        release.open()
+        await starting.value
+
+        #expect(await rig.outcome() == .failed(.noSpeech))
+        #expect(rig.feed.starts == 0)
     }
 
     // MARK: Échecs

@@ -96,10 +96,13 @@ public struct DictationConfig: Sendable {
 public protocol DictationSessioning: Sendable {
     /// `idle` → `preparing` → `recording`, ou `failed`. Sans effet hors de `idle`.
     func start() async
-    /// `recording` → `finalizing` → `finished(texte)` ou `failed`. Sans effet hors de `recording`.
+    /// `recording` → `finalizing` → `finished(texte)` ou `failed`. Pendant `preparing`, la demande est retenue : le micro
+    /// n'est pas ouvert et la prise finit en `failed(.noSpeech)` (rien n'a été enregistré). Sans effet dans toute autre
+    /// phase, `idle` comprise : un `finish()` qui précède `start()` est perdu, à l'appelant de les enchaîner.
     func finish() async
     /// Toute phase non terminale → `cancelled`. Sans effet sur une phase terminale.
     func cancel() async
-    /// Un instantané à chaque changement ; le flux se termine après une phase terminale.
+    /// Un instantané à chaque changement ; le flux se termine après une phase terminale. Un seul lecteur à la fois (c'est
+    /// une propriété d'`AsyncStream`) ; un abonné qui arrive après la fin ne voit rien.
     var snapshots: AsyncStream<DictationSnapshot> { get }
 }

@@ -57,6 +57,9 @@ public actor DictationSession: DictationSessioning {
     private var openTextStart: Int?
     private var lastOpenPassAt: Double?
     private var maxDurationReached = false
+    /// `finish()` reçu pendant `preparing` : retenu, lu à la fin de la préparation (la touche relâchée trop tôt n'est
+    /// pas perdue).
+    private var finishRequestedWhilePreparing = false
     /// Pour les tests : appelée à la fin de chaque passe d'aperçu, résultat pris en compte ou non.
     private var previewPassDidFinish: (@Sendable () -> Void)?
 
@@ -133,6 +136,12 @@ public actor DictationSession: DictationSessioning {
             guard snapshot.phase == .preparing else { return }
         }
 
+        // Fin demandée avant l'ouverture du micro : il n'y a rien à enregistrer, le micro n'est pas ouvert.
+        guard !finishRequestedWhilePreparing else {
+            fail(.noSpeech)
+            return
+        }
+
         let (chunks, sink) = AsyncStream<AudioChunk>.makeStream()
         do {
             // Le rappel ne fait que transmettre : voir la description de la classe.
@@ -156,6 +165,10 @@ public actor DictationSession: DictationSessioning {
     }
 
     public func finish() async {
+        if snapshot.phase == .preparing {
+            finishRequestedWhilePreparing = true
+            return
+        }
         guard snapshot.phase == .recording else { return }
         setPhase(.finalizing)
         stopCapture()
