@@ -36,6 +36,24 @@ public actor DictationSession: DictationSessioning {
     private var inputRate: Double?
     private var startedAt = 0.0
 
+    // Aperçu : un seul travailleur à la fois, hors de la pompe.
+    private enum PreviewPass {
+        /// Le passage clos qui commence à cet échantillon.
+        case closed(start: Int)
+        /// Le passage ouvert qui commence à cet échantillon.
+        case open(start: Int)
+    }
+    private var previewUsable: Bool
+    private var previewBusy = false
+    /// Textes des passages clos, dans l'ordre : le rang est celui du passage dans `timeline.closedSegments`.
+    private var frozenTexts: [String] = []
+    private var openText = ""
+    /// Début du passage dont `openText` est le texte. Un passage qui se ferme garde son texte affiché jusqu'à ce que
+    /// sa passe de passage clos le fige : le texte ne clignote pas.
+    private var openTextStart: Int?
+    private var lastOpenPassAt: Double?
+    private var maxDurationReached = false
+
     private var chunkSink: AsyncStream<AudioChunk>.Continuation?
     private var pump: Task<Void, Never>?
     /// Vrai de l'ouverture du micro jusqu'à la fin de la vidange : la pompe n'accepte plus de tranche ensuite.
@@ -58,6 +76,7 @@ public actor DictationSession: DictationSessioning {
         self.config = config
         self.now = now
         self.makeResampler = makeResampler
+        previewUsable = preview != nil
         timeline = SpeechTimeline(blockSize: detector.blockSize, sampleRate: transcriberSampleRate)
         (snapshots, snapshotSink) = AsyncStream<DictationSnapshot>.makeStream()
         snapshotSink.yield(snapshot)
@@ -90,6 +109,11 @@ public actor DictationSession: DictationSessioning {
             return
         }
         guard snapshot.phase == .preparing else { return }
+        // Un aperçu qui ne se prépare pas n'empêche pas la dictée : la prise se passe de texte provisoire.
+        if let preview {
+            do { try await preview.prepare() } catch { previewUsable = false }
+            guard snapshot.phase == .preparing else { return }
+        }
 
         let (chunks, sink) = AsyncStream<AudioChunk>.makeStream()
         do {
@@ -187,6 +211,75 @@ public actor DictationSession: DictationSessioning {
         let converted = resampler.push(chunk.samples)
         guard !failIfResamplerFailed(resampler), await ingest(converted) else { return }
         snapshot.elapsed = now() - startedAt
+        schedulePreview(includingOpenSegment: true)
+        emit()
+        if snapshot.elapsed >= config.maxDuration, !maxDurationReached {
+            maxDurationReached = true
+            // Une tâche à part : `finish()` attend la pompe, qui est justement en train d'appeler ceci.
+            Task { [weak self] in await self?.finish() }
+        }
+    }
+
+    // MARK: - Aperçu
+
+    /// Lance au plus une passe d'aperçu, jamais pendant une autre. D'abord les passages clos (une fois chacun, dans
+    /// l'ordre, sans attendre), puis le passage ouvert, au plus une fois par `previewInterval` (de début de passe à début
+    /// de passe) et sur ses `previewWindow` dernières secondes. Les passages ne sont pas élargis de `padding` : c'est un
+    /// aperçu, le moteur final a le dernier mot.
+    private func schedulePreview(includingOpenSegment: Bool) {
+        guard snapshot.phase == .recording, previewUsable, let preview, !previewBusy else { return }
+        let pass: PreviewPass
+        let clip: AudioClip
+        if frozenTexts.count < timeline.closedSegments.count {
+            let segment = timeline.closedSegments[frozenTexts.count]
+            pass = .closed(start: segment.lowerBound)
+            clip = timeline.clip(of: segment)
+        } else if includingOpenSegment, let start = timeline.openSegmentStart,
+                  lastOpenPassAt.map({ now() - $0 >= config.previewInterval }) ?? true,
+                  let openClip = timeline.openClip(maxSeconds: config.previewWindow) {
+            lastOpenPassAt = now()
+            pass = .open(start: start)
+            clip = openClip
+        } else {
+            return
+        }
+        previewBusy = true
+        let language = config.language
+        let vocabulary = config.vocabulary
+        Task { [weak self] in
+            let result: Result<String, Error>
+            do {
+                result = .success(try await preview.transcribe(clip, language: language, vocabulary: vocabulary))
+            } catch {
+                result = .failure(error)
+            }
+            await self?.previewFinished(pass, result)
+        }
+    }
+
+    private func previewFinished(_ pass: PreviewPass, _ result: Result<String, Error>) {
+        previewBusy = false
+        // Après `recording`, le texte provisoire ne compte plus.
+        guard snapshot.phase == .recording else { return }
+        switch pass {
+        case .closed(let start):
+            // Une erreur n'est pas retentée (le moteur final couvrira ce passage) : le passage garde le texte qu'il
+            // avait comme passage ouvert, s'il en avait un.
+            var text = openTextStart == start ? openText : ""
+            if case .success(let transcript) = result { text = transcript.trimmingCharacters(in: .whitespacesAndNewlines) }
+            frozenTexts.append(text)
+            if openTextStart == start {
+                openText = ""
+                openTextStart = nil
+            }
+        case .open(let start):
+            // Un passage clos entre-temps : sa propre passe donnera son texte. Une erreur laisse le texte tel quel.
+            guard case .success(let transcript) = result, timeline.openSegmentStart == start else { break }
+            openText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            openTextStart = start
+        }
+        snapshot.liveText = (frozenTexts + [openText]).filter { !$0.isEmpty }.joined(separator: " ")
+        schedulePreview(includingOpenSegment: false)
         emit()
     }
 

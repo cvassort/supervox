@@ -5,26 +5,32 @@ import os
 // Doubles de la session de dictée. Aucun ne dort : le temps vient de `TestClock`, et chaque double répond quand le
 // test le décide (`Gate`, `ScriptedTranscriber.release`).
 
-/// Porte à ouvrir une fois : `wait()` rend la main quand `open()` a été appelé (avant ou après).
+/// Porte à ouvrir une fois : `wait()` rend la main quand `open()` a été appelé (avant ou après), ou quand la tâche qui
+/// attend est annulée (la limite de temps d'un test annule le test : il échoue au lieu de pendre).
 final class Gate: @unchecked Sendable {
-    private let state = OSAllocatedUnfairLock(initialState: (isOpen: false, waiters: [CheckedContinuation<Void, Never>]()))
+    private let state = OSAllocatedUnfairLock(initialState: (isOpen: false, waiters: [UUID: CheckedContinuation<Void, Never>]()))
 
     func wait() async {
-        await withCheckedContinuation { continuation in
-            let passes = state.withLock { s -> Bool in
-                if s.isOpen { return true }
-                s.waiters.append(continuation)
-                return false
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let passes = state.withLock { s -> Bool in
+                    if s.isOpen || Task.isCancelled { return true }
+                    s.waiters[id] = continuation
+                    return false
+                }
+                if passes { continuation.resume() }
             }
-            if passes { continuation.resume() }
+        } onCancel: {
+            state.withLock { $0.waiters.removeValue(forKey: id) }?.resume()
         }
     }
 
     func open() {
         let waiters = state.withLock { s -> [CheckedContinuation<Void, Never>] in
             s.isOpen = true
-            defer { s.waiters = [] }
-            return s.waiters
+            defer { s.waiters = [:] }
+            return Array(s.waiters.values)
         }
         for waiter in waiters { waiter.resume() }
     }
@@ -144,7 +150,7 @@ final class ScriptedTranscriber: Transcriber, @unchecked Sendable {
     private struct State {
         var calls: [Call] = []
         var held: [Int: Held] = [:]
-        var waiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+        var waiters: [UUID: (count: Int, continuation: CheckedContinuation<Void, Never>)] = [:]
         var prepares = 0
     }
 
@@ -173,9 +179,9 @@ final class ScriptedTranscriber: Transcriber, @unchecked Sendable {
     func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {
         let (index, ready) = state.withLock { s -> (Int, [CheckedContinuation<Void, Never>]) in
             s.calls.append(Call(clip: clip, language: language, vocabulary: vocabulary))
-            let ready = s.waiters.filter { $0.count <= s.calls.count }.map(\.continuation)
-            s.waiters.removeAll { $0.count <= s.calls.count }
-            return (s.calls.count - 1, ready)
+            let due = s.waiters.filter { $0.value.count <= s.calls.count }
+            for key in due.keys { s.waiters[key] = nil }
+            return (s.calls.count - 1, due.values.map(\.continuation))
         }
         for waiter in ready { waiter.resume() }
         switch reply(index) {
@@ -211,15 +217,20 @@ final class ScriptedTranscriber: Transcriber, @unchecked Sendable {
 
     func release(call: Int, text: String) { release(call: call, with: .success(text)) }
 
-    /// Rend la main quand `count` appels au moins ont été faits.
+    /// Rend la main quand `count` appels au moins ont été faits (ou quand la tâche est annulée).
     func waitForCalls(_ count: Int) async {
-        await withCheckedContinuation { continuation in
-            let ready = state.withLock { s -> Bool in
-                if s.calls.count >= count { return true }
-                s.waiters.append((count, continuation))
-                return false
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let ready = state.withLock { s -> Bool in
+                    if s.calls.count >= count || Task.isCancelled { return true }
+                    s.waiters[id] = (count, continuation)
+                    return false
+                }
+                if ready { continuation.resume() }
             }
-            if ready { continuation.resume() }
+        } onCancel: {
+            state.withLock { $0.waiters.removeValue(forKey: id) }?.continuation.resume()
         }
     }
 }
@@ -230,7 +241,7 @@ final class SnapshotLog: @unchecked Sendable {
         var matches: @Sendable (DictationSnapshot) -> Bool
         var continuation: CheckedContinuation<DictationSnapshot?, Never>
     }
-    private let state = OSAllocatedUnfairLock(initialState: (items: [DictationSnapshot](), ended: false, waiters: [Waiter]()))
+    private let state = OSAllocatedUnfairLock(initialState: (items: [DictationSnapshot](), ended: false, waiters: [UUID: Waiter]()))
 
     init(_ stream: AsyncStream<DictationSnapshot>) {
         Task { [self] in
@@ -242,9 +253,9 @@ final class SnapshotLog: @unchecked Sendable {
     private func append(_ snapshot: DictationSnapshot) {
         let ready = state.withLock { s -> [CheckedContinuation<DictationSnapshot?, Never>] in
             s.items.append(snapshot)
-            let ready = s.waiters.filter { $0.matches(snapshot) }.map(\.continuation)
-            s.waiters.removeAll { $0.matches(snapshot) }
-            return ready
+            let due = s.waiters.filter { $0.value.matches(snapshot) }
+            for key in due.keys { s.waiters[key] = nil }
+            return due.values.map(\.continuation)
         }
         for continuation in ready { continuation.resume(returning: snapshot) }
     }
@@ -252,22 +263,28 @@ final class SnapshotLog: @unchecked Sendable {
     private func end() {
         let waiters = state.withLock { s -> [Waiter] in
             s.ended = true
-            defer { s.waiters = [] }
-            return s.waiters
+            defer { s.waiters = [:] }
+            return Array(s.waiters.values)
         }
         for waiter in waiters { waiter.continuation.resume(returning: nil) }
     }
 
-    /// Le premier instantané (déjà reçu ou à venir) qui satisfait `matches` ; `nil` si le flux se termine sans.
+    /// Le premier instantané (déjà reçu ou à venir) qui satisfait `matches` ; `nil` si le flux se termine sans, ou si la
+    /// tâche est annulée.
     func wait(_ matches: @escaping @Sendable (DictationSnapshot) -> Bool) async -> DictationSnapshot? {
-        await withCheckedContinuation { continuation in
-            let found = state.withLock { s -> DictationSnapshot?? in
-                if let item = s.items.first(where: matches) { return .some(item) }
-                if s.ended { return .some(nil) }
-                s.waiters.append(Waiter(matches: matches, continuation: continuation))
-                return nil
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let found = state.withLock { s -> DictationSnapshot?? in
+                    if let item = s.items.first(where: matches) { return .some(item) }
+                    if s.ended || Task.isCancelled { return .some(nil) }
+                    s.waiters[id] = Waiter(matches: matches, continuation: continuation)
+                    return nil
+                }
+                if let found { continuation.resume(returning: found) }
             }
-            if let found { continuation.resume(returning: found) }
+        } onCancel: {
+            state.withLock { $0.waiters.removeValue(forKey: id) }?.continuation.resume(returning: nil)
         }
     }
 
