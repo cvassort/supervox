@@ -19,3 +19,15 @@ public protocol StreamingVoiceDetector: Sendable {
     /// `block` a exactement `blockSize` échantillons à 16 kHz.
     func process(_ block: [Float]) async throws -> VoiceEvent?
 }
+
+extension StreamingVoiceDetector {
+    /// Fin de prise : passe au détecteur le dernier bloc partiel de `timeline` (`SpeechTimeline.flush()`, complété de
+    /// zéros), applique l'événement éventuel à `timeline` et le rend. Ne fait rien, et rend `nil`, s'il n'y a pas de
+    /// reste. À appeler une fois par prise, après le dernier `process`, sans appel concurrent (voir le protocole).
+    public func flush(_ timeline: inout SpeechTimeline) async throws -> VoiceEvent? {
+        guard let block = timeline.flush() else { return nil }
+        guard let event = try await process(block) else { return nil }
+        timeline.apply(event)
+        return event
+    }
+}

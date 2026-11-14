@@ -36,6 +36,19 @@ public struct SpeechTimeline: Sendable {
         return blocks
     }
 
+    /// Fin de prise : le reste de l'audio qui ne remplit pas un bloc (moins de `blockSize` échantillons), complété par
+    /// des zéros jusqu'à `blockSize` pour être passé au détecteur ; `nil` s'il n'y a pas de reste. Sans cet appel, la
+    /// fin de la prise (jusqu'à `blockSize` - 1 échantillons, soit près de 0,26 s à 4096) n'est jamais vue du détecteur :
+    /// un mot court prononcé juste avant le relâchement de la touche resterait sans voix détectée. Le reste est
+    /// consommé : un second appel rend `nil`. À appeler une fois, à la fin de la prise, avant de s'en servir ; ajouter
+    /// de l'audio ensuite n'a plus de sens, les blocs suivants ne seraient pas alignés sur ceux du détecteur.
+    public mutating func flush() -> [Float]? {
+        guard nextBlockStart < audio.count else { return nil }
+        let rest = Array(audio[nextBlockStart...])
+        nextBlockStart = audio.count
+        return rest + [Float](repeating: 0, count: blockSize - rest.count)
+    }
+
     /// Prend en compte un événement du détecteur. Un événement incohérent est ignoré et l'état précédent est gardé :
     /// deux débuts de suite, une fin sans début, une fin qui ne tombe pas après le début, un début qui chevauche le
     /// dernier passage clos. Un indice hors de l'audio reçu est ramené dans [0, longueur reçue].
