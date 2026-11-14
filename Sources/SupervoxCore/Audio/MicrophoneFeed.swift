@@ -98,6 +98,19 @@ public final class ScriptedMicrophoneFeed: MicrophoneFeed {
     }
 }
 
+/// Ce que `LiveMicrophoneFeed` demande à la capture : l'unique endroit où il décide de garder ou non le tampon interne.
+/// `AudioCapture` la satisfait ; les tests la remplacent pour vérifier ce câblage sans micro.
+protocol StreamingCapture: Sendable {
+    func startStreaming(onChunk: @escaping @Sendable (AudioChunk) -> Void, accumulate: Bool) throws
+    func stop() -> AudioClip
+}
+
+extension AudioCapture: StreamingCapture {
+    func startStreaming(onChunk: @escaping @Sendable (AudioChunk) -> Void, accumulate: Bool) throws {
+        try start(onChunk: onChunk, accumulate: accumulate)
+    }
+}
+
 /// Le vrai micro, vu comme une `MicrophoneFeed` : possède une `AudioCapture` qui ne déclenche jamais l'invite système
 /// (l'application demande l'autorisation par son propre parcours) ; sans autorisation, `start` lève
 /// `AudioCaptureError.microphoneAccessDenied`. Les tranches sont à la fréquence native du micro, premier canal.
@@ -105,14 +118,19 @@ public final class ScriptedMicrophoneFeed: MicrophoneFeed {
 /// Le tampon interne d'`AudioCapture` n'accumule rien (`accumulate: false`) : une dictée longue ne fait pas grossir
 /// la mémoire. `@unchecked Sendable` : `AudioCapture` sérialise elle-même `start` et `stop`.
 public final class LiveMicrophoneFeed: MicrophoneFeed, @unchecked Sendable {
-    let capture: AudioCapture
+    let capture: any StreamingCapture
 
-    public init(voiceProcessing: Bool = true) {
-        capture = AudioCapture(voiceProcessing: voiceProcessing, promptsForAccess: false)
+    public convenience init(voiceProcessing: Bool = true) {
+        self.init(capture: AudioCapture(voiceProcessing: voiceProcessing, promptsForAccess: false))
+    }
+
+    /// Pour les tests : une capture factice à la place du micro.
+    init(capture: any StreamingCapture) {
+        self.capture = capture
     }
 
     public func start(onChunk: @escaping @Sendable (AudioChunk) -> Void) throws {
-        try capture.start(onChunk: onChunk, accumulate: false)
+        try capture.startStreaming(onChunk: onChunk, accumulate: false)
     }
 
     public func stop() {
