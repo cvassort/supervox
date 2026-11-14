@@ -159,30 +159,123 @@ private func sampleSettings() -> AppSettings {
         #expect(Set(contents) == [first, second])
     }
 
-    @Test func newerVersionIsNotOverwritten() throws {
+    /// Un fichier d'une version future est lu avec ce que cette version connaît, gardé à sa place, et jamais
+    /// écrasé : la version qui l'a écrit le retrouvera intact.
+    @Test func newerVersionIsReadAsFarAsPossibleAndNeverOverwritten() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        // Un fichier de forme lisible mais d'une version future : il ne doit pas être repris tel quel.
-        var future = AppSettings.defaults
-        future.version = 99
-        future.lastModeID = "mode-du-futur"
-        let original = try JSONEncoder().encode(future)
+        let original = Data(#"{"version": 99, "providers": [], "hotKey": {"keyCode": 40, "modifiers": 768}, "hotKeyBehavior": "toggle", "lastModeID": "mode-du-futur", "moteurDuFutur": "x"}"#.utf8)
+        try original.write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        let result = store.load()
+        #expect(result.settings.lastModeID == "mode-du-futur")
+        #expect(result.settings.hotKey == HotKey(keyCode: 40, modifiers: [.command, .shift]))
+        // En mémoire, ce sont des réglages de la version courante.
+        #expect(result.settings.version == AppSettings.current)
+        let notice = try #require(result.notice)
+        #expect(notice.contains("99"))
+        #expect(notice.contains("plus récente"))
+        #expect(notice.contains("rien n'y sera écrit"))
+        #expect(try names(in: directory) == ["settings.json"])
+
+        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 99)) {
+            try store.save(.defaults)
+        }
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try names(in: directory) == ["settings.json"])
+    }
+
+    /// Même une version future que cette application ne sait pas lire n'est ni déplacée ni écrasée.
+    @Test func unreadableNewerVersionIsNeitherMovedNorOverwritten() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let original = Data(#"{"version": 2, "providers": "une autre forme"}"#.utf8)
         try original.write(to: file)
         let store = SettingsStore(file: file, now: fixedClock)
 
         let result = store.load()
         #expect(result.settings == .defaults)
         let notice = try #require(result.notice)
-        #expect(notice.contains("99"))
-        #expect(notice.contains("inconnue"))
-        #expect(notice.contains(asideStem))
+        #expect(notice.contains("plus récente"))
+        #expect(try names(in: directory) == ["settings.json"])
+        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 2)) {
+            try store.save(sampleSettings())
+        }
+        #expect(try Data(contentsOf: file) == original)
+    }
 
-        let aside = directory.appendingPathComponent(asideStem)
-        #expect(try Data(contentsOf: aside) == original)
+    /// Un fichier de version 1 écrit avant l'ajout d'un champ : le champ absent prend sa valeur par défaut, le
+    /// fichier n'est pas mis de côté. Simulé en retirant des champs qui existent aujourd'hui.
+    @Test func versionOneFileWithoutALaterFieldReadsWithItsDefault() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let id = UUID()
+        try Data(#"""
+        {"version": 1, "hotKey": {"keyCode": 40, "modifiers": 768},
+         "providers": [{"id": "\#(id.uuidString)", "name": "Local", "baseURL": "http://localhost:1", "kind": "openAICompatible"}]}
+        """#.utf8).write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
 
-        try store.save(.defaults)
-        #expect(try Data(contentsOf: aside) == original)
+        let result = store.load()
+        #expect(result.notice == nil)
+        #expect(result.settings.hotKey == HotKey(keyCode: 40, modifiers: [.command, .shift]))
+        #expect(result.settings.hotKeyBehavior == AppSettings.defaults.hotKeyBehavior)
+        #expect(result.settings.lastModeID == AppSettings.defaults.lastModeID)
+        #expect(result.settings.providers == [Provider(id: id, name: "Local", baseURL: "http://localhost:1", kind: .openAICompatible, models: [])])
+        #expect(try names(in: directory) == ["settings.json"])
+        // Et l'application peut l'enregistrer : il est de sa version.
+        try store.save(result.settings)
+        #expect(store.load().settings == result.settings)
+    }
+
+    /// Un champ inconnu (écrit par une version future qui a gardé le même numéro, ou à la main) est ignoré.
+    @Test func unknownFieldsAreIgnoredAndTheFileIsKept() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let id = UUID()
+        try Data(#"""
+        {"version": 1, "providers": [{"id": "\#(id.uuidString)", "name": "Local", "baseURL": "http://localhost:1",
+          "kind": "anthropic", "models": ["m"], "couleur": "bleu"}],
+         "hotKey": {"keyCode": 49, "modifiers": 6144}, "hotKeyBehavior": "toggle", "lastModeID": "prompt",
+         "langue": "fr", "moteur": {"nom": "x"}}
+        """#.utf8).write(to: file)
+
+        let result = SettingsStore(file: file, now: fixedClock).load()
+        #expect(result.notice == nil)
+        #expect(result.settings.lastModeID == "prompt")
+        #expect(result.settings.providers.map(\.models) == [["m"]])
+        #expect(try names(in: directory) == ["settings.json"])
+    }
+
+    /// m1 : une erreur de lecture (ici un fichier sans droit de lecture) n'est pas un fichier abîmé : il reste à
+    /// sa place, intact, les réglages par défaut servent en mémoire, et rien ne l'écrase.
+    @Test func readErrorKeepsTheFileInPlaceAndSaysSo() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        try store.save(sampleSettings())
+        let original = try Data(contentsOf: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+
+        let result = store.load()
+        #expect(result.settings == .defaults)
+        let notice = try #require(result.notice)
+        #expect(notice.contains("n'a pas pu être lu"))
+        #expect(notice.contains("reste en place"))
+        #expect(try names(in: directory) == ["settings.json"])
+        #expect(throws: SettingsError.unreadableFileKept(fileName: "settings.json")) {
+            try store.save(.defaults)
+        }
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        #expect(try Data(contentsOf: file) == original)
     }
 
     @Test func settingsFileNeverContainsASecretField() throws {
@@ -256,11 +349,14 @@ private func sampleSettings() -> AppSettings {
         let store = SettingsStore(file: file)
         var future = AppSettings.defaults
         future.version = 99
-        let contents = [Data("{pas du json".utf8), try JSONEncoder().encode(future)]
+        let cases: [(Data, SettingsError)] = [
+            (Data("{pas du json".utf8), .unreadableFileKept(fileName: "settings.json")),
+            (try JSONEncoder().encode(future), .newerVersionKept(fileName: "settings.json", version: 99)),
+        ]
 
-        for original in contents {
+        for (original, refusal) in cases {
             try original.write(to: file)
-            #expect(throws: SettingsError.unreadableFileKept(fileName: "settings.json")) {
+            #expect(throws: refusal) {
                 try store.save(sampleSettings())
             }
             #expect(try Data(contentsOf: file) == original)
@@ -271,6 +367,9 @@ private func sampleSettings() -> AppSettings {
         let message = SettingsError.unreadableFileKept(fileName: "settings.json").localizedDescription
         #expect(message.contains("settings.json"))
         #expect(!message.contains("/"))
+        let newer = SettingsError.newerVersionKept(fileName: "settings.json", version: 7).localizedDescription
+        #expect(newer.contains("settings.json") && newer.contains("7") && newer.contains("plus récente"))
+        #expect(!newer.contains("/"))
     }
 
     @Test func defaultFileIsInApplicationSupport() throws {

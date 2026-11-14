@@ -3,11 +3,15 @@ import Foundation
 public enum SettingsError: Error, Equatable, LocalizedError {
     /// Le fichier de réglages existe mais est illisible ou d'une version inconnue : on ne l'écrase pas.
     case unreadableFileKept(fileName: String)
+    /// Le fichier de réglages vient d'une version plus récente de l'application : on ne l'écrase pas.
+    case newerVersionKept(fileName: String, version: Int)
 
     public var errorDescription: String? {
         switch self {
         case .unreadableFileKept(let fileName):
             return "Le fichier « \(fileName) » est illisible ou d'une version inconnue ; il est conservé tel quel et les réglages n'ont pas été enregistrés."
+        case .newerVersionKept(let fileName, let version):
+            return "Le fichier « \(fileName) » vient d'une version plus récente de Supervox (version \(version)) ; il est conservé tel quel et les réglages n'ont pas été enregistrés."
         }
     }
 }
@@ -24,8 +28,14 @@ public struct SettingsLoad: Equatable {
     }
 }
 
-/// Lit et écrit le fichier de réglages. Un fichier illisible ou d'une version inconnue
-/// n'est jamais écrasé : il est déplacé à côté, puis les réglages par défaut s'appliquent.
+/// Lit et écrit le fichier de réglages. Aucun fichier existant n'est jamais écrasé s'il n'est pas lisible à la
+/// version courante :
+/// - fichier abîmé (pas du JSON, sans `version`, version nulle ou négative, champ d'une autre forme) : déplacé à
+///   côté, puis les réglages par défaut s'appliquent ;
+/// - fichier d'une version plus récente : laissé en place ; ce que cette version sait en lire s'applique, et rien
+///   n'y est écrit ;
+/// - fichier présent mais impossible à lire (droits, erreur passagère) : laissé en place, les réglages par défaut
+///   s'appliquent en mémoire, et rien n'y est écrit.
 public struct SettingsStore: Sendable {
     public let file: URL
     private let now: @Sendable () -> Date
@@ -61,21 +71,39 @@ public struct SettingsStore: Sendable {
             if !FileManager.default.fileExists(atPath: file.path) {
                 return SettingsLoad(settings: .defaults, notice: nil)
             }
-            return setAside(reason: "Le fichier de réglages n'a pas pu être lu")
+            // Une erreur de lecture ne dit rien du contenu : le fichier peut être valide. Il reste à sa place.
+            return SettingsLoad(
+                settings: .defaults,
+                notice: "Le fichier de réglages « \(file.lastPathComponent) » n'a pas pu être lu : il reste en place, intact, et rien n'y sera écrit ; les réglages par défaut sont utilisés jusqu'au prochain lancement.")
         }
         switch Self.decode(data) {
-        case .success(let settings):
+        case .success(.current(let settings)):
             return SettingsLoad(settings: settings, notice: nil)
+        case .success(.newer(let settings, let version)):
+            let use = settings == nil ? "les réglages par défaut sont utilisés" : "les réglages que cette version sait lire sont utilisés"
+            var inMemory = settings ?? .defaults
+            inMemory.version = AppSettings.current
+            return SettingsLoad(
+                settings: inMemory,
+                notice: "Le fichier de réglages vient d'une version plus récente de Supervox (version \(version)) : il est gardé tel quel et rien n'y sera écrit ; \(use), et les modifications ne seront pas enregistrées.")
         case .failure(let problem):
             return setAside(reason: problem.description)
         }
     }
 
-    /// Refuse d'écrire par-dessus un fichier existant qui n'est pas lisible à la version courante :
-    /// il a été mis de côté, ou aurait dû l'être (déplacement en échec), et ne doit jamais être perdu.
+    /// Refuse d'écrire par-dessus un fichier existant qui n'est pas lisible à la version courante : il a été mis de
+    /// côté, ou aurait dû l'être (déplacement en échec), ou il appartient à une version plus récente, ou il n'a pas
+    /// pu être lu. Il ne doit jamais être perdu.
     public func save(_ settings: AppSettings) throws {
         if FileManager.default.fileExists(atPath: file.path) {
-            guard let existing = try? Data(contentsOf: file), case .success = Self.decode(existing) else {
+            guard let existing = try? Data(contentsOf: file) else {
+                throw SettingsError.unreadableFileKept(fileName: file.lastPathComponent)
+            }
+            switch Self.decode(existing) {
+            case .success(.current): break
+            case .success(.newer(_, let version)):
+                throw SettingsError.newerVersionKept(fileName: file.lastPathComponent, version: version)
+            case .failure:
                 throw SettingsError.unreadableFileKept(fileName: file.lastPathComponent)
             }
         }
@@ -92,21 +120,28 @@ public struct SettingsStore: Sendable {
         var description: String
     }
 
-    /// Lit d'abord `version` seule : un fichier d'une autre version n'est pas décodé, même si sa forme
-    /// ressemble à la nôtre. Toute version autre que `AppSettings.current` (y compris 0 ou négative) est inconnue.
-    private static func decode(_ data: Data) -> Result<AppSettings, Problem> {
+    private enum Decoded {
+        /// Fichier de la version courante (ou d'une version antérieure connue, quand il y en aura).
+        case current(AppSettings)
+        /// Fichier d'une version plus récente : ce qui a pu en être lu, ou `nil`.
+        case newer(AppSettings?, version: Int)
+    }
+
+    /// Lit d'abord `version` seule. Une version nulle ou négative est inconnue. Une version plus récente est lue
+    /// autant que possible (décodage tolérant), sans échec. La version courante doit se décoder.
+    private static func decode(_ data: Data) -> Result<Decoded, Problem> {
         struct VersionProbe: Decodable { var version: Int }
         guard let probe = try? JSONDecoder().decode(VersionProbe.self, from: data) else {
             return .failure(Problem(description: "Le fichier de réglages est illisible"))
         }
-        guard probe.version == AppSettings.current else {
+        guard probe.version >= 1 else {
             return .failure(Problem(description:
                 "Le fichier de réglages a une version inconnue (\(probe.version)), cette application lit la version \(AppSettings.current)"))
         }
-        guard let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else {
-            return .failure(Problem(description: "Le fichier de réglages est illisible"))
-        }
-        return .success(settings)
+        let settings = try? JSONDecoder().decode(AppSettings.self, from: data)
+        if probe.version > AppSettings.current { return .success(.newer(settings, version: probe.version)) }
+        guard let settings else { return .failure(Problem(description: "Le fichier de réglages est illisible")) }
+        return .success(.current(settings))
     }
 
     // MARK: - Mise de côté
