@@ -65,3 +65,81 @@ struct DictationSessionCancellationTests {
         #expect(rig.feed.stops == 1)
     }
 }
+
+// MARK: - cancel() annule le travail en cours
+
+/// Les moteurs doubles de ces tests respectent l'annulation de tâche (`honorsCancellation`) : un moteur qui l'ignore
+/// finit son calcul pour rien, mais la session ne dépend pas de lui.
+@Suite(.timeLimit(.minutes(1)))
+struct DictationSessionCancelsWorkTests {
+    private static let config = DictationConfig(language: "fr", previewInterval: 0.5, padding: 0)
+
+    /// Une passe d'aperçu retenue sur le passage ouvert.
+    private func rigWithAPreviewPassInProgress(
+        final: ScriptedTranscriber = ScriptedTranscriber(text: "texte")
+    ) async -> (rig: Rig, preview: ScriptedTranscriber) {
+        let preview = ScriptedTranscriber(honorsCancellation: true, reply: { _ in .hold })
+        let rig = makeRig(events: [0: .speechStart(sample: 0)], final: final, preview: preview, config: Self.config)
+        await rig.session.start()
+        rig.clock.set(0.125)
+        rig.feed.push(rampChunk(0..<1000))
+        await preview.waitForCalls(1)
+        return (rig, preview)
+    }
+
+    @Test func cancelCancelsThePreviewPassInProgress() async {
+        let (rig, preview) = await rigWithAPreviewPassInProgress()
+
+        await rig.session.cancel()
+
+        await preview.cancellation(of: 0).wait()
+        #expect(await rig.outcome() == .cancelled)
+    }
+
+    @Test func leavingRecordingCancelsThePreviewPassInProgress() async {
+        // Le moteur d'aperçu peut être le même que le moteur final : une passe d'aperçu ne le retient pas pendant `finalizing`.
+        let (rig, preview) = await rigWithAPreviewPassInProgress()
+
+        await rig.session.finish()
+
+        await preview.cancellation(of: 0).wait()
+        #expect(await rig.outcome() == .finished("texte"))
+    }
+
+    @Test func cancelCancelsTheFinalTranscriptionInProgress() async {
+        let final = ScriptedTranscriber(honorsCancellation: true, reply: { _ in .hold })
+        let rig = makeRig(chunks: [rampChunk(0..<2000)], events: [0: .speechStart(sample: 0)], final: final)
+        await rig.session.start()
+        let finishing = Task { await rig.session.finish() }
+        await final.waitForCalls(1)
+
+        await rig.session.cancel()
+
+        await final.cancellation(of: 0).wait()
+        await finishing.value
+        #expect(await rig.outcome() == .cancelled)
+        #expect(await rig.session.phase == .cancelled)
+    }
+
+    @Test func aCancelledCallerOfFinishCancelsTheFinalTranscriptionAndTheTakeIsCancelledNotFailed() async {
+        let final = ScriptedTranscriber(honorsCancellation: true, reply: { _ in .hold })
+        let rig = makeRig(chunks: [rampChunk(0..<2000)], events: [0: .speechStart(sample: 0)], final: final)
+        await rig.session.start()
+        let finishing = Task { await rig.session.finish() }
+        await final.waitForCalls(1)
+
+        finishing.cancel()
+
+        await final.cancellation(of: 0).wait()
+        await finishing.value
+        #expect(await rig.outcome() == .cancelled)
+    }
+
+    @Test func aCancellationErrorFromTheFinalEngineIsACancellationNotAnEngineFailure() async {
+        let final = ScriptedTranscriber(reply: { _ in .fail(CancellationError()) })
+        let rig = makeRig(chunks: [rampChunk(0..<2000)], events: [0: .speechStart(sample: 0)], final: final)
+        await rig.session.start()
+        await rig.session.finish()
+        #expect(await rig.outcome() == .cancelled)
+    }
+}

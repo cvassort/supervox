@@ -166,16 +166,31 @@ final class ScriptedTranscriber: Transcriber, @unchecked Sendable {
         var held: [Int: Held] = [:]
         var waiters: [UUID: (count: Int, continuation: CheckedContinuation<Void, Never>)] = [:]
         var prepares = 0
+        var cancellationGates: [Int: Gate] = [:]
     }
 
     let name: String
     var prepareError: Error?
     private let reply: @Sendable (Int) -> Reply
+    /// Un appel retenu (`.hold`) qui voit sa tâche annulée rend `CancellationError` et ouvre `cancellation(of:)`. Sans
+    /// cela (défaut), l'annulation est ignorée, comme le fait un moteur qui ne la respecte pas.
+    private let honorsCancellation: Bool
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(name: String = "double", reply: @escaping @Sendable (Int) -> Reply) {
+    init(name: String = "double", honorsCancellation: Bool = false, reply: @escaping @Sendable (Int) -> Reply) {
         self.name = name
+        self.honorsCancellation = honorsCancellation
         self.reply = reply
+    }
+
+    /// S'ouvre quand l'appel de rang `call` a vu sa tâche annulée (voir `honorsCancellation`).
+    func cancellation(of call: Int) -> Gate {
+        state.withLock { s in
+            if let gate = s.cancellationGates[call] { return gate }
+            let gate = Gate()
+            s.cancellationGates[call] = gate
+            return gate
+        }
     }
 
     convenience init(name: String = "double", text: String) {
@@ -202,16 +217,38 @@ final class ScriptedTranscriber: Transcriber, @unchecked Sendable {
         case .text(let text): return text
         case .fail(let error): throw error
         case .hold:
-            return try await withCheckedThrowingContinuation { continuation in
-                let early = state.withLock { s -> Result<String, Error>? in
-                    if case .released(let result) = s.held[index] {
+            guard honorsCancellation else { return try await holdUntilReleased(index) }
+            let gate = cancellation(of: index)
+            return try await withTaskCancellationHandler {
+                try await holdUntilReleased(index, cancelled: gate)
+            } onCancel: {
+                gate.open()
+                let waiting = state.withLock { s -> CheckedContinuation<String, Error>? in
+                    if case .waiting(let continuation) = s.held[index] {
                         s.held[index] = nil
-                        return result
+                        return continuation
                     }
-                    s.held[index] = .waiting(continuation)
                     return nil
                 }
-                if let early { continuation.resume(with: early) }
+                waiting?.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    private func holdUntilReleased(_ index: Int, cancelled: Gate? = nil) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let early = state.withLock { s -> Result<String, Error>? in
+                if case .released(let result) = s.held[index] {
+                    s.held[index] = nil
+                    return result
+                }
+                if cancelled != nil, Task.isCancelled { return .failure(CancellationError()) }
+                s.held[index] = .waiting(continuation)
+                return nil
+            }
+            if let early {
+                if case .failure(let error) = early, error is CancellationError { cancelled?.open() }
+                continuation.resume(with: early)
             }
         }
     }

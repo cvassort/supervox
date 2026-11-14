@@ -45,6 +45,10 @@ public actor DictationSession: DictationSessioning {
     }
     private var previewUsable: Bool
     private var previewBusy = false
+    private var previewTask: Task<Void, Never>?
+    /// La transcription finale : retenue pour que `cancel()` puisse l'annuler (un moteur qui respecte l'annulation de
+    /// tâche s'arrête, au lieu de calculer pour rien).
+    private var finalTask: Task<String, Error>?
     /// Textes des passages clos, dans l'ordre : le rang est celui du passage dans `timeline.closedSegments`.
     private var frozenTexts: [String] = []
     private var openText = ""
@@ -155,6 +159,8 @@ public actor DictationSession: DictationSessioning {
         guard snapshot.phase == .recording else { return }
         setPhase(.finalizing)
         stopCapture()
+        // Le moteur d'aperçu peut être le moteur final : une passe d'aperçu ne le retient pas pendant `finalizing`.
+        cancelPreview()
         // La pompe vide ce qui était déjà livré, puis s'arrête avec le flux.
         await pump?.value
 
@@ -179,9 +185,19 @@ public actor DictationSession: DictationSessioning {
             fail(.noSpeech)
             return
         }
+        let engine = final
+        let language = config.language
+        let vocabulary = config.vocabulary
+        let transcription = Task { try await engine.transcribe(clip, language: language, vocabulary: vocabulary) }
+        finalTask = transcription
         let text: String
         do {
-            text = try await final.transcribe(clip, language: config.language, vocabulary: config.vocabulary)
+            // Une tâche appelante annulée annule aussi le moteur.
+            text = try await withTaskCancellationHandler { try await transcription.value } onCancel: { transcription.cancel() }
+        } catch is CancellationError {
+            // Annulation (de la session ou de l'appelant) : ce n'est pas une panne du moteur.
+            setPhase(.cancelled)
+            return
         } catch {
             guard snapshot.phase == .finalizing else { return }
             fail(.engine(Self.describe(error)))
@@ -259,7 +275,7 @@ public actor DictationSession: DictationSessioning {
         previewPassesLaunched += 1
         let language = config.language
         let vocabulary = config.vocabulary
-        Task { [weak self] in
+        previewTask = Task { [weak self] in
             let result: Result<String, Error>
             do {
                 result = .success(try await preview.transcribe(clip, language: language, vocabulary: vocabulary))
@@ -268,6 +284,13 @@ public actor DictationSession: DictationSessioning {
             }
             await self?.previewFinished(pass, result)
         }
+    }
+
+    /// Annule la passe d'aperçu en cours, s'il y en a une ; son résultat, quand il arrive, est ignoré.
+    private func cancelPreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        previewBusy = false
     }
 
     /// Pour les tests : de quoi attendre qu'une passe d'aperçu ait été traitée par la session.
@@ -344,6 +367,8 @@ public actor DictationSession: DictationSessioning {
             ingesting = false
             stopCapture()
             pump?.cancel()
+            cancelPreview()
+            finalTask?.cancel()
         }
         emit()
         if phase.isTerminal { snapshotSink.finish() }

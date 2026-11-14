@@ -17,7 +17,7 @@ struct DictationSessionMessagesTests {
 
     @Test func anUnknownSystemErrorNeverShowsItsRawTextNorTheServiceAddress() async {
         let address = "https://service.example.invalid/v1/audio"
-        let error = URLError(.notConnectedToInternet, userInfo: [NSURLErrorFailingURLStringErrorKey: address])
+        let error = URLError(.notConnectedToInternet, userInfo: [NSURLErrorFailingURLErrorKey: URL(string: address)!])
 
         let failure = await failureOf(finalReply: .fail(error))
 
