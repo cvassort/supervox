@@ -15,8 +15,10 @@ public protocol HotKeyRegistrar {
 public enum HotKeyError: Error, Equatable, Sendable {
     /// La combinaison n'a même pas été proposée au système.
     case invalid(HotKeyValidation)
-    /// Le système a refusé l'enregistrement (combinaison déjà prise, par exemple).
-    case taken
+    /// Le système a refusé l'enregistrement. macOS ne dit pas pourquoi : en pratique, une autre application tient
+    /// déjà la combinaison. Il ne refuse pas une combinaison prise par l'un de ses propres raccourcis
+    /// (voir `SystemHotKeys`).
+    case refused
 }
 
 /// Tient le raccourci global de l'application : en change sans jamais laisser l'utilisateur
@@ -97,6 +99,6 @@ public final class HotKeyCenter {
             active = nil
             activeOnPress = nil
         }
-        return .failure(.taken)
+        return .failure(.refused)
     }
 }

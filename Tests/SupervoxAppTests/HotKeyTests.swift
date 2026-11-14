@@ -366,7 +366,7 @@ import Testing
         var pressesA = 0
         var pressesB = 0
         #expect(Self.failure(center.apply(Self.keyA) { pressesA += 1 }) == nil)
-        #expect(Self.failure(center.apply(Self.keyB) { pressesB += 1 }) == .taken)
+        #expect(Self.failure(center.apply(Self.keyB) { pressesB += 1 }) == .refused)
         #expect(center.active == Self.keyA)
         // L'ancien raccourci est de nouveau enregistré, et fonctionne avec son propre rappel.
         #expect(registrar.registered == Self.keyA)
@@ -379,7 +379,7 @@ import Testing
         let registrar = FakeRegistrar()
         registrar.refused = [Self.keyB]
         let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
-        #expect(Self.failure(center.apply(Self.keyB) {}) == .taken)
+        #expect(Self.failure(center.apply(Self.keyB) {}) == .refused)
         #expect(center.active == nil)
         #expect(registrar.registered == nil)
     }
@@ -390,7 +390,7 @@ import Testing
         #expect(Self.failure(center.apply(Self.keyA) {}) == nil)
         // Le système refuse désormais tout, y compris de reprendre l'ancien raccourci.
         registrar.refused = [Self.keyA, Self.keyB]
-        #expect(Self.failure(center.apply(Self.keyB) {}) == .taken)
+        #expect(Self.failure(center.apply(Self.keyB) {}) == .refused)
         #expect(registrar.registered == nil)
         #expect(center.active == nil)
     }
@@ -432,7 +432,7 @@ import Testing
         // Même combinaison redemandée : acceptée seulement si l'ancienne a été libérée d'abord.
         #expect(Self.failure(center.apply(Self.keyA) { presses += 10 }) == nil)
         // Refus du nouveau : l'ancien est repris, ce qui exige aussi un emplacement libre.
-        #expect(Self.failure(center.apply(Self.keyB) {}) == .taken)
+        #expect(Self.failure(center.apply(Self.keyB) {}) == .refused)
         #expect(center.active == Self.keyA)
         #expect(registrar.registered == Self.keyA)
         registrar.press()
@@ -494,7 +494,7 @@ import Testing
         center.suspend()
 
         registrar.refused = [Self.keyB]
-        #expect(Self.failure(center.apply(Self.keyB, onPress: {})) == .taken)
+        #expect(Self.failure(center.apply(Self.keyB, onPress: {})) == .refused)
         #expect(registrar.registered == Self.keyA)
         #expect(!center.isSuspended)
     }

@@ -48,6 +48,10 @@ public final class HotKeySettingsModel {
         BehaviorOption(behavior: .hold, label: "Maintenir pour dicter (à venir)", isEnabled: false),
     ]
 
+    /// Ce que l'onglet dit toujours : un conflit avec une autre application ne se voit pas.
+    public static let conflictHint =
+        "macOS ne signale pas les conflits avec une autre application : si le raccourci n'ouvre pas le panneau, choisissez-en un autre."
+
     public typealias Apply = @MainActor (HotKey) -> Result<Void, HotKeyError>
     public typealias Save = @MainActor (HotKey, HotKeyBehavior) throws -> Void
 
@@ -60,6 +64,7 @@ public final class HotKeySettingsModel {
     public private(set) var message: String?
 
     @ObservationIgnored private let layout: any KeyboardLayout
+    @ObservationIgnored private let systemHotKeys: any SystemHotKeys
     @ObservationIgnored private let control: GlobalHotKeyControl
     @ObservationIgnored private let save: Save
 
@@ -67,15 +72,19 @@ public final class HotKeySettingsModel {
     /// diffère de `hotKey`, le message le dit.
     public init(
         hotKey: HotKey, active: HotKey?, behavior: HotKeyBehavior, layout: any KeyboardLayout,
-        control: GlobalHotKeyControl, save: @escaping Save
+        systemHotKeys: any SystemHotKeys, control: GlobalHotKeyControl, save: @escaping Save
     ) {
         self.hotKey = hotKey
         self.behavior = behavior
         self.layout = layout
+        self.systemHotKeys = systemHotKeys
         self.control = control
         self.save = save
+        let label = hotKey.label(layout: layout)
         if active != hotKey {
-            message = "\(hotKey.label(layout: layout)) n'est pas actif : il est déjà pris ou refusé. Choisissez-en un autre."
+            message = "\(label) n'est pas actif : macOS l'a refusé. Choisissez-en un autre."
+        } else if systemHotKeys.enabled().contains(hotKey) {
+            message = Self.systemConflict(label: label)
         }
     }
 
@@ -119,10 +128,15 @@ public final class HotKeySettingsModel {
             message = Self.refusal(validation, label: candidateLabel)
             return
         }
+        // macOS accepterait la combinaison sans dire lequel des deux raccourcis l'emporte.
+        guard !systemHotKeys.enabled().contains(candidate) else {
+            message = Self.systemShortcutRefusal(label: candidateLabel)
+            return
+        }
         let previous = hotKey
         switch control.apply(candidate) {
-        case .failure(.taken):
-            message = "\(candidateLabel) est déjà pris par une autre application."
+        case .failure(.refused):
+            message = "\(candidateLabel) a été refusé par macOS : il est sans doute déjà pris par une autre application. Choisissez-en un autre."
         case .failure(.invalid(let validation)):
             message = Self.refusal(validation, label: candidateLabel)
         case .success:
@@ -166,6 +180,17 @@ public final class HotKeySettingsModel {
         if flags.contains(.shift) { modifiers.insert(.shift) }
         if flags.contains(.command) { modifiers.insert(.command) }
         return HotKey(keyCode: UInt32(keyCode), modifiers: modifiers)
+    }
+
+    /// Refus d'une combinaison captée.
+    static func systemShortcutRefusal(label: String) -> String {
+        "\(label) est un raccourci de macOS activé sur ce Mac (Réglages Système, Clavier, Raccourcis clavier) : choisissez-en un autre."
+    }
+
+    /// Le raccourci enregistré est aussi un raccourci de macOS activé : il est enregistré, mais rien ne dit lequel des
+    /// deux l'emporte.
+    static func systemConflict(label: String) -> String {
+        "\(label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
     }
 
     private static func refusal(_ validation: HotKeyValidation, label: String) -> String {

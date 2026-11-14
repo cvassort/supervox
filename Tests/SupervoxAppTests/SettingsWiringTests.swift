@@ -30,7 +30,7 @@ import Testing
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
             escapeRegistrar: escape,
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
-            settingsView: settingsView, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks)
+            systemHotKeys: FakeSystemHotKeys(), settingsView: settingsView, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks)
     }
 
     /// Changement de mode dans le panneau, puis ajout d'un fournisseur dans la fenêtre : les deux restent.
@@ -90,7 +90,7 @@ import Testing
         #expect(controller.panelModel.hotKeyLabel == HotKeyTests.keyB.label)
 
         registrar.refused = [HotKeyTests.keyA]
-        #expect(HotKeyTests.failure(controller.changeHotKey(HotKeyTests.keyA)) == .taken)
+        #expect(HotKeyTests.failure(controller.changeHotKey(HotKeyTests.keyA)) == .refused)
         #expect(registrar.registered == HotKeyTests.keyB)
         #expect(controller.panelModel.hotKeyLabel == HotKeyTests.keyB.label)
     }

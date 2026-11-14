@@ -51,7 +51,7 @@ public struct HotKey: Codable, Equatable, Sendable {
     static let modifierKeyCodes: ClosedRange<UInt32> = UInt32(kVK_RightCommand)...UInt32(kVK_Function)
 
     /// Touches de fonction F1 à F20 (les codes ne se suivent pas).
-    private static let functionKeyCodes: Set<UInt32> = Set(
+    static let functionKeyCodes: Set<UInt32> = Set(
         [
             kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
             kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19,

@@ -25,6 +25,8 @@ public final class AppController {
     public let hotKeys: HotKeyCenter
     public let panelModel: PanelModel
     public let permissions: PermissionsModel
+    /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
+    public let systemHotKeys: any SystemHotKeys
     /// Réglages en vigueur.
     public private(set) var settings: AppSettings
 
@@ -41,6 +43,7 @@ public final class AppController {
         hotKeyRegistrar: any HotKeyRegistrar,
         escapeRegistrar: any HotKeyRegistrar,
         permissionsProbe: any PermissionsProbe,
+        systemHotKeys: any SystemHotKeys,
         settingsView: @escaping SettingsViewProvider = AppController.emptySettings,
         makePanelSurface: @MainActor (AnyView) -> any PanelSurface = { FloatingPanelSurface(content: $0) },
         clickMonitor: any OutsideClickMonitor = GlobalClickMonitor()
@@ -48,6 +51,7 @@ public final class AppController {
         self.settingsStore = settingsStore
         self.secrets = secrets
         self.settingsView = settingsView
+        self.systemHotKeys = systemHotKeys
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar)
 
         let loaded = settingsStore.load()
@@ -86,6 +90,7 @@ public final class AppController {
             hotKeyRegistrar: CarbonHotKeyRegistrar(),
             escapeRegistrar: CarbonHotKeyRegistrar(),
             permissionsProbe: SystemPermissions(),
+            systemHotKeys: SymbolicHotKeys(),
             settingsView: settingsView)
     }
 
@@ -96,8 +101,9 @@ public final class AppController {
         applyHotKeyAtLaunch()
     }
 
-    /// Enregistre le raccourci des réglages. S'il est refusé, le panneau s'ouvre de lui-même pour le
-    /// dire : sans raccourci, l'utilisateur pourrait ne jamais trouver le panneau.
+    /// Enregistre le raccourci des réglages. S'il est refusé, ou s'il est aussi un raccourci de macOS activé (il peut
+    /// alors ne pas ouvrir le panneau), le panneau s'ouvre de lui-même pour le dire : sans raccourci, l'utilisateur
+    /// pourrait ne jamais trouver le panneau.
     func applyHotKeyAtLaunch() {
         if !applyHotKey() { panel.open() }
     }
@@ -105,15 +111,22 @@ public final class AppController {
     // MARK: - Raccourci
 
     /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :
-    /// le raccourci bascule toujours.
+    /// le raccourci bascule toujours. Rend vrai si rien n'est à signaler.
     private func applyHotKey() -> Bool {
         let hotKey = settings.hotKey
         switch hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() }) {
         case .success:
             panelModel.hotKeyLabel = hotKey.label
-            panelModel.setNotice(nil, for: .hotKey)
             log.notice("raccourci enregistré : \(hotKey.label, privacy: .public)")
-            return true
+            guard systemHotKeys.enabled().contains(hotKey) else {
+                panelModel.setNotice(nil, for: .hotKey)
+                return true
+            }
+            let message =
+                "Le raccourci \(hotKey.label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre dans Réglages, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
+            panelModel.setNotice(message, for: .hotKey)
+            log.notice("raccourci de macOS : \(hotKey.label, privacy: .public)")
+            return false
         case .failure(let error):
             panelModel.hotKeyLabel = hotKeys.active?.label
             let message = Self.message(for: error, label: hotKey.label)
@@ -125,7 +138,8 @@ public final class AppController {
 
     private static func message(for error: HotKeyError, label: String) -> String {
         switch error {
-        case .taken: "Le raccourci \(label) est déjà pris : ouvrez le panneau depuis la barre de menus."
+        case .refused:
+            "Le raccourci \(label) a été refusé par macOS : ouvrez le panneau depuis la barre de menus, puis choisissez-en un autre dans Réglages."
         case .invalid: "Le raccourci \(label) n'est pas valide : ouvrez le panneau depuis la barre de menus."
         }
     }

@@ -55,9 +55,9 @@ public struct SettingsView: View {
     {
         HotKeySettingsModel(
             hotKey: controller.settings.hotKey, active: controller.hotKeys.active,
-            behavior: controller.settings.hotKeyBehavior, layout: layout,
+            behavior: controller.settings.hotKeyBehavior, layout: layout, systemHotKeys: controller.systemHotKeys,
             control: GlobalHotKeyControl(
-                apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.taken) },
+                apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.refused) },
                 suspend: { [weak controller] in controller?.suspendHotKeysForCapture() },
                 resume: { [weak controller] in controller?.resumeHotKeys() },
                 clear: { [weak controller] in controller?.clearHotKey() }),
@@ -327,6 +327,10 @@ private struct HotKeyPane: View {
                         .foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Text(HotKeySettingsModel.conflictHint)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Section {
                 Picker(

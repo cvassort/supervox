@@ -13,6 +13,7 @@ import Testing
     let hotKeys = HotKeyTests.FakeRegistrar()
     let escape = HotKeyTests.FakeRegistrar()
     let probe = FakePermissionsProbe(microphone: .granted, accessibility: .granted)
+    let system = FakeSystemHotKeys()
     let surface = FakePanelSurface()
     let clicks = FakeClickMonitor()
 
@@ -26,7 +27,7 @@ import Testing
     func makeController() -> AppController {
         AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
-            escapeRegistrar: escape, permissionsProbe: probe,
+            escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks)
     }
 
@@ -91,7 +92,27 @@ import Testing
         #expect(surface.isShown)
         let notice = try #require(controller.panelModel.notices[.hotKey])
         #expect(notice.contains(HotKey.standard.label))
+        #expect(notice.contains("refusé par macOS"))
         #expect(controller.panelModel.hotKeyLabel == nil)
+    }
+
+    /// I2 (c) : le raccourci du fichier (ici le défaut, ⌃⌥Espace) est un raccourci de macOS activé sur ce Mac.
+    /// Il est quand même enregistré (qui l'emporte n'est pas connu), et le panneau s'ouvre pour le dire.
+    @Test func hotKeyThatIsAnEnabledSystemShortcutIsAnnouncedAtLaunch() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        system.hotKeys = [.standard]
+        let controller = makeController()
+
+        controller.applyHotKeyAtLaunch()
+        #expect(hotKeys.registered == .standard)
+        #expect(controller.panelModel.isOpen)
+        let notice = try #require(controller.panelModel.notices[.hotKey])
+        #expect(notice.contains("raccourci de macOS"))
+        #expect(notice.contains(HotKey.standard.label))
+
+        // Un autre raccourci accepté efface l'avis.
+        #expect(HotKeyTests.failure(controller.changeHotKey(HotKeyTests.keyB)) == nil)
+        #expect(controller.panelModel.notices[.hotKey] == nil)
     }
 
     @Test func acceptedHotKeyAtLaunchLeavesThePanelClosed() {

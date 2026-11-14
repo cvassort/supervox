@@ -7,6 +7,7 @@ import Testing
     typealias FakeRegistrar = HotKeyTests.FakeRegistrar
 
     let registrar = FakeRegistrar()
+    let system = FakeSystemHotKeys()
     let center: HotKeyCenter
     var saved: [(HotKey, HotKeyBehavior)] { saves.values }
     let saves = SaveLog()
@@ -32,7 +33,7 @@ import Testing
         let center = center
         let saves = saves
         return HotKeySettingsModel(
-            hotKey: hotKey, active: center.active, behavior: behavior, layout: layout,
+            hotKey: hotKey, active: center.active, behavior: behavior, layout: layout, systemHotKeys: system,
             control: GlobalHotKeyControl(
                 apply: { center.apply($0, onPress: {}) }, suspend: { center.suspend() },
                 resume: { center.resume() }, clear: { center.clear() }),
@@ -63,8 +64,46 @@ import Testing
         #expect(model.hotKey == Self.keyA)
         #expect(registrar.registered == Self.keyA)
         #expect(saved.isEmpty)
-        #expect(model.message?.contains("déjà pris") == true)
+        #expect(model.message?.contains("refusé par macOS") == true)
         #expect(model.message?.contains("⌃⌥B") == true)
+    }
+
+    // MARK: - Raccourcis du système
+
+    /// I2 : macOS ne refuse pas une combinaison qu'un de ses propres raccourcis utilise ; la fenêtre la refuse avant
+    /// de la proposer, et dit pourquoi.
+    @Test func enabledSystemShortcutIsRefusedAndNamed() {
+        system.hotKeys = [Self.keyB]
+        let model = makeModel()
+        model.startRecording()
+        let callsBefore = registrar.registerCalls
+        model.record(Self.keyB)
+
+        #expect(registrar.registerCalls == callsBefore + 1)  // seulement le retour de l'ancien, à la fin de la capture
+        #expect(registrar.registered == Self.keyA)
+        #expect(model.hotKey == Self.keyA)
+        #expect(saved.isEmpty)
+        #expect(model.message?.contains("⌃⌥B") == true)
+        #expect(model.message?.contains("raccourci de macOS") == true)
+    }
+
+    @Test func onlyTheExactSystemCombinationIsRefused() {
+        system.hotKeys = [HotKey(keyCode: 0x0B, modifiers: [.control, .command])]
+        let model = makeModel()
+        model.record(Self.keyB)
+        #expect(model.hotKey == Self.keyB)
+        #expect(model.message == nil)
+    }
+
+    /// I2 (c) : le raccourci enregistré (le défaut, par exemple) est un raccourci de macOS activé sur ce Mac.
+    @Test func savedHotKeyThatIsAnEnabledSystemShortcutIsSignalled() {
+        system.hotKeys = [Self.keyA]
+        let model = makeModel()
+        #expect(model.message?.contains("raccourci de macOS") == true)
+        #expect(model.message?.contains("⌃⌥A") == true)
+
+        system.hotKeys = []
+        #expect(makeModel().message == nil)
     }
 
     @Test func reservedCombinationIsRefusedWithoutTouchingTheSystem() {
