@@ -118,6 +118,31 @@ import Testing
         #expect(controller.panelModel.notices[.hotKey] == nil)
     }
 
+    // MARK: - Fichier non enregistrable pendant la session
+
+    /// R1 : fichier valide rendu illisible au lancement, puis lisible de nouveau ; le changement de mode suivant ne
+    /// l'écrase pas (les réglages en mémoire sont les défauts), et l'avis le dit.
+    @Test func fileUnreadableAtLaunchIsNeverWrittenDuringTheSession() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = AppSettings(
+            version: 1, providers: [Provider(id: UUID(), name: "Gardé", baseURL: "https://api.example.com", kind: .anthropic, models: [])],
+            hotKey: HotKeyTests.keyA, hotKeyBehavior: .toggle, lastModeID: "entretien")
+        try store.save(saved)
+        let original = try Data(contentsOf: store.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.file.path)
+        let controller = makeController()
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store.file.path)
+        #expect(controller.panelModel.notices[.settingsLoad] != nil)
+
+        controller.panelModel.select("prompt")
+
+        #expect(try Data(contentsOf: store.file) == original)
+        let notice = try #require(controller.panelModel.notices[.save])
+        #expect(notice.contains("settings.json"))
+        #expect(controller.panelModel.notices[.settingsLoad] != nil)
+        #expect(controller.settings.lastModeID != "prompt")
+    }
+
     // MARK: - Premier lancement, réouverture
 
     /// I3 : sans fichier de réglages, le panneau s'ouvre seul avec l'accueil et la ligne des permissions manquantes ;

@@ -293,6 +293,31 @@ private func sampleSettings() -> AppSettings {
         #expect(try Data(contentsOf: file) == original)
     }
 
+    /// R1 : une lecture qui a échoué rend le fichier non enregistrable pour toute la session, même si l'erreur cesse
+    /// ensuite ; le magasin le dit dans `SettingsLoad`. Un fichier lisible et un fichier absent restent enregistrables.
+    @Test func failedReadMakesTheFileUnsavableForTheSession() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        #expect(store.load().saveRefusal == nil)  // absent
+        try store.save(sampleSettings())
+        #expect(store.load().saveRefusal == nil)  // lisible
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        let result = store.load()
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        #expect(result.saveRefusal == .unreadableFileKept(fileName: "settings.json"))
+    }
+
+    @Test func newerVersionIsUnsavableForTheSession() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(#"{"version": 7}"#.utf8).write(to: file)
+        #expect(SettingsStore(file: file).load().saveRefusal == .newerVersionKept(fileName: "settings.json", version: 7))
+    }
+
     @Test func settingsFileNeverContainsASecretField() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }

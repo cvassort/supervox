@@ -23,11 +23,18 @@ public struct SettingsLoad: Equatable {
     public var notice: String?
     /// Vrai seulement si le fichier n'existe pas : rien n'a encore été enregistré sur ce Mac.
     public var isFirstLaunch: Bool
+    /// Non `nil` : le fichier ne doit plus être écrit pendant cette session, quoi que dise le disque ensuite. Après une
+    /// erreur de lecture, le fichier peut redevenir lisible (droits rétablis, verrou levé) alors que les réglages en
+    /// mémoire sont les défauts : l'écrire perdrait les vrais. Même chose pour un fichier d'une version plus récente.
+    public var saveRefusal: SettingsError?
 
-    public init(settings: AppSettings, notice: String?, isFirstLaunch: Bool = false) {
+    public init(
+        settings: AppSettings, notice: String?, saveRefusal: SettingsError? = nil, isFirstLaunch: Bool = false
+    ) {
         self.settings = settings
         self.notice = notice
         self.isFirstLaunch = isFirstLaunch
+        self.saveRefusal = saveRefusal
     }
 }
 
@@ -39,6 +46,10 @@ public struct SettingsLoad: Equatable {
 ///   n'y est écrit ;
 /// - fichier présent mais impossible à lire (droits, erreur passagère) : laissé en place, les réglages par défaut
 ///   s'appliquent en mémoire, et rien n'y est écrit.
+///
+/// `save` relit le disque à chaque appel ; il ne sait pas ce que la session a chargé. Pour les deux derniers cas,
+/// `load` rend donc aussi `saveRefusal`, que l'appelant doit respecter toute la session (`AppController.updateSettings`) :
+/// un fichier redevenu lisible après une erreur passagère ne doit pas recevoir les réglages par défaut.
 public struct SettingsStore: Sendable {
     public let file: URL
     private let now: @Sendable () -> Date
@@ -77,7 +88,8 @@ public struct SettingsStore: Sendable {
             // Une erreur de lecture ne dit rien du contenu : le fichier peut être valide. Il reste à sa place.
             return SettingsLoad(
                 settings: .defaults,
-                notice: "Le fichier de réglages « \(file.lastPathComponent) » n'a pas pu être lu : il reste en place, intact, et rien n'y sera écrit ; les réglages par défaut sont utilisés jusqu'au prochain lancement.")
+                notice: "Le fichier de réglages « \(file.lastPathComponent) » n'a pas pu être lu : il reste en place, intact, et rien n'y sera écrit ; les réglages par défaut sont utilisés jusqu'au prochain lancement.",
+                saveRefusal: .unreadableFileKept(fileName: file.lastPathComponent))
         }
         switch Self.decode(data) {
         case .success(.current(let settings)):
@@ -88,7 +100,8 @@ public struct SettingsStore: Sendable {
             inMemory.version = AppSettings.current
             return SettingsLoad(
                 settings: inMemory,
-                notice: "Le fichier de réglages vient d'une version plus récente de Supervox (version \(version)) : il est gardé tel quel et rien n'y sera écrit ; \(use), et les modifications ne seront pas enregistrées.")
+                notice: "Le fichier de réglages vient d'une version plus récente de Supervox (version \(version)) : il est gardé tel quel et rien n'y sera écrit ; \(use), et les modifications ne seront pas enregistrées.",
+                saveRefusal: .newerVersionKept(fileName: file.lastPathComponent, version: version))
         case .failure(let problem):
             return setAside(reason: problem.description)
         }

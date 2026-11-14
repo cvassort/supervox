@@ -36,6 +36,9 @@ public final class AppController {
     public private(set) var settings: AppSettings
     /// Aucun fichier de réglages au lancement.
     private let isFirstLaunch: Bool
+    /// Le fichier n'a pas pu être lu au lancement (ou vient d'une version plus récente) : il n'est plus jamais écrit
+    /// pendant cette session, même s'il redevient lisible (`SettingsLoad.saveRefusal`).
+    private let saveRefusal: SettingsError?
 
     private let panel: PanelController
     private let settingsView: SettingsViewProvider
@@ -75,6 +78,7 @@ public final class AppController {
         let loaded = settingsStore.load()
         settings = loaded.settings
         isFirstLaunch = loaded.isFirstLaunch
+        saveRefusal = loaded.saveRefusal
 
         let panelModel = PanelModel(lastModeID: loaded.settings.lastModeID)
         panelModel.setNotice(loaded.notice, for: .settingsLoad)
@@ -210,6 +214,7 @@ public final class AppController {
     /// Seul chemin d'écriture des réglages depuis la fenêtre : `change` s'applique aux réglages en vigueur
     /// (ceux que le panneau modifie aussi), qui ne changent en mémoire que si l'enregistrement réussit.
     public func updateSettings(_ change: (inout AppSettings) -> Void) throws {
+        if let saveRefusal { throw saveRefusal }
         var updated = settings
         change(&updated)
         try settingsStore.save(updated)
