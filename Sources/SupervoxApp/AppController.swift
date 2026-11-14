@@ -36,6 +36,8 @@ public final class AppController {
     public private(set) var settings: AppSettings
     /// Aucun fichier de réglages au lancement.
     private let isFirstLaunch: Bool
+    /// Le chargement a laissé un avis (fichier mis de côté, illisible, d'une version plus récente).
+    private let hasLoadNotice: Bool
     /// Le fichier n'a pas pu être lu au lancement (ou vient d'une version plus récente) : il n'est plus jamais écrit
     /// pendant cette session, même s'il redevient lisible (`SettingsLoad.saveRefusal`).
     private let saveRefusal: SettingsError?
@@ -78,6 +80,7 @@ public final class AppController {
         let loaded = settingsStore.load()
         settings = loaded.settings
         isFirstLaunch = loaded.isFirstLaunch
+        hasLoadNotice = loaded.notice != nil
         saveRefusal = loaded.saveRefusal
 
         let panelModel = PanelModel(lastModeID: loaded.settings.lastModeID)
@@ -136,6 +139,9 @@ public final class AppController {
     /// son bouton « Autoriser… » : rien n'est demandé au système avant ce clic. Le fichier de réglages est créé à la
     /// fin de ce lancement, avec les réglages en vigueur : l'accueil ne revient pas.
     ///
+    /// Le panneau s'ouvre aussi dès que le chargement a laissé un avis : sinon l'utilisateur pourrait ne jamais
+    /// apprendre que son fichier a été mis de côté.
+    ///
     /// Le panneau ne s'ouvre qu'une fois tout son contenu posé (accueil, avis) : la vraie surface prend sa taille à
     /// l'affichage.
     func launch() {
@@ -149,7 +155,7 @@ public final class AppController {
                 log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
             }
         }
-        if !hotKeyIsFine || isFirstLaunch { panel.open() }
+        if !hotKeyIsFine || isFirstLaunch || hasLoadNotice { panel.open() }
     }
 
     /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.

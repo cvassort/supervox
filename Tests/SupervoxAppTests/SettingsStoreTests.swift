@@ -293,6 +293,25 @@ private func sampleSettings() -> AppSettings {
         #expect(try Data(contentsOf: file) == original)
     }
 
+    /// m-e : après une mise de côté, le fichier manque, mais ce n'est pas un nouvel utilisateur : pas de premier
+    /// lancement tant qu'une copie mise de côté existe.
+    @Test func setAsideCopyMeansNoFirstLaunch() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        try Data("pas du json".utf8).write(to: file)
+
+        let first = store.load()
+        #expect(!first.isFirstLaunch)
+        #expect(first.notice?.contains("settings.json.illisible-") == true)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        let next = store.load()
+        #expect(!next.isFirstLaunch)
+        #expect(next.saveRefusal == nil)
+    }
+
     /// R1 : une lecture qui a échoué rend le fichier non enregistrable pour toute la session, même si l'erreur cesse
     /// ensuite ; le magasin le dit dans `SettingsLoad`. Un fichier lisible et un fichier absent restent enregistrables.
     @Test func failedReadMakesTheFileUnsavableForTheSession() throws {

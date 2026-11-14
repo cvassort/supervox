@@ -146,6 +146,30 @@ import Testing
         #expect(controller.settings.lastModeID != "prompt")
     }
 
+    /// m-e : un avis de chargement ouvre le panneau au lancement. Après une mise de côté, l'avis nomme la copie, et ce
+    /// n'est pas l'accueil d'un nouvel utilisateur, ni à ce lancement ni au suivant.
+    @Test func loadNoticeOpensThePanelAtLaunchWithoutWelcome() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try corruptTheSettingsFile()
+        let controller = makeController()
+
+        controller.launch()
+        #expect(controller.panelModel.isOpen)
+        #expect(surface.showCount == 1)
+        #expect(controller.panelModel.welcome == nil)
+        let notice = try #require(controller.panelModel.notices[.settingsLoad])
+        #expect(notice.contains("settings.json.illisible-"))
+
+        let next = AppController(
+            settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
+            escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
+            keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+        next.launch()
+        #expect(next.panelModel.welcome == nil)
+        #expect(!next.panelModel.isOpen)
+    }
+
     // MARK: - Premier lancement, réouverture
 
     /// I3 : sans fichier de réglages, le panneau s'ouvre seul avec l'accueil et la ligne des permissions manquantes ;

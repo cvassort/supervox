@@ -83,7 +83,8 @@ public struct SettingsStore: Sendable {
             data = try Data(contentsOf: file)
         } catch {
             if !FileManager.default.fileExists(atPath: file.path) {
-                return SettingsLoad(settings: .defaults, notice: nil, isFirstLaunch: true)
+                // Une copie mise de côté prouve que Supervox a déjà servi ici : pas d'accueil de nouvel utilisateur.
+                return SettingsLoad(settings: .defaults, notice: nil, isFirstLaunch: !hasSetAsideCopy())
             }
             // Une erreur de lecture ne dit rien du contenu : le fichier peut être valide. Il reste à sa place.
             return SettingsLoad(
@@ -177,9 +178,16 @@ public struct SettingsStore: Sendable {
             notice: "\(reason) ; il a été mis de côté sous « \(destination.lastPathComponent) » et les réglages par défaut sont utilisés.")
     }
 
+    private var asidePrefix: String { "\(file.lastPathComponent).illisible-" }
+
+    private func hasSetAsideCopy() -> Bool {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)) ?? []
+        return names.contains { $0.hasPrefix(asidePrefix) }
+    }
+
     /// `settings.json.illisible-<AAAAMMJJ>T<HHMMSS>Z` (UTC), suivi de `-2`, `-3`… si ce nom est déjà pris.
     private func uniqueAsideURL() -> URL {
-        let base = "\(file.lastPathComponent).illisible-\(Self.timestamp(now()))"
+        let base = "\(asidePrefix)\(Self.timestamp(now()))"
         let folder = file.deletingLastPathComponent()
         var candidate = folder.appendingPathComponent(base)
         var counter = 2
