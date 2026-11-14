@@ -242,10 +242,18 @@ private struct ModelRow: View {
         case .absent:
             Label(TranscriptionModel.stateLabel(local.state), systemImage: "arrow.down.circle")
                 .labelStyle(StateLabelStyle(tint: .secondary))
+        case .incomplete:
+            Label(TranscriptionModel.stateLabel(local.state), systemImage: "exclamationmark.triangle.fill")
+                .labelStyle(StateLabelStyle(tint: .orange))
         case .downloading(let fraction):
             VStack(alignment: .leading, spacing: 4) {
                 Text(TranscriptionModel.stateLabel(local.state)).font(.callout)
-                ProgressView(value: fraction)
+                // Une fraction seulement si la bibliothèque la donne ; sinon une barre indéterminée.
+                if let fraction {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                }
             }
         case .failed:
             Label(TranscriptionModel.stateLabel(local.state), systemImage: "xmark.circle.fill")

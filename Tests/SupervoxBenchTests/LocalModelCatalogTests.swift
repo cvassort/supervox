@@ -30,27 +30,45 @@ import WhisperKit
             LocalModelCatalog(root: root, fluidAudioRoot: fluidAudio, whisperVariants: variants)
         }
 
-        /// Un dossier de variante WhisperKit tel que le téléchargement le laisse : les trois modèles Core ML.
-        func makeWhisperFolder(_ name: String, models: [String] = ["MelSpectrogram", "AudioEncoder", "TextDecoder"]) throws {
+        /// Les fichiers d'une variante WhisperKit, d'après la liste du dépôt de modèles (arborescence publique des quatre
+        /// variantes lue : trois dossiers Core ML compilés et deux fichiers de configuration). Copie indépendante de celle du
+        /// catalogue : `theRequiredFilesAreThoseOfTheRepositoryListing` les compare.
+        static let whisperFiles: [String] = {
+            var files = ["config.json", "generation_config.json"]
+            for bundle in ["AudioEncoder", "MelSpectrogram", "TextDecoder"] {
+                for file in ["analytics/coremldata.bin", "coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin"] {
+                    files.append("\(bundle).mlmodelc/\(file)")
+                }
+            }
+            return files
+        }()
+
+        /// Un dossier de variante WhisperKit tel que le téléchargement le laisse. `omitting` : fichiers absents ;
+        /// `empty` : fichiers présents mais vides.
+        func makeWhisperFolder(_ name: String, omitting: Set<String> = [], empty: Set<String> = []) throws {
             let folder = LocalModelCatalog.whisperRepository(in: root).appendingPathComponent(name, isDirectory: true)
-            for model in models {
-                let bundle = folder.appendingPathComponent("\(model).mlmodelc", isDirectory: true)
-                try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-                try Data("x".utf8).write(to: bundle.appendingPathComponent("coremldata.bin"))
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for file in Self.whisperFiles where !omitting.contains(file) {
+                let url = folder.appendingPathComponent(file)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try (empty.contains(file) ? Data() : Data("x".utf8)).write(to: url)
             }
         }
 
-        func markComplete(_ variant: String) throws {
-            let marker = LocalModelCatalog.completionMarker(forWhisper: variant, in: root)
-            try FileManager.default.createDirectory(
-                at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data().write(to: marker)
+        /// Les fiches de téléchargement que la bibliothèque tient à côté du dossier.
+        func makeDownloadNotes(for folderName: String) throws -> URL {
+            let notes = LocalModelCatalog.whisperRepository(in: root)
+                .appendingPathComponent(".cache/huggingface/download/\(folderName)/AudioEncoder.mlmodelc", isDirectory: true)
+            try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+            try Data("x".utf8).write(to: notes.appendingPathComponent("coremldata.bin.metadata"))
+            return notes.deletingLastPathComponent()
         }
     }
 
     static func state(_ models: [LocalModel], _ id: String) -> LocalModel.State? { models.first { $0.id == id }?.state }
 
     static let turbo = LocalModelID.whisper("large-v3-v20240930_turbo")
+    static let small = LocalModelID.whisper("small")
 
     // MARK: - Liste
 
@@ -59,8 +77,7 @@ import WhisperKit
         defer { sandbox.cleanUp() }
         let models = await sandbox.catalog().models()
         #expect(models.map(\.id) == [
-            LocalModelID.parakeet, Self.turbo, LocalModelID.whisper("small"), LocalModelID.whisper("base"),
-            LocalModelID.voiceDetector,
+            LocalModelID.parakeet, Self.turbo, Self.small, LocalModelID.whisper("base"), LocalModelID.voiceDetector,
         ])
         #expect(models.allSatisfy { $0.state == .absent })
         #expect(models.allSatisfy { !$0.title.isEmpty && !$0.detail.isEmpty })
@@ -73,29 +90,51 @@ import WhisperKit
         #expect(LocalModelCatalog.offeredWhisperVariants.map(\.name) == ["large-v3-v20240930_turbo", "small", "base"])
     }
 
-    @Test func aWhisperFolderWithItsThreeModelsAndMarkerReadsReady() async throws {
+    @Test func theRequiredFilesAreThoseOfTheRepositoryListing() {
+        #expect(Set(LocalModelCatalog.requiredWhisperFiles) == Set(Sandbox.whisperFiles))
+    }
+
+    // MARK: - État d'une variante WhisperKit, lu du disque seul
+
+    @Test func aWhisperFolderWithEveryExpectedFileReadsReady() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         try sandbox.makeWhisperFolder("openai_whisper-small")
-        try sandbox.markComplete("small")
         let models = await sandbox.catalog().models()
-        #expect(Self.state(models, LocalModelID.whisper("small")) == .ready)
+        #expect(Self.state(models, Self.small) == .ready)
         #expect(Self.state(models, Self.turbo) == .absent)
+        // Aucune marque ni fichier ajouté par le catalogue : l'état vient du disque seul.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path) == ["models"])
     }
 
-    @Test func aWhisperFolderWithoutTheCompletionMarkerIsNotReady() async throws {
+    @Test func aWhisperFolderMissingAnInnerFileReadsIncomplete() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        try sandbox.makeWhisperFolder("openai_whisper-small")  // téléchargement interrompu : pas de marque
-        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.whisper("small")) == .absent)
+        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: ["AudioEncoder.mlmodelc/weights/weight.bin"])
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
     }
 
-    @Test func aWhisperFolderMissingOneModelIsNotReadyEvenWithTheMarker() async throws {
+    @Test func aWhisperFolderMissingAWholeModelReadsIncomplete() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        try sandbox.makeWhisperFolder("openai_whisper-small", models: ["MelSpectrogram", "AudioEncoder"])
-        try sandbox.markComplete("small")
-        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.whisper("small")) == .absent)
+        let missing = Set(Sandbox.whisperFiles.filter { $0.hasPrefix("TextDecoder.mlmodelc/") })
+        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: missing)
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
+    }
+
+    @Test func anEmptyExpectedFileReadsIncomplete() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", empty: ["TextDecoder.mlmodelc/weights/weight.bin"])
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
+    }
+
+    @Test func aPresentButEmptyFolderReadsIncompleteNotAbsent() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        let folder = LocalModelCatalog.whisperRepository(in: sandbox.root).appendingPathComponent("openai_whisper-small")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
     }
 
     /// WhisperKit cherche `*<variante>/*` : « small » ne doit pas reconnaître le dossier de « small.en ».
@@ -103,51 +142,79 @@ import WhisperKit
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         try sandbox.makeWhisperFolder("openai_whisper-small.en")
-        try sandbox.markComplete("small")
-        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.whisper("small")) == .absent)
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .absent)
     }
 
-    @Test func theVoiceDetectorReadsReadyOnlyWithItsModelAndNoPartialFile() async throws {
+    @Test func theVoiceDetectorReadsReadyThenIncompleteWithAPartialFileThenAbsent() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         let folder = LocalModelCatalog.voiceDetectorFolder(fluidAudioRoot: sandbox.fluidAudio)
+        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.voiceDetector) == .absent)
+
         let bundle = folder.appendingPathComponent(LocalModelCatalog.voiceDetectorBundleName, isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
         try Data("x".utf8).write(to: bundle.appendingPathComponent("coremldata.bin"))
         #expect(Self.state(await sandbox.catalog().models(), LocalModelID.voiceDetector) == .ready)
 
         try Data("x".utf8).write(to: bundle.appendingPathComponent("weight.bin.partial"))
-        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.voiceDetector) == .absent)
+        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.voiceDetector) == .incomplete)
+    }
+
+    @Test func aVoiceDetectorFolderWithoutItsModelReadsIncomplete() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        let folder = LocalModelCatalog.voiceDetectorFolder(fluidAudioRoot: sandbox.fluidAudio)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.voiceDetector) == .incomplete)
+    }
+
+    /// Un dossier de Parakeet sans les fichiers que `AsrModels.modelsExist` attend : incomplet, jamais prêt.
+    @Test func aParakeetFolderWithoutTheExpectedFilesReadsIncomplete() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        let folders = LocalModelCatalog.parakeetFolders(fluidAudioRoot: sandbox.fluidAudio)
+        try FileManager.default.createDirectory(at: folders[0], withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: folders[0].appendingPathComponent("fichier"))
+        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.parakeet) == .incomplete)
     }
 
     // MARK: - Suppression
 
-    @Test func deletingAWhisperModelRemovesItsFolderAndMarkerAndNothingElse() async throws {
+    @Test func deletingAWhisperModelRemovesItsFolderAndItsDownloadNotesAndNothingElse() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         try sandbox.makeWhisperFolder("openai_whisper-small")
-        try sandbox.markComplete("small")
+        let smallNotes = try sandbox.makeDownloadNotes(for: "openai_whisper-small")
         try sandbox.makeWhisperFolder("openai_whisper-base")
-        try sandbox.markComplete("base")
+        let baseNotes = try sandbox.makeDownloadNotes(for: "openai_whisper-base")
         let catalog = sandbox.catalog()
 
-        try await catalog.delete(LocalModelID.whisper("small"))
+        try await catalog.delete(Self.small)
 
         let models = await catalog.models()
-        #expect(Self.state(models, LocalModelID.whisper("small")) == .absent)
+        #expect(Self.state(models, Self.small) == .absent)
         #expect(Self.state(models, LocalModelID.whisper("base")) == .ready)
         let repository = LocalModelCatalog.whisperRepository(in: sandbox.root)
         #expect(!FileManager.default.fileExists(atPath: repository.appendingPathComponent("openai_whisper-small").path))
-        #expect(
-            !FileManager.default.fileExists(
-                atPath: LocalModelCatalog.completionMarker(forWhisper: "small", in: sandbox.root).path))
+        #expect(!FileManager.default.fileExists(atPath: smallNotes.path))
+        #expect(FileManager.default.fileExists(atPath: baseNotes.path))
+    }
+
+    @Test func anIncompleteWhisperModelCanBeDeleted() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: ["config.json"])
+        let catalog = sandbox.catalog()
+        #expect(Self.state(await catalog.models(), Self.small) == .incomplete)
+        try await catalog.delete(Self.small)
+        #expect(Self.state(await catalog.models(), Self.small) == .absent)
     }
 
     @Test func deletingAnAbsentModelIsHarmless() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         let catalog = sandbox.catalog()
-        try await catalog.delete(LocalModelID.whisper("small"))
+        try await catalog.delete(Self.small)
         try await catalog.delete(LocalModelID.parakeet)
         try await catalog.delete(LocalModelID.voiceDetector)
     }
@@ -172,13 +239,14 @@ import WhisperKit
         #expect(folders.allSatisfy { $0.path.hasPrefix(sandbox.fluidAudio.path) })
     }
 
-    @Test func anUnknownModelIsRefusedWithoutTouchingTheDisk() async throws {
+    @Test(arguments: ["inconnu", "", "whisper:", "whisper:../small", "whisper:medium", "../parakeet"])
+    func anUnlistedIdentifierIsRefusedWithoutTouchingTheDisk(id: String) async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         let catalog = sandbox.catalog()
-        await #expect(throws: LocalModelCatalogError.unknownModel("inconnu")) { try await catalog.delete("inconnu") }
-        await #expect(throws: LocalModelCatalogError.unknownModel("whisper:medium")) {
-            try await catalog.download("whisper:medium", progress: { _ in })
+        await #expect(throws: LocalModelCatalogError.unknownModel(id)) { try await catalog.delete(id) }
+        await #expect(throws: LocalModelCatalogError.unknownModel(id)) {
+            try await catalog.download(id, progress: { _ in })
         }
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path))
     }
@@ -190,11 +258,10 @@ import WhisperKit
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         try sandbox.makeWhisperFolder("openai_whisper-small")
-        try sandbox.markComplete("small")
         let count = await sandbox.catalog().promptTokenCount(["Kubernetes"], whisperModel: "small")
         #expect(count == nil)
-        let names = try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path).sorted()
-        #expect(names == [".complete", "models"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path) == ["models"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: sandbox.root.appendingPathComponent("models").path) == ["argmaxinc"])
     }
 
     @Test func theTokenCountOfAnUnknownVariantNameIsNil() async throws {
@@ -228,18 +295,29 @@ struct LocalModelCatalogIntegrationTests {
         let catalog = sandbox.catalog(variants: [tiny])
         #expect(LocalModelCatalogTests.state(await catalog.models(), id) == .absent)
 
-        let fractions = FractionLog()
-        try await catalog.download(id, progress: { fractions.add($0) })
-        let seen = fractions.values
-        print("[intégration] fractions : premières \(seen.prefix(3)), dernière \(String(describing: seen.last)), \(seen.count) appels")
-        #expect(!seen.isEmpty && seen.allSatisfy { (0...1).contains($0) })
-        #expect(seen.last == 1)
+        // Pendant le téléchargement, le catalogue dit « en cours » sans fraction inventée.
+        let observed = StateLog()
+        let watcher = Task {
+            while !Task.isCancelled {
+                observed.add(LocalModelCatalogTests.state(await catalog.models(), id))
+                await Task.yield()
+            }
+        }
+        try await catalog.download(id, progress: { _ in })
+        watcher.cancel()
+        let states = observed.values
+        print("[intégration] états vus pendant le téléchargement : \(Set(states.map { String(describing: $0) }).sorted())")
+        #expect(states.contains { $0 == .downloading(nil) })
         #expect(LocalModelCatalogTests.state(await catalog.models(), id) == .ready)
 
-        // Tout est tombé sous la racine temporaire, le tokenizer compris (jamais dans Documents).
+        // Tout est tombé sous la racine temporaire, le tokenizer compris (jamais dans Documents), et l'état vient du
+        // disque seul : les fichiers attendus (copie indépendante de la liste du dépôt) y sont tous.
         let top = try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path).sorted()
         print("[intégration] sous la racine : \(top)")
-        #expect(Set(top).isSubset(of: [".complete", "models"]))
+        #expect(top == ["models"])
+        let folder = LocalModelCatalogTests.Sandbox.whisperFiles
+        let repository = LocalModelCatalog.whisperRepository(in: sandbox.root).appendingPathComponent("openai_whisper-tiny")
+        for file in folder { #expect(FileManager.default.fileExists(atPath: repository.appendingPathComponent(file).path), "\(file)") }
         let tokenizer = sandbox.root.appendingPathComponent("models/openai/whisper-tiny/tokenizer.json")
         #expect(FileManager.default.fileExists(atPath: tokenizer.path))
 
@@ -256,8 +334,8 @@ struct LocalModelCatalogIntegrationTests {
     }
 }
 
-private final class FractionLog: Sendable {
-    private let storage = Mutex<[Double]>([])
-    func add(_ value: Double) { storage.withLock { $0.append(value) } }
-    var values: [Double] { storage.withLock { $0 } }
+private final class StateLog: Sendable {
+    private let storage = Mutex<[LocalModel.State?]>([])
+    func add(_ value: LocalModel.State?) { storage.withLock { $0.append(value) } }
+    var values: [LocalModel.State?] { storage.withLock { $0 } }
 }

@@ -5,8 +5,11 @@ public struct LocalModel: Equatable, Identifiable, Sendable {
     /// Où en est le modèle sur ce Mac.
     public enum State: Equatable, Sendable {
         case absent
-        /// Téléchargement en cours, fraction faite entre 0 et 1.
-        case downloading(Double)
+        /// Un dossier est là mais des fichiers attendus manquent (téléchargement interrompu, fichier supprimé).
+        case incomplete
+        /// Téléchargement en cours. La fraction (entre 0 et 1) n'est donnée que si la bibliothèque qui télécharge la
+        /// fournit elle-même ; `nil` : en cours, sans mesure d'avancement.
+        case downloading(Double?)
         case ready
         /// Dernier téléchargement en échec ; le texte dit pourquoi, en français.
         case failed(String)
@@ -45,7 +48,8 @@ public enum LocalModelID {
 public protocol ModelCatalog: Sendable {
     /// Les modèles proposés, avec leur état courant sur le disque.
     func models() async -> [LocalModel]
-    /// Télécharge le modèle ; `progress` reçoit la fraction faite (0 à 1). Lève en cas d'échec.
+    /// Télécharge le modèle ; `progress` reçoit la fraction faite (0 à 1) quand la bibliothèque la fournit (jamais une
+    /// fraction inventée : sans elle, `progress` n'est pas appelée). Lève en cas d'échec.
     func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws
     /// Supprime le modèle du disque. Sans effet s'il est absent.
     func delete(_ id: String) async throws

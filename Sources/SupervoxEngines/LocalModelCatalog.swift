@@ -28,9 +28,9 @@ public enum LocalModelCatalogError: Error, Equatable, LocalizedError {
 ///   `ParakeetTranscriber` et `FluidVoiceDetector` lisent (`Application Support/FluidAudio`). Les tests donnent un autre
 ///   `fluidAudioRoot`.
 ///
-/// L'état « prêt » d'une variante WhisperKit demande une marque de fin (`root/.complete/whisper-<variante>`, écrite après le
-/// téléchargement du modèle et de son tokenizer) et les trois modèles Core ML : un téléchargement interrompu laisse des
-/// fichiers sans marque, et reste « absent ».
+/// L'état d'un modèle se lit du disque seul, sans marque ni fichier ajouté : « prêt » si tous les fichiers attendus sont là,
+/// « incomplet » si un dossier existe mais qu'il en manque, « absent » sinon. Pour une variante WhisperKit, les fichiers
+/// attendus sont `requiredWhisperFiles`.
 public actor LocalModelCatalog: ModelCatalog {
     /// Une variante WhisperKit proposée à l'utilisateur. `name` est celui du dépôt de modèles de WhisperKit.
     public struct WhisperVariant: Sendable, Equatable {
@@ -70,8 +70,10 @@ public actor LocalModelCatalog: ModelCatalog {
     public nonisolated let root: URL
     private let fluidAudioRoot: URL
     private let whisperVariants: [WhisperVariant]
-    /// Fractions de téléchargement en cours, par identifiant de modèle.
-    private var downloading: [String: Double] = [:]
+    /// Modèles en cours de téléchargement.
+    private var inFlight: Set<String> = []
+    /// Fraction de téléchargement, seulement quand la bibliothèque en donne une (le détecteur de voix).
+    private var fractions: [String: Double] = [:]
 
     /// `root` : dossier des modèles de l'application (sous Application Support, jamais Documents). `fluidAudioRoot` :
     /// dossier de FluidAudio (`nil` : celui de la bibliothèque).
@@ -91,10 +93,17 @@ public actor LocalModelCatalog: ModelCatalog {
         root.appendingPathComponent("models/argmaxinc/whisperkit-coreml", isDirectory: true)
     }
 
-    /// Les marques de fin vivent hors des dossiers de modèles, que la bibliothèque parcourt.
-    static func completionMarker(forWhisper variant: String, in root: URL) -> URL {
-        root.appendingPathComponent(".complete/whisper-\(variant)")
-    }
+    /// Les fichiers d'une variante WhisperKit que le moteur charge : les trois modèles Core ML compilés (chacun cinq fichiers)
+    /// et les deux fichiers de configuration. Tiré de l'arborescence publique du dépôt de modèles de WhisperKit (variantes
+    /// `large-v3-v20240930_turbo`, `small`, `base` et `tiny` lues : mêmes fichiers). `model.mlmodel` (absent de l'un des
+    /// trois) et `TextDecoderContextPrefill` (présent pour la seule variante turbo) ne sont pas exigés.
+    static let requiredWhisperFiles: [String] =
+        ["config.json", "generation_config.json"]
+        + ["AudioEncoder", "MelSpectrogram", "TextDecoder"].flatMap { bundle in
+            ["analytics/coremldata.bin", "coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin"].map {
+                "\(bundle).mlmodelc/\($0)"
+            }
+        }
 
     /// Le tokenizer d'une variante : `downloadBase/models/openai/whisper-<variante>` (`tokenizerNameForVariant`).
     static func tokenizerFile(for variant: ModelVariant, in root: URL) -> URL {
@@ -131,24 +140,34 @@ public actor LocalModelCatalog: ModelCatalog {
 
     // MARK: - État sur le disque
 
-    private func whisperIsReady(_ variant: String) -> Bool {
-        guard FileManager.default.fileExists(atPath: Self.completionMarker(forWhisper: variant, in: root).path),
-            let folder = Self.whisperFolder(for: variant, in: root)
-        else { return false }
-        return ["MelSpectrogram", "AudioEncoder", "TextDecoder"].allSatisfy {
-            Self.isDirectory(folder.appendingPathComponent("\($0).mlmodelc"))
+    private func whisperState(_ variant: String) -> LocalModel.State {
+        guard let folder = Self.whisperFolder(for: variant, in: root) else { return .absent }
+        let complete = Self.requiredWhisperFiles.allSatisfy { Self.isNonEmptyFile(folder.appendingPathComponent($0)) }
+        return complete ? .ready : .incomplete
+    }
+
+    private static func isNonEmptyFile(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return false
         }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.intValue ?? 0
+        return size > 0
     }
 
-    private func parakeetIsReady() -> Bool {
+    private func parakeetState() -> LocalModel.State {
         let folders = Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)
-        return AsrModels.modelsExist(at: folders[0], version: .v3) && CtcModels.modelsExist(at: folders[1])
+        if AsrModels.modelsExist(at: folders[0], version: .v3) && CtcModels.modelsExist(at: folders[1]) { return .ready }
+        return folders.contains { FileManager.default.fileExists(atPath: $0.path) } ? .incomplete : .absent
     }
 
-    private func voiceDetectorIsReady() -> Bool {
+    private func voiceDetectorState() -> LocalModel.State {
         let folder = Self.voiceDetectorFolder(fluidAudioRoot: fluidAudioRoot)
-        return Self.isDirectory(folder.appendingPathComponent(Self.voiceDetectorBundleName))
+        guard FileManager.default.fileExists(atPath: folder.path) else { return .absent }
+        let ready =
+            Self.isDirectory(folder.appendingPathComponent(Self.voiceDetectorBundleName))
             && !Self.containsPartialFile(in: folder)
+        return ready ? .ready : .incomplete
     }
 
     private static func isDirectory(_ url: URL) -> Bool {
@@ -168,93 +187,88 @@ public actor LocalModelCatalog: ModelCatalog {
     // MARK: - ModelCatalog
 
     public func models() async -> [LocalModel] {
-        func state(_ id: String, ready: Bool) -> LocalModel.State {
-            if let fraction = downloading[id] { return .downloading(fraction) }
-            return ready ? .ready : .absent
+        func state(_ id: String, onDisk: @autoclosure () -> LocalModel.State) -> LocalModel.State {
+            inFlight.contains(id) ? .downloading(fractions[id]) : onDisk()
         }
         var list = [
             LocalModel(
                 id: LocalModelID.parakeet, title: "Parakeet",
                 detail:
                     "Aperçu du texte en direct pendant que vous parlez, et moteur de dictée possible, très rapide. Comprend le petit modèle qui sert à reconnaître votre vocabulaire.",
-                state: state(LocalModelID.parakeet, ready: parakeetIsReady()))
+                state: state(LocalModelID.parakeet, onDisk: parakeetState()))
         ]
         for variant in whisperVariants {
             let id = LocalModelID.whisper(variant.name)
             list.append(
                 LocalModel(
                     id: id, title: variant.title, detail: variant.detail,
-                    state: state(id, ready: whisperIsReady(variant.name))))
+                    state: state(id, onDisk: whisperState(variant.name))))
         }
         list.append(
             LocalModel(
                 id: LocalModelID.voiceDetector, title: "Détecteur de voix",
                 detail: "Repère quand vous parlez, pour ne pas transcrire les silences.",
-                state: state(LocalModelID.voiceDetector, ready: voiceDetectorIsReady())))
+                state: state(LocalModelID.voiceDetector, onDisk: voiceDetectorState())))
         return list
     }
 
+    /// Pendant le téléchargement, `models()` dit « en cours ». Une fraction n'est rapportée que si la bibliothèque en donne
+    /// une pour ce modèle seul : c'est le cas du détecteur de voix (un seul fichier à charger). Pour WhisperKit
+    /// (`Progress` compté en fichiers, pas en octets, d'après `HubApi.snapshot`) et pour Parakeet (deux téléchargements
+    /// enchaînés, FluidAudio repartant de zéro à chaque fichier), aucune fraction n'est donnée : un partage entre le modèle
+    /// et son tokenizer, ou entre deux modèles, serait une invention.
     public func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         let title = try title(of: id)
-        guard downloading[id] == nil else { throw LocalModelCatalogError.alreadyDownloading(id) }
-        downloading[id] = 0
-        defer { downloading[id] = nil }
-
-        // Chaque fraction rapportée ne recule jamais : les bibliothèques repartent de zéro à chaque fichier.
-        let monotonic = MonotonicProgress { fraction in
-            progress(fraction)
-            Task { await self.record(fraction, of: id) }
+        guard !inFlight.contains(id) else { throw LocalModelCatalogError.alreadyDownloading(id) }
+        inFlight.insert(id)
+        defer {
+            inFlight.remove(id)
+            fractions[id] = nil
         }
         if let variant = LocalModelID.whisperVariant(of: id) {
-            try await downloadWhisper(variant, title: title, progress: monotonic)
+            try await downloadWhisper(variant, title: title)
         } else if id == LocalModelID.parakeet {
-            try await downloadParakeet(progress: monotonic)
+            try await downloadParakeet()
         } else {
+            // Une fraction qui ne recule jamais : la bibliothèque la fait repartir de zéro à chaque phase.
+            let monotonic = MonotonicProgress { fraction in
+                progress(fraction)
+                Task { await self.record(fraction, of: id) }
+            }
             _ = try await VadManager(
                 modelDirectory: fluidAudioRoot,
                 progressHandler: { monotonic.report($0.fractionCompleted) })
-            guard voiceDetectorIsReady() else { throw LocalModelCatalogError.incomplete(title) }
+            guard voiceDetectorState() == .ready else { throw LocalModelCatalogError.incomplete(title) }
+            monotonic.report(1)
         }
-        monotonic.report(1)
     }
 
     private func record(_ fraction: Double, of id: String) {
         // Une fraction qui arrive après la fin du téléchargement ne le ressuscite pas.
-        if downloading[id] != nil { downloading[id] = fraction }
+        if inFlight.contains(id) { fractions[id] = fraction }
     }
 
-    /// Le modèle, puis son tokenizer. Le partage entre les deux est arbitraire (le modèle compte pour 90 %), non mesuré :
-    /// la fraction ne sert qu'à l'affichage.
-    private func downloadWhisper(_ variant: String, title: String, progress: MonotonicProgress) async throws {
-        _ = try await WhisperKit.download(
-            variant: variant, downloadBase: root,
-            progressCallback: { progress.report($0.fractionCompleted * 0.9) })
+    /// Le modèle, puis son tokenizer (pour compter l'amorce du vocabulaire hors ligne).
+    private func downloadWhisper(_ variant: String, title: String) async throws {
+        _ = try await WhisperKit.download(variant: variant, downloadBase: root)
         if let tokenizerVariant = WhisperKitTranscriber.tokenizerVariant(of: variant) {
             _ = try await ModelUtilities.loadTokenizer(for: tokenizerVariant, tokenizerFolder: root)
         }
-        guard Self.whisperFolder(for: variant, in: root) != nil else { throw LocalModelCatalogError.incomplete(title) }
-        let marker = Self.completionMarker(forWhisper: variant, in: root)
-        try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: marker)
-        guard whisperIsReady(variant) else { throw LocalModelCatalogError.incomplete(title) }
+        guard whisperState(variant) == .ready else { throw LocalModelCatalogError.incomplete(title) }
     }
 
-    /// Reconnaissance (TDT v3) puis recalage du vocabulaire (CTC). Moitié-moitié : partage arbitraire, non mesuré.
-    private func downloadParakeet(progress: MonotonicProgress) async throws {
+    /// Reconnaissance (TDT v3) puis recalage du vocabulaire (CTC).
+    private func downloadParakeet() async throws {
         let folders = Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)
-        try await AsrModels.download(
-            to: folders[0], version: .v3, progressHandler: { progress.report($0.fractionCompleted * 0.5) })
-        try await CtcModels.download(
-            to: folders[1], variant: .ctc110m, progressHandler: { progress.report(0.5 + $0.fractionCompleted * 0.5) })
-        guard parakeetIsReady() else { throw LocalModelCatalogError.incomplete("Parakeet") }
+        try await AsrModels.download(to: folders[0], version: .v3)
+        try await CtcModels.download(to: folders[1], variant: .ctc110m)
+        guard parakeetState() == .ready else { throw LocalModelCatalogError.incomplete("Parakeet") }
     }
 
     public func delete(_ id: String) async throws {
         _ = try title(of: id)
-        guard downloading[id] == nil else { throw LocalModelCatalogError.alreadyDownloading(id) }
+        guard !inFlight.contains(id) else { throw LocalModelCatalogError.alreadyDownloading(id) }
         if let variant = LocalModelID.whisperVariant(of: id) {
-            // La marque d'abord : un effacement interrompu laisse un modèle « absent », jamais un « prêt » troué.
-            try removeIfPresent(Self.completionMarker(forWhisper: variant, in: root))
             if let folder = Self.whisperFolder(for: variant, in: root) {
                 try removeIfPresent(folder)
                 // Les fiches de téléchargement de la bibliothèque : sans elles, un nouveau téléchargement repart de zéro.

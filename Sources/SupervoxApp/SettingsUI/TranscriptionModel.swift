@@ -87,7 +87,7 @@ public final class TranscriptionModel {
     /// Le bouton que l'état permet : télécharger (ou réessayer après un échec), supprimer, ou aucun pendant un téléchargement.
     public static func action(for state: LocalModel.State) -> RowAction? {
         switch state {
-        case .absent: RowAction(kind: .download, label: "Télécharger")
+        case .absent, .incomplete: RowAction(kind: .download, label: "Télécharger")
         case .failed: RowAction(kind: .download, label: "Réessayer")
         case .ready: RowAction(kind: .delete, label: "Supprimer…")
         case .downloading: nil
@@ -97,8 +97,10 @@ public final class TranscriptionModel {
     public static func stateLabel(_ state: LocalModel.State) -> String {
         switch state {
         case .absent: "Non téléchargé"
+        case .incomplete: "Incomplet"
         case .ready: "Prêt"
-        case .downloading(let fraction): "Téléchargement : \(Int((min(max(fraction, 0), 1) * 100).rounded())) %"
+        case .downloading(let fraction?): "Téléchargement : \(Int((min(max(fraction, 0), 1) * 100).rounded())) %"
+        case .downloading(nil): "Téléchargement en cours…"
         case .failed(let reason): reason
         }
     }
@@ -106,7 +108,7 @@ public final class TranscriptionModel {
     /// Lance le téléchargement. Sans effet si ce modèle est déjà en cours de téléchargement.
     public func download(_ id: String) async {
         if case .downloading? = overrides[id] { return }
-        overrides[id] = .downloading(0)
+        overrides[id] = .downloading(nil)
         clearMessage()
         do {
             try await catalog.download(id) { [weak self] fraction in
