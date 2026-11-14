@@ -14,31 +14,33 @@ public struct TranscriptionPane: View {
         _vocabulary = State(initialValue: model.vocabularyText)
     }
 
+    /// Le bandeau général est une rangée au-dessus du formulaire, jamais posé par-dessus : il ne recouvre rien, à aucune
+    /// taille de fenêtre. Les messages du vocabulaire s'affichent dans sa section, à côté du champ.
     public var body: some View {
-        Form {
-            engineSection
-            languageSection
-            vocabularySection
-            modelsSection
-        }
-        .formStyle(.grouped)
-        // Le message reste visible quel que soit l'endroit où le défilement s'est arrêté.
-        .safeAreaInset(edge: .bottom) {
-            if let message = model.message {
-                MessageBanner(text: message, kind: model.messageKind)
+        VStack(spacing: 0) {
+            if let message = model.message, model.messageArea == .general {
+                MessageLine(text: message, kind: model.messageKind)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.bar)
             }
+            Form {
+                engineSection
+                languageSection
+                vocabularySection
+                modelsSection
+            }
+            .formStyle(.grouped)
         }
-        .confirmationDialog(
-            "Supprimer « \(removal?.title ?? "") » de ce Mac ?",
-            isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }),
-            presenting: removal
-        ) { removed in
-            Button("Supprimer", role: .destructive) { Task { await model.delete(removed.id) } }
-        } message: { removed in
-            Text(
-                model.isUsedByChosenEngine(removed.id)
-                    ? "C'est le modèle du moteur choisi : la prochaine dictée devra le télécharger de nouveau."
-                    : "Vous pourrez le télécharger de nouveau plus tard.")
+        .sheet(item: $removal) { removed in
+            DeletionSheet(
+                title: "Supprimer « \(removed.title) » de ce Mac ?", message: model.deletionConfirmation(for: removed),
+                cancel: { removal = nil },
+                confirm: {
+                    removal = nil
+                    Task { await model.delete(removed.id) }
+                })
         }
     }
 
@@ -136,6 +138,9 @@ public struct TranscriptionPane: View {
                     }
                 }
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
+            if let message = model.message, model.messageArea == .vocabulary {
+                MessageLine(text: message, kind: model.messageKind)
+            }
             HStack {
                 Spacer()
                 Button("Enregistrer le vocabulaire") { applyVocabulary() }
@@ -153,12 +158,14 @@ public struct TranscriptionPane: View {
         }
     }
 
+    /// Un refus, un échec d'enregistrement ou une saisie dépassée laissent le texte tapé dans le champ, avec le message à côté :
+    /// l'utilisateur retire des termes au lieu de tout retaper. Seul un vocabulaire enregistré est remis en forme.
     private func applyVocabulary() {
-        let draft = vocabulary
+        let submitted = vocabulary
         Task {
-            await model.setVocabulary(text: draft)
-            // Refusé ou normalisé (lignes vides et doublons retirés) : le champ montre ce qui est enregistré.
-            vocabulary = model.vocabularyText
+            let outcome = await model.setVocabulary(text: submitted)
+            vocabulary = TranscriptionModel.fieldText(
+                afterSubmitting: submitted, outcome: outcome, current: vocabulary, saved: model.vocabularyText)
         }
     }
 
@@ -214,7 +221,7 @@ private struct ModelRow: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if let action = TranscriptionModel.action(for: local.state) {
+                ForEach(TranscriptionModel.actions(for: local.state), id: \.label) { action in
                     Button(action.label) {
                         switch action.kind {
                         case .download: Task { await model.download(local.id) }
@@ -275,8 +282,9 @@ private struct StateLabelStyle: LabelStyle {
     }
 }
 
-/// Bandeau du message de l'onglet : refus ou échec, réserve, ou information.
-private struct MessageBanner: View {
+/// Un message de l'onglet : refus ou échec, réserve, ou information. Le texte reste dans la couleur du texte courant ; la
+/// couleur ne porte que sur l'icône.
+private struct MessageLine: View {
     let text: String
     let kind: TranscriptionMessageKind
 
@@ -287,10 +295,6 @@ private struct MessageBanner: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.bar)
     }
 
     private var symbol: String {
@@ -307,5 +311,38 @@ private struct MessageBanner: View {
         case .warning: .orange
         case .info: .secondary
         }
+    }
+}
+
+/// La confirmation de suppression d'un modèle. Une feuille de l'application (et non une boîte de dialogue du système) pour
+/// que `supervox-snapshots` puisse la rendre telle quelle.
+public struct DeletionSheet: View {
+    let title: String
+    let message: String
+    let cancel: () -> Void
+    let confirm: () -> Void
+
+    public init(title: String, message: String, cancel: @escaping () -> Void, confirm: @escaping () -> Void) {
+        self.title = title
+        self.message = message
+        self.cancel = cancel
+        self.confirm = confirm
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            Text(message)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Annuler", role: .cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Supprimer", role: .destructive, action: confirm)
+            }
+            .padding(.top, 4)
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }

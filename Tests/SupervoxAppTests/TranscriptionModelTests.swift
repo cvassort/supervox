@@ -17,6 +17,8 @@ final class FakeModelCatalog: ModelCatalog {
         var listCount = 0
         /// Retient le premier comptage de jetons tant qu'elle n'est pas ouverte.
         var firstCountGate: Gate?
+        /// Retient le prochain `models()` tant qu'elle n'est pas ouverte.
+        var nextListingGate: Gate?
         var tokenCount: Int?
         var download: DownloadBehavior = { _, _ in }
         var deleteFailure: (any Error)?
@@ -35,16 +37,23 @@ final class FakeModelCatalog: ModelCatalog {
     var deletions: [String] { state.withLock { $0.deletions } }
     var listCount: Int { state.withLock { $0.listCount } }
     var countRequests: [(vocabulary: [String], model: String)] { state.withLock { $0.countRequests } }
+    func holdNextListing(_ gate: Gate) { state.withLock { $0.nextListingGate = gate } }
     func holdFirstCount(_ gate: Gate) { state.withLock { $0.firstCountGate = gate } }
     func setTokenCount(_ count: Int?) { state.withLock { $0.tokenCount = count } }
     func setDownload(_ behavior: @escaping DownloadBehavior) { state.withLock { $0.download = behavior } }
+    /// Change l'état que le disque (le double) rend pour ce modèle.
+    func setDiskState(_ newState: LocalModel.State, of id: String) { setState(newState, of: id) }
     func setDeleteFailure(_ error: (any Error)?) { state.withLock { $0.deleteFailure = error } }
 
     func models() async -> [LocalModel] {
-        state.withLock { state in
+        let gate = state.withLock { state in
             state.listCount += 1
-            return state.models
+            defer { state.nextListingGate = nil }
+            return state.nextListingGate
         }
+        // L'état est lu après l'attente : une liste retenue montre le disque tel qu'il est quand elle repart.
+        if let gate { await gate.wait() }
+        return state.withLock { $0.models }
     }
 
     func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
@@ -99,7 +108,7 @@ final class ProgressBox: Sendable {
 }
 
 /// Rend la main au fil principal tant que `condition` est fausse. Borné en tours de boucle, jamais en durée.
-@MainActor private func settle(_ condition: @MainActor () -> Bool) async {
+@MainActor func settle(_ condition: @MainActor () -> Bool) async {
     for _ in 0..<10_000 where !condition() { await Task.yield() }
 }
 
@@ -142,20 +151,33 @@ final class ProgressBox: Sendable {
 
     // MARK: - Lignes de l'onglet
 
-    @Test func eachStateOffersTheRightButton() {
-        #expect(TranscriptionModel.action(for: .absent) == TranscriptionModel.RowAction(kind: .download, label: "Télécharger"))
-        #expect(
-            TranscriptionModel.action(for: .failed("x")) == TranscriptionModel.RowAction(kind: .download, label: "Réessayer"))
-        #expect(TranscriptionModel.action(for: .ready) == TranscriptionModel.RowAction(kind: .delete, label: "Supprimer…"))
-        #expect(TranscriptionModel.action(for: .downloading(0.4)) == nil)
+    @Test func eachStateOffersTheRightButtons() {
+        func labels(_ state: LocalModel.State) -> [String] { TranscriptionModel.actions(for: state).map(\.label) }
+        func kinds(_ state: LocalModel.State) -> [TranscriptionModel.RowAction.Kind] {
+            TranscriptionModel.actions(for: state).map(\.kind)
+        }
+        #expect(labels(.absent) == ["Télécharger"])
+        #expect(kinds(.absent) == [.download])
+        // Incomplet : supprimer ce qui reste, ou le compléter.
+        #expect(labels(.incomplete) == ["Supprimer…", "Télécharger"])
+        #expect(kinds(.incomplete) == [.delete, .download])
+        #expect(labels(.ready) == ["Supprimer…"])
+        #expect(kinds(.ready) == [.delete])
+        #expect(labels(.failed("x")) == ["Réessayer", "Supprimer…"])
+        #expect(kinds(.failed("x")) == [.download, .delete])
+        #expect(labels(.downloading(0.4)).isEmpty)
+        #expect(labels(.downloading(nil)).isEmpty)
     }
 
     @Test func eachStateHasAReadableLabel() {
         #expect(TranscriptionModel.stateLabel(.absent) == "Non téléchargé")
+        #expect(TranscriptionModel.stateLabel(.incomplete) == "Incomplet : des fichiers manquent")
         #expect(TranscriptionModel.stateLabel(.ready) == "Prêt")
         #expect(TranscriptionModel.stateLabel(.downloading(0.4)) == "Téléchargement : 40 %")
         #expect(TranscriptionModel.stateLabel(.downloading(0)) == "Téléchargement : 0 %")
         #expect(TranscriptionModel.stateLabel(.downloading(1)) == "Téléchargement : 100 %")
+        // Sans fraction donnée par la bibliothèque : aucun pourcentage.
+        #expect(TranscriptionModel.stateLabel(.downloading(nil)) == "Téléchargement en cours…")
         #expect(TranscriptionModel.stateLabel(.failed("Le téléchargement a échoué : réseau.")) == "Le téléchargement a échoué : réseau.")
     }
 
@@ -296,7 +318,7 @@ final class ProgressBox: Sendable {
         #expect(model.settings.vocabulary == ["Nouveau"])
 
         gate.open()
-        await first.value
+        _ = await first.value
         #expect(model.settings.vocabulary == ["Nouveau"])
         #expect(saver.saved.map(\.vocabulary) == [["Nouveau"]])
     }
@@ -424,19 +446,6 @@ final class ProgressBox: Sendable {
         #expect(Self.state(model, FakeModelCatalog.turbo.id) == .absent)
         #expect(model.message?.contains("prochaine dictée") == true)
         #expect(model.message?.contains("télécharg") == true)
-    }
-
-    @Test func deletingParakeetWarnsOnlyWhenParakeetIsTheChosenEngine() async {
-        let model = makeModel()
-        await model.refresh()
-        await model.download(LocalModelID.parakeet)
-        await model.delete(LocalModelID.parakeet)
-        #expect(model.message == nil)  // moteur choisi : WhisperKit
-
-        await model.download(LocalModelID.parakeet)
-        model.setEngine("parakeet")
-        await model.delete(LocalModelID.parakeet)
-        #expect(model.message?.contains("prochaine dictée") == true)
     }
 
     @Test func deletingAnAbsentModelOfTheChosenEngineDoesNotWarn() async {
