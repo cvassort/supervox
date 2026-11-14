@@ -26,8 +26,11 @@ import Testing
         store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
     }
 
-    func makeController(layout: any KeyboardLayout = HotKeyTests.ansi) -> AppController {
-        AppController(
+    /// `seeded` : sans fichier de réglages, en écrit un (réglages par défaut) avant la construction, pour que `launch()`
+    /// suive le chemin d'un lancement ordinaire. Les tests du premier lancement passent `false`.
+    func makeController(layout: any KeyboardLayout = HotKeyTests.ansi, seeded: Bool = true) -> AppController {
+        if seeded, !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
+        return AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
             escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
@@ -41,7 +44,7 @@ import Testing
     @Test func openingThePanelRereadsThePermissions() {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
 
         hotKeys.press()
         #expect(controller.panelModel.isOpen)
@@ -90,7 +93,7 @@ import Testing
         hotKeys.refused = [.standard]
         let controller = makeController()
 
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         #expect(controller.panelModel.isOpen)
         #expect(surface.isShown)
         let notice = try #require(controller.panelModel.notices[.hotKey])
@@ -106,7 +109,7 @@ import Testing
         system.hotKeys = [.standard]
         let controller = makeController()
 
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         #expect(hotKeys.registered == .standard)
         #expect(controller.panelModel.isOpen)
         let notice = try #require(controller.panelModel.notices[.hotKey])
@@ -151,7 +154,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         probe.set(microphone: .notDetermined, accessibility: .denied)
         #expect(!FileManager.default.fileExists(atPath: store.file.path))
-        let controller = makeController()
+        let controller = makeController(seeded: false)
 
         controller.launch()
         #expect(controller.panelModel.isOpen)
@@ -181,7 +184,7 @@ import Testing
     @Test func welcomeWithoutAHotKeyPointsToTheMenuBar() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         hotKeys.refused = [.standard]
-        let controller = makeController()
+        let controller = makeController(seeded: false)
         // La vraie surface prend sa taille à l'affichage : l'accueil doit déjà être là quand le panneau s'ouvre, même
         // quand c'est le refus du raccourci qui l'ouvre.
         var welcomeAtShow: String?
@@ -199,7 +202,7 @@ import Testing
     /// L'accueil ne sert qu'à la première ouverture : il disparaît quand le panneau se ferme.
     @Test func welcomeGoesAwayWhenThePanelCloses() {
         defer { try? FileManager.default.removeItem(at: directory) }
-        let controller = makeController()
+        let controller = makeController(seeded: false)
         controller.launch()
         #expect(controller.panelModel.welcome != nil)
 
@@ -243,7 +246,7 @@ import Testing
     @Test func reopeningTheRunningAppOpensThePanel() {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         let delegate = ApplicationDelegate(controller: controller)
 
         #expect(!delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false))
@@ -260,15 +263,15 @@ import Testing
         try store.save(AppSettings(version: 1, providers: [], hotKey: HotKeyTests.keyA, hotKeyBehavior: .toggle, lastModeID: "prompt"))
 
         let ansi = makeController(layout: HotKeyTests.ansi)
-        ansi.applyHotKeyAtLaunch()
+        ansi.launch()
         #expect(ansi.panelModel.hotKeyLabel == "⌃⌥A")
 
         let azerty = makeController(layout: HotKeyTests.azerty)
-        azerty.applyHotKeyAtLaunch()
+        azerty.launch()
         #expect(azerty.panelModel.hotKeyLabel == "⌃⌥Q")
         hotKeys.refused = [HotKeyTests.keyA]
         let refused = makeController(layout: HotKeyTests.azerty)
-        refused.applyHotKeyAtLaunch()
+        refused.launch()
         #expect(refused.panelModel.notices[.hotKey]?.contains("⌃⌥Q") == true)
     }
 
@@ -276,7 +279,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
 
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         #expect(!controller.panelModel.isOpen)
         #expect(!surface.isShown)
         #expect(controller.panelModel.notices.isEmpty)
@@ -291,7 +294,7 @@ import Testing
         let controller = makeController()
         let loadNotice = try #require(controller.panelModel.notices[.settingsLoad])
 
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         #expect(controller.panelModel.notices[.hotKey] != nil)
         // Le second avis n'écrase pas le premier.
         #expect(controller.panelModel.notices[.settingsLoad] == loadNotice)
@@ -305,7 +308,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         hotKeys.refused = [.standard]
         let controller = makeController()
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         let hotKeyNotice = try #require(controller.panelModel.notices[.hotKey])
 
         try corruptTheSettingsFile()
@@ -339,7 +342,7 @@ import Testing
     func makeOpenPanel() -> AppController {
         _ = NSApplication.shared  // `NSApp` doit exister pour le menu principal ; rien n'est affiché.
         let controller = makeController()
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         hotKeys.press()
         return controller
     }

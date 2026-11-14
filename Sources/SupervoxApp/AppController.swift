@@ -165,13 +165,6 @@ public final class AppController {
         panel.open()
     }
 
-    /// Enregistre le raccourci des réglages. S'il est refusé, ou s'il est aussi un raccourci de macOS activé (il peut
-    /// alors ne pas ouvrir le panneau), le panneau s'ouvre de lui-même pour le dire : sans raccourci, l'utilisateur
-    /// pourrait ne jamais trouver le panneau.
-    func applyHotKeyAtLaunch() {
-        if !applyHotKey() { panel.open() }
-    }
-
     // MARK: - Raccourci
 
     /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :

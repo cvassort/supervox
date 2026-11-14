@@ -25,10 +25,12 @@ import Testing
         store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
     }
 
+    /// Un fichier de réglages existe toujours (réglages par défaut) : `launch()` suit le chemin d'un lancement ordinaire.
     func makeController(settingsView: @escaping AppController.SettingsViewProvider = AppController.emptySettings)
         -> AppController
     {
-        AppController(
+        if !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
+        return AppController(
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
             escapeRegistrar: escape,
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
@@ -62,7 +64,7 @@ import Testing
         defer { NSApplication.shared.mainMenu = previousMenu }
         let built = Built()
         let controller = makeController(settingsView: testProvider(built))
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         controller.openSettings()
         let window = try #require(presenter.windows.first)
         let hotKey = try #require(built.hotKey)
@@ -87,7 +89,7 @@ import Testing
         defer { NSApplication.shared.mainMenu = previousMenu }
         let built = Built()
         let controller = makeController(settingsView: testProvider(built))
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         controller.openSettings()
         let window = try #require(presenter.windows.first)
         let hotKey = try #require(built.hotKey)
@@ -216,7 +218,7 @@ import Testing
     @Test func recordingAHotKeySuspendsTheGlobalHotKeyAndEscape() {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        controller.applyHotKeyAtLaunch()
+        controller.launch()
         registrar.press()
         #expect(controller.panelModel.isOpen)
         #expect(escape.registered != nil)
