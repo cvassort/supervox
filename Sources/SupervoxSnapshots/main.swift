@@ -51,6 +51,10 @@ struct ExamplePermissions: PermissionsProbe {
 }
 
 /// Catalogue d'exemple : une liste figée (un modèle par état) et un nombre de jetons d'amorce donné.
+struct ExampleDownloadFailure: LocalizedError {
+    var errorDescription: String? { "la connexion Internet semble interrompue" }
+}
+
 actor ExampleCatalog: ModelCatalog {
     private var listed: [LocalModel]
     private let tokenCount: Int?
@@ -59,7 +63,9 @@ actor ExampleCatalog: ModelCatalog {
         self.tokenCount = tokenCount
     }
     func models() async -> [LocalModel] { listed }
-    func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {}
+    func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        throw ExampleDownloadFailure()
+    }
     func delete(_ id: String) async throws {
         if let index = listed.firstIndex(where: { $0.id == id }) { listed[index].state = .absent }
     }
@@ -108,6 +114,14 @@ func exampleModels(
     await act(model)
     return model
 }
+
+/// 40 termes d'infrastructure : un vocabulaire d'administrateur système réaliste (voir `transcription-vocabulaire-refuse`).
+let infrastructureTerms = [
+    "Kubernetes", "PostgreSQL", "Keycloak", "Terraform", "Ansible", "Grafana", "Prometheus", "Redis", "RabbitMQ",
+    "OpenSearch", "Kafka", "Nginx", "GitLab", "Helm", "Traefik", "Elasticsearch", "Logstash", "Kibana", "Jenkins",
+    "SonarQube", "Vault", "Consul", "Nomad", "Istio", "Envoy", "Argo CD", "Harbor", "MinIO", "Ceph", "Zabbix", "Nagios",
+    "Wazuh", "Suricata", "Graylog", "Loki", "Tempo", "Jaeger", "OpenTelemetry", "Podman", "Buildah",
+]
 
 let layout = ExampleLayout()
 let granted = ExamplePermissions(microphoneState: .granted, accessibilityState: .granted)
@@ -253,57 +267,80 @@ for dark in [false, true] {
             providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model,
             permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .transcription)
     }
-    let everyStateModels = exampleModels(
-        parakeet: .downloading(0.4), turbo: .ready,
-        small: .failed("Le téléchargement a échoué : la connexion Internet semble interrompue."), base: .absent,
-        voice: .ready)
     let allAbsentModels = exampleModels(parakeet: .absent, turbo: .absent, small: .absent, base: .absent, voice: .absent)
-    let everyState = ExampleCatalog(listed: everyStateModels)
-    let allAbsent = ExampleCatalog(listed: allAbsentModels)
-    let tallSize = NSSize(width: 600, height: 1_180)
-    // La liste avec les quatre états (téléchargement, prêt, échec, absent), le contenu de l'onglet en entier (la vraie
-    // fenêtre le fait défiler), puis à la taille de la vraie fenêtre.
+    let allReadyModels = exampleModels(parakeet: .ready, turbo: .ready, small: .absent, base: .absent, voice: .ready)
+    let tallSize = NSSize(width: 600, height: 1_260)
+    let whisperChosen = TranscriptionSettings(
+        engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+        vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"])
+
+    // Tous les états d'une ligne : en cours sans fraction (Parakeet : deux téléchargements enchaînés, aucune fraction
+    // honnête), prêt, incomplet, non téléchargé, en cours avec la fraction de la bibliothèque (détecteur de voix). Le
+    // contenu de l'onglet en entier : la vraie fenêtre le fait défiler.
     try render(
         TranscriptionPane(
             model: await transcriptionModel(
-                everyState, settings: TranscriptionSettings(
-                    engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
-                    vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"]))),
-        name: "transcription-liste", dark: dark, background: window, size: tallSize)
+                ExampleCatalog(
+                    listed: exampleModels(
+                        parakeet: .downloading(nil), turbo: .ready, small: .incomplete, base: .absent,
+                        voice: .downloading(0.55))),
+                settings: whisperChosen)),
+        name: "transcription-etats", dark: dark, background: window, size: tallSize)
+    // Un échec de téléchargement, avec « Réessayer » et « Supprimer… ».
     try render(
-        await transcriptionTab(await transcriptionModel(everyState)),
-        name: "transcription-liste-fenetre", dark: dark, background: window, size: settingsSize)
+        TranscriptionPane(
+            model: await transcriptionModel(
+                ExampleCatalog(listed: exampleModels(parakeet: .ready, turbo: .absent, small: .absent, base: .absent, voice: .ready)),
+                settings: whisperChosen,
+                act: { model in
+                    // Un échec réel du modèle : le catalogue d'exemple refuse ce téléchargement.
+                    await model.download(turboID)
+                })),
+        name: "transcription-echec", dark: dark, background: window, size: tallSize)
     // Parakeet choisi, rien de téléchargé.
     try render(
         TranscriptionPane(
             model: await transcriptionModel(
-                allAbsent, settings: TranscriptionSettings(
-                    engine: "parakeet", whisperModel: "small", language: "en", vocabulary: []))),
+                ExampleCatalog(listed: allAbsentModels),
+                settings: TranscriptionSettings(engine: "parakeet", whisperModel: "small", language: "en", vocabulary: []))),
         name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
-    // Vocabulaire refusé : trop long pour l'amorce du moteur, l'ancien est gardé.
+    // Vocabulaire refusé : un vrai vocabulaire (40 termes d'infrastructure) trop long pour Whisper. Le compte vient du
+    // tokenizer de large-v3, celui du modèle par défaut (`WhisperKitTranscriber.promptTokenCount`, hors ligne) : 30
+    // premiers termes = 102, 40 termes = 136, pour une limite de 111. Le champ garde la saisie refusée.
+    let refused = await transcriptionModel(
+        ExampleCatalog(listed: allReadyModels, tokenCount: 136),
+        settings: TranscriptionSettings(
+            engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+            vocabulary: Array(infrastructureTerms.prefix(30))),
+        act: { _ = await $0.setVocabulary(text: infrastructureTerms.joined(separator: "\n")) })
     try render(
-        await transcriptionTab(
-            await transcriptionModel(
-                ExampleCatalog(listed: everyStateModels, tokenCount: 140),
-                settings: TranscriptionSettings(
-                    engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
-                    vocabulary: ["Kubernetes", "PostgreSQL"]),
-                act: { await $0.setVocabulary(text: (1...40).map { "TermeTechnique\($0)" }.joined(separator: "\n")) })),
-        name: "transcription-vocabulaire-refuse", dark: dark, background: window, size: settingsSize)
+        TranscriptionPane(model: refused, draft: infrastructureTerms.joined(separator: "\n")),
+        name: "transcription-vocabulaire-refuse", dark: dark, background: window, size: tallSize)
     // Vocabulaire accepté, mais le modèle n'est pas là pour compter.
     try render(
-        await transcriptionTab(
-            await transcriptionModel(
+        TranscriptionPane(
+            model: await transcriptionModel(
                 ExampleCatalog(listed: allAbsentModels, tokenCount: nil),
-                act: { await $0.setVocabulary(text: "Kubernetes\nPostgreSQL") })),
-        name: "transcription-vocabulaire-avertissement", dark: dark, background: window, size: settingsSize)
-    // Suppression du modèle du moteur choisi : le message prévient.
+                act: { _ = await $0.setVocabulary(text: "Kubernetes\nPostgreSQL") })),
+        name: "transcription-vocabulaire-avertissement", dark: dark, background: window, size: tallSize)
+    // Suppression de Parakeet alors que WhisperKit est choisi : le bandeau, au-dessus du formulaire, à la taille de la vraie
+    // fenêtre ; il ne recouvre rien.
     try render(
         await transcriptionTab(
             await transcriptionModel(
-                ExampleCatalog(listed: exampleModels(parakeet: .absent, turbo: .ready, small: .absent, base: .absent, voice: .ready)),
-                act: { await $0.delete(turboID) })),
-        name: "transcription-suppression", dark: dark, background: window, size: settingsSize)
+                ExampleCatalog(listed: allReadyModels), settings: whisperChosen,
+                act: { await $0.delete(LocalModelID.parakeet) })),
+        name: "transcription-fenetre-bandeau", dark: dark, background: window, size: settingsSize)
+    // Les deux confirmations de suppression : un dossier partagé (Parakeet), et le modèle du moteur choisi.
+    let confirming = await transcriptionModel(ExampleCatalog(listed: allReadyModels), settings: whisperChosen)
+    for (name, id) in [("partagee", LocalModelID.parakeet), ("modele", turboID)] {
+        let model = confirming.models.first { $0.id == id }!
+        try render(
+            DeletionSheet(
+                title: "Supprimer « \(model.title) » de ce Mac ?", message: confirming.deletionConfirmation(for: model),
+                cancel: {}, confirm: {}),
+            name: "transcription-confirmation-\(name)", dark: dark, background: window)
+    }
     // Version sans catalogue de modèles.
     try render(
         TranscriptionPane(model: await transcriptionModel(UnavailableModelCatalog())),

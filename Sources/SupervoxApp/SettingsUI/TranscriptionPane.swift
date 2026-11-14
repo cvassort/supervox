@@ -9,9 +9,11 @@ public struct TranscriptionPane: View {
     @State private var removal: LocalModel?
     @FocusState private var vocabularyFocused: Bool
 
-    public init(model: TranscriptionModel) {
+    /// `draft` : le texte que le champ de vocabulaire montre à l'ouverture (`nil` : le vocabulaire enregistré). Sert au rendu
+    /// d'un refus, où le champ garde ce que l'utilisateur a tapé.
+    public init(model: TranscriptionModel, draft: String? = nil) {
         self.model = model
-        _vocabulary = State(initialValue: model.vocabularyText)
+        _vocabulary = State(initialValue: draft ?? model.vocabularyText)
     }
 
     /// Le bandeau général est une rangée au-dessus du formulaire, jamais posé par-dessus : il ne recouvre rien, à aucune
@@ -122,7 +124,7 @@ public struct TranscriptionPane: View {
         Section {
             TextEditor(text: $vocabulary)
                 .font(.body)
-                .frame(minHeight: 84)
+                .frame(minHeight: 84, maxHeight: 160)  // une longue liste défile dans le champ, elle ne l'agrandit pas
                 .focused($vocabularyFocused)
                 .onChange(of: vocabularyFocused) { _, focused in
                     if !focused { applyVocabulary() }
