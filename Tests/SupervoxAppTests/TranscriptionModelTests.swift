@@ -15,6 +15,8 @@ final class FakeModelCatalog: ModelCatalog {
         var deletions: [String] = []
         var countRequests: [(vocabulary: [String], model: String)] = []
         var listCount = 0
+        /// Retient le premier comptage de jetons tant qu'elle n'est pas ouverte.
+        var firstCountGate: Gate?
         var tokenCount: Int?
         var download: DownloadBehavior = { _, _ in }
         var deleteFailure: (any Error)?
@@ -33,6 +35,7 @@ final class FakeModelCatalog: ModelCatalog {
     var deletions: [String] { state.withLock { $0.deletions } }
     var listCount: Int { state.withLock { $0.listCount } }
     var countRequests: [(vocabulary: [String], model: String)] { state.withLock { $0.countRequests } }
+    func holdFirstCount(_ gate: Gate) { state.withLock { $0.firstCountGate = gate } }
     func setTokenCount(_ count: Int?) { state.withLock { $0.tokenCount = count } }
     func setDownload(_ behavior: @escaping DownloadBehavior) { state.withLock { $0.download = behavior } }
     func setDeleteFailure(_ error: (any Error)?) { state.withLock { $0.deleteFailure = error } }
@@ -62,10 +65,13 @@ final class FakeModelCatalog: ModelCatalog {
     }
 
     func promptTokenCount(_ vocabulary: [String], whisperModel: String) async -> Int? {
-        state.withLock { state in
+        let gate = state.withLock { state in
             state.countRequests.append((vocabulary, whisperModel))
-            return state.tokenCount
+            defer { state.firstCountGate = nil }
+            return state.firstCountGate
         }
+        if let gate { await gate.wait() }
+        return state.withLock { $0.tokenCount }
     }
 
     private func setState(_ newState: LocalModel.State, of id: String) {
@@ -73,6 +79,13 @@ final class FakeModelCatalog: ModelCatalog {
             if let index = state.models.firstIndex(where: { $0.id == id }) { state.models[index].state = newState }
         }
     }
+}
+
+/// Garde la fonction de progression reçue par le catalogue, pour la rappeler après la fin du téléchargement.
+final class ProgressBox: Sendable {
+    private let stored = Mutex<(@Sendable (Double) -> Void)?>(nil)
+    func keep(_ progress: @escaping @Sendable (Double) -> Void) { stored.withLock { $0 = progress } }
+    func call(_ fraction: Double) { stored.withLock { $0 }?(fraction) }
 }
 
 @MainActor final class TranscriptionSaver {
@@ -262,6 +275,24 @@ final class FakeModelCatalog: ModelCatalog {
         #expect(catalog.countRequests.isEmpty)
     }
 
+    /// Deux saisies de suite : la seconde, comptée plus vite, l'emporte ; la première, qui finit après, ne l'écrase pas.
+    @Test func aVocabularyReplacedWhileItsTokensAreCountedIsDropped() async {
+        let model = makeModel()
+        let gate = Gate()
+        catalog.holdFirstCount(gate)
+        catalog.setTokenCount(5)
+
+        let first = Task { await model.setVocabulary(text: "Ancien") }
+        await settle { gate.isWaiting }
+        await model.setVocabulary(text: "Nouveau")
+        #expect(model.settings.vocabulary == ["Nouveau"])
+
+        gate.open()
+        await first.value
+        #expect(model.settings.vocabulary == ["Nouveau"])
+        #expect(saver.saved.map(\.vocabulary) == [["Nouveau"]])
+    }
+
     @Test func anUnchangedVocabularyIsNotSavedAgain() async {
         let model = makeModel(
             TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
@@ -317,11 +348,14 @@ final class FakeModelCatalog: ModelCatalog {
         let first = Task { await model.download(id) }
         await settle { gate.isWaiting }
 
-        await model.download(id)
+        let second = Task { await model.download(id) }
+        // Un second téléchargement lancé aurait atteint le catalogue : on lui laisse tous les tours qu'il lui faut.
+        await settle { catalog.downloads.count > 1 }
         #expect(catalog.downloads == [id])
 
         gate.open()
         await first.value
+        await second.value
         #expect(catalog.downloads == [id])
         #expect(Self.state(model, id) == .ready)
     }
@@ -356,6 +390,20 @@ final class FakeModelCatalog: ModelCatalog {
         #expect(Self.state(model, id) == .downloading(0.5))
         gate.open()
         await download.value
+    }
+
+    @Test func aLateProgressReportDoesNotBringAFinishedDownloadBack() async {
+        let model = makeModel()
+        await model.refresh()
+        let id = LocalModelID.parakeet
+        let report = ProgressBox()
+        catalog.setDownload { _, progress in report.keep(progress) }
+        await model.download(id)
+        #expect(Self.state(model, id) == .ready)
+
+        report.call(0.5)
+        await settle { Self.state(model, id) == .downloading(0.5) }
+        #expect(Self.state(model, id) == .ready)
     }
 
     // MARK: - Suppression
