@@ -145,7 +145,7 @@ public final class AppController {
     /// Le panneau ne s'ouvre qu'une fois tout son contenu posé (accueil, avis) : la vraie surface prend sa taille à
     /// l'affichage.
     func launch() {
-        let hotKeyIsFine = applyHotKey()
+        let hotKeyNeedsPanel = applyHotKey()
         if isFirstLaunch {
             panelModel.welcome = Self.welcome(hotKeyLabel: panelModel.hotKeyLabel)
             do {
@@ -155,7 +155,7 @@ public final class AppController {
                 log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
             }
         }
-        if !hotKeyIsFine || isFirstLaunch || hasLoadNotice { panel.open() }
+        if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
     }
 
     /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.
@@ -175,6 +175,10 @@ public final class AppController {
 
     /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :
     /// le raccourci bascule toujours. Rend vrai si rien n'est à signaler.
+    /// Enregistre le raccourci des réglages et pose l'avis qui le concerne. Rend `true` si le panneau doit s'ouvrir
+    /// pour le montrer : raccourci refusé, ou raccourci de macOS activé pas encore signalé. Ce dernier cas n'ouvre le
+    /// panneau qu'une fois : la combinaison signalée est gardée dans les réglages (`systemConflictShown`), et l'avis
+    /// reste posé aux lancements suivants sans ouvrir le panneau.
     private func applyHotKey() -> Bool {
         let hotKey = settings.hotKey
         switch hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() }) {
@@ -184,19 +188,36 @@ public final class AppController {
             log.notice("raccourci enregistré : \(label, privacy: .public)")
             guard systemHotKeys.enabled().contains(hotKey) else {
                 panelModel.setNotice(nil, for: .hotKey)
-                return true
+                return false
             }
             let message =
                 "Le raccourci \(label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre dans Réglages, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
             panelModel.setNotice(message, for: .hotKey)
             log.notice("raccourci de macOS : \(label, privacy: .public)")
-            return false
+            guard settings.systemConflictShown != hotKey else { return false }
+            recordShownSystemConflict(hotKey)
+            return true
         case .failure(let error):
             panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
             let message = Self.message(for: error, label: hotKey.label(layout: keyboardLayout))
             panelModel.setNotice(message, for: .hotKey)
             log.notice("raccourci refusé : \(message, privacy: .public)")
-            return false
+            return true
+        }
+    }
+
+    /// Garde la combinaison signalée sans passer par `updateSettings`, qui effacerait l'avis de chargement que le
+    /// panneau doit montrer. Un fichier non enregistrable n'est pas touché ; un échec laisse le panneau s'ouvrir au
+    /// prochain lancement, sans autre avis.
+    private func recordShownSystemConflict(_ hotKey: HotKey) {
+        guard saveRefusal == nil else { return }
+        var updated = settings
+        updated.systemConflictShown = hotKey
+        do {
+            try settingsStore.save(updated)
+            settings = updated
+        } catch {
+            log.error("raccourci signalé non gardé : \(error.localizedDescription, privacy: .public)")
         }
     }
 

@@ -55,19 +55,25 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var hotKey: HotKey
     public var hotKeyBehavior: HotKeyBehavior
     public var lastModeID: String
+    /// Raccourci déjà signalé comme raccourci de macOS activé en ouvrant le panneau au lancement : il ne l'ouvre plus
+    /// seul (l'avis reste). `nil` : rien de signalé.
+    public var systemConflictShown: HotKey?
 
     public init(
         version: Int, providers: [Provider], hotKey: HotKey,
-        hotKeyBehavior: HotKeyBehavior, lastModeID: String
+        hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil
     ) {
         self.version = version
         self.providers = providers
         self.hotKey = hotKey
         self.hotKeyBehavior = hotKeyBehavior
         self.lastModeID = lastModeID
+        self.systemConflictShown = systemConflictShown
     }
 
-    private enum CodingKeys: String, CodingKey { case version, providers, hotKey, hotKeyBehavior, lastModeID }
+    private enum CodingKeys: String, CodingKey {
+        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown
+    }
 
     /// Un champ absent prend sa valeur par défaut ; un champ inconnu est ignoré ; un champ présent mais d'une autre
     /// forme lève une erreur (le fichier est alors illisible). Seul `version` est obligatoire.
@@ -79,6 +85,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hotKey = try container.decodeIfPresent(HotKey.self, forKey: .hotKey) ?? defaults.hotKey
         hotKeyBehavior = try container.decodeIfPresent(HotKeyBehavior.self, forKey: .hotKeyBehavior) ?? defaults.hotKeyBehavior
         lastModeID = try container.decodeIfPresent(String.self, forKey: .lastModeID) ?? defaults.lastModeID
+        systemConflictShown = try container.decodeIfPresent(HotKey.self, forKey: .systemConflictShown)
     }
 
     public static var defaults: AppSettings {

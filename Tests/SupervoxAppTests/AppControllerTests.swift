@@ -299,6 +299,60 @@ import Testing
         #expect(refused.panelModel.notices[.hotKey]?.contains("⌃⌥Q") == true)
     }
 
+    /// m-f : un raccourci qui est aussi un raccourci de macOS activé ouvre le panneau une seule fois ; aux lancements
+    /// suivants, l'avis reste, le panneau ne s'ouvre plus seul. Mécanisme : la combinaison annoncée est gardée dans les
+    /// réglages (`systemConflictShown`).
+    @Test func systemShortcutConflictOpensThePanelOnlyOnce() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        system.hotKeys = [.standard]
+        let first = makeController()
+        first.launch()
+        #expect(first.panelModel.isOpen)
+        #expect(store.load().settings.systemConflictShown == .standard)
+
+        let nextSurface = FakePanelSurface()
+        let next = AppController(
+            settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
+            escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
+            keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in nextSurface }, clickMonitor: FakeClickMonitor(),
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+        next.launch()
+        #expect(!next.panelModel.isOpen)
+        #expect(nextSurface.showCount == 0)
+        #expect(next.panelModel.notices[.hotKey]?.contains("raccourci de macOS") == true)
+    }
+
+    /// Garder la combinaison annoncée ne touche pas un fichier illisible au chargement, même redevenu lisible (R1).
+    @Test func recordingTheAnnouncedConflictLeavesAnUnsavableFileAlone() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        system.hotKeys = [.standard]
+        try store.save(.defaults)
+        let original = try Data(contentsOf: store.file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: store.file.path)
+        let controller = makeController()
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: store.file.path)
+
+        controller.launch()
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.notices[.settingsLoad] != nil)
+        #expect(try Data(contentsOf: store.file) == original)
+    }
+
+    /// Garder la combinaison annoncée n'efface pas l'avis de chargement que le panneau ouvert doit montrer :
+    /// l'écriture passe à côté de `updateSettings`, qui l'effacerait.
+    @Test func recordingTheAnnouncedConflictAfterASetAsideKeepsItsNotice() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        system.hotKeys = [.standard]
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("pas du json".utf8).write(to: store.file)
+        let controller = makeController(seeded: false)
+
+        controller.launch()
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.notices[.settingsLoad] != nil)
+        #expect(store.load().settings.systemConflictShown == .standard)
+    }
+
     @Test func acceptedHotKeyAtLaunchLeavesThePanelClosed() {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
