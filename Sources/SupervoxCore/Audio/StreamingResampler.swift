@@ -5,14 +5,14 @@ import Foundation
 /// la prise.
 ///
 /// Pourquoi pas `Resampler.resample` sur chaque tranche : chaque appel crée un convertisseur neuf, dont le filtre
-/// repart de zéro. Mesuré avant le plan : à 48 kHz vers 16 kHz, des tranches indépendantes de 100 ms donnent le même
-/// nombre d'échantillons mais changent le texte transcrit dans 2 cas sur 8. Ici l'état du filtre passe d'une tranche
-/// à l'autre, comme pour un clip entier.
+/// repart de zéro, et la sortie s'écarte de celle du clip entier (mesuré dans `StreamingResamplerTests`). Ici l'état
+/// du filtre passe d'une tranche à l'autre : la sortie est identique à celle du clip entier, quel que soit le découpage.
 ///
 /// - Même convention que `Resampler` : mono, Float32, qualité maximale.
 /// - Fil : les appels sont sérialisés par un verrou interne ; l'ordre des tranches est celui des appels à `push`.
-/// - Erreur du convertisseur : l'instance cesse de produire (`push` et `finish` rendent `[]`), jamais de sortie
-///   tronquée présentée comme complète au milieu d'un flux. La signature ne lève pas d'erreur, comme `Resampler`.
+/// - Erreur du convertisseur : l'instance cesse de produire (`push` et `finish` rendent `[]`) et `hasFailed` passe à
+///   `true`, définitivement. La signature ne lève pas d'erreur, comme `Resampler` : l'appelant lit `hasFailed` (après
+///   `finish()` au plus tard) pour ne pas prendre un flux tronqué pour un flux complet.
 public final class StreamingResampler: @unchecked Sendable {
     private let lock = NSLock()
     /// `nil` quand les deux fréquences sont égales : les échantillons passent tels quels.
@@ -22,6 +22,15 @@ public final class StreamingResampler: @unchecked Sendable {
     private let ratio: Double
     private var finished = false
     private var failed = false
+    /// Pour les tests : appelée avant chaque conversion, `true` simule une erreur du convertisseur.
+    var injectedFault: (() -> Bool)?
+
+    /// `true` si une conversion a échoué : la sortie de cette instance est alors incomplète (voir ci-dessus).
+    public var hasFailed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return failed
+    }
 
     /// `nil` si une fréquence est nulle, négative ou non finie, ou si le système refuse de créer le convertisseur.
     public init?(from: Double, to: Double) {
@@ -100,6 +109,10 @@ public final class StreamingResampler: @unchecked Sendable {
         result.reserveCapacity(Int(capacity))
         while true {
             output.frameLength = 0
+            if injectedFault?() == true {
+                failed = true
+                return []
+            }
             var error: NSError?
             let status = converter.convert(to: output, error: &error) { _, inputStatus in supplying(inputStatus) }
             if status == .error || error != nil {

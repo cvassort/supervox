@@ -85,20 +85,23 @@ private let continuousBound = 1e-9
     #expect(meanSquaredError(stream, whole, from: skippedHead) < continuousBound)
 }
 
-@Test func independentChunksDriftFurtherFromWholeClipThanTheStreamingResampler() throws {
+/// Raison d'être du type : des tranches indépendantes (un convertisseur neuf par tranche) s'écartent du clip entier,
+/// pas le convertisseur continu. Tranches de 1 024 échantillons (écart indépendant mesuré : 0,356 ; continu : 0).
+/// Assertion relative plutôt qu'un seuil absolu sur l'indépendant, qui dépendrait de l'amorçage du filtre.
+@Test func independentChunksDriftFarFurtherFromWholeClipThanTheStreamingResampler() throws {
     let signal = twoToneSignal()
     let whole = Resampler.resample(AudioClip(samples: signal, sampleRate: 48000), to: 16000).samples
-    let continuous = try streamed(signal, chunk: 4800)
-    // Un convertisseur neuf par tranche : c'est ce que `StreamingResampler` existe pour éviter.
-    let independent = slices(signal, of: 4800).flatMap {
+    let continuous = try streamed(signal, chunk: 1024)
+    let independent = slices(signal, of: 1024).flatMap {
         Resampler.resample(AudioClip(samples: $0, sampleRate: 48000), to: 16000).samples
     }
 
     let continuousError = meanSquaredError(continuous, whole, from: skippedHead)
     let independentError = meanSquaredError(independent, whole, from: skippedHead)
-    #expect(independentError > continuousError, "indépendantes \(independentError), continu \(continuousError)")
-    // Le seuil du test précédent doit refuser des tranches indépendantes, sinon il ne protège de rien.
-    #expect(independentError > continuousBound, "indépendantes \(independentError), seuil \(continuousBound)")
+    #expect(continuousError < 1e-6, "continu \(continuousError)")
+    #expect(continuousError * 1000 <= independentError, "continu \(continuousError), indépendantes \(independentError)")
+    // Un continu à 0 satisfait `0 <= x` même si `x` vaut 0 : on exige aussi un écart strict.
+    #expect(independentError > continuousError, "continu \(continuousError), indépendantes \(independentError)")
 }
 
 @Test func streamingResamplerAtSameRateReturnsSamplesUnchanged() throws {
@@ -108,14 +111,28 @@ private let continuousBound = 1e-9
     #expect(resampler.finish().isEmpty)
 }
 
-@Test(arguments: [(0.0, 16000.0), (-48000.0, 16000.0), (48000.0, 0.0), (48000.0, -16000.0)])
+@Test(arguments: [(0.0, 16000.0), (-48000.0, 16000.0), (48000.0, 0.0), (48000.0, -16000.0),
+                  (Double.nan, 16000.0), (48000.0, Double.nan), (Double.infinity, 16000.0), (48000.0, Double.infinity)])
 func streamingResamplerRejectsNonPositiveRates(from: Double, to: Double) {
     #expect(StreamingResampler(from: from, to: to) == nil)
 }
 
 @Test func streamingResamplerAcceptsAnEmptyChunk() throws {
+    let signal = twoToneSignal(seconds: 1)
+    let whole = Resampler.resample(AudioClip(samples: signal, sampleRate: 48000), to: 16000).samples
     let resampler = try #require(StreamingResampler(from: 48000, to: 16000))
+
     #expect(resampler.push([]) == [])
+    // Une tranche vide au début, au milieu et à la fin ne change rien au résultat ni n'abîme le flux.
+    var out = resampler.push(Array(signal[0..<24000]))
+    #expect(resampler.push([]) == [])
+    out += resampler.push(Array(signal[24000...]))
+    #expect(resampler.push([]) == [])
+    out += resampler.finish()
+
+    #expect(!resampler.hasFailed)
+    #expect(out.count == whole.count, "\(out.count) échantillons contre \(whole.count)")
+    #expect(meanSquaredError(out, whole, from: 0) < continuousBound)
 }
 
 /// La queue du filtre (16 échantillons mesurés après 3 s) ne sort qu'à la fin du flux : sans `finish()`, la fin de la
@@ -128,9 +145,34 @@ func streamingResamplerRejectsNonPositiveRates(from: Double, to: Double) {
     for piece in slices(signal, of: 4800) { pushed += resampler.push(piece) }
     let tail = resampler.finish()
 
+    #expect(!resampler.hasFailed)
     #expect(!tail.isEmpty)
     #expect(pushed.count + tail.count == whole.count, "\(pushed.count) + \(tail.count) contre \(whole.count)")
     // Après `finish()`, l'instance ne produit plus rien.
     #expect(resampler.push([0.5, 0.5, 0.5]).isEmpty)
     #expect(resampler.finish().isEmpty)
+}
+
+/// Une erreur du convertisseur ne doit pas passer pour du silence : l'appelant la lit par `hasFailed`.
+/// La panne est injectée (le vrai `AVAudioConverter` ne se laisse pas faire échouer simplement) à la 3e conversion.
+@Test func converterFailureIsReportedAndStopsTheStream() throws {
+    let signal = twoToneSignal(seconds: 1)
+    let resampler = try #require(StreamingResampler(from: 48000, to: 16000))
+    nonisolated(unsafe) var conversions = 0
+    resampler.injectedFault = {
+        conversions += 1
+        return conversions == 3
+    }
+
+    let first = resampler.push(Array(signal[0..<4800]))
+    let second = resampler.push(Array(signal[4800..<9600]))
+    #expect(!first.isEmpty && !second.isEmpty)
+    #expect(!resampler.hasFailed)
+
+    #expect(resampler.push(Array(signal[9600..<14400])).isEmpty)
+    #expect(resampler.hasFailed)
+    // Définitif : plus rien ne sort ensuite, et `hasFailed` ne retombe pas.
+    #expect(resampler.push(Array(signal[14400..<19200])).isEmpty)
+    #expect(resampler.finish().isEmpty)
+    #expect(resampler.hasFailed)
 }
