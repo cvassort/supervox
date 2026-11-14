@@ -1,5 +1,7 @@
 import Foundation
 
+/// Enregistré dans `settings.json` : un nouveau cas exige une nouvelle `AppSettings.current` (voir sa règle
+/// d'évolution).
 public enum ProviderKind: String, Codable, Sendable {
     case openAICompatible
     case anthropic
@@ -36,6 +38,8 @@ public struct Provider: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// Enregistré dans `settings.json` : un nouveau cas exige une nouvelle `AppSettings.current` (voir sa règle
+/// d'évolution).
 public enum HotKeyBehavior: String, Codable, Sendable {
     case toggle
     case hold
@@ -46,6 +50,12 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 /// Règle d'évolution du format : tout champ ajouté est décodé avec `decodeIfPresent` et une valeur par défaut, pour
 /// qu'un fichier écrit avant son ajout se lise encore ; un champ inconnu est ignoré. `version` ne change que pour un
 /// format que l'ancienne application ne saurait pas lire correctement (voir `SettingsStore`).
+///
+/// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, ou toute énumération ajoutée plus
+/// tard) est un tel format : il exige d'augmenter `current`. Sans cela, une application plus ancienne lit un cas
+/// inconnu à sa propre version, ne sait pas décoder le fichier et le met entièrement de côté (fournisseurs compris) ;
+/// avec une version plus récente, elle le garde intact, n'y écrit rien et prend les réglages par défaut. Les deux
+/// comportements sont fixés par `SettingsStoreTests` (`unknownEnumCase…`).
 public struct AppSettings: Codable, Equatable, Sendable {
     /// Version du format du fichier que cette application sait lire et écrire.
     public static let current = 1

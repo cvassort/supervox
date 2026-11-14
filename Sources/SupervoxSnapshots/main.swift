@@ -6,8 +6,8 @@ import SwiftUI
 //
 // Données d'exemple seulement (adresses `example.com`), doubles partout : aucun accès au trousseau, au réseau, aux
 // réglages réels, au clavier ni aux permissions du système. Chaque vue est posée dans une fenêtre placée hors de
-// l'écran, puis la vue cadre de la fenêtre est copiée par `cacheDisplay` ; le fond est peint explicitement, sans quoi
-// il serait transparent.
+// l'écran, puis la vue d'hébergement SwiftUI (le contenu de la fenêtre, sans cadre, barre de titre ni barre d'onglets)
+// est copiée par `cacheDisplay` ; le fond est peint explicitement, sans quoi il serait transparent. Voir `render`.
 
 // supervox-snapshots --iconset <dossier.iconset> : écrit le jeu d'icônes de l'application, pour `iconutil`.
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--iconset" {

@@ -247,6 +247,45 @@ private func sampleSettings() -> AppSettings {
         #expect(store.load().settings == result.settings)
     }
 
+    /// m-d : un cas d'énumération inconnu à la version courante n'est pas remplacé en silence : tout le fichier est
+    /// mis de côté, avec un avis. C'est pourquoi un nouveau cas exige une nouvelle `version` (règle d'`AppSettings`).
+    @Test(arguments: [
+        #"{"version": 1, "providers": [{"id": "6F9619FF-8B86-D011-B42D-00CF4FC964FF", "name": "x", "baseURL": "http://localhost:1", "kind": "typeDuFutur"}]}"#,
+        #"{"version": 1, "hotKeyBehavior": "comportementDuFutur"}"#,
+    ])
+    func unknownEnumCaseAtTheCurrentVersionSetsTheFileAside(json: String) throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(json.utf8).write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        let result = store.load()
+        #expect(result.settings == .defaults)
+        let notice = try #require(result.notice)
+        #expect(notice.contains("mis de côté"))
+        let names = try names(in: directory)
+        #expect(!names.contains("settings.json"))
+        let aside = try #require(names.first { $0.hasPrefix("settings.json.illisible-") })
+        #expect(try Data(contentsOf: directory.appendingPathComponent(aside)) == Data(json.utf8))
+    }
+
+    /// Le même cas inconnu dans un fichier d'une version plus récente : fichier gardé intact, réglages par défaut.
+    @Test func unknownEnumCaseInANewerFileKeepsItAndUsesDefaults() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let original = Data(#"{"version": 2, "hotKeyBehavior": "comportementDuFutur", "lastModeID": "mode-du-futur"}"#.utf8)
+        try original.write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        let result = store.load()
+        #expect(result.settings == .defaults)
+        #expect(result.notice?.contains("plus récente") == true)
+        #expect(try names(in: directory) == ["settings.json"])
+        #expect(try Data(contentsOf: file) == original)
+    }
+
     /// Un champ inconnu (écrit par une version future qui a gardé le même numéro, ou à la main) est ignoré.
     @Test func unknownFieldsAreIgnoredAndTheFileIsKept() throws {
         let directory = try makeTemporaryDirectory()
