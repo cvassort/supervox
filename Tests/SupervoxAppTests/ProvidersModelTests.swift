@@ -616,6 +616,15 @@ struct SaveFailure: Error, LocalizedError {
         #expect(!other.contains("corps du serveur"))
     }
 
+    /// Une redirection vers une autre origine est refusée par le client : le message dit que la clé n'est pas partie
+    /// et ce qu'il faut faire, au lieu d'un texte technique.
+    @Test func crossOriginRedirectHasItsOwnMessage() {
+        let message = ProvidersModel.message(for: EndpointError.crossOriginRedirect)
+        #expect(message.contains("autre adresse"))
+        #expect(message.contains("clé ne lui a pas été envoyée"))
+        #expect(!message.contains("EndpointError"))
+    }
+
     @Test func deniedKeychainHasItsOwnMessage() {
         let denied = ProvidersModel.message(for: SecretError.denied)
         #expect(denied.contains("trousseau"))

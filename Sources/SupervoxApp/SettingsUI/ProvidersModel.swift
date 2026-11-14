@@ -331,6 +331,8 @@ public final class ProvidersModel {
             return "La réponse du serveur a été interrompue."
         case EndpointError.missingVariable:
             return "Erreur inattendue de configuration."
+        case EndpointError.crossOriginRedirect:
+            return "Le serveur renvoie vers une autre adresse (autre hôte, port ou schéma) : la clé ne lui a pas été envoyée. Saisissez l'adresse finale du serveur."
         case SecretError.denied:
             return "Accès au trousseau refusé : autorisez Supervox dans l'invite du trousseau, puis réessayez."
         case let error as SecretError:

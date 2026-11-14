@@ -106,7 +106,8 @@ public struct ModelLister: Sendable {
     }
 
     /// Envoie la requête (GET) et rend l'objet JSON d'une réponse 2xx. Toute autre issue est une `EndpointError`,
-    /// sauf l'annulation de la tâche, qui reste une `CancellationError`.
+    /// sauf l'annulation de la tâche, qui reste une `CancellationError`. Une redirection vers une autre origine n'est
+    /// pas suivie (`EndpointTaskDelegate`) : `.crossOriginRedirect`.
     private func fetchObject(_ request: URLRequest) async throws -> [String: Any] {
         var request = request
         request.httpMethod = "GET"
@@ -114,11 +115,13 @@ public struct ModelLister: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let data: Data
         let response: URLResponse
+        let delegate = EndpointTaskDelegate()
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await session.data(for: request, delegate: delegate)
         } catch {
             throw mapped(error)
         }
+        if delegate.refusedRedirect { throw EndpointError.crossOriginRedirect }
         guard let http = response as? HTTPURLResponse else { throw EndpointError.malformedResponse }
         guard (200..<300).contains(http.statusCode) else {
             throw EndpointError.http(status: http.statusCode, body: masked(String(decoding: data, as: UTF8.self)))

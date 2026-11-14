@@ -12,6 +12,9 @@ public enum EndpointError: Error, Equatable {
     case streamInterrupted
     /// Échec avant d'obtenir une réponse HTTP (réseau, TLS, délai) ou adresse de base inutilisable.
     case transport(String)
+    /// Le serveur a répondu par une redirection vers une autre origine (schéma, hôte ou port) : elle n'est pas
+    /// suivie, et rien n'est envoyé à cette autre origine, clé comprise.
+    case crossOriginRedirect
 }
 
 /// Adresse et clé de l'endpoint, lues dans l'environnement. La clé n'apparaît dans aucun affichage :
