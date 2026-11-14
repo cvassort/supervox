@@ -68,10 +68,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Raccourci déjà signalé comme raccourci de macOS activé en ouvrant le panneau au lancement : il ne l'ouvre plus
     /// seul (l'avis reste). `nil` : rien de signalé.
     public var systemConflictShown: HotKey?
+    /// Moteur, modèle, langue et vocabulaire de la dictée. Absent d'un fichier plus ancien : les défauts s'appliquent.
+    public var transcription: TranscriptionSettings
 
     public init(
         version: Int, providers: [Provider], hotKey: HotKey,
-        hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil
+        hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil,
+        transcription: TranscriptionSettings = .defaults
     ) {
         self.version = version
         self.providers = providers
@@ -79,10 +82,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.hotKeyBehavior = hotKeyBehavior
         self.lastModeID = lastModeID
         self.systemConflictShown = systemConflictShown
+        self.transcription = transcription
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown
+        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription
     }
 
     /// Un champ absent prend sa valeur par défaut ; un champ inconnu est ignoré ; un champ présent mais d'une autre
@@ -96,6 +100,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hotKeyBehavior = try container.decodeIfPresent(HotKeyBehavior.self, forKey: .hotKeyBehavior) ?? defaults.hotKeyBehavior
         lastModeID = try container.decodeIfPresent(String.self, forKey: .lastModeID) ?? defaults.lastModeID
         systemConflictShown = try container.decodeIfPresent(HotKey.self, forKey: .systemConflictShown)
+        transcription =
+            try container.decodeIfPresent(TranscriptionSettings.self, forKey: .transcription) ?? defaults.transcription
     }
 
     public static var defaults: AppSettings {
