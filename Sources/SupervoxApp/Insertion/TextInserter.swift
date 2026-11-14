@@ -112,7 +112,12 @@ public enum InsertionOutcome: Equatable, Sendable {
             return .copied(reason: Self.postFailureReason)
         }
 
-        await wait(restoreDelay)
+        // Dans une tâche non structurée, qui n'hérite pas de l'annulation : une annulation pendant cette attente
+        // (`Task.sleep` rend aussitôt la main) restaurerait avant que l'application cible ait lu ⌘V, et elle
+        // collerait l'ancien contenu. La restauration a toujours lieu au délai prévu.
+        let wait = self.wait
+        let restoreDelay = self.restoreDelay
+        await Task { @MainActor in await wait(restoreDelay) }.value
         // Une autre application a écrit entre-temps : son contenu est plus récent que la sauvegarde, on n'y touche pas.
         restoreIfUnchanged()
         return .pasted

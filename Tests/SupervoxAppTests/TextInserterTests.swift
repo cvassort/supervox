@@ -1,6 +1,7 @@
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
+import Synchronization
 import Testing
 
 @testable import SupervoxApp
@@ -109,9 +110,42 @@ import Testing
     }
 }
 
+/// Une attente qui se comporte comme `try? await Task.sleep` : elle dure jusqu'à `release()`, mais rend la main
+/// aussitôt si la tâche qui l'attend est annulée. Aucune durée réelle n'est attendue.
+@MainActor final class SleepingWait {
+    let log: CallLog
+    private(set) var isSleeping = false
+    private nonisolated let slot = Mutex<CheckedContinuation<Void, Never>?>(nil)
+
+    init(log: CallLog) { self.log = log }
+
+    func wait(_ seconds: Double) async {
+        log.entries.append("wait(\(seconds))")
+        if Task.isCancelled { return }
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                slot.withLock { $0 = continuation }
+                isSleeping = true
+            }
+        } onCancel: {
+            wake()
+        }
+        isSleeping = false
+    }
+
+    func release() { wake() }
+
+    private nonisolated func wake() {
+        slot.withLock {
+            $0?.resume()
+            $0 = nil
+        }
+    }
+}
+
 /// Tout ce qu'il faut pour une insertion : les doubles, leur journal, et l'insertion câblée dessus.
 @MainActor final class InsertionRig {
-    let log = CallLog()
+    let log: CallLog
     let board: FakePasteboard
     let keys: FakeKeyPoster
     let waiter: FakeWait
@@ -119,16 +153,19 @@ import Testing
 
     /// `restoreDelay` et `modifierPatience` à `nil` : les valeurs par défaut de l'insertion.
     init(
+        log: CallLog = CallLog(),
         original: PasteboardContents = FakeInsertion.original,
         trusted: Bool = true, held: [Bool] = [false], postSucceeds: Bool = true,
         layout: any KeyboardLayout = HotKeyTests.ansi,
-        restoreDelay: Double? = nil, modifierPatience: Double? = nil
+        restoreDelay: Double? = nil, modifierPatience: Double? = nil,
+        wait waitOverride: (@MainActor (Double) async -> Void)? = nil
     ) {
+        self.log = log
         board = FakePasteboard(log: log, contents: original)
         keys = FakeKeyPoster(log: log, held: held, postSucceeds: postSucceeds)
         let waiter = FakeWait(log: log)
         self.waiter = waiter
-        let wait: @MainActor (Double) async -> Void = { await waiter.wait($0) }
+        let wait: @MainActor (Double) async -> Void = waitOverride ?? { await waiter.wait($0) }
         switch (restoreDelay, modifierPatience) {
         case (nil, nil):
             inserter = TextInserter(
@@ -365,6 +402,34 @@ enum FakeInsertion {
         let outcome = await box.run(rig.inserter, FakeInsertion.dictated)
         #expect(outcome == .nothing)
         #expect(rig.log.entries == ["read", "writeText(transient: true)", "modifiersHeld", "write"])
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
+    @Test("annulée après le ⌘V : la restauration n'est ni avancée ni sautée, elle a lieu quand l'attente prévue se termine")
+    func cancellationAfterPasteStillWaitsBeforeRestoring() async throws {
+        let log = CallLog()
+        let sleeper = SleepingWait(log: log)
+        let rig = InsertionRig(log: log, wait: { await sleeper.wait($0) })
+        let box = InsertTaskBox()
+        let task = Task { @MainActor in await box.run(rig.inserter, FakeInsertion.dictated) }
+
+        // Laisse l'insertion avancer jusqu'à l'attente de restauration (aucune durée réelle : des cessions seulement).
+        for _ in 0..<1000 where !sleeper.isSleeping { await Task.yield() }
+        try #require(sleeper.isSleeping)
+        #expect(log.entries.last == "wait(0.4)")
+
+        box.cancel()
+        for _ in 0..<100 { await Task.yield() }
+        // L'attente de l'application cible n'est pas finie : le presse-papiers porte encore la dictée.
+        #expect(!log.entries.contains("write"))
+        #expect(rig.board.text == FakeInsertion.dictated)
+
+        sleeper.release()
+        let outcome = await task.value
+        #expect(outcome == .pasted)
+        #expect(log.entries == [
+            "read", "writeText(transient: true)", "modifiersHeld", "postPaste(\(kVK_ANSI_V))", "wait(0.4)", "write",
+        ])
         #expect(rig.board.contents == FakeInsertion.original)
     }
 
