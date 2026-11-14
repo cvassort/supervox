@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "SupervoxApp", targets: ["SupervoxApp"]),
         .executable(name: "Supervox", targets: ["Supervox"]),
         .executable(name: "supervox-bench", targets: ["SupervoxBench"]),
+        .executable(name: "supervox-snapshots", targets: ["SupervoxSnapshots"]),
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.18.3"),
@@ -31,6 +32,7 @@ let package = Package(
             dependencies: ["SupervoxCore"]
         ),
         .executableTarget(name: "Supervox", dependencies: ["SupervoxApp"]),
+        .executableTarget(name: "SupervoxSnapshots", dependencies: ["SupervoxApp"]),
         .executableTarget(
             name: "SupervoxBench",
             dependencies: [

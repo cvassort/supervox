@@ -144,7 +144,8 @@ public final class AppController {
         }
     }
 
-    static func welcome(hotKeyLabel: String?) -> String {
+    /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.
+    public static func welcome(hotKeyLabel: String?) -> String {
         let opening =
             hotKeyLabel.map { "\($0) ouvre et ferme ce panneau, depuis n'importe quelle application." }
             ?? "Ouvrez ce panneau depuis l'icône de Supervox dans la barre de menus."

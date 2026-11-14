@@ -46,7 +46,7 @@ public final class PanelModel {
     /// Libellé du raccourci global effectivement enregistré, `nil` s'il n'y en a aucun.
     public var hotKeyLabel: String?
     /// Accueil du premier lancement ; effacé quand le panneau se ferme.
-    public internal(set) var welcome: String?
+    public var welcome: String?
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 

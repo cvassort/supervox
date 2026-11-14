@@ -247,7 +247,7 @@ private struct ModelsRow: View {
 
 /// Feuille d'ajout ou de modification. Le champ de clé est vide à l'ouverture : la clé n'est jamais
 /// relue pour être affichée.
-struct ProviderEditor: View {
+public struct ProviderEditor: View {
     let model: ProvidersModel
     let existing: Provider?
     @Environment(\.dismiss) private var dismiss
@@ -258,15 +258,17 @@ struct ProviderEditor: View {
     @State private var failure: String?
     @State private var isSaving = false
 
-    init(model: ProvidersModel, existing: Provider?) {
+    /// `existing` : `nil` pour un ajout. `initialFailure` : un message d'erreur déjà affiché (rendu des écrans).
+    public init(model: ProvidersModel, existing: Provider?, initialFailure: String? = nil) {
         self.model = model
         self.existing = existing
         _name = State(initialValue: existing?.name ?? "")
         _baseURL = State(initialValue: existing?.baseURL ?? "https://")
         _kind = State(initialValue: existing?.kind ?? .openAICompatible)
+        _failure = State(initialValue: initialFailure)
     }
 
-    var body: some View {
+    public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
                 TextField("Nom", text: $name)
@@ -449,15 +451,21 @@ private struct PermissionsPane: View {
         }
     }
 
+    /// La couleur porte sur l'icône seule : un texte vert clair sur fond clair se lit mal.
     @ViewBuilder
     private func stateLabel(_ state: PermissionState) -> some View {
         switch state {
-        case .granted:
-            Label("Autorisé", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        case .notDetermined:
-            Label("Pas encore demandé", systemImage: "questionmark.circle").foregroundStyle(.secondary)
-        case .denied:
-            Label("Non autorisé", systemImage: "xmark.circle.fill").foregroundStyle(.red)
+        case .granted: stateLabel("Autorisé", "checkmark.circle.fill", .green)
+        case .notDetermined: stateLabel("Pas encore demandé", "questionmark.circle", .secondary)
+        case .denied: stateLabel("Non autorisé", "xmark.circle.fill", .red)
+        }
+    }
+
+    private func stateLabel(_ title: String, _ symbol: String, _ tint: some ShapeStyle) -> some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(tint)
         }
     }
 }
