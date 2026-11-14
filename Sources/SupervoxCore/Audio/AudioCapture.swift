@@ -19,8 +19,10 @@ public enum AudioCaptureError: Error, Equatable {
 /// - Les échantillons sont rendus à la fréquence native du périphérique ; le rééchantillonnage est l'affaire de l'appelant.
 /// - Une instance sert à plusieurs `start()`/`stop()` successifs : le montage du moteur n'est fait qu'une fois.
 /// - Deux usages : le banc d'essai lit le clip rendu par `stop()` ; la dictée reçoit les tranches au fil de l'eau par
-///   `start(onChunk:)` (le tampon interne continue alors d'être rempli, sans changement pour le premier usage).
-public final class AudioCapture {
+///   `start(onChunk:accumulate:)`, avec `accumulate: false` pour ne rien garder en mémoire.
+/// - `start` et `stop` sont sérialisés par un verrou interne (appelables de plusieurs fils, un à la fois) ; le reste de
+///   l'état est derrière des verrous : `@unchecked Sendable`.
+public final class AudioCapture: @unchecked Sendable {
     /// Échantillons et fréquence, partagés entre le fil audio temps réel (qui ajoute) et l'appelant (qui lit).
     /// Seul état capturé par le tap : jamais `self`.
     private struct Buffer {
@@ -44,13 +46,14 @@ public final class AudioCapture {
     private let anchorPlayer = AVAudioPlayerNode()
     private let voiceProcessing: Bool
     private let buffer = OSAllocatedUnfairLock(initialState: Buffer())
-    /// `true` tant que le tap peut appeler `onChunk`. L'appel se fait sous ce verrou : `stop()` le prend pour passer
-    /// à `false`, donc il attend la fin d'un appel en cours et plus aucun ne démarre après son retour.
-    private let delivering = OSAllocatedUnfairLock(initialState: false)
+    /// Porte de livraison de la prise en cours (une neuve par prise, voir `DeliveryGate`) ; `nil` hors prise.
+    private let currentGate = OSAllocatedUnfairLock<DeliveryGate?>(initialState: nil)
     private let promptsForAccess: Bool
+    /// Sérialise `start` et `stop` : protège `wired` et `running`.
+    private let lifecycle = NSLock()
     private var wired = false
     private var running = false
-    private var description = "entrée audio non initialisée"
+    private let inputText = OSAllocatedUnfairLock(initialState: "entrée audio non initialisée")
 
     /// - Parameter promptsForAccess: `false` pour une application qui a déjà son propre parcours d'autorisation :
     ///   un statut « non déterminé » lève alors `microphoneAccessDenied` au lieu d'afficher l'invite système et d'attendre
@@ -61,17 +64,23 @@ public final class AudioCapture {
     }
 
     /// Nom du micro (si connu), nombre de canaux et fréquence vus au dernier `start()`.
-    public var inputDescription: String { description }
+    public var inputDescription: String { inputText.withLock { $0 } }
 
     /// Démarre sans livraison de tranches : seul `stop()` rend l'enregistrement (usage du banc d'essai).
     public func start() throws {
-        try start(onChunk: nil)
+        try start(onChunk: nil, accumulate: true)
     }
 
     /// Démarre la capture. Si `onChunk` est fourni, il reçoit chaque fenêtre du tap (premier canal, fréquence native),
-    /// dans l'ordre, **sur le fil audio** : il doit rester bref et ne pas appeler `stop()` (blocage). Après le retour de
-    /// `stop()`, plus aucun appel n'arrive.
-    public func start(onChunk: (@Sendable (AudioChunk) -> Void)? = nil) throws {
+    /// dans l'ordre, **sur le fil du tap** : il doit rester bref, ne prendre aucun verrou que l'appelant de `stop()`
+    /// peut tenir, et ne jamais appeler `stop()` (précondition). Après le retour de `stop()`, plus aucun appel n'arrive.
+    ///
+    /// - Parameter accumulate: `true` (défaut) : le tampon interne garde tout, `stop()` rend le clip. `false` : rien
+    ///   n'est gardé (mémoire constante), `stop()` rend un clip vide ; exige `onChunk`.
+    public func start(onChunk: (@Sendable (AudioChunk) -> Void)? = nil, accumulate: Bool = true) throws {
+        precondition(onChunk != nil || accumulate, "accumulate: false sans onChunk n'enregistrerait rien")
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
         guard !running else { throw AudioCaptureError.alreadyRunning }
         try ensureMicrophoneAccess()
         try wireIfNeeded()
@@ -80,42 +89,12 @@ public final class AudioCapture {
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else { throw AudioCaptureError.noInputDevice }
         let device = AVCaptureDevice.default(for: .audio)?.localizedName
-        description = "\(device.map { $0 + ", " } ?? "")\(format.channelCount) canaux, \(Int(format.sampleRate)) Hz, canal 1 lu"
+        inputText.withLock {
+            $0 = "\(device.map { $0 + ", " } ?? "")\(format.channelCount) canaux, \(Int(format.sampleRate)) Hz, canal 1 lu"
+        }
 
+        let tap = makeTap(sampleRate: format.sampleRate, accumulate: accumulate, onChunk: onChunk)
         let store = buffer
-        store.withLock {
-            $0.samples.removeAll(keepingCapacity: true)
-            $0.samples.reserveCapacity(Int(format.sampleRate) * 30)
-            $0.sampleRate = format.sampleRate
-            $0.accepting = true
-            $0.firstBufferAt = nil
-            $0.firstSampleHostTime = nil
-        }
-        let delivering = delivering
-        delivering.withLock { $0 = onChunk != nil }
-        // Fil audio temps réel : un verrou, une copie et l'appel de `onChunk`, rien d'autre.
-        let tap: AVAudioNodeTapBlock = { pcm, when in
-            guard let channels = pcm.floatChannelData else { return }
-            let n = Int(pcm.frameLength)
-            guard n > 0 else { return }
-            let first = UnsafeBufferPointer(start: channels[0], count: n)
-            let rate = pcm.format.sampleRate
-            // `withLockUnchecked` : le pointeur ne sort pas de la section critique, il n'a pas à être Sendable.
-            store.withLockUnchecked {
-                guard $0.accepting else { return }
-                $0.samples.append(contentsOf: first)
-                $0.sampleRate = rate
-                if $0.firstBufferAt == nil {
-                    $0.firstBufferAt = DispatchTime.now().uptimeNanoseconds
-                    $0.firstSampleHostTime = when.isHostTimeValid ? when.hostTime : nil
-                }
-            }
-            if let onChunk {
-                let chunk = AudioChunk(samples: Array(first), sampleRate: rate)
-                delivering.withLock { if $0 { onChunk(chunk) } }
-            }
-        }
-
         do {
             let frames = AVAudioFrameCount((format.sampleRate * Self.tapBufferSeconds).rounded(.up))
             try installTap(on: input, bufferSize: frames, format: format, block: tap)
@@ -125,10 +104,56 @@ public final class AudioCapture {
         } catch {
             input.removeTap(onBus: 0)
             store.withLock { $0.accepting = false }
-            delivering.withLock { $0 = false }
+            currentGate.withLock { $0 }?.close()
             throw error as? AudioCaptureError ?? AudioCaptureError.engineFailed(String(describing: error))
         }
         running = true
+    }
+
+    /// Prépare une prise (remet le tampon à zéro, ouvre une porte de livraison neuve) et rend le bloc du tap. Séparé
+    /// de `start` pour être exercé sans micro par des tampons synthétiques.
+    ///
+    /// Fil du tap : un verrou pour le tampon, une copie `[Float]` et l'appel de `onChunk` sous la porte de livraison ;
+    /// aucun autre travail.
+    func makeTap(sampleRate: Double, accumulate: Bool,
+                 onChunk: (@Sendable (AudioChunk) -> Void)?) -> AVAudioNodeTapBlock {
+        let store = buffer
+        store.withLock {
+            $0.samples.removeAll(keepingCapacity: true)
+            if accumulate { $0.samples.reserveCapacity(Int(sampleRate) * 30) }
+            $0.sampleRate = sampleRate
+            $0.accepting = true
+            $0.firstBufferAt = nil
+            $0.firstSampleHostTime = nil
+        }
+        let gate = DeliveryGate()
+        // Une prise encore ouverte (cas anormal) est fermée avant d'être remplacée.
+        currentGate.withLock { old in
+            let previous = old
+            old = gate
+            return previous
+        }?.close()
+        return { pcm, when in
+            guard let channels = pcm.floatChannelData else { return }
+            let n = Int(pcm.frameLength)
+            guard n > 0 else { return }
+            let first = UnsafeBufferPointer(start: channels[0], count: n)
+            let rate = pcm.format.sampleRate
+            // `withLockUnchecked` : le pointeur ne sort pas de la section critique, il n'a pas à être Sendable.
+            store.withLockUnchecked {
+                guard $0.accepting else { return }
+                if accumulate { $0.samples.append(contentsOf: first) }
+                $0.sampleRate = rate
+                if $0.firstBufferAt == nil {
+                    $0.firstBufferAt = DispatchTime.now().uptimeNanoseconds
+                    $0.firstSampleHostTime = when.isHostTimeValid ? when.hostTime : nil
+                }
+            }
+            if let onChunk {
+                let chunk = AudioChunk(samples: Array(first), sampleRate: rate)
+                gate.deliver { onChunk(chunk) }
+            }
+        }
     }
 
     /// Délai (secondes) entre l'appel de `engine.start()` et la livraison du premier buffer du tap, au dernier
@@ -151,9 +176,16 @@ public final class AudioCapture {
     /// 400 ms au pire** si le système élargit. Un appelant qui ne peut pas perdre la fin d'une phrase doit laisser
     /// tourner la capture au moins 400 ms après le dernier son voulu avant d'appeler `stop()` (c'est ce que fait
     /// `RecordSession`).
+    ///
+    /// Si `onChunk` a été fourni : `stop()` attend la fin d'un appel en cours et plus aucun n'arrive après son retour.
+    /// Ne pas l'appeler depuis `onChunk` (précondition).
     public func stop() -> AudioClip {
+        // Avant de prendre `lifecycle` : un `stop()` venu de `onChunk` doit échouer net, non attendre un autre `stop()`.
+        currentGate.withLock { $0 }?.assertNotDelivering()
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
         // D'abord : une livraison en cours se termine, aucune autre ne commence.
-        delivering.withLock { $0 = false }
+        currentGate.withLock { $0 }?.close()
         if running {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)

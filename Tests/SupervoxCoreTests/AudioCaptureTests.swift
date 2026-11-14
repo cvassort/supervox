@@ -68,8 +68,9 @@ struct RealMicrophoneTests {
         #expect(delivered > 1, "tranches reçues : \(delivered)")
         #expect(received.seconds >= 0.6 && received.seconds <= 1.4, "durée totale des tranches : \(received.seconds) s")
         #expect(received.chunks.allSatisfy { $0.sampleRate > 0 && !$0.samples.isEmpty })
-        // Le tampon interne et le clip rendu par `stop()` restent ceux du banc d'essai : mêmes échantillons que les tranches.
-        #expect(clip.samples.count == received.chunks.reduce(0) { $0 + $1.samples.count })
+        // Le clip rendu par `stop()` contient toutes les tranches livrées ; il peut en contenir une de plus : une fenêtre
+        // ajoutée au tampon juste avant que `stop()` ferme la livraison n'est pas livrée (constaté : 0,7 s contre 0,6 s).
+        #expect(clip.samples.count >= received.chunks.reduce(0) { $0 + $1.samples.count })
         // Contrat de `stop()` : rien n'arrive après son retour.
         try await Task.sleep(for: .milliseconds(400))
         #expect(received.chunks.count == delivered, "tranches arrivées après stop() : \(received.chunks.count - delivered)")
@@ -84,11 +85,141 @@ struct RealMicrophoneTests {
         try await Task.sleep(for: .seconds(1))
         feed.stop()
         let delivered = received.chunks.count
+        // La dictée n'a pas besoin du clip : le tampon interne ne doit rien avoir gardé.
+        #expect(feed.capture.stop().samples.isEmpty)
 
         #expect(received.seconds >= 0.6 && received.seconds <= 1.4, "durée totale des tranches : \(received.seconds) s")
         try await Task.sleep(for: .milliseconds(400))
         #expect(received.chunks.count == delivered, "tranches arrivées après stop() : \(received.chunks.count - delivered)")
     }
+}
+
+// MARK: - Traitement du tap, sans micro (tampons synthétiques)
+
+/// 4 800 images à 48 kHz : une rampe qui commence à `first`, pour reconnaître chaque tranche.
+private func syntheticWindow(first: Float) -> AVAudioPCMBuffer {
+    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 2, interleaved: false)!
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4800)!
+    buffer.frameLength = 4800
+    for i in 0..<4800 {
+        buffer.floatChannelData![0][i] = first + Float(i)
+        buffer.floatChannelData![1][i] = -1   // le 2e canal ne doit jamais apparaître
+    }
+    return buffer
+}
+
+private let anyTime = AVAudioTime(hostTime: 0)
+
+/// La garantie du contrat de `stop()` : aucun `onChunk` après son retour. Deux fils : A est dans une livraison,
+/// B appelle `stop()`. Les attentes à délai ne peuvent produire qu'un faux succès, jamais un faux échec.
+@Test func stopWaitsForTheDeliveryInProgressAndNothingIsDeliveredAfterItReturns() {
+    let capture = AudioCapture()
+    let received = ReceivedChunks()
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    let stopReturned = DispatchSemaphore(value: 0)
+    let tapDone = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) let tap = capture.makeTap(sampleRate: 48000, accumulate: false) { chunk in
+        received.append(chunk)
+        if received.chunks.count == 1 {
+            entered.signal()
+            release.wait()
+        }
+    }
+    nonisolated(unsafe) let window = syntheticWindow(first: 0)
+
+    DispatchQueue.global().async {   // fil A : le tap, bloqué dans `onChunk`
+        tap(window, anyTime)
+        tapDone.signal()
+    }
+    #expect(entered.wait(timeout: .now() + 10) == .success)
+    DispatchQueue.global().async {   // fil B
+        _ = capture.stop()
+        stopReturned.signal()
+    }
+    #expect(stopReturned.wait(timeout: .now() + 0.2) == .timedOut, "stop() est revenu pendant une livraison")
+    release.signal()
+    #expect(stopReturned.wait(timeout: .now() + 10) == .success)
+    #expect(tapDone.wait(timeout: .now() + 10) == .success)
+
+    tap(window, anyTime)   // un bloc du tap en retard, après le retour de stop()
+    #expect(received.chunks.count == 1)
+}
+
+/// Un bloc de la prise précédente, encore en vol après un nouveau `start`, ne doit pas appeler l'ancien `onChunk`.
+@Test func aLateTapBlockOfAnEarlierTakeNeverReachesTheNewTakeHandler() {
+    let capture = AudioCapture()
+    let first = ReceivedChunks()
+    let second = ReceivedChunks()
+    nonisolated(unsafe) let oldTap = capture.makeTap(sampleRate: 48000, accumulate: false) { first.append($0) }
+    _ = capture.stop()
+    nonisolated(unsafe) let newTap = capture.makeTap(sampleRate: 48000, accumulate: false) { second.append($0) }
+    let window = syntheticWindow(first: 0)
+
+    oldTap(window, anyTime)
+    newTap(window, anyTime)
+
+    #expect(first.chunks.isEmpty)
+    #expect(second.chunks.count == 1)
+}
+
+@Test func tapDeliversTheFirstChannelOnlyAtTheNativeRate() {
+    let capture = AudioCapture()
+    let received = ReceivedChunks()
+    let tap = capture.makeTap(sampleRate: 48000, accumulate: true) { received.append($0) }
+
+    tap(syntheticWindow(first: 10), anyTime)
+
+    let chunk = received.chunks.first
+    #expect(chunk?.sampleRate == 48000)
+    #expect(chunk?.samples.count == 4800)
+    #expect(chunk?.samples.first == 10 && chunk?.samples.last == 10 + 4799)
+}
+
+@Test func accumulateFalseKeepsNothingInTheInternalBuffer() {
+    let capture = AudioCapture()
+    let received = ReceivedChunks()
+    let tap = capture.makeTap(sampleRate: 48000, accumulate: false) { received.append($0) }
+
+    for index in 0..<5 { tap(syntheticWindow(first: Float(index)), anyTime) }
+
+    #expect(received.chunks.count == 5)
+    #expect(capture.stop().samples.isEmpty)
+}
+
+@Test func accumulateTrueKeepsEveryWindowInTheInternalBufferForStop() {
+    let capture = AudioCapture()
+    let received = ReceivedChunks()
+    let tap = capture.makeTap(sampleRate: 48000, accumulate: true) { received.append($0) }
+
+    for index in 0..<3 { tap(syntheticWindow(first: Float(index) * 10000), anyTime) }
+    let clip = capture.stop()
+
+    #expect(received.chunks.count == 3)
+    #expect(clip.samples == received.chunks.flatMap(\.samples))
+    #expect(clip.sampleRate == 48000)
+}
+
+@Test func tapWithoutHandlerStillRecordsForTheBench() {
+    let capture = AudioCapture()
+    let tap = capture.makeTap(sampleRate: 48000, accumulate: true, onChunk: nil)
+
+    tap(syntheticWindow(first: 0), anyTime)
+
+    #expect(capture.stop().samples.count == 4800)
+}
+
+/// Appeler `stop()` depuis `onChunk` : erreur de programmation, le processus s'arrête (précondition).
+@Test func captureStopFromOnChunkIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let capture = AudioCapture()
+        let tap = capture.makeTap(sampleRate: 48000, accumulate: false) { _ in _ = capture.stop() }
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48000, channels: 1, interleaved: false)!
+        let window = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480)!
+        window.frameLength = 480
+        tap(window, AVAudioTime(hostTime: 0))
+    }
+    #expect(String(decoding: result.standardErrorContent, as: UTF8.self).contains("erreur de programmation"))
 }
 
 // MARK: - Décision d'accès au micro (pure : aucune permission réelle n'est touchée)
