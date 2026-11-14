@@ -95,7 +95,8 @@ final class TestFeed: MicrophoneFeed, @unchecked Sendable {
 final class ScriptedDetector: StreamingVoiceDetector, @unchecked Sendable {
     let blockSize: Int
     private let events: [Int: VoiceEvent]
-    private let state = OSAllocatedUnfairLock(initialState: (blocks: [[Float]](), prepares: 0, resets: 0))
+    private let state = OSAllocatedUnfairLock(initialState: (blocks: [[Float]](), prepares: 0, resets: 0,
+                                                              holds: [Int: (entered: Gate, release: Gate)]()))
     /// Fait échouer `prepare()`.
     var prepareError: Error?
     /// Fait échouer `process` pour le bloc de rang donné.
@@ -108,6 +109,14 @@ final class ScriptedDetector: StreamingVoiceDetector, @unchecked Sendable {
     init(blockSize: Int = 1000, events: [Int: VoiceEvent] = [:]) {
         self.blockSize = blockSize
         self.events = events
+    }
+
+    /// Retient `process` sur le bloc de rang `block` : `entered` s'ouvre à l'entrée, le bloc ne sort qu'à l'ouverture de
+    /// `release`. À poser avant `start()`.
+    func hold(block: Int) -> (entered: Gate, release: Gate) {
+        let gates = (entered: Gate(), release: Gate())
+        state.withLock { $0.holds[block] = gates }
+        return gates
     }
 
     var blocks: [[Float]] { state.withLock { $0.blocks } }
@@ -128,6 +137,10 @@ final class ScriptedDetector: StreamingVoiceDetector, @unchecked Sendable {
         let index = state.withLock { s -> Int in
             s.blocks.append(block)
             return s.blocks.count - 1
+        }
+        if let gates = state.withLock({ $0.holds[index] }) {
+            gates.entered.open()
+            await gates.release.wait()
         }
         if let processFailure, processFailure.block == index { throw processFailure.error }
         return events[index]

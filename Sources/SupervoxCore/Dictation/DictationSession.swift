@@ -88,6 +88,14 @@ public actor DictationSession: DictationSessioning {
     /// après une phase terminale).
     var phase: DictationPhase { snapshot.phase }
 
+    /// Pour les tests : nombre de passes d'aperçu lancées depuis le début de la session.
+    private(set) var previewPassesLaunched = 0
+
+    /// Pour les tests : rend la main quand la pompe a fini (flux vidé ou annulée).
+    func waitUntilPumpEnds() async {
+        await pump?.value
+    }
+
     /// Niveau affichable d'une tranche : RMS en décibels, ramené sur 0…1 (−60 dB → 0, 0 dB → 1). Une tranche vide ou
     /// non numérique donne 0.
     public static func level(of samples: [Float]) -> Float {
@@ -250,6 +258,7 @@ public actor DictationSession: DictationSessioning {
             return
         }
         previewBusy = true
+        previewPassesLaunched += 1
         let language = config.language
         let vocabulary = config.vocabulary
         Task { [weak self] in
