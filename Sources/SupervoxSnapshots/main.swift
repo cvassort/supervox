@@ -9,8 +9,15 @@ import SwiftUI
 // l'écran, puis la vue cadre de la fenêtre est copiée par `cacheDisplay` ; le fond est peint explicitement, sans quoi
 // il serait transparent.
 
+// supervox-snapshots --iconset <dossier.iconset> : écrit le jeu d'icônes de l'application, pour `iconutil`.
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--iconset" {
+    try BrandMark.writeIconset(to: URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true))
+    print("jeu d'icônes écrit : \(CommandLine.arguments[2])")
+    exit(0)
+}
 guard CommandLine.arguments.count == 2 else {
-    FileHandle.standardError.write(Data("usage : supervox-snapshots <dossier de sortie>\n".utf8))
+    FileHandle.standardError.write(
+        Data("usage : supervox-snapshots <dossier de sortie>\n        supervox-snapshots --iconset <dossier.iconset>\n".utf8))
     exit(2)
 }
 let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)

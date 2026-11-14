@@ -101,6 +101,9 @@ swift run supervox-snapshots /chemin/vers/un/dossier
 d'exemple (`example.com`) : aucun accès au trousseau, au réseau ni aux réglages réels. Les onglets des réglages
 sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas fidèlement.
 
+Le logo est dessiné par le code (`BrandMark`) : aucune image n'est suivie dans le dépôt. `Scripts/make-app.sh`
+fabrique l'icône de l'application avec `supervox-snapshots --iconset <dossier.iconset>` puis `iconutil`.
+
 ## Le banc d'essai
 
 ```sh

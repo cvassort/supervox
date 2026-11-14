@@ -281,7 +281,7 @@ public final class AppController {
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Supervox")
+        item.button?.image = BrandMark.menuBarImage()
         let menu = NSMenu()
         let panelItem = MenuAction.item(panelMenuTitle, key: "") { [weak self] in self?.togglePanelFromMenu() }
         menu.addItem(panelItem)

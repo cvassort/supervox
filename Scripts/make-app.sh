@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Construit build/Supervox.app (compilation release, Info.plist, signature).
+# Construit build/Supervox.app (compilation release, icône, Info.plist, signature).
 #
 # Signature : avec l'identité nommée par SUPERVOX_SIGN_IDENTITY si elle est définie (par exemple un
 # certificat auto-signé du trousseau de connexion) ; sinon ad hoc, et alors le système redemande le
@@ -16,6 +16,12 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$binary" "$app/Contents/MacOS/Supervox"
 
+# Icône : dessinée par le code (BrandMark), puis assemblée en .icns. Aucune image n'est suivie dans le dépôt.
+iconset="$(mktemp -d)/Supervox.iconset"
+swift run -c release supervox-snapshots --iconset "$iconset" >/dev/null
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/Supervox.icns"
+rm -rf "$(dirname "$iconset")"
+
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -24,6 +30,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDevelopmentRegion</key>
     <string>fr</string>
     <key>CFBundleExecutable</key>
+    <string>Supervox</string>
+    <key>CFBundleIconFile</key>
     <string>Supervox</string>
     <key>CFBundleIdentifier</key>
     <string>dev.supervox.app</string>
