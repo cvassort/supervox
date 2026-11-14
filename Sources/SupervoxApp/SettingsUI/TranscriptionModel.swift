@@ -43,6 +43,8 @@ public final class TranscriptionModel {
     private var listed: [LocalModel] = []
     /// Téléchargement en cours (`downloading`) ou échec (`failed`), par identifiant de modèle.
     private var overrides: [String: LocalModel.State] = [:]
+    /// Vrai une fois la liste lue au moins une fois (même vide).
+    public private(set) var hasListed = false
     @ObservationIgnored private var vocabularyGeneration = 0
     @ObservationIgnored private let catalog: any ModelCatalog
     @ObservationIgnored private let promptTokenLimit: Int
@@ -66,6 +68,39 @@ public final class TranscriptionModel {
 
     public func refresh() async {
         listed = await catalog.models()
+        hasListed = true
+    }
+
+    /// Les variantes WhisperKit de la liste, dans l'ordre du catalogue.
+    public var whisperModels: [LocalModel] { models.filter { Self.whisperVariant(of: $0) != nil } }
+
+    /// Le nom de variante WhisperKit d'une ligne de la liste, `nil` pour les autres modèles.
+    public static func whisperVariant(of model: LocalModel) -> String? { LocalModelID.whisperVariant(of: model.id) }
+
+    /// Le bouton d'une ligne de la liste.
+    public struct RowAction: Equatable, Sendable {
+        public enum Kind: Equatable, Sendable { case download, delete }
+        public let kind: Kind
+        public let label: String
+    }
+
+    /// Le bouton que l'état permet : télécharger (ou réessayer après un échec), supprimer, ou aucun pendant un téléchargement.
+    public static func action(for state: LocalModel.State) -> RowAction? {
+        switch state {
+        case .absent: RowAction(kind: .download, label: "Télécharger")
+        case .failed: RowAction(kind: .download, label: "Réessayer")
+        case .ready: RowAction(kind: .delete, label: "Supprimer…")
+        case .downloading: nil
+        }
+    }
+
+    public static func stateLabel(_ state: LocalModel.State) -> String {
+        switch state {
+        case .absent: "Non téléchargé"
+        case .ready: "Prêt"
+        case .downloading(let fraction): "Téléchargement : \(Int((min(max(fraction, 0), 1) * 100).rounded())) %"
+        case .failed(let reason): reason
+        }
     }
 
     /// Lance le téléchargement. Sans effet si ce modèle est déjà en cours de téléchargement.

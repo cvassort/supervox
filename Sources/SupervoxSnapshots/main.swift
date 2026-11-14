@@ -1,5 +1,6 @@
 import AppKit
 import SupervoxApp
+import SupervoxCore
 import SwiftUI
 
 // supervox-snapshots <dossier> : rend chaque écran de l'application en PNG, en clair et en sombre.
@@ -47,6 +48,65 @@ struct ExamplePermissions: PermissionsProbe {
 @MainActor final class NoKeyMonitor: KeyEventMonitor {
     func start(_ handler: @escaping @MainActor (UInt16, NSEvent.ModifierFlags) -> Void) {}
     func stop() {}
+}
+
+/// Catalogue d'exemple : une liste figée (un modèle par état) et un nombre de jetons d'amorce donné.
+actor ExampleCatalog: ModelCatalog {
+    private var listed: [LocalModel]
+    private let tokenCount: Int?
+    init(listed: [LocalModel], tokenCount: Int? = nil) {
+        self.listed = listed
+        self.tokenCount = tokenCount
+    }
+    func models() async -> [LocalModel] { listed }
+    func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {}
+    func delete(_ id: String) async throws {
+        if let index = listed.firstIndex(where: { $0.id == id }) { listed[index].state = .absent }
+    }
+    func promptTokenCount(_ vocabulary: [String], whisperModel: String) async -> Int? { tokenCount }
+}
+
+let turboID = LocalModelID.whisper("large-v3-v20240930_turbo")
+func exampleModels(
+    parakeet: LocalModel.State, turbo: LocalModel.State, small: LocalModel.State, base: LocalModel.State,
+    voice: LocalModel.State
+) -> [LocalModel] {
+    [
+        LocalModel(
+            id: LocalModelID.parakeet, title: "Parakeet",
+            detail:
+                "Aperçu du texte en direct pendant que vous parlez, et moteur de dictée possible, très rapide. Comprend le petit modèle qui sert à reconnaître votre vocabulaire.",
+            state: parakeet),
+        LocalModel(
+            id: turboID, title: "Whisper large-v3 turbo",
+            detail:
+                "Le modèle par défaut, celui des mesures de précision du projet. C'est le plus gros des trois : il demande le plus de temps de téléchargement, d'espace disque et de mémoire.",
+            state: turbo),
+        LocalModel(
+            id: LocalModelID.whisper("small"), title: "Whisper small",
+            detail:
+                "Plus petit et plus rapide à charger que le modèle par défaut. Sa précision n'a pas été mesurée pour ce projet, et elle est en général moins bonne.",
+            state: small),
+        LocalModel(
+            id: LocalModelID.whisper("base"), title: "Whisper base",
+            detail:
+                "Le plus léger des trois, pour un Mac peu puissant ou un essai rapide. Sa précision n'a pas été mesurée pour ce projet, et elle est en général plus faible.",
+            state: base),
+        LocalModel(
+            id: LocalModelID.voiceDetector, title: "Détecteur de voix",
+            detail: "Repère quand vous parlez, pour ne pas transcrire les silences.", state: voice),
+    ]
+}
+
+/// Un modèle d'onglet Transcription préparé : liste lue, puis `act` (une saisie refusée, une suppression…).
+@MainActor func transcriptionModel(
+    _ catalog: any ModelCatalog, settings: TranscriptionSettings = .defaults,
+    act: (TranscriptionModel) async -> Void = { _ in }
+) async -> TranscriptionModel {
+    let model = TranscriptionModel(settings: settings, catalog: catalog, promptTokenLimit: 111, save: { _ in })
+    await model.refresh()
+    await act(model)
+    return model
 }
 
 let layout = ExampleLayout()
@@ -162,6 +222,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel(list), hotKey: hotKeyModel(),
+                transcription: await transcriptionModel(UnavailableModelCatalog()),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -171,6 +232,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(refusing: refusing),
+                transcription: await transcriptionModel(UnavailableModelCatalog()),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .hotKey),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -180,9 +242,72 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(),
+                transcription: await transcriptionModel(UnavailableModelCatalog()),
                 permissions: PermissionsModel(probe: probe), openSystemSettings: { _ in }, initialTab: .permissions),
             name: name, dark: dark, background: window, size: settingsSize)
     }
+
+    // Onglet Transcription. La barre d'onglets n'est pas rendue (voir `render`).
+    func transcriptionTab(_ model: TranscriptionModel) async -> SettingsView {
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model,
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .transcription)
+    }
+    let everyStateModels = exampleModels(
+        parakeet: .downloading(0.4), turbo: .ready,
+        small: .failed("Le téléchargement a échoué : la connexion Internet semble interrompue."), base: .absent,
+        voice: .ready)
+    let allAbsentModels = exampleModels(parakeet: .absent, turbo: .absent, small: .absent, base: .absent, voice: .absent)
+    let everyState = ExampleCatalog(listed: everyStateModels)
+    let allAbsent = ExampleCatalog(listed: allAbsentModels)
+    let tallSize = NSSize(width: 600, height: 1_180)
+    // La liste avec les quatre états (téléchargement, prêt, échec, absent), le contenu de l'onglet en entier (la vraie
+    // fenêtre le fait défiler), puis à la taille de la vraie fenêtre.
+    try render(
+        TranscriptionPane(
+            model: await transcriptionModel(
+                everyState, settings: TranscriptionSettings(
+                    engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+                    vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"]))),
+        name: "transcription-liste", dark: dark, background: window, size: tallSize)
+    try render(
+        await transcriptionTab(await transcriptionModel(everyState)),
+        name: "transcription-liste-fenetre", dark: dark, background: window, size: settingsSize)
+    // Parakeet choisi, rien de téléchargé.
+    try render(
+        TranscriptionPane(
+            model: await transcriptionModel(
+                allAbsent, settings: TranscriptionSettings(
+                    engine: "parakeet", whisperModel: "small", language: "en", vocabulary: []))),
+        name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
+    // Vocabulaire refusé : trop long pour l'amorce du moteur, l'ancien est gardé.
+    try render(
+        await transcriptionTab(
+            await transcriptionModel(
+                ExampleCatalog(listed: everyStateModels, tokenCount: 140),
+                settings: TranscriptionSettings(
+                    engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+                    vocabulary: ["Kubernetes", "PostgreSQL"]),
+                act: { await $0.setVocabulary(text: (1...40).map { "TermeTechnique\($0)" }.joined(separator: "\n")) })),
+        name: "transcription-vocabulaire-refuse", dark: dark, background: window, size: settingsSize)
+    // Vocabulaire accepté, mais le modèle n'est pas là pour compter.
+    try render(
+        await transcriptionTab(
+            await transcriptionModel(
+                ExampleCatalog(listed: allAbsentModels, tokenCount: nil),
+                act: { await $0.setVocabulary(text: "Kubernetes\nPostgreSQL") })),
+        name: "transcription-vocabulaire-avertissement", dark: dark, background: window, size: settingsSize)
+    // Suppression du modèle du moteur choisi : le message prévient.
+    try render(
+        await transcriptionTab(
+            await transcriptionModel(
+                ExampleCatalog(listed: exampleModels(parakeet: .absent, turbo: .ready, small: .absent, base: .absent, voice: .ready)),
+                act: { await $0.delete(turboID) })),
+        name: "transcription-suppression", dark: dark, background: window, size: settingsSize)
+    // Version sans catalogue de modèles.
+    try render(
+        TranscriptionPane(model: await transcriptionModel(UnavailableModelCatalog())),
+        name: "transcription-indisponible", dark: dark, background: window, size: NSSize(width: 600, height: 760))
 
     // Feuille d'édition : ajout vide, puis fournisseur existant avec une erreur.
     try render(

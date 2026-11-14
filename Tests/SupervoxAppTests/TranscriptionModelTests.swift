@@ -14,6 +14,7 @@ final class FakeModelCatalog: ModelCatalog {
         var downloads: [String] = []
         var deletions: [String] = []
         var countRequests: [(vocabulary: [String], model: String)] = []
+        var listCount = 0
         var tokenCount: Int?
         var download: DownloadBehavior = { _, _ in }
         var deleteFailure: (any Error)?
@@ -30,12 +31,18 @@ final class FakeModelCatalog: ModelCatalog {
 
     var downloads: [String] { state.withLock { $0.downloads } }
     var deletions: [String] { state.withLock { $0.deletions } }
+    var listCount: Int { state.withLock { $0.listCount } }
     var countRequests: [(vocabulary: [String], model: String)] { state.withLock { $0.countRequests } }
     func setTokenCount(_ count: Int?) { state.withLock { $0.tokenCount = count } }
     func setDownload(_ behavior: @escaping DownloadBehavior) { state.withLock { $0.download = behavior } }
     func setDeleteFailure(_ error: (any Error)?) { state.withLock { $0.deleteFailure = error } }
 
-    func models() async -> [LocalModel] { state.withLock { $0.models } }
+    func models() async -> [LocalModel] {
+        state.withLock { state in
+            state.listCount += 1
+            return state.models
+        }
+    }
 
     func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         let behavior = state.withLock { state in
@@ -111,6 +118,40 @@ final class FakeModelCatalog: ModelCatalog {
         #expect(model.models.map(\.id) == [LocalModelID.parakeet, FakeModelCatalog.turbo.id, FakeModelCatalog.small.id])
         #expect(Self.state(model, LocalModelID.parakeet) == .absent)
         #expect(Self.state(model, FakeModelCatalog.turbo.id) == .ready)
+    }
+
+    @Test func theListIsKnownOnlyAfterTheFirstRefresh() async {
+        let model = makeModel()
+        #expect(!model.hasListed)
+        await model.refresh()
+        #expect(model.hasListed)
+    }
+
+    // MARK: - Lignes de l'onglet
+
+    @Test func eachStateOffersTheRightButton() {
+        #expect(TranscriptionModel.action(for: .absent) == TranscriptionModel.RowAction(kind: .download, label: "Télécharger"))
+        #expect(
+            TranscriptionModel.action(for: .failed("x")) == TranscriptionModel.RowAction(kind: .download, label: "Réessayer"))
+        #expect(TranscriptionModel.action(for: .ready) == TranscriptionModel.RowAction(kind: .delete, label: "Supprimer…"))
+        #expect(TranscriptionModel.action(for: .downloading(0.4)) == nil)
+    }
+
+    @Test func eachStateHasAReadableLabel() {
+        #expect(TranscriptionModel.stateLabel(.absent) == "Non téléchargé")
+        #expect(TranscriptionModel.stateLabel(.ready) == "Prêt")
+        #expect(TranscriptionModel.stateLabel(.downloading(0.4)) == "Téléchargement : 40 %")
+        #expect(TranscriptionModel.stateLabel(.downloading(0)) == "Téléchargement : 0 %")
+        #expect(TranscriptionModel.stateLabel(.downloading(1)) == "Téléchargement : 100 %")
+        #expect(TranscriptionModel.stateLabel(.failed("Le téléchargement a échoué : réseau.")) == "Le téléchargement a échoué : réseau.")
+    }
+
+    @Test func theWhisperVariantsAreTheWhisperRowsOfTheList() async {
+        let model = makeModel()
+        await model.refresh()
+        #expect(model.whisperModels.map(\.id) == [FakeModelCatalog.turbo.id, FakeModelCatalog.small.id])
+        #expect(TranscriptionModel.whisperVariant(of: FakeModelCatalog.small) == "small")
+        #expect(TranscriptionModel.whisperVariant(of: FakeModelCatalog.parakeet) == nil)
     }
 
     // MARK: - Enregistrement des changements
