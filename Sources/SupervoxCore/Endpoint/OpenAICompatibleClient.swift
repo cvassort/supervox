@@ -5,7 +5,7 @@ import Synchronization
 /// et des arguments des appels.
 public final class OpenAICompatibleClient: Sendable {
     private let config: EndpointConfig
-    private let session: URLSession
+    let session: URLSession
     /// Délai d'inactivité de chaque requête, en secondes : la requête échoue (`EndpointError.transport`) si aucune
     /// donnée n'arrive pendant cette durée (mesuré : un serveur muet fait échouer la requête au bout du délai ; une
     /// réponse qui s'étire sur plus longtemps mais livre des octets plus souvent passe). Ce n'est pas une durée totale.
@@ -14,7 +14,7 @@ public final class OpenAICompatibleClient: Sendable {
     /// Sans délai explicite, une requête attendrait 60 s (défaut du système) à chaque appel sur un endpoint muet.
     public static let defaultRequestTimeout: TimeInterval = 30
 
-    public init(config: EndpointConfig, session: URLSession = .shared, requestTimeout: TimeInterval = defaultRequestTimeout) {
+    public init(config: EndpointConfig, session: URLSession = EndpointSession.shared, requestTimeout: TimeInterval = defaultRequestTimeout) {
         self.config = config
         self.session = session
         self.requestTimeout = requestTimeout

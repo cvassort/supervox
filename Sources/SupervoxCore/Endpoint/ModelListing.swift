@@ -14,7 +14,7 @@ public enum ModelListingKind: Sendable {
 public struct ModelLister: Sendable {
     private let config: EndpointConfig
     private let kind: ModelListingKind
-    private let session: URLSession
+    let session: URLSession
     /// Délai d'inactivité de chaque requête, en secondes (voir `OpenAICompatibleClient.requestTimeout`).
     public let requestTimeout: TimeInterval
 
@@ -25,7 +25,7 @@ public struct ModelLister: Sendable {
     /// Au-delà de ce nombre de pages, la liste est refusée : un serveur qui annonce toujours une suite ne boucle pas.
     static let maxPages = 20
 
-    public init(config: EndpointConfig, kind: ModelListingKind, session: URLSession = .shared, requestTimeout: TimeInterval = 15) {
+    public init(config: EndpointConfig, kind: ModelListingKind, session: URLSession = EndpointSession.shared, requestTimeout: TimeInterval = 15) {
         self.config = config
         self.kind = kind
         self.session = session
