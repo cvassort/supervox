@@ -3,13 +3,23 @@
 /// Contrat : un seul emplacement. `register` remplace ce qui s'y trouve ; si le système refuse,
 /// le résultat est `false` et plus aucun raccourci n'est enregistré (l'ancien n'est pas conservé).
 /// `unregister` retire le raccourci enregistré, et ne fait rien s'il n'y en a pas.
-/// `onPress` est appelé sur le fil principal.
+/// `onPress` et `onRelease` sont appelés sur le fil principal, dans l'ordre où le système les a émis (un appui, puis son
+/// relâchement). `onRelease` vaut `nil` quand le relâchement n'intéresse personne (Échap).
 ///
 /// Le protocole est isolé au fil principal, comme `HotKeyCenter` et les rappels.
 @MainActor
 public protocol HotKeyRegistrar {
-    func register(_ hotKey: HotKey, onPress: @escaping @MainActor () -> Void) -> Bool
+    func register(
+        _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void, onRelease: (@MainActor () -> Void)?
+    ) -> Bool
     func unregister()
+}
+
+extension HotKeyRegistrar {
+    /// Un raccourci dont seul l'appui compte.
+    func register(_ hotKey: HotKey, onPress: @escaping @MainActor () -> Void) -> Bool {
+        register(hotKey, onPress: onPress, onRelease: nil)
+    }
 }
 
 public enum HotKeyError: Error, Equatable, Sendable {
@@ -28,6 +38,7 @@ public final class HotKeyCenter {
     private let registrar: any HotKeyRegistrar
     private let layout: any KeyboardLayout
     private var activeOnPress: (@MainActor () -> Void)?
+    private var activeOnRelease: (@MainActor () -> Void)?
 
     /// Vrai entre `suspend` et `resume` (ou le prochain `apply`) : `active` est gardé mais pas enregistré.
     public private(set) var isSuspended = false
@@ -45,9 +56,12 @@ public final class HotKeyCenter {
     public func resume() -> Bool {
         guard isSuspended else { return true }
         isSuspended = false
-        guard let active, let activeOnPress, registrar.register(active, onPress: activeOnPress) else {
+        guard let active, let activeOnPress,
+            registrar.register(active, onPress: activeOnPress, onRelease: activeOnRelease)
+        else {
             self.active = nil
             activeOnPress = nil
+            activeOnRelease = nil
             return false
         }
         return true
@@ -58,6 +72,7 @@ public final class HotKeyCenter {
         registrar.unregister()
         active = nil
         activeOnPress = nil
+        activeOnRelease = nil
         isSuspended = false
     }
 
@@ -73,31 +88,37 @@ public final class HotKeyCenter {
 
     /// Enregistre `hotKey` à la place du précédent. Si la combinaison est invalide, le système n'est
     /// pas sollicité. Si le système la refuse, le précédent raccourci est de nouveau enregistré avec
-    /// son propre rappel ; hors suspension, `active` ne nomme jamais un raccourci qui n'est pas enregistré.
+    /// ses propres rappels ; hors suspension, `active` ne nomme jamais un raccourci qui n'est pas enregistré.
     public func apply(
-        _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void
+        _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void, onRelease: (@MainActor () -> Void)? = nil
     ) -> Result<Void, HotKeyError> {
         let validation = hotKey.validate(layout: layout)
         guard validation == .valid else { return .failure(.invalid(validation)) }
 
         let previous = active
         let previousOnPress = activeOnPress
+        let previousOnRelease = activeOnRelease
         // Un essai met fin à une suspension : en cas de refus, le précédent est réenregistré ci-dessous.
         isSuspended = false
         // Retiré pour l'essai : le système refuserait une combinaison déjà tenue par l'ancienne.
         registrar.unregister()
-        if registrar.register(hotKey, onPress: onPress) {
+        if registrar.register(hotKey, onPress: onPress, onRelease: onRelease) {
             active = hotKey
             activeOnPress = onPress
+            activeOnRelease = onRelease
             return .success(())
         }
 
-        if let previous, let previousOnPress, registrar.register(previous, onPress: previousOnPress) {
+        if let previous, let previousOnPress,
+            registrar.register(previous, onPress: previousOnPress, onRelease: previousOnRelease)
+        {
             active = previous
             activeOnPress = previousOnPress
+            activeOnRelease = previousOnRelease
         } else {
             active = nil
             activeOnPress = nil
+            activeOnRelease = nil
         }
         return .failure(.refused)
     }
