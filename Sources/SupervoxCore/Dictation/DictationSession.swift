@@ -157,7 +157,6 @@ public actor DictationSession: DictationSessioning {
         stopCapture()
         // La pompe vide ce qui était déjà livré, puis s'arrête avec le flux.
         await pump?.value
-        guard snapshot.phase == .finalizing else { return }
 
         if let resampler {
             guard await ingest(resampler.finish()), !failIfResamplerFailed(resampler) else { return }
@@ -188,8 +187,8 @@ public actor DictationSession: DictationSessioning {
             fail(.engine(Self.describe(error)))
             return
         }
-        // Annulée pendant l'attente : le résultat qui arrive ne change plus rien.
-        guard snapshot.phase == .finalizing else { return }
+        // Annulée pendant l'attente : `setPhase` refuse tout changement depuis une phase terminale, le résultat qui
+        // arrive ne change donc plus rien.
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             fail(.noSpeech)
@@ -206,7 +205,6 @@ public actor DictationSession: DictationSessioning {
     // MARK: - Pompe
 
     private func handle(_ chunk: AudioChunk) async {
-        guard ingesting else { return }
         if let rate = inputRate {
             guard chunk.sampleRate == rate else {
                 fail(.microphone("la fréquence du micro a changé en cours de prise"))
