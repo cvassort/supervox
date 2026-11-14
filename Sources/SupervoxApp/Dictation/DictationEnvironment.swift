@@ -1,0 +1,85 @@
+import Foundation
+import SupervoxCore
+
+/// Ce que le contrôleur de dictée demande au monde extérieur : fabriquer une session, savoir si un modèle manque, compter
+/// l'amorce du vocabulaire. La cible `Supervox` le construit avec les moteurs réels ; les tests et l'outil de rendu en
+/// donnent un double. `SupervoxApp` ne dépend pas des moteurs.
+public struct DictationEnvironment: Sendable {
+    /// Une session neuve pour ces réglages. Une erreur levée ici n'ouvre aucun micro : le contrôleur la dit.
+    public var makeSession: @Sendable (TranscriptionSettings) async throws -> any DictationSessioning
+    /// Vrai si un modèle dont la dictée a besoin (moteur choisi, aperçu, détecteur de voix) n'est pas prêt sur le disque :
+    /// la préparation le téléchargera.
+    public var needsModelDownload: @Sendable (TranscriptionSettings) async -> Bool
+    /// Nombre de jetons de l'amorce du vocabulaire pour ce modèle Whisper ; `nil` si son tokenizer n'est pas sur le disque
+    /// (`ModelCatalog.promptTokenCount`).
+    public var promptTokenCount: @Sendable (_ vocabulary: [String], _ whisperModel: String) async -> Int?
+    /// Jetons d'amorce que Whisper garde (`WhisperKitTranscriber.promptTokenLimit`).
+    public var promptTokenLimit: Int
+
+    public init(
+        makeSession: @escaping @Sendable (TranscriptionSettings) async throws -> any DictationSessioning,
+        needsModelDownload: @escaping @Sendable (TranscriptionSettings) async -> Bool,
+        promptTokenCount: @escaping @Sendable ([String], String) async -> Int?,
+        promptTokenLimit: Int
+    ) {
+        self.makeSession = makeSession
+        self.needsModelDownload = needsModelDownload
+        self.promptTokenCount = promptTokenCount
+        self.promptTokenLimit = promptTokenLimit
+    }
+
+    /// Aucun moteur : la dictée dit qu'elle n'est pas disponible. Sert aux fenêtres et aux tests qui ne dictent pas.
+    public static let unavailable = DictationEnvironment(
+        makeSession: { _ in throw DictationUnavailable() },
+        needsModelDownload: { _ in false },
+        promptTokenCount: { _, _ in nil },
+        promptTokenLimit: 0)
+}
+
+/// La dictée n'a pas de moteur dans ce contexte.
+struct DictationUnavailable: Error {}
+
+/// Le panneau, tel que le contrôleur de dictée le pilote. Le contrôleur ne sait pas si c'est la vraie fenêtre.
+@MainActor
+public protocol PanelOpening: AnyObject {
+    var isOpen: Bool { get }
+    func open()
+    func close()
+}
+
+/// Ce que la vue du panneau montre d'une dictée.
+public struct DictationViewState: Equatable, Sendable {
+    public var phase: DictationPhase
+    /// Texte provisoire, tel que la session le donne.
+    public var liveText: String
+    /// Les 48 derniers niveaux du micro, entre 0 et 1, du plus ancien au plus récent.
+    public var levels: [Float]
+    /// Secondes écoulées depuis le début de la prise.
+    public var elapsed: Double
+    /// Une ligne à montrer sous l'état : mention de téléchargement, avis sur le vocabulaire, raison d'un échec ou d'une copie.
+    public var notice: String?
+
+    public init(
+        phase: DictationPhase = .idle, liveText: String = "", levels: [Float] = [], elapsed: Double = 0,
+        notice: String? = nil
+    ) {
+        self.phase = phase
+        self.liveText = liveText
+        self.levels = levels
+        self.elapsed = elapsed
+        self.notice = notice
+    }
+
+    /// Nombre de niveaux gardés.
+    public static let levelCount = 48
+}
+
+extension DictationPhase {
+    /// Une dictée est en cours : le micro se prépare, écoute ou le texte se finalise.
+    public var isActive: Bool {
+        switch self {
+        case .preparing, .recording, .finalizing: true
+        case .idle, .finished, .cancelled, .failed: false
+        }
+    }
+}

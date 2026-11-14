@@ -79,6 +79,8 @@ import Testing
 
     /// Appelé à chaque sondage, avant la réponse : un test y annule la tâche, par exemple.
     var onPoll: (() -> Void)?
+    /// Appelé quand ⌘V est posté, avant la réponse : un test y lit ce que le presse-papiers contient à cet instant.
+    var onPostPaste: (() -> Void)?
 
     func modifiersHeld() -> Bool {
         log.entries.append("modifiersHeld")
@@ -90,6 +92,7 @@ import Testing
 
     func postPaste(keyCode: UInt16) -> Bool {
         log.entries.append("postPaste(\(keyCode))")
+        onPostPaste?()
         return postSucceeds
     }
 }
