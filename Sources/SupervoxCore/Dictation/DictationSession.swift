@@ -53,6 +53,8 @@ public actor DictationSession: DictationSessioning {
     private var openTextStart: Int?
     private var lastOpenPassAt: Double?
     private var maxDurationReached = false
+    /// Pour les tests : appelée à la fin de chaque passe d'aperçu, résultat pris en compte ou non.
+    private var previewPassDidFinish: (@Sendable () -> Void)?
 
     private var chunkSink: AsyncStream<AudioChunk>.Continuation?
     private var pump: Task<Void, Never>?
@@ -257,7 +259,13 @@ public actor DictationSession: DictationSessioning {
         }
     }
 
+    /// Pour les tests : de quoi attendre qu'une passe d'aperçu ait été traitée par la session.
+    func onPreviewPassFinished(_ hook: @escaping @Sendable () -> Void) {
+        previewPassDidFinish = hook
+    }
+
     private func previewFinished(_ pass: PreviewPass, _ result: Result<String, Error>) {
+        defer { previewPassDidFinish?() }
         previewBusy = false
         // Après `recording`, le texte provisoire ne compte plus.
         guard snapshot.phase == .recording else { return }

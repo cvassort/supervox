@@ -208,7 +208,8 @@ struct DictationSessionFlowTests {
     // MARK: Appels répétés
 
     @Test func aSecondFinishChangesNothing() async {
-        let final = ScriptedTranscriber(reply: { _ in .hold })
+        // Un second appel au moteur (à tort) répondrait « deux » tout de suite, au lieu de retenir le test.
+        let final = ScriptedTranscriber(reply: { $0 == 0 ? .hold : .text("deux") })
         let rig = makeRig(chunks: tenBlocks, events: [3: .speechStart(sample: 3000)], final: final)
         await rig.session.start()
         let first = Task { await rig.session.finish() }
@@ -492,19 +493,48 @@ struct DictationPreviewTests {
         #expect(preview.calls.isEmpty)
     }
 
-    @Test func aPreviewResultThatArrivesAfterTheEndOfRecordingChangesNothing() async {
+    @Test func aPreviewResultThatArrivesWhileFinalizingChangesNothing() async {
         let preview = ScriptedTranscriber(reply: { _ in .hold })
-        let rig = makeRig(events: [1: .speechStart(sample: 1000)], preview: preview, config: Self.config)
+        let final = ScriptedTranscriber(reply: { _ in .hold })
+        let rig = makeRig(events: [1: .speechStart(sample: 1000)], final: final, preview: preview, config: Self.config)
+        let previewHandled = Gate()
+        await rig.session.onPreviewPassFinished { previewHandled.open() }
         await rig.session.start()
         await pushBlock(0, at: 0.125, in: rig)
         await pushBlock(1, at: 0.25, in: rig)
         await preview.waitForCalls(1)
+        let finishing = Task { await rig.session.finish() }
+        await final.waitForCalls(1)   // la prise est en `finalizing`
 
-        await rig.session.finish()
         preview.release(call: 0, text: "trop tard")
+        await previewHandled.wait()   // la session a reçu la passe d'aperçu
+        final.release(call: 0, text: "définitif")
+        await finishing.value
 
-        #expect(await rig.outcome() == .finished("texte"))
+        #expect(await rig.outcome() == .finished("définitif"))
         #expect(rig.log.items.allSatisfy { $0.liveText.isEmpty })
+    }
+
+    @Test func aPreviewResultForASegmentThatClosedInTheMeantimeIsDroppedItsOwnPassGivesTheText() async {
+        let preview = ScriptedTranscriber(reply: { _ in .hold })
+        let rig = makeRig(events: [1: .speechStart(sample: 1000), 3: .speechEnd(sample: 3000)], preview: preview, config: Self.config)
+        let handled = Gate()
+        await rig.session.onPreviewPassFinished { handled.open() }
+        await rig.session.start()
+        await pushBlock(0, at: 0.125, in: rig)
+        await pushBlock(1, at: 0.25, in: rig)   // passe 0 sur le passage ouvert, retenue
+        await preview.waitForCalls(1)
+        await pushBlock(2, at: 0.375, in: rig)
+        await pushBlock(3, at: 0.5, in: rig)    // le passage se ferme pendant la passe 0
+
+        preview.release(call: 0, text: "périmé")
+        await handled.wait()
+        await preview.waitForCalls(2)           // la passe du passage clos part dès que la précédente a rendu
+        #expect(preview.calls[1].clip == ramp(1000..<3000))
+        #expect(rig.log.items.allSatisfy { $0.liveText != "périmé" })
+        preview.release(call: 1, text: "vrai")
+        _ = await rig.log.wait { $0.liveText == "vrai" }
+        await rig.session.cancel()
     }
 
     // MARK: Niveau et temps écoulé
