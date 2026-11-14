@@ -114,7 +114,9 @@ public enum InsertionOutcome: Equatable, Sendable {
     /// Sonde les modificateurs jusqu'à ce qu'ils soient relâchés ; faux si la patience est épuisée. Les sondages sont
     /// comptés en entiers : sommer des 0,05 en virgule flottante ferait dériver le total.
     private func modifiersReleased() async -> Bool {
-        let polls = Int((modifierPatience / Self.modifierPollInterval).rounded())
+        // Une patience négative, infinie ou NaN n'a pas de sens : zéro attente (et `Int(_:)` planterait sur NaN
+        // et l'infini).
+        let polls = modifierPatience.isFinite ? max(0, Int((modifierPatience / Self.modifierPollInterval).rounded())) : 0
         var remaining = polls
         while keys.modifiersHeld() {
             if remaining == 0 { return false }

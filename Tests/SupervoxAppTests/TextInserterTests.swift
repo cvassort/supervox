@@ -71,8 +71,15 @@ import Testing
         self.postSucceeds = postSucceeds
     }
 
+    /// Soupape : au bout de `releaseAfterPolls` sondages les touches sont relâchées, pour qu'une boucle fautive
+    /// de sondage s'arrête (et fasse échouer le test) au lieu de tourner sans fin.
+    let releaseAfterPolls = 1000
+    private var polls = 0
+
     func modifiersHeld() -> Bool {
         log.entries.append("modifiersHeld")
+        polls += 1
+        if polls > releaseAfterPolls { return false }
         return held.count > 1 ? held.removeFirst() : (held.first ?? false)
     }
 
@@ -264,6 +271,17 @@ enum FakeInsertion {
         #expect(!rig.log.entries.contains { $0.hasPrefix("postPaste") })
         #expect(rig.board.text == FakeInsertion.dictated)
         #expect(!rig.log.entries.contains("write"))
+    }
+
+    @Test("une patience négative, infinie ou NaN est ramenée à zéro attente : aucun sondage d'attente, aucune touche, le texte reste",
+        arguments: [-1.0, -Double.infinity, Double.infinity, Double.nan])
+    func unsafePatienceMeansNoWaiting(patience: Double) async {
+        let rig = InsertionRig(held: [true], modifierPatience: patience)
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated)
+        #expect(reason(outcome)?.contains("relâchez") == true)
+        #expect(rig.waiter.durations.isEmpty)
+        #expect(!rig.log.entries.contains { $0.hasPrefix("postPaste") })
+        #expect(rig.board.text == FakeInsertion.dictated)
     }
 
     @Test("des modificateurs relâchés avant la fin de la patience : le collage a lieu après les attentes")
