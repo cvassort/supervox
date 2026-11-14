@@ -12,6 +12,8 @@ final class RecordingSecretStore: SecretStore {
         var name: String
         var account: String
         var onMainThread: Bool
+        /// Libellé de la file d'exécution de l'appel (`""` hors d'une file nommée).
+        var queueLabel: String
     }
 
     struct State {
@@ -45,7 +47,9 @@ final class RecordingSecretStore: SecretStore {
     }
 
     private func note(_ name: String, _ account: String) {
-        let call = Call(name: name, account: account, onMainThread: Thread.isMainThread)
+        let call = Call(
+            name: name, account: account, onMainThread: Thread.isMainThread,
+            queueLabel: String(cString: __dispatch_queue_get_label(nil)))
         state.withLock { $0.calls.append(call) }
     }
 
@@ -578,6 +582,8 @@ struct SaveFailure: Error, LocalizedError {
 
         #expect(store.calls.map(\.name) == ["read", "write", "delete"])
         #expect(store.calls.allSatisfy { !$0.onMainThread })
+        // Sur la file commune de l'application, qui sépare les invites du trousseau.
+        #expect(store.calls.allSatisfy { $0.queueLabel == SecretAccess.sharedQueue.label })
     }
 
     @Test func failedRefreshKeepsThePreviousModelList() async throws {

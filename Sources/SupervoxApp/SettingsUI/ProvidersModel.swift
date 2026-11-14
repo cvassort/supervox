@@ -60,7 +60,7 @@ public enum ProvidersError: Error, Equatable, LocalizedError {
 /// Les clés vivent dans le magasin de secrets, sous le compte `provider.id.uuidString`, jamais dans les
 /// réglages. Construire le modèle et lire ses états n'appelle pas le magasin. `checkKeys` demande si une clé
 /// existe, sans la lire ; la seule lecture de clé a lieu dans `refreshModels`. Tout appel au magasin passe
-/// par une file dédiée, hors du fil principal, parce qu'il peut attendre la réponse à une invite du trousseau.
+/// par `SecretAccess`, hors du fil principal, parce qu'il peut attendre la réponse à une invite du trousseau.
 ///
 /// Une clé n'est envoyée qu'à l'origine (schéma, hôte, port) pour laquelle elle a été saisie : quand l'origine
 /// d'un fournisseur change, l'ancienne clé est retirée avant tout enregistrement.
@@ -79,18 +79,19 @@ public final class ProvidersModel {
     /// Comptes dont la clé n'a pas pu être retirée ; nouvel essai après chaque enregistrement réussi.
     @ObservationIgnored private var pendingDeletions: Set<String> = []
 
-    @ObservationIgnored private let secrets: any SecretStore
+    @ObservationIgnored private let secrets: SecretAccess
     @ObservationIgnored private let listModels: ListModels
     @ObservationIgnored private let save: ([Provider]) throws -> Void
 
     /// `save` enregistre la liste complète des fournisseurs ; s'il lève, rien ne change en mémoire.
-    /// N'appelle pas le magasin de secrets.
+    /// N'appelle pas le magasin de secrets. `secretQueue` : la file des appels au magasin (la file commune de
+    /// `SecretAccess` par défaut).
     public init(
         providers: [Provider], secrets: any SecretStore, listModels: @escaping ListModels,
-        save: @escaping ([Provider]) throws -> Void
+        save: @escaping ([Provider]) throws -> Void, secretQueue: DispatchQueue = SecretAccess.sharedQueue
     ) {
         self.providers = providers
-        self.secrets = secrets
+        self.secrets = SecretAccess(secrets, queue: secretQueue)
         self.listModels = listModels
         self.save = save
     }
@@ -104,7 +105,7 @@ public final class ProvidersModel {
     public func checkKeys() async {
         for id in providers.map(\.id) where keyStates[id] == nil {
             let account = id.uuidString
-            guard let exists = try? await Self.secretsQueue({ [secrets] in try secrets.contains(account: account) })
+            guard let exists = try? await secrets.contains(account: account)
             else { return }
             // Une écriture ou une suppression faite pendant la demande a priorité.
             if keyStates[id] == nil, providers.contains(where: { $0.id == id }) {
@@ -127,14 +128,14 @@ public final class ProvidersModel {
         let provider = Provider(id: UUID(), name: name, baseURL: baseURL, kind: kind, models: [])
         let account = provider.id.uuidString
         if !key.isEmpty {
-            try await Self.secretsQueue { [secrets] in try secrets.write(key, account: account) }
+            try await secrets.write(key, account: account)
         }
         do {
             try commit(providers + [provider])
         } catch let saveError {
             guard !key.isEmpty else { throw saveError }
             do {
-                try await Self.secretsQueue { [secrets] in try secrets.delete(account: account) }
+                try await secrets.delete(account: account)
             } catch {
                 pendingDeletions.insert(account)
                 throw ProvidersError.notSavedKeyLeft(Self.message(for: saveError))
@@ -171,7 +172,7 @@ public final class ProvidersModel {
 
         if originChanged {
             do {
-                try await Self.secretsQueue { [secrets] in try secrets.delete(account: account) }
+                try await secrets.delete(account: account)
             } catch {
                 throw ProvidersError.oldKeyNotRemoved(Self.message(for: error))
             }
@@ -192,7 +193,7 @@ public final class ProvidersModel {
         let key = Self.trimmed(newKey ?? "")
         if !key.isEmpty {
             do {
-                try await Self.secretsQueue { [secrets] in try secrets.write(key, account: account) }
+                try await secrets.write(key, account: account)
                 keyStates[provider.id] = .present
             } catch {
                 // Après une nouvelle origine, l'ancienne clé est déjà retirée : il n'y a plus de clé.
@@ -213,7 +214,7 @@ public final class ProvidersModel {
         refreshGenerations[id, default: 0] += 1
         let account = id.uuidString
         do {
-            try await Self.secretsQueue { [secrets] in try secrets.delete(account: account) }
+            try await secrets.delete(account: account)
         } catch {
             pendingDeletions.insert(account)
             throw ProvidersError.keyNotDeleted(account: account, cause: Self.message(for: error))
@@ -224,7 +225,7 @@ public final class ProvidersModel {
     /// Nouvel essai des suppressions en attente ; s'arrête à la première erreur, sans boucler.
     private func retryPendingDeletions() async {
         for account in pendingDeletions.sorted() {
-            guard (try? await Self.secretsQueue({ [secrets] in try secrets.delete(account: account) })) != nil
+            guard (try? await secrets.delete(account: account)) != nil
             else { return }
             pendingDeletions.remove(account)
         }
@@ -243,7 +244,7 @@ public final class ProvidersModel {
         let outcome: ProviderStatus
         do {
             let account = id.uuidString
-            let key = try await Self.secretsQueue { [secrets] in try secrets.read(account: account) }
+            let key = try await secrets.read(account: account)
             outcome = try await refreshed(provider, key: key, generation: generation)
         } catch is CancellationError {
             outcome = .idle
@@ -399,17 +400,6 @@ public final class ProvidersModel {
     private func commit(_ updated: [Provider]) throws {
         try save(updated)
         providers = updated
-    }
-
-    /// File série dédiée aux appels du magasin de secrets, qui peuvent bloquer sur une invite du trousseau.
-    private nonisolated static let queue = DispatchQueue(label: "dev.supervox.app.settings-secrets")
-
-    private nonisolated static func secretsQueue<T: Sendable>(
-        _ work: @escaping @Sendable () throws -> T
-    ) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async { continuation.resume(with: Result { try work() }) }
-        }
     }
 
     // MARK: - Réalisation
