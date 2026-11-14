@@ -20,17 +20,26 @@ public actor WhisperKitTranscriber: Transcriber {
     public static let promptTokenLimit = Constants.maxTokenContext / 2 - 1
 
     private let model: String
+    private let downloadBase: URL?
     private var kit: WhisperKit?
 
-    /// `model` : variante du dépôt de modèles WhisperKit (ex. `large-v3-v20240930_turbo`).
-    public init(model: String) {
+    /// `model` : variante du dépôt de modèles WhisperKit (ex. `large-v3-v20240930_turbo`). `downloadBase` : dossier où le
+    /// modèle (et son tokenizer) sont cherchés et, s'ils manquent, téléchargés ; `nil` : le dossier de WhisperKit par
+    /// défaut, `Documents/huggingface` (le banc d'essai). L'application passe le dossier de ses modèles, jamais Documents.
+    public init(model: String, downloadBase: URL? = nil) {
         self.model = model
+        self.downloadBase = downloadBase
+    }
+
+    /// Ce que `prepare` passe à WhisperKit. `load: true` : sans lui, WhisperKit charge le modèle au premier `transcribe`,
+    /// donc dans la mesure.
+    static func configuration(model: String, downloadBase: URL?) -> WhisperKitConfig {
+        WhisperKitConfig(model: model, downloadBase: downloadBase, load: true)
     }
 
     public func prepare() async throws {
         if kit != nil { return }
-        // `load: true` : sans lui, WhisperKit charge le modèle au premier `transcribe`, donc dans la mesure.
-        let kit = try await WhisperKit(WhisperKitConfig(model: model, load: true))
+        let kit = try await WhisperKit(Self.configuration(model: model, downloadBase: downloadBase))
         guard kit.modelState == .loaded else {
             throw TranscriberError.engine("modèle WhisperKit \(model) non chargé (état : \(kit.modelState))")
         }
@@ -63,13 +72,19 @@ public actor WhisperKitTranscriber: Transcriber {
         return tokens
     }
 
-    /// Nombre de jetons de l'amorce pour `vocabulary`, avec le tokenizer du modèle `model`, sans charger le modèle
-    /// (seul le tokenizer est lu, ou téléchargé s'il manque). `nil` si la variante du modèle ne se déduit pas de son nom.
-    public static func promptTokenCount(_ vocabulary: [String], model: String) async throws -> Int? {
-        // La variante la plus spécifique contenue dans le nom : « large-v3-v20240930_turbo » → large-v3.
+    /// La variante de tokenizer d'un nom de modèle : la plus spécifique contenue dans le nom (« large-v3-v20240930_turbo »
+    /// → large-v3). `nil` si elle ne se déduit pas du nom.
+    static func tokenizerVariant(of model: String) -> ModelVariant? {
         let candidates = ModelVariant.allCases.filter { model.contains($0.description) }
-        guard let variant = candidates.max(by: { $0.description.count < $1.description.count }) else { return nil }
-        let tokenizer = try await ModelUtilities.loadTokenizer(for: variant)
+        return candidates.max(by: { $0.description.count < $1.description.count })
+    }
+
+    /// Nombre de jetons de l'amorce pour `vocabulary`, avec le tokenizer du modèle `model`, sans charger le modèle
+    /// (seul le tokenizer est lu, ou téléchargé s'il manque, dans `tokenizerFolder` ; `nil` : `Documents/huggingface`).
+    /// `nil` si la variante du modèle ne se déduit pas de son nom.
+    public static func promptTokenCount(_ vocabulary: [String], model: String, tokenizerFolder: URL? = nil) async throws -> Int? {
+        guard let variant = tokenizerVariant(of: model) else { return nil }
+        let tokenizer = try await ModelUtilities.loadTokenizer(for: variant, tokenizerFolder: tokenizerFolder)
         let prompt = " " + vocabulary.joined(separator: ", ")
         return tokenizer.encode(text: prompt).filter { $0 < tokenizer.specialTokens.specialTokenBegin }.count
     }

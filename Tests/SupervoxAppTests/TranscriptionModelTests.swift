@@ -89,7 +89,8 @@ final class FakeModelCatalog: ModelCatalog {
     ])
     let saver = TranscriptionSaver()
 
-    static let limit = 223
+    /// Valeur de `WhisperKitTranscriber.promptTokenLimit`, fixée par `EngineIntegrationTests.whisperKitPromptBudget`.
+    static let limit = 111
 
     func makeModel(_ settings: TranscriptionSettings = .defaults) -> TranscriptionModel {
         let saver = saver
