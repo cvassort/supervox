@@ -21,7 +21,8 @@ public enum DictationFailure: Error, Equatable, Sendable {
     private static func trimmed(_ reason: String) -> String {
         var text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         while text.hasSuffix(".") { text.removeLast() }
-        return text
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "cause inconnue" : text
     }
 }
 
@@ -73,9 +74,9 @@ public struct DictationConfig: Sendable {
     /// Durée maximale, en secondes, de la fin du passage ouvert donnée au moteur d'aperçu. Choix de conception du
     /// plan, non mesuré.
     public var previewWindow: Double
-    /// Marge, en secondes, ajoutée de chaque côté de la parole avant le moteur final. 0,3 s : un bloc du détecteur
-    /// dure 0,256 s (4096 échantillons à 16 kHz) et le début détecté peut se tromper d'un bloc
-    /// (`task-2-report.md`, mesuré sur voix de synthèse).
+    /// Marge, en secondes, ajoutée de chaque côté de la parole avant le moteur final. Raisonnement de granularité, non
+    /// mesuré sur des voix réelles : le détecteur décide par blocs de 4096 échantillons à 16 kHz, soit 0,256 s, et le
+    /// début qu'il donne peut être décalé d'un bloc ; 0,3 s couvre un bloc de chaque côté.
     public var padding: Double
     /// Durée de prise, en secondes, à laquelle la session se termine d'elle-même. 300 s (5 minutes) : choix du plan.
     public var maxDuration: Double

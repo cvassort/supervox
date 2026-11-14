@@ -42,6 +42,9 @@ import Testing
     // Une raison qui finit déjà par un point ne donne pas « .. ».
     #expect(!DictationFailure.microphone("accès refusé.").message.contains(".."))
     #expect(DictationFailure.microphone("accès refusé.").message.hasSuffix("accès refusé."))
+    // Une raison vide ne donne pas « : . ».
+    #expect(DictationFailure.microphone("").message == "Le micro ne fonctionne pas : cause inconnue.")
+    #expect(DictationFailure.engine(" . ").message == "La transcription a échoué : cause inconnue.")
 }
 
 @Test func defaultConfigurationValues() {
@@ -209,6 +212,7 @@ struct DictationSessionFlowTests {
 
     // MARK: Appels répétés
 
+    // Ne tombe que si la garde de phase ET `ingesting` sont retirées : la seconde garde masque la première (voir la revue).
     @Test func aSecondFinishChangesNothing() async {
         // Un second appel au moteur (à tort) répondrait « deux » tout de suite, au lieu de retenir le test.
         let final = ScriptedTranscriber(reply: { $0 == 0 ? .hold : .text("deux") })
@@ -228,6 +232,7 @@ struct DictationSessionFlowTests {
         #expect(rig.feed.stops == 1)
     }
 
+    // Masqué par la garde terminale de `setPhase` : ne tombe que si les gardes de phase sont toutes retirées.
     @Test func finishAfterCancelAndCancelAfterFinishChangeNothing() async {
         let cancelled = makeRig(chunks: tenBlocks, events: [3: .speechStart(sample: 3000)])
         await cancelled.session.start()
@@ -373,6 +378,7 @@ struct DictationSessionFlowTests {
         #expect(rig.detector.blocks.count == 5)
     }
 
+    // Masqué par la garde terminale de `setPhase`, comme `finishAfterCancelAndCancelAfterFinishChangeNothing`.
     @Test func aSecondFinishAfterAFailureChangesNothing() async {
         let rig = makeRig(chunks: tenBlocks)
         await rig.session.start()
