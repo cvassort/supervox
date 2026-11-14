@@ -84,6 +84,10 @@ public actor DictationSession: DictationSessioning {
         snapshotSink.yield(snapshot)
     }
 
+    /// Pour les tests : la phase courante, y compris après la fin du flux d'instantanés (qui, lui, ne montre plus rien
+    /// après une phase terminale).
+    var phase: DictationPhase { snapshot.phase }
+
     /// Niveau affichable d'une tranche : RMS en décibels, ramené sur 0…1 (−60 dB → 0, 0 dB → 1). Une tranche vide ou
     /// non numérique donne 0.
     public static func level(of samples: [Float]) -> Float {

@@ -170,6 +170,8 @@ struct DictationSessionFlowTests {
 
         #expect(await rig.outcome() == .cancelled)
         #expect(rig.log.phases == [.idle, .preparing, .recording, .finalizing, .cancelled])
+        // Le flux d'instantanés est clos : seule la phase de la session montre si le résultat tardif a été pris en compte.
+        #expect(await rig.session.phase == .cancelled)
     }
 
     @Test func cancelWhileRecordingStopsTheCaptureAndNeverCallsTheEngines() async {
@@ -222,6 +224,7 @@ struct DictationSessionFlowTests {
 
         #expect(final.calls.count == 1)
         #expect(await rig.outcome() == .finished("un"))
+        #expect(await rig.session.phase == .finished("un"))
         #expect(rig.feed.stops == 1)
     }
 
