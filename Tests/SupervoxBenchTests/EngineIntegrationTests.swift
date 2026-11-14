@@ -62,6 +62,38 @@ private func measure(_ engine: any Transcriber, label: String, clip: AudioClip, 
     return texts[0]
 }
 
+/// Fin de la voix de `say` : son dernier échantillon d'au moins −60 dBFS (`say` ajoute ensuite ~0,2 s de souffle à
+/// −88 dBFS). Même seuil que `VoiceDetectorIntegrationTests`.
+private let speechFloor: Float = 0.001
+
+/// `lead` secondes de silence numérique, la phrase coupée à sa fin réelle, puis `trail` secondes de silence. Rend le
+/// clip et les indices du premier et du dernier échantillon de voix (fin exclue).
+private func framedSpeech(_ text: String = sentence, lead: Double = 1, trail: Double = 1) throws -> (clip: AudioClip, speechStart: Int, speechEnd: Int) {
+    let speech = try synthesizedSentence(text)
+    let last = try #require(speech.samples.lastIndex { abs($0) >= speechFloor })
+    let leading = [Float](repeating: 0, count: Int(lead * speech.sampleRate))
+    let trailing = [Float](repeating: 0, count: Int(trail * speech.sampleRate))
+    let samples = leading + speech.samples[...last] + trailing
+    return (AudioClip(samples: samples, sampleRate: speech.sampleRate), leading.count, leading.count + last + 1)
+}
+
+/// Fait passer `clip` dans `detector` comme le fera la session : l'audio arrive par morceaux de 1 600 échantillons
+/// (100 ms), la ligne de temps le redécoupe en blocs, chaque événement y est appliqué. Rend les événements dans
+/// l'ordre et la ligne de temps.
+private func stream(_ clip: AudioClip, through detector: any StreamingVoiceDetector) async throws -> (events: [VoiceEvent], timeline: SpeechTimeline) {
+    var timeline = SpeechTimeline(blockSize: detector.blockSize)
+    var events: [VoiceEvent] = []
+    for start in stride(from: 0, to: clip.samples.count, by: 1600) {
+        for block in timeline.append(Array(clip.samples[start..<min(start + 1600, clip.samples.count)])) {
+            if let event = try await detector.process(block) {
+                events.append(event)
+                timeline.apply(event)
+            }
+        }
+    }
+    return (events, timeline)
+}
+
 /// Phrase avec des termes techniques rares, pour montrer l'effet du vocabulaire. « PostgreSQL » est dans la liste
 /// mais pas dans la phrase : il ne doit jamais ressortir.
 private let technicalSentence = "Le worker Celery redémarre après la mise à jour de Keycloak."
@@ -167,6 +199,75 @@ struct EngineIntegrationTests {
     @Test func appleSpeechRejectsUnsupportedLocale() async {
         await #expect(throws: TranscriberError.unsupportedLocale("zz-ZZ")) {
             try await AppleSpeechTranscriber(locale: "zz-ZZ").prepare()
+        }
+    }
+
+    /// Une phrase précédée d'une seconde de silence numérique et suivie de deux : un `speechStart`, puis un
+    /// `speechEnd`, rien d'autre. Une seconde de silence après la voix ne suffit pas : le détecteur attend 4 blocs
+    /// silencieux (1,024 s) avant de fermer le passage (mesuré : `speechStart` seul).
+    /// Les indices tombent sur la grille des blocs (4096 échantillons) ; le début est celui du bloc où la voix
+    /// commence, donc au plus une tranche avant la voix.
+    @Test func streamingDetectorFindsOneSegmentAroundASentence() async throws {
+        let detector = FluidStreamingVoiceDetector()
+        try await detector.prepare()
+        let (clip, speechStart, speechEnd) = try framedSpeech(trail: 2)
+        let (events, timeline) = try await stream(clip, through: detector)
+        print("[intégration] détection en flux : voix réelle \(speechStart)..<\(speechEnd), événements \(events), passages \(timeline.closedSegments)")
+        try #require(events.count == 2, "événements : \(events)")
+        guard case .speechStart(let start) = events[0], case .speechEnd(let end) = events[1] else {
+            Issue.record("ordre inattendu : \(events)")
+            return
+        }
+        #expect(start <= 24000, "début après la première seconde et demie : \(start)")
+        #expect(start > speechStart - 2 * detector.blockSize, "début plus de deux blocs avant la voix : \(start)")
+        #expect(end > speechEnd, "fin avant la vraie fin : \(end) pour \(speechEnd)")
+        #expect(start % detector.blockSize == 0 && end % detector.blockSize == 0)
+        #expect(timeline.closedSegments == [start..<end])
+        #expect(timeline.openSegmentStart == nil)
+    }
+
+    @Test func streamingDetectorHearsNothingInSilence() async throws {
+        let detector = FluidStreamingVoiceDetector()
+        let silence = AudioClip(samples: [Float](repeating: 0, count: 48000), sampleRate: 16000)
+        let (events, timeline) = try await stream(silence, through: detector)
+        #expect(events.isEmpty, "événements dans du silence : \(events)")
+        #expect(!timeline.hasSpeech)
+        #expect(timeline.spokenClip(padding: 0.2) == nil)
+    }
+
+    /// `reset()` remet le flux à neuf : une voix restée ouverte n'est pas fermée dans la prise suivante, et les
+    /// indices repartent de 0 (la même prise donne les mêmes événements).
+    @Test func streamingDetectorResetStartsANewTake() async throws {
+        let detector = FluidStreamingVoiceDetector()
+        let (clip, _, _) = try framedSpeech(trail: 2)
+        let first = try await stream(clip, through: detector).events
+        await detector.reset()
+        let second = try await stream(clip, through: detector).events
+        #expect(first.count == 2)
+        #expect(second == first, "la même prise après reset() : \(second) au lieu de \(first)")
+
+        // Une prise qui s'arrête en pleine voix laisse le détecteur « en voix » : sans reset, le silence suivant
+        // fermerait ce passage.
+        await detector.reset()
+        let speech = try framedSpeech(lead: 0.5, trail: 0)
+        let open = try await stream(speech.clip, through: detector)
+        #expect(open.events.count == 1 && open.timeline.openSegmentStart != nil, "prise coupée en pleine voix : \(open.events)")
+        await detector.reset()
+        let silence = AudioClip(samples: [Float](repeating: 0, count: 48000), sampleRate: 16000)
+        #expect(try await stream(silence, through: detector).events.isEmpty)
+    }
+}
+
+/// Sans modèle : le contrôle de taille de bloc précède tout chargement, rien n'est téléchargé.
+@Suite struct FluidStreamingVoiceDetectorBlockTests {
+    @Test func blockSizeIsOneModelChunkAndOtherSizesAreRefused() async {
+        let detector = FluidStreamingVoiceDetector()
+        #expect(detector.blockSize == 4096)
+        await #expect(throws: TranscriberError.engine("bloc de 4095 échantillons, 4096 attendus")) {
+            _ = try await detector.process([Float](repeating: 0, count: 4095))
+        }
+        await #expect(throws: TranscriberError.engine("bloc de 0 échantillons, 4096 attendus")) {
+            _ = try await detector.process([])
         }
     }
 }
