@@ -384,7 +384,7 @@ struct SaveFailure: Error, LocalizedError {
     static let remote = Provider(
         id: UUID(), name: "Distant", baseURL: "https://models.invalid/v1", kind: .anthropic, models: ["m"])
 
-    @Test func newOriginWithEmptyKeyDeletesTheOldKeyBeforeSaving() async throws {
+    @Test func newOriginWithEmptyKeyDeletesTheOldKeyAndNeverSendsIt() async throws {
         let store = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
         let model = makeModel(providers: [Self.remote], secrets: store)
         var moved = Self.remote
@@ -629,6 +629,40 @@ struct SaveFailure: Error, LocalizedError {
         #expect(message.contains("autre adresse"))
         #expect(message.contains("clé ne lui a pas été envoyée"))
         #expect(!message.contains("EndpointError"))
+    }
+
+    /// m5 : une adresse lue dans le fichier de réglages (modifié à la main) est revalidée avant de lire la clé et de
+    /// l'envoyer : la règle « https, ou http vers la machine locale » ne tient pas qu'à l'interface.
+    @Test(arguments: ["http://models.invalid", "ftp://models.invalid", "pas une adresse"])
+    func refreshRevalidatesAnAddressFromTheFileBeforeTouchingTheKey(address: String) async throws {
+        let edited = Provider(id: UUID(), name: "Édité", baseURL: address, kind: .anthropic, models: ["m"])
+        let store = RecordingSecretStore(secrets: [edited.id.uuidString: "sk-edited"])
+        let model = makeModel(providers: [edited], secrets: store)
+
+        await model.refreshModels(edited.id)
+
+        #expect(lister.calls.isEmpty)
+        #expect(store.readCount == 0)
+        guard case .failed(let message) = model.status(of: edited.id) else {
+            Issue.record("attendu un échec, reçu \(model.status(of: edited.id))"); return
+        }
+        #expect(message.contains("Adresse"))
+        #expect(model.providers.first?.models == ["m"])
+    }
+
+    /// m3 : la liste des clés à retirer ne vit qu'en mémoire ; le message ne promet pas un retrait qui n'aura pas
+    /// lieu après une relance, et dit où retirer la clé à la main.
+    @Test func leftoverKeyMessagesDoNotPromiseALaterRemoval() {
+        let messages = [
+            ProvidersError.keyNotDeleted(account: "COMPTE-1", cause: "Accès refusé.").localizedDescription,
+            ProvidersError.notSavedKeyLeft(account: "COMPTE-1", cause: "disque plein").localizedDescription,
+        ]
+        for message in messages {
+            #expect(!message.contains("sera retirée au prochain enregistrement"))
+            #expect(message.contains("COMPTE-1"))
+            #expect(message.contains("Trousseaux d'accès"))
+            #expect(message.contains("tant que Supervox reste ouvert"))
+        }
     }
 
     @Test func deniedKeychainHasItsOwnMessage() {

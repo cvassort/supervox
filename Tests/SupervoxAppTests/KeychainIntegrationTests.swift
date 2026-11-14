@@ -29,7 +29,7 @@ struct KeychainIntegrationTests {
         try store.delete(account: account)
     }
 
-    @Test func containsSeesTheEntryWithoutReadingIt() throws {
+    @Test func containsSeesAWrittenEntryAndNotAMissingOne() throws {
         let store = KeychainSecretStore(service: "dev.supervox.tests")
         let account = "test-\(UUID().uuidString)"
         defer { try? store.delete(account: account) }

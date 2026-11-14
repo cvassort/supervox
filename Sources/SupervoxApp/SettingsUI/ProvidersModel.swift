@@ -32,7 +32,12 @@ public enum ProvidersError: Error, Equatable, LocalizedError {
     /// Nouvelle origine : l'ancienne clé est retirée, mais les réglages n'ont pas été enregistrés.
     case oldKeyRemovedButNotSaved(String)
     /// Ajout : les réglages n'ont pas été enregistrés et la clé saisie n'a pas pu être retirée du trousseau.
-    case notSavedKeyLeft(String)
+    case notSavedKeyLeft(account: String, cause: String)
+
+    /// La liste des clés à retirer ne vit qu'en mémoire : rien ne promet un retrait après une relance.
+    private static func leftoverKeyAdvice(account: String) -> String {
+        "Un nouvel essai aura lieu à chaque enregistrement réussi tant que Supervox reste ouvert ; sinon, supprimez-la dans Trousseaux d'accès (entrée « dev.supervox.app », compte \(account))."
+    }
 
     public var errorDescription: String? {
         switch self {
@@ -44,13 +49,13 @@ public enum ProvidersError: Error, Equatable, LocalizedError {
         case .unknownProvider: "Ce fournisseur n'existe plus."
         case .keyNotSaved(let cause): "Réglages enregistrés, mais la nouvelle clé ne l'est pas : \(cause)"
         case .keyNotDeleted(let account, let cause):
-            "Fournisseur supprimé, mais sa clé reste dans le trousseau (compte \(account)) : \(cause) Elle sera retirée au prochain enregistrement."
+            "Fournisseur supprimé, mais sa clé reste dans le trousseau : \(cause) \(Self.leftoverKeyAdvice(account: account))"
         case .oldKeyNotRemoved(let cause):
             "Adresse inchangée : l'ancienne clé n'a pas pu être retirée avant le changement d'hôte. \(cause)"
         case .oldKeyRemovedButNotSaved(let cause):
             "L'ancienne clé a été retirée (nouvel hôte), mais les réglages n'ont pas été enregistrés : \(cause) Ressaisissez la clé une fois le problème réglé."
-        case .notSavedKeyLeft(let cause):
-            "Réglages non enregistrés : \(cause) La clé saisie reste dans le trousseau ; elle sera retirée au prochain enregistrement."
+        case .notSavedKeyLeft(let account, let cause):
+            "Réglages non enregistrés : \(cause) La clé saisie reste dans le trousseau. \(Self.leftoverKeyAdvice(account: account))"
         }
     }
 }
@@ -76,7 +81,8 @@ public final class ProvidersModel {
     private var keyStates: [UUID: KeyState] = [:]
     /// Change à chaque nouvelle adresse, nouveau type ou suppression : une lecture lancée avant n'écrit plus rien.
     @ObservationIgnored private var refreshGenerations: [UUID: Int] = [:]
-    /// Comptes dont la clé n'a pas pu être retirée ; nouvel essai après chaque enregistrement réussi.
+    /// Comptes dont la clé n'a pas pu être retirée ; nouvel essai après chaque enregistrement réussi. En mémoire
+    /// seulement : après une relance, la clé reste (les messages le disent et nomment le compte).
     @ObservationIgnored private var pendingDeletions: Set<String> = []
 
     @ObservationIgnored private let secrets: SecretAccess
@@ -138,7 +144,7 @@ public final class ProvidersModel {
                 try await secrets.delete(account: account)
             } catch {
                 pendingDeletions.insert(account)
-                throw ProvidersError.notSavedKeyLeft(Self.message(for: saveError))
+                throw ProvidersError.notSavedKeyLeft(account: account, cause: Self.message(for: saveError))
             }
             throw saveError
         }
@@ -212,7 +218,7 @@ public final class ProvidersModel {
     }
 
     /// Retire le fournisseur des réglages, puis sa clé du trousseau. Une clé qui ne peut pas être retirée est
-    /// notée, et retirée au prochain enregistrement réussi.
+    /// notée, et un nouvel essai a lieu après chaque enregistrement réussi, tant que l'application reste ouverte.
     public func remove(_ id: UUID) async throws {
         guard providers.contains(where: { $0.id == id }) else { throw ProvidersError.unknownProvider }
         try commit(providers.filter { $0.id != id })
@@ -250,6 +256,9 @@ public final class ProvidersModel {
 
         let outcome: ProviderStatus
         do {
+            // Adresse relue dans le fichier, peut-être modifiée à la main : même règle qu'à la saisie, avant toute
+            // lecture ou envoi de la clé.
+            _ = try Self.validatedBaseURL(provider.baseURL)
             let account = id.uuidString
             let key = try await secrets.read(account: account)
             outcome = try await refreshed(provider, key: key, generation: generation)
@@ -352,7 +361,7 @@ public final class ProvidersModel {
 
     // MARK: - Validation
 
-    private static func trimmed(_ text: String) -> String {
+    private nonisolated static func trimmed(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -364,7 +373,7 @@ public final class ProvidersModel {
 
     /// Adresse complète en `https`, ou en `http` seulement vers `localhost` ou `127.0.0.1` : ailleurs, la clé
     /// voyagerait en clair. Rend l'adresse sans les espaces autour.
-    static func validatedBaseURL(_ text: String) throws -> String {
+    nonisolated static func validatedBaseURL(_ text: String) throws -> String {
         let text = trimmed(text)
         guard let components = URLComponents(string: text),
             let scheme = components.scheme?.lowercased(), scheme == "https" || scheme == "http",
@@ -413,7 +422,9 @@ public final class ProvidersModel {
 
     /// La vraie liste des modèles : `ModelLister` sur l'adresse et le type du fournisseur.
     public static let live: ListModels = { provider, key in
-        guard let url = URL(string: provider.baseURL) else { throw EndpointError.transport("adresse inutilisable") }
+        guard let url = URL(string: try validatedBaseURL(provider.baseURL)) else {
+            throw EndpointError.transport("adresse inutilisable")
+        }
         let kind: ModelListingKind =
             switch provider.kind {
             case .openAICompatible: .openAICompatible
