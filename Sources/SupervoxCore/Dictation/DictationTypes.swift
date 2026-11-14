@@ -11,10 +11,17 @@ public enum DictationFailure: Error, Equatable, Sendable {
 
     public var message: String {
         switch self {
-        case .microphone(let reason): "Le micro ne fonctionne pas : \(reason)."
+        case .microphone(let reason): "Le micro ne fonctionne pas : \(Self.trimmed(reason))."
         case .noSpeech: "Aucune parole n'a été entendue."
-        case .engine(let reason): "La transcription a échoué : \(reason)."
+        case .engine(let reason): "La transcription a échoué : \(Self.trimmed(reason))."
         }
+    }
+
+    /// Sans le point final de la raison : la phrase en met un, pas deux.
+    private static func trimmed(_ reason: String) -> String {
+        var text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix(".") { text.removeLast() }
+        return text
     }
 }
 
