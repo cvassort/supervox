@@ -13,9 +13,6 @@ public struct HotKey: Codable, Equatable, Sendable {
     /// Contrôle + option + espace.
     public static let standard = HotKey(keyCode: 49, modifiers: [.control, .option])
 
-    /// `validate(layout:)` avec la disposition de clavier active du système.
-    public func validate() -> HotKeyValidation { validate(layout: SystemKeyboardLayout()) }
-
     /// Dit si la combinaison peut être proposée à l'utilisateur. Règles, dans cet ordre :
     /// 1. la touche est elle-même un modificateur : `.modifierOnly` ;
     /// 2. aucun modificateur, ou un bit de modificateur inconnu (fichier de réglages écrit à la main :
@@ -61,9 +58,6 @@ public struct HotKey: Codable, Equatable, Sendable {
     /// Lettres qui, avec commande seule, appartiennent au système : quitter, fermer la fenêtre,
     /// masquer, réduire.
     private static let reservedLetters: Set<String> = ["Q", "W", "H", "M"]
-
-    /// `label(layout:)` avec la disposition de clavier active du système.
-    public var label: String { label(layout: SystemKeyboardLayout()) }
 
     /// Symboles des modificateurs dans l'ordre de la convention macOS (⌃⌥⇧⌘), puis le nom de la
     /// touche, par exemple « ⌃⌥Espace ».
@@ -153,7 +147,7 @@ public struct HotKey: Codable, Equatable, Sendable {
     }
 }
 
-/// Résultat de `HotKey.validate()`.
+/// Résultat de `HotKey.validate(layout:)`.
 public enum HotKeyValidation: Equatable, Sendable {
     case valid
     /// La touche n'est accompagnée d'aucun modificateur : elle volerait la frappe normale.

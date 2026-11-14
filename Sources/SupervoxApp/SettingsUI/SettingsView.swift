@@ -45,7 +45,7 @@ public struct SettingsView: View {
     public static let provider: AppController.SettingsViewProvider = { controller in
         content(
             providers: makeProvidersModel(controller),
-            hotKey: makeHotKeyModel(controller, layout: SystemKeyboardLayout(), keyMonitor: LocalKeyDownMonitor()),
+            hotKey: makeHotKeyModel(controller, keyMonitor: LocalKeyDownMonitor()),
             permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
     }
 
@@ -71,12 +71,12 @@ public struct SettingsView: View {
             save: { [weak controller] providers in try controller?.updateSettings { $0.providers = providers } })
     }
 
-    static func makeHotKeyModel(
-        _ controller: AppController, layout: any KeyboardLayout, keyMonitor: any KeyEventMonitor
-    ) -> HotKeySettingsModel {
+    /// La disposition de clavier est celle du contrôleur : la fenêtre et le panneau nomment les touches de la même façon.
+    static func makeHotKeyModel(_ controller: AppController, keyMonitor: any KeyEventMonitor) -> HotKeySettingsModel {
         HotKeySettingsModel(
             hotKey: controller.settings.hotKey, active: controller.hotKeys.active,
-            behavior: controller.settings.hotKeyBehavior, layout: layout, systemHotKeys: controller.systemHotKeys,
+            behavior: controller.settings.hotKeyBehavior, layout: controller.keyboardLayout,
+            systemHotKeys: controller.systemHotKeys,
             keyMonitor: keyMonitor,
             control: GlobalHotKeyControl(
                 apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.refused) },

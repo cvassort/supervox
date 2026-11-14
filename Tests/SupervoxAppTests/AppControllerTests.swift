@@ -26,10 +26,10 @@ import Testing
         store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
     }
 
-    func makeController() -> AppController {
+    func makeController(layout: any KeyboardLayout = HotKeyTests.ansi) -> AppController {
         AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
-            escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system,
+            escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate)
     }
@@ -94,7 +94,7 @@ import Testing
         #expect(controller.panelModel.isOpen)
         #expect(surface.isShown)
         let notice = try #require(controller.panelModel.notices[.hotKey])
-        #expect(notice.contains(HotKey.standard.label))
+        #expect(notice.contains(HotKey.standard.label(layout: HotKeyTests.ansi)))
         #expect(notice.contains("refusé par macOS"))
         #expect(controller.panelModel.hotKeyLabel == nil)
     }
@@ -111,7 +111,7 @@ import Testing
         #expect(controller.panelModel.isOpen)
         let notice = try #require(controller.panelModel.notices[.hotKey])
         #expect(notice.contains("raccourci de macOS"))
-        #expect(notice.contains(HotKey.standard.label))
+        #expect(notice.contains(HotKey.standard.label(layout: HotKeyTests.ansi)))
 
         // Un autre raccourci accepté efface l'avis.
         #expect(HotKeyTests.failure(controller.changeHotKey(HotKeyTests.keyB)) == nil)
@@ -132,7 +132,7 @@ import Testing
         #expect(controller.panelModel.isOpen)
         #expect(surface.isShown)
         let welcome = try #require(controller.panelModel.welcome)
-        #expect(welcome.contains(HotKey.standard.label))
+        #expect(welcome.contains(HotKey.standard.label(layout: HotKeyTests.ansi)))
         #expect(welcome.contains("Réglages"))
         #expect(controller.permissions.summary != nil)
         #expect(controller.permissions.canRequest)
@@ -145,7 +145,7 @@ import Testing
         let next = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
-            makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
+            keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate)
         next.launch()
         #expect(!next.panelModel.isOpen)
@@ -160,7 +160,7 @@ import Testing
 
         controller.launch()
         let welcome = try #require(controller.panelModel.welcome)
-        #expect(!welcome.contains(HotKey.standard.label))
+        #expect(!welcome.contains(HotKey.standard.label(layout: HotKeyTests.ansi)))
         #expect(welcome.contains("barre de menus"))
         #expect(controller.panelModel.notices[.hotKey] != nil)
     }
@@ -208,6 +208,25 @@ import Testing
         #expect(controller.panelModel.isOpen)
     }
 
+    /// m21 : le libellé du raccourci vient de la disposition de clavier donnée au contrôleur, jamais de celle de la
+    /// machine qui exécute les tests. Le code 0x00 est A en ANSI et Q en AZERTY.
+    @Test func hotKeyLabelUsesTheInjectedKeyboardLayout() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try store.save(AppSettings(version: 1, providers: [], hotKey: HotKeyTests.keyA, hotKeyBehavior: .toggle, lastModeID: "prompt"))
+
+        let ansi = makeController(layout: HotKeyTests.ansi)
+        ansi.applyHotKeyAtLaunch()
+        #expect(ansi.panelModel.hotKeyLabel == "⌃⌥A")
+
+        let azerty = makeController(layout: HotKeyTests.azerty)
+        azerty.applyHotKeyAtLaunch()
+        #expect(azerty.panelModel.hotKeyLabel == "⌃⌥Q")
+        hotKeys.refused = [HotKeyTests.keyA]
+        let refused = makeController(layout: HotKeyTests.azerty)
+        refused.applyHotKeyAtLaunch()
+        #expect(refused.panelModel.notices[.hotKey]?.contains("⌃⌥Q") == true)
+    }
+
     @Test func acceptedHotKeyAtLaunchLeavesThePanelClosed() {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
@@ -216,7 +235,7 @@ import Testing
         #expect(!controller.panelModel.isOpen)
         #expect(!surface.isShown)
         #expect(controller.panelModel.notices.isEmpty)
-        #expect(controller.panelModel.hotKeyLabel == HotKey.standard.label)
+        #expect(controller.panelModel.hotKeyLabel == HotKey.standard.label(layout: HotKeyTests.ansi))
     }
 
     @Test func acceptedHotKeyClearsOnlyTheHotKeyNotice() throws {

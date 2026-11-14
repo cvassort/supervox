@@ -32,7 +32,7 @@ import Testing
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
             escapeRegistrar: escape,
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
-            systemHotKeys: FakeSystemHotKeys(), settingsView: settingsView,
+            systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi, settingsView: settingsView,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate)
     }
@@ -45,7 +45,7 @@ import Testing
     /// La vraie composition de la fenêtre (`SettingsView.content`), avec disposition et moniteur de touches doubles.
     func testProvider(_ built: Built) -> AppController.SettingsViewProvider {
         { [monitor] controller in
-            let hotKey = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi, keyMonitor: monitor)
+            let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
             built.hotKey = hotKey
             return SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
@@ -144,7 +144,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
         let providers = SettingsView.makeProvidersModel(controller)
-        let hotKey = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi, keyMonitor: monitor)
+        let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
 
         try await providers.add(name: "Local", baseURL: "http://localhost:1", kind: .openAICompatible, key: "")
         hotKey.record(HotKeyTests.keyB)
@@ -178,12 +178,12 @@ import Testing
         let result = controller.changeHotKey(HotKeyTests.keyB)
         #expect(HotKeyTests.failure(result) == nil)
         #expect(registrar.registered == HotKeyTests.keyB)
-        #expect(controller.panelModel.hotKeyLabel == HotKeyTests.keyB.label)
+        #expect(controller.panelModel.hotKeyLabel == HotKeyTests.keyB.label(layout: HotKeyTests.ansi))
 
         registrar.refused = [HotKeyTests.keyA]
         #expect(HotKeyTests.failure(controller.changeHotKey(HotKeyTests.keyA)) == .refused)
         #expect(registrar.registered == HotKeyTests.keyB)
-        #expect(controller.panelModel.hotKeyLabel == HotKeyTests.keyB.label)
+        #expect(controller.panelModel.hotKeyLabel == HotKeyTests.keyB.label(layout: HotKeyTests.ansi))
     }
 
     @Test func settingsWindowIsBuiltWithoutReadingAnyKey() throws {
@@ -221,7 +221,7 @@ import Testing
         #expect(controller.panelModel.isOpen)
         #expect(escape.registered != nil)
 
-        let model = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi, keyMonitor: monitor)
+        let model = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
         model.startRecording()
         #expect(registrar.registered == nil)
         #expect(escape.registered == nil)

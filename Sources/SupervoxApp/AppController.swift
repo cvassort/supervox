@@ -30,6 +30,8 @@ public final class AppController {
     public let permissions: PermissionsModel
     /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
     public let systemHotKeys: any SystemHotKeys
+    /// Nomme les touches des raccourcis (libellés, avis) et reconnaît ⌘Q, ⌘W, ⌘H et ⌘M.
+    public let keyboardLayout: any KeyboardLayout
     /// Réglages en vigueur.
     public private(set) var settings: AppSettings
     /// Aucun fichier de réglages au lancement.
@@ -54,6 +56,7 @@ public final class AppController {
         escapeRegistrar: any HotKeyRegistrar,
         permissionsProbe: any PermissionsProbe,
         systemHotKeys: any SystemHotKeys,
+        keyboardLayout: any KeyboardLayout,
         settingsView: @escaping SettingsViewProvider = AppController.emptySettings,
         makePanelSurface: @MainActor (AnyView) -> any PanelSurface,
         clickMonitor: any OutsideClickMonitor,
@@ -66,7 +69,8 @@ public final class AppController {
         self.makeSettingsWindow = makeSettingsWindow
         self.terminate = terminate
         self.systemHotKeys = systemHotKeys
-        hotKeys = HotKeyCenter(registrar: hotKeyRegistrar)
+        self.keyboardLayout = keyboardLayout
+        hotKeys = HotKeyCenter(registrar: hotKeyRegistrar, layout: keyboardLayout)
 
         let loaded = settingsStore.load()
         settings = loaded.settings
@@ -106,6 +110,7 @@ public final class AppController {
             escapeRegistrar: CarbonHotKeyRegistrar(),
             permissionsProbe: SystemPermissions(),
             systemHotKeys: SymbolicHotKeys(),
+            keyboardLayout: SystemKeyboardLayout(),
             settingsView: settingsView,
             makePanelSurface: { FloatingPanelSurface(content: $0) },
             clickMonitor: GlobalClickMonitor(),
@@ -166,20 +171,21 @@ public final class AppController {
         let hotKey = settings.hotKey
         switch hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() }) {
         case .success:
-            panelModel.hotKeyLabel = hotKey.label
-            log.notice("raccourci enregistré : \(hotKey.label, privacy: .public)")
+            let label = hotKey.label(layout: keyboardLayout)
+            panelModel.hotKeyLabel = label
+            log.notice("raccourci enregistré : \(label, privacy: .public)")
             guard systemHotKeys.enabled().contains(hotKey) else {
                 panelModel.setNotice(nil, for: .hotKey)
                 return true
             }
             let message =
-                "Le raccourci \(hotKey.label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre dans Réglages, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
+                "Le raccourci \(label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre dans Réglages, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
             panelModel.setNotice(message, for: .hotKey)
-            log.notice("raccourci de macOS : \(hotKey.label, privacy: .public)")
+            log.notice("raccourci de macOS : \(label, privacy: .public)")
             return false
         case .failure(let error):
-            panelModel.hotKeyLabel = hotKeys.active?.label
-            let message = Self.message(for: error, label: hotKey.label)
+            panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
+            let message = Self.message(for: error, label: hotKey.label(layout: keyboardLayout))
             panelModel.setNotice(message, for: .hotKey)
             log.notice("raccourci refusé : \(message, privacy: .public)")
             return false
@@ -212,7 +218,7 @@ public final class AppController {
     /// jour le libellé du panneau. N'enregistre pas les réglages. En cas de refus, l'ancien reste actif.
     public func changeHotKey(_ hotKey: HotKey) -> Result<Void, HotKeyError> {
         let result = hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() })
-        panelModel.hotKeyLabel = hotKeys.active?.label
+        panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
         if case .success = result { panelModel.setNotice(nil, for: .hotKey) }
         return result
     }
@@ -226,10 +232,10 @@ public final class AppController {
     /// Fin de capture : le raccourci suspendu est réenregistré, s'il l'est encore. Rend faux si le système le refuse.
     func resumeHotKeys() -> Bool {
         let restored = hotKeys.resume()
-        panelModel.hotKeyLabel = hotKeys.active?.label
+        panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
         if !restored {
             panelModel.setNotice(
-                "Le raccourci \(settings.hotKey.label) n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages.",
+                "Le raccourci \(settings.hotKey.label(layout: keyboardLayout)) n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages.",
                 for: .hotKey)
             log.notice("raccourci non rétabli après la capture")
         }

@@ -66,7 +66,7 @@ public final class HotKeyCenter {
     public private(set) var active: HotKey?
 
     /// `layout` sert à reconnaître les combinaisons réservées par caractère (⌘Q, ⌘W, ⌘H, ⌘M).
-    public init(registrar: any HotKeyRegistrar, layout: any KeyboardLayout = SystemKeyboardLayout()) {
+    public init(registrar: any HotKeyRegistrar, layout: any KeyboardLayout) {
         self.registrar = registrar
         self.layout = layout
     }

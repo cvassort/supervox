@@ -27,4 +27,13 @@ struct WindowIntegrationTests {
         #expect(leaves == 3)
         #expect(!surface.window.isVisible)
     }
+
+    /// Le panneau flottant ne prend jamais la frappe ni le statut de fenêtre principale : l'application de premier plan
+    /// les garde. Construit hors écran, jamais affiché.
+    @Test func panelCanNeitherBecomeKeyNorMain() {
+        let panel = FloatingPanel(content: Color.clear.frame(width: 10, height: 10))
+        #expect(!panel.canBecomeKey)
+        #expect(!panel.canBecomeMain)
+        #expect(!panel.isVisible)
+    }
 }

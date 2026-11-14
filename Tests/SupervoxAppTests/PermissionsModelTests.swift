@@ -164,9 +164,16 @@ final class FakePermissionsProbe: PermissionsProbe {
         try #require(probe.microphoneRequests == 1)
         #expect(!model.canRequest)
 
-        // Lancée à part : si elle n'était pas ignorée, elle attendrait elle aussi la réponse.
-        let second = Task { await model.requestNext() }
-        for _ in 0..<1_000 { await Task.yield() }
+        // Lancée à part : si elle n'était pas ignorée, elle attendrait elle aussi la réponse. On attend l'un des deux
+        // événements, sans nombre de tours fixé à l'avance : la seconde demande s'est terminée (ignorée), ou elle a
+        // atteint la sonde (non ignorée). Le test ne peut donc pas passer avant que la seconde ait été exécutée.
+        let secondDone = Flag()
+        let second = Task {
+            await model.requestNext()
+            secondDone.set()
+        }
+        while !secondDone.isSet, probe.microphoneRequests < 2 { await Task.yield() }
+        #expect(secondDone.isSet)
         #expect(probe.microphoneRequests == 1)
         #expect(probe.accessibilityPrompts == 0)
 
@@ -222,3 +229,9 @@ final class GatedPermissionsProbe: PermissionsProbe {
     }
 }
 
+
+/// Drapeau posé par une tâche et lu par le test, sur le fil principal.
+@MainActor final class Flag {
+    private(set) var isSet = false
+    func set() { isSet = true }
+}

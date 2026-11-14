@@ -25,7 +25,7 @@ import Testing
 
     @Test func standardHotKeyIsValidAndLabelled() {
         #expect(HotKey.standard.validate(layout: Self.ansi) == .valid)
-        #expect(HotKey.standard.label == "⌃⌥Espace")
+        #expect(HotKey.standard.label(layout: Self.ansi) == "⌃⌥Espace")
     }
 
     @Test func keyWithoutModifierIsRejected() {

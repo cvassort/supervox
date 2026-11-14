@@ -105,18 +105,4 @@ import Testing
         controller.open()
         #expect(model.notices[.escape] == nil)
     }
-
-    @Test func panelCanNeitherBecomeKeyNorMain() {
-        // Construit hors écran, jamais affiché.
-        let panel = FloatingPanel(content: EmptyContent())
-        #expect(!panel.canBecomeKey)
-        #expect(!panel.canBecomeMain)
-        #expect(!panel.isVisible)
-    }
-}
-
-import SwiftUI
-
-private struct EmptyContent: View {
-    var body: some View { Color.clear.frame(width: 10, height: 10) }
 }

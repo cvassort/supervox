@@ -12,7 +12,7 @@ struct KeyboardLayoutIntegrationTests {
         let character = SystemKeyboardLayout().character(forKeyCode: 0x00)
         print("SUPERVOX_KEYBOARD: code 0x00 -> \(character.map { "\"\($0)\"" } ?? "nil")")
         #expect(character?.isEmpty == false)
-        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).label.hasPrefix("⌃"))
-        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).label.count >= 2)
+        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).label(layout: SystemKeyboardLayout()).hasPrefix("⌃"))
+        #expect(HotKey(keyCode: 0x00, modifiers: [.control]).label(layout: SystemKeyboardLayout()).count >= 2)
     }
 }
