@@ -285,6 +285,13 @@ enum FakeInsertion {
         #expect(rig.board.contents == FakeInsertion.original)
     }
 
+    @Test("la patience par défaut est d'une seconde : vingt sondages de 0,05 s")
+    func defaultPatienceIsOneSecond() async {
+        let rig = InsertionRig(held: [true])
+        _ = await rig.inserter.insert(FakeInsertion.dictated)
+        #expect(rig.waiter.durations == Array(repeating: 0.05, count: 20))
+    }
+
     // MARK: - Échec de ⌘V
 
     @Test("si ⌘V n'a pas pu être posté, le texte reste dans le presse-papiers et la raison dit de faire ⌘V")
@@ -315,6 +322,9 @@ enum FakeInsertion {
         #expect(TextInserter.pasteKeyCode(layout: HotKeyTests.azerty) == UInt16(kVK_ANSI_V))
         #expect(TextInserter.pasteKeyCode(layout: Self.dvorak) == UInt16(kVK_ANSI_Period))
         #expect(TextInserter.pasteKeyCode(layout: HotKeyTests.StubLayout(characters: [:])) == UInt16(kVK_ANSI_V))
+        // « v » sur deux codes dont celui de V : celui de V l'emporte, même si l'autre est plus petit.
+        let twice = HotKeyTests.StubLayout(characters: [0x02: "v", UInt32(kVK_ANSI_V): "v"])
+        #expect(TextInserter.pasteKeyCode(layout: twice) == UInt16(kVK_ANSI_V))
         // Une disposition non latine (aucun « v » nulle part) : repli sur le code de V.
         let cyrillic = HotKeyTests.StubLayout(characters: [0x09: "м", 0x00: "ф", 0x0B: "и"])
         #expect(TextInserter.pasteKeyCode(layout: cyrillic) == UInt16(kVK_ANSI_V))
