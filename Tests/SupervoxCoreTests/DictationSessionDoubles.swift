@@ -45,8 +45,9 @@ final class TestClock: @unchecked Sendable {
     var reader: @Sendable () -> Double { { [self] in value.withLock { $0 } } }
 }
 
-struct TestFailure: Error, CustomStringConvertible, Equatable {
+struct TestFailure: LocalizedError, CustomStringConvertible, Equatable {
     var description: String
+    var errorDescription: String? { description }
     init(_ description: String) { self.description = description }
 }
 

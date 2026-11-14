@@ -357,7 +357,10 @@ public actor DictationSession: DictationSessioning {
         snapshotSink.yield(snapshot)
     }
 
-    /// Le texte d'une erreur, en une raison qui se lit dans une phrase (sans point final).
+    /// Le texte d'une erreur, en une raison qui se lit dans une phrase (sans point final). Jamais le texte brut d'une
+    /// erreur inconnue : une erreur système (`URLError`…) y met l'adresse du service. Les erreurs connues (`AudioCaptureError`,
+    /// `TranscriberError`) et celles qui portent un message d'elles-mêmes (`LocalizedError`) gardent leur message ; le
+    /// reste devient une phrase générique.
     private static func describe(_ error: Error) -> String {
         if let capture = error as? AudioCaptureError {
             switch capture {
@@ -367,7 +370,8 @@ public actor DictationSession: DictationSessioning {
             case .engineFailed(let message): return "le moteur audio a échoué (\(message))"
             }
         }
+        if let transcriber = error as? TranscriberError { return transcriber.description }
         if let localized = error as? LocalizedError, let description = localized.errorDescription { return description }
-        return String(describing: error)   // `TranscriberError` et les erreurs de test se décrivent par `description`
+        return "erreur inattendue"
     }
 }
