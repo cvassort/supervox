@@ -822,6 +822,109 @@ struct SaveFailure: Error, LocalizedError {
         #expect(model.providers.first?.models == ["model-1"])
     }
 
+    // MARK: - Écritures pendant l'attente de la suppression d'une clé (I6 / N2)
+
+    /// Le premier `delete` reste bloqué (sur la file propre au modèle testé) jusqu'à `release()`.
+    final class BlockingDeleteStore: SecretStore {
+        let inner: RecordingSecretStore
+        private let blocked = Mutex(false)
+        private let entered = Mutex(false)
+        private let gate = DispatchSemaphore(value: 0)
+
+        init(secrets: [String: String]) { inner = RecordingSecretStore(secrets: secrets) }
+
+        var hasEnteredDelete: Bool { entered.withLock { $0 } }
+        func release() { gate.signal() }
+
+        func read(account: String) throws -> String? { try inner.read(account: account) }
+        func write(_ secret: String, account: String) throws { try inner.write(secret, account: account) }
+        func contains(account: String) throws -> Bool { try inner.contains(account: account) }
+        func delete(account: String) throws {
+            let first = blocked.withLock { wasBlocked in
+                defer { wasBlocked = true }
+                return !wasBlocked
+            }
+            if first {
+                entered.withLock { $0 = true }
+                gate.wait()
+            }
+            try inner.delete(account: account)
+        }
+    }
+
+    static let first = Provider(id: UUID(), name: "Premier", baseURL: "http://localhost:8080", kind: .openAICompatible, models: ["a"])
+    static let second = Provider(id: UUID(), name: "Second", baseURL: "http://localhost:9090", kind: .openAICompatible, models: [])
+
+    /// Le premier fournisseur change d'hôte ; pendant que l'ancienne clé est retirée, `during` fait une autre
+    /// écriture. Rend le modèle une fois les deux terminées.
+    func changeOriginOfTheFirst(
+        while during: @MainActor (ProvidersModel, Gate) async throws -> Void
+    ) async throws -> ProvidersModel {
+        let store = BlockingDeleteStore(secrets: [Self.first.id.uuidString: "sk-1", Self.second.id.uuidString: "sk-2"])
+        let gate = Gate()
+        let saver = saver
+        let model = ProvidersModel(
+            providers: [Self.first, Self.second], secrets: store,
+            listModels: { provider, _ in
+                await gate.wait()
+                return ["liste-de-\(provider.name)"]
+            },
+            save: { try saver.save($0) }, secretQueue: DispatchQueue(label: "test-suppression-bloquee"))
+
+        var moved = Self.first
+        moved.baseURL = "http://127.0.0.1:7070"
+        try await during(model, gate) // prépare, par exemple une lecture suspendue chez le serveur
+        let update = Task { try await model.update(moved, newKey: nil) }
+        while !store.hasEnteredDelete { await Task.yield() }
+        try await during(model, gate)
+        store.release()
+        try await update.value
+        #expect(model.providers.first { $0.id == Self.first.id }?.baseURL == "http://127.0.0.1:7070")
+        return model
+    }
+
+    @Test func modelListSavedWhileTheOldKeyIsRemovedIsNotLost() async throws {
+        var refresh: Task<Void, Never>?
+        var step = 0
+        let model = try await changeOriginOfTheFirst { model, gate in
+            step += 1
+            if step == 1 {
+                // Lecture du second lancée avant : elle attend le serveur, sa clé déjà lue.
+                let done = Gate()
+                refresh = Task {
+                    await model.refreshModels(Self.second.id)
+                    done.open()
+                }
+                while !gate.isWaiting, !done.isOpen { await Task.yield() }
+                try #require(gate.isWaiting)
+            } else {
+                // Elle se termine pendant que la suppression de l'ancienne clé du premier attend.
+                gate.open()
+                await refresh?.value
+                #expect(model.status(of: Self.second.id) == .ok(count: 1))
+            }
+        }
+
+        #expect(model.providers.first { $0.id == Self.second.id }?.models == ["liste-de-Second"])
+        #expect(saver.saved.last?.first { $0.id == Self.second.id }?.models == ["liste-de-Second"])
+    }
+
+    @Test func providerRemovedWhileTheOldKeyIsRemovedStaysRemoved() async throws {
+        var step = 0
+        var removal: Task<Void, any Error>?
+        let model = try await changeOriginOfTheFirst { model, _ in
+            step += 1
+            guard step == 2 else { return }
+            // La suppression enregistre les réglages avant d'attendre le trousseau (bloqué derrière l'autre).
+            removal = Task { try await model.remove(Self.second.id) }
+            while model.providers.contains(where: { $0.id == Self.second.id }) { await Task.yield() }
+        }
+        try await removal?.value
+
+        #expect(!model.providers.contains { $0.id == Self.second.id })
+        #expect(saver.saved.last?.contains { $0.id == Self.second.id } == false)
+    }
+
     // MARK: - Ouverture
 
     @Test func keyPresenceIsCheckedWithoutReadingAnyKey() async throws {

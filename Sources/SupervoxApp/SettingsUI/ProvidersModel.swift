@@ -166,8 +166,6 @@ public final class ProvidersModel {
         // La liste des modèles ne vient que de `refreshModels` : celle de `provider` peut dater de l'ouverture
         // de la feuille d'édition.
         changed.models = endpointChanged ? [] : current.models
-        var updated = providers
-        updated[index] = changed
         let account = provider.id.uuidString
 
         if originChanged {
@@ -177,12 +175,21 @@ public final class ProvidersModel {
                 throw ProvidersError.oldKeyNotRemoved(Self.message(for: error))
             }
             keyStates[provider.id] = .absent
+            // Pendant l'attente, une liste de modèles a pu être enregistrée, ou un fournisseur supprimé : la liste
+            // est relue maintenant, pas recopiée d'avant l'attente.
+            guard let index = providers.firstIndex(where: { $0.id == provider.id }) else {
+                throw ProvidersError.unknownProvider
+            }
+            var updated = providers
+            updated[index] = changed
             do {
                 try commit(updated)
             } catch {
                 throw ProvidersError.oldKeyRemovedButNotSaved(Self.message(for: error))
             }
         } else {
+            var updated = providers
+            updated[index] = changed
             try commit(updated)
         }
         if endpointChanged {
