@@ -17,10 +17,11 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$binary" "$app/Contents/MacOS/Supervox"
 
 # Icône : dessinée par le code (BrandMark), puis assemblée en .icns. Aucune image n'est suivie dans le dépôt.
-iconset="$(mktemp -d)/Supervox.iconset"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+iconset="$work/Supervox.iconset"
 swift run -c release supervox-snapshots --iconset "$iconset" >/dev/null
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/Supervox.icns"
-rm -rf "$(dirname "$iconset")"
 
 cat > "$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

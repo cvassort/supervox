@@ -74,6 +74,34 @@ struct BrandMarkTests {
         #expect(entries.map(\.pixels) == [16, 32, 32, 64, 128, 256, 256, 512, 512, 1024])
     }
 
+    @Test("l'icône d'application porte les barres blanches sur le fond indigo")
+    func appIconCarriesWhiteBarsOnTheIndigoTile() throws {
+        let rep = BrandMark.appIconBitmap(pixels: 256)
+
+        // Barre centrale : au milieu du carré, AppKit compte les lignes du bitmap depuis le haut.
+        let bar = try #require(rep.colorAt(x: 128, y: 110)?.usingColorSpace(.sRGB))
+        #expect(bar.redComponent > 0.9 && bar.greenComponent > 0.9 && bar.blueComponent > 0.9)
+        // Entre deux barres, à la même hauteur : le fond, nettement plus bleu que rouge.
+        let tile = try #require(rep.colorAt(x: 128 - 18, y: 110)?.usingColorSpace(.sRGB))
+        #expect(tile.blueComponent > tile.redComponent + 0.3)
+    }
+
+    @Test("le jeu d'icônes écrit dix PNG lisibles, chacun à sa taille")
+    func writeIconsetWritesTenReadablePNGsAtTheirSizes() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("supervox-iconset-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        try BrandMark.writeIconset(to: folder)
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 10)
+        for entry in BrandMark.iconsetEntries {
+            let data = try Data(contentsOf: folder.appendingPathComponent(entry.name))
+            let rep = try #require(NSBitmapImageRep(data: data), "\(entry.name)")
+            #expect(rep.pixelsWide == entry.pixels && rep.pixelsHigh == entry.pixels, "\(entry.name)")
+        }
+    }
+
     /// Part des pixels non transparents d'une image rendue dans un carré de `pixels` de côté.
     private func opaqueShare(of image: NSImage, pixels: Int) throws -> Double {
         let rep = try #require(NSBitmapImageRep(
