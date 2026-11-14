@@ -1,11 +1,10 @@
 import Foundation
-import Synchronization
 
 /// Client d'un endpoint HTTP compatible OpenAI. Aucun nom de fournisseur ni de modèle : tout vient de `EndpointConfig`
 /// et des arguments des appels.
 public final class OpenAICompatibleClient: Sendable {
     private let config: EndpointConfig
-    private let session: URLSession
+    let session: URLSession
     /// Délai d'inactivité de chaque requête, en secondes : la requête échoue (`EndpointError.transport`) si aucune
     /// donnée n'arrive pendant cette durée (mesuré : un serveur muet fait échouer la requête au bout du délai ; une
     /// réponse qui s'étire sur plus longtemps mais livre des octets plus souvent passe). Ce n'est pas une durée totale.
@@ -14,7 +13,7 @@ public final class OpenAICompatibleClient: Sendable {
     /// Sans délai explicite, une requête attendrait 60 s (défaut du système) à chaque appel sur un endpoint muet.
     public static let defaultRequestTimeout: TimeInterval = 30
 
-    public init(config: EndpointConfig, session: URLSession = .shared, requestTimeout: TimeInterval = defaultRequestTimeout) {
+    public init(config: EndpointConfig, session: URLSession = EndpointSession.shared, requestTimeout: TimeInterval = defaultRequestTimeout) {
         self.config = config
         self.session = session
         self.requestTimeout = requestTimeout
@@ -99,10 +98,10 @@ public final class OpenAICompatibleClient: Sendable {
         request.timeoutInterval = requestTimeout
         request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let observer = ConnectionObserver()
-        let (data, response) = try await send(request, body: try encoder.encode(fields), delegate: observer)
+        let delegate = EndpointTaskDelegate()
+        let (data, response) = try await send(request, body: try encoder.encode(fields), delegate: delegate)
         try checkIsAudio(data, response: response, format: format)
-        return (data, observer.connection)
+        return (data, delegate.connection)
     }
 
     // MARK: - Requêtes
@@ -128,9 +127,10 @@ public final class OpenAICompatibleClient: Sendable {
     }
 
     /// Envoie la requête et rend le corps et la réponse d'un statut 2xx. Toute autre issue est une `EndpointError`,
-    /// sauf l'annulation de la tâche, qui reste une `CancellationError`.
+    /// sauf l'annulation de la tâche, qui reste une `CancellationError`. Une redirection vers une autre origine
+    /// n'est pas suivie (`EndpointTaskDelegate`).
     private func send(_ request: URLRequest, body: Data,
-                      delegate: (any URLSessionTaskDelegate)? = nil) async throws -> (data: Data, response: HTTPURLResponse) {
+                      delegate: EndpointTaskDelegate = EndpointTaskDelegate()) async throws -> (data: Data, response: HTTPURLResponse) {
         let data: Data
         let response: URLResponse
         do {
@@ -138,6 +138,7 @@ public final class OpenAICompatibleClient: Sendable {
         } catch {
             throw mapped(error)
         }
+        if delegate.refusedRedirect { throw EndpointError.crossOriginRedirect }
         guard let http = response as? HTTPURLResponse else { throw EndpointError.malformedResponse }
         guard (200..<300).contains(http.statusCode) else {
             throw EndpointError.http(status: http.statusCode, body: errorBody(data))
@@ -186,7 +187,9 @@ public final class OpenAICompatibleClient: Sendable {
         request.httpBody = try JSONEncoder().encode(
             Body(model: model, messages: messages.map { .init(role: $0.role, content: $0.content) }, max_tokens: maxTokens))
 
-        let (bytes, response) = try await session.bytes(for: request)
+        let delegate = EndpointTaskDelegate()
+        let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
+        if delegate.refusedRedirect { throw EndpointError.crossOriginRedirect }
         guard let http = response as? HTTPURLResponse else { throw EndpointError.malformedResponse }
         guard (200..<300).contains(http.statusCode) else {
             var body = Data()
@@ -251,19 +254,6 @@ public struct ConnectionInfo: Equatable, Sendable {
     public init(networkProtocol: String?, reused: Bool) {
         self.networkProtocol = networkProtocol
         self.reused = reused
-    }
-}
-
-/// Délégué propre à une tâche : relève la connexion dans les mesures livrées à la fin de la tâche (mesuré sur
-/// l'endpoint : elles arrivent avant le retour de l'appel).
-private final class ConnectionObserver: NSObject, URLSessionTaskDelegate, Sendable {
-    private let observed = Mutex<ConnectionInfo?>(nil)
-    var connection: ConnectionInfo? { observed.withLock { $0 } }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
-        guard let last = metrics.transactionMetrics.last else { return }
-        let info = ConnectionInfo(networkProtocol: last.networkProtocolName, reused: last.isReusedConnection)
-        observed.withLock { $0 = info }
     }
 }
 

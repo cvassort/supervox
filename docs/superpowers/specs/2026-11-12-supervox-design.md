@@ -154,7 +154,7 @@ Un mode est une donnée : nom, consigne (vide pour la dictée brute), modèle, m
 
 **Vocabulaire personnel** : une liste de termes (noms de produits, d'outils) transmise au moteur de transcription quand il l'accepte, et à la consigne de nettoyage.
 
-**Moteur de transcription** : interchangeable. Le choix du moteur par défaut n'est pas fait dans ce document (voir étape 1).
+**Moteur de transcription** : interchangeable. Décidé le 2026-11-13 après les mesures de l'étape 1 (`docs/bench/2026-11-13-resultats.md`) : **WhisperKit avec vocabulaire par défaut pour la dictée**, Parakeet restant sélectionnable ; **Parakeet pour l'entretien**, où la vitesse prime. Ces taux d'erreur ont été mesurés sur des phrases entières transcrites en bloc : le « texte en direct » du parcours (5.1) n'a pas été mesuré, et le texte final devra venir d'une transcription en bloc ou être remesuré à l'étape 3. Le recalage par vocabulaire de Parakeet a remplacé à tort deux mots corrects sur 20 phrases : à surveiller à l'étape 6.
 
 ### 6.5 Voix
 
@@ -182,7 +182,7 @@ Voix par défaut : celle de l'endpoint de l'utilisateur, jugée « acceptable po
 Un seul lot, comme décidé, mais dans cet ordre. Chaque étape laisse quelque chose d'utilisable.
 
 1. **Banc d'essai en ligne de commande**, avant toute interface. Deux mesures :
-   - **Transcription.** Le corpus n'existe pas encore : l'utilisateur lit à voix haute une vingtaine de phrases écrites à l'avance, en français mêlé d'anglais technique, tirées de ses vrais prompts. Le texte écrit sert de référence. On compare les moteurs locaux en flux sous licence permise, et la transcription de l'endpoint. Critères, dans l'ordre : taux d'erreur sur les termes techniques, taux d'erreur global, délai de la transcription finale. Le même moteur local sert à la dictée et à l'entretien.
+   - **Transcription.** Le corpus n'existe pas encore : l'utilisateur lit à voix haute une vingtaine de phrases écrites à l'avance, en français mêlé d'anglais technique, tirées de ses vrais prompts. Le texte écrit sert de référence. On compare les moteurs locaux en flux sous licence permise, et la transcription de l'endpoint. Critères, dans l'ordre : taux d'erreur sur les termes techniques, taux d'erreur global, délai de la transcription finale. Le même moteur local devait servir à la dictée et à l'entretien ; après mesure, l'utilisateur a retenu deux moteurs (voir 6.4).
    - **Latence de bout en bout** de la chaîne de l'entretien, de la fin réelle de la parole au premier son. Cible : moins de 2 secondes.
    - **Si aucun moteur local n'est assez bon** : la dictée passe par l'endpoint (plus lent, sans texte en direct) et l'entretien utilise le meilleur moteur local disponible, avec ses défauts écrits noir sur blanc. **Si la cible de latence n'est pas tenue** : on le dit à l'utilisateur avant de construire l'interface, avec les leviers (voix du système, silence de fin de tour plus court, autre modèle). La décision de continuer lui revient.
 2. **Socle** : app de barre de menus, touche globale, panneau, réglages, trousseau, permissions.
@@ -210,8 +210,8 @@ Ce qui ne se teste pas automatiquement (qualité de la voix, fluidité de l'éch
 
 | Inconnue | Pourquoi elle n'est pas levée | Quand elle le sera |
 |---|---|---|
-| Qualité et vitesse d'une transcription locale en flux, en français technique | Aucun benchmark public ; non mesuré | Étape 1 |
-| Délai entre la fin réelle de la parole et le premier son de l'outil | Seuls les maillons ont été mesurés séparément : environ 1,5 s en les additionnant, hors transcription locale. Cible : moins de 2 secondes, silence de fin de tour compris. La marge est mince. | Étape 1 |
+| Qualité et vitesse d'une transcription locale, en français technique | **Levée le 2026-11-13** pour la transcription en bloc (`docs/bench/2026-11-13-resultats.md`). La transcription en flux reste non mesurée. | Étape 3 pour le flux |
+| Délai entre la fin réelle de la parole et le premier son de l'outil | **Mesuré le 2026-11-13** : médiane 1,87 s avec Parakeet, 14 tours sur 40 au-dessus de 2 s. La cible n'est pas tenue ; l'utilisateur a décidé de continuer. Plus de la moitié du délai est la détection de fin de tour (1,02 s). | Étape 6 : raccourcir la détection de fin de tour |
 | Qualité des questions posées par le modèle rapide | Seule sa vitesse a été mesurée | Étape 6 |
 | Voix française | Une seule voix, jugée seulement « acceptable » | Étape 7, en cherchant d'autres voix |
 | Annulation d'écho dans d'autres conditions | Testée dans une pièce, à un volume, avec un casque | À l'usage |

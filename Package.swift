@@ -7,7 +7,10 @@ let package = Package(
     products: [
         .library(name: "SupervoxCore", targets: ["SupervoxCore"]),
         .library(name: "SupervoxEngines", targets: ["SupervoxEngines"]),
+        .library(name: "SupervoxApp", targets: ["SupervoxApp"]),
+        .executable(name: "Supervox", targets: ["Supervox"]),
         .executable(name: "supervox-bench", targets: ["SupervoxBench"]),
+        .executable(name: "supervox-snapshots", targets: ["SupervoxSnapshots"]),
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.18.3"),
@@ -24,6 +27,12 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ]
         ),
+        .target(
+            name: "SupervoxApp",
+            dependencies: ["SupervoxCore"]
+        ),
+        .executableTarget(name: "Supervox", dependencies: ["SupervoxApp"]),
+        .executableTarget(name: "SupervoxSnapshots", dependencies: ["SupervoxApp"]),
         .executableTarget(
             name: "SupervoxBench",
             dependencies: [
@@ -37,6 +46,7 @@ let package = Package(
             dependencies: ["SupervoxCore"],
             resources: [.copy("Fixtures")]
         ),
+        .testTarget(name: "SupervoxAppTests", dependencies: ["SupervoxApp"]),
         .testTarget(name: "SupervoxBenchTests", dependencies: ["SupervoxBench", "SupervoxEngines"]),
     ]
 )

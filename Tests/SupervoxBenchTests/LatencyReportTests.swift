@@ -432,8 +432,11 @@ private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
     #expect(text.contains("<endpoint>"))
 }
 
+/// Les essais passent par le vrai `runLatencyTrials` (classement suspect, échec, sans contenu, mesuré), chronométré
+/// par une horloge réelle ; leurs durées sont ensuite fixées, pour que le rapport ne dépende pas de la vitesse de la
+/// machine (m-j : un total réel arrondi à 0,74 s faisait échouer l'ancienne assertion `!md.contains("0,74")`).
 @Test func reportSeparatesFlaggedFailedAndNoContentRunsAndStatesLimits() async throws {
-    let out = try await trials(runs: 4, chat: { n in
+    let timed = try await trials(runs: 4, chat: { n in
         switch n {
         case 1: stream([.content("Quel est l'objectif ?")])                                       // suspect
         case 2: stream([], error: EndpointError.http(status: 500, body: "https://gw.example.test panne"))   // échec
@@ -441,6 +444,16 @@ private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
         default: stream(streamed)                                                                 // mesuré
         }
     })
+    let kinds = timed.map { trial -> String in
+        switch trial.outcome {
+        case .suspectCache: "suspect"
+        case .failed: "échec"
+        case .noContent: "sans contenu"
+        case .measured: "mesuré"
+        }
+    }
+    #expect(kinds == ["suspect", "échec", "sans contenu", "mesuré"])
+    let out = timed.map(withFixedTiming)
     let settings = LatencySettings(engine: "parakeet", chatModel: "m", ttsModel: "t", voice: "v", ttsExtra: [:],
                                    silenceMs: 600, target: 2.0, maxTokens: 300, runs: 4, detector: "détecteur",
                                    detectorHop: 0.256)
@@ -450,12 +463,29 @@ private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
     // Binomiale(3 ; 0,1) : on peut affirmer que plus de 10 % des tours ratent, non tenu.
     #expect(md.contains("NON tenu — 2 essai(s) au-dessus de la cible ou sans réponse sur 3 jugé(s)"))
     #expect(md.contains("2 essai(s) sans réponse (1 sans contenu, 1 en échec), comptés comme ratés dans le verdict"))
-    #expect(!md.contains("indicatif") && !md.contains("0,74") && !md.contains("deux séries"))
+    #expect(!md.contains("indicatif") && !md.contains("probabilité de 0,74") && !md.contains("deux séries"))
     #expect(md.contains("constante ajoutée") && md.contains("en bloc"))
     #expect(md.contains("muet"))
     // 600 ms comptées par tranches de 256 ms, à partir de la fin de la première tranche silencieuse : (1 + 3) × 0,256.
     #expect(md.contains("au plus tôt 1,02 s") && md.contains("soit 0,42 s de plus"))
     #expect(!md.contains("gw.example.test"))
+}
+
+/// Le même essai avec des durées fixes (total 1,5 s avec le silence constant) ; les étapes absentes le restent.
+private func withFixedTiming(_ trial: LatencyTrial) -> LatencyTrial {
+    func fixed(_ timing: TurnTiming) -> TurnTiming {
+        TurnTiming(silence: timing.silence, transcription: 0.2, firstSentence: timing.firstSentence.map { _ in 0.4 },
+                   synthesis: timing.synthesis.map { _ in 0.3 })
+    }
+    let outcome: TrialOutcome = switch trial.outcome {
+    case .measured(let timing): .measured(fixed(timing))
+    case .noContent(let timing, let reason): .noContent(fixed(timing), reason: reason)
+    case .suspectCache(let timing, let reason): .suspectCache(fixed(timing), reason: reason)
+    case .failed: trial.outcome
+    }
+    return LatencyTrial(number: trial.number, recording: trial.recording, transcript: trial.transcript,
+                        sentence: trial.sentence, contentChunks: trial.contentChunks, outcome: outcome,
+                        connection: trial.connection)
 }
 
 private let settings600 = LatencySettings(engine: "parakeet", chatModel: "m", ttsModel: "t", voice: "v", ttsExtra: [:],

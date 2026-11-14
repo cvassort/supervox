@@ -1,0 +1,103 @@
+import Foundation
+import Security
+
+/// Résultat d'un appel `SecItem*`, ramené à ce que le code appelant doit distinguer.
+enum SecretOutcome: Equatable {
+    case success
+    case notFound
+    case failure(SecretError)
+}
+
+/// Secrets dans le trousseau de l'utilisateur : un mot de passe générique par compte, dans le
+/// trousseau fichier classique. Le trousseau à protection des données (`kSecUseDataProtectionKeychain`)
+/// exige un profil d'approvisionnement que cette application n'a pas : on ne le demande donc jamais.
+public struct KeychainSecretStore: SecretStore {
+    public let service: String
+
+    public init(service: String) {
+        self.service = service
+    }
+
+    static func outcome(forStatus status: OSStatus) -> SecretOutcome {
+        switch status {
+        case errSecSuccess: .success
+        case errSecItemNotFound: .notFound
+        case errSecUserCanceled, errSecAuthFailed: .failure(.denied)
+        default: .failure(.unavailable(status: status))
+        }
+    }
+
+    public func read(account: String) throws -> String? {
+        var query = identity(account: account)
+        query[kSecReturnData] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        switch Self.outcome(forStatus: SecItemCopyMatching(query as CFDictionary, &result)) {
+        case .notFound: return nil
+        case .failure(let error): throw error
+        case .success:
+            guard let data = result as? Data, let secret = String(data: data, encoding: .utf8) else {
+                throw SecretError.unavailable(status: errSecDecode)
+            }
+            return secret
+        }
+    }
+
+    public func write(_ secret: String, account: String) throws {
+        try SecretError.rejectEmpty(secret)
+        let data = Data(secret.utf8)
+        let update = [kSecValueData: data] as [CFString: Any]
+
+        // Deux tours au plus : une écriture ou une suppression concurrente peut faire changer l'état
+        // de l'entrée entre la mise à jour et l'ajout. Au-delà, on le dit au lieu de n'avoir rien écrit.
+        for _ in 0..<2 {
+            switch Self.outcome(forStatus: SecItemUpdate(identity(account: account) as CFDictionary, update as CFDictionary)) {
+            case .success: return
+            case .failure(let error): throw error
+            case .notFound: break
+            }
+
+            var item = identity(account: account)
+            item[kSecValueData] = data
+            let added = SecItemAdd(item as CFDictionary, nil)
+            if added == errSecDuplicateItem { continue }
+            if case .failure(let error) = Self.outcome(forStatus: added) { throw error }
+            return
+        }
+        throw SecretError.unavailable(status: errSecDuplicateItem)
+    }
+
+    public func delete(account: String) throws {
+        switch Self.outcome(forStatus: SecItemDelete(identity(account: account) as CFDictionary)) {
+        case .success, .notFound: return
+        case .failure(let error): throw error
+        }
+    }
+
+    /// Recherche des attributs seulement : la donnée (la clé) n'est ni demandée ni déchiffrée.
+    public func contains(account: String) throws -> Bool {
+        var result: CFTypeRef?
+        switch Self.outcome(forStatus: SecItemCopyMatching(existenceQuery(account: account) as CFDictionary, &result)) {
+        case .success: return true
+        case .notFound: return false
+        case .failure(let error): throw error
+        }
+    }
+
+    /// Requête de `contains` : attributs demandés, jamais `kSecReturnData`.
+    func existenceQuery(account: String) -> [CFString: Any] {
+        var query = identity(account: account)
+        query[kSecReturnAttributes] = true
+        query[kSecMatchLimit] = kSecMatchLimitOne
+        return query
+    }
+
+    private func identity(account: String) -> [CFString: Any] {
+        [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account,
+        ]
+    }
+}

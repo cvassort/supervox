@@ -1,0 +1,83 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "model-c",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "owner-test",
+      "root": "model-c",
+      "aliases": [],
+      "parent": null,
+      "max_model_len": 4096,
+      "permission": [
+        {
+          "id": "perm-test",
+          "object": "model_permission",
+          "created": 1700000000,
+          "allow_create_engine": false,
+          "allow_sampling": true,
+          "allow_logprobs": true,
+          "allow_search_indices": false,
+          "allow_view": true,
+          "allow_fine_tuning": false,
+          "organization": "*",
+          "group": null,
+          "is_blocking": false
+        }
+      ]
+    },
+    {
+      "id": "model-a",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "owner-test",
+      "root": "model-a",
+      "aliases": [],
+      "parent": null,
+      "max_model_len": 4096,
+      "permission": [
+        {
+          "id": "perm-test",
+          "object": "model_permission",
+          "created": 1700000000,
+          "allow_create_engine": false,
+          "allow_sampling": true,
+          "allow_logprobs": true,
+          "allow_search_indices": false,
+          "allow_view": true,
+          "allow_fine_tuning": false,
+          "organization": "*",
+          "group": null,
+          "is_blocking": false
+        }
+      ]
+    },
+    {
+      "id": "model-b",
+      "object": "model",
+      "created": 1700000000,
+      "owned_by": "owner-test",
+      "root": "model-b",
+      "aliases": [],
+      "parent": null,
+      "max_model_len": 4096,
+      "permission": [
+        {
+          "id": "perm-test",
+          "object": "model_permission",
+          "created": 1700000000,
+          "allow_create_engine": false,
+          "allow_sampling": true,
+          "allow_logprobs": true,
+          "allow_search_indices": false,
+          "allow_view": true,
+          "allow_fine_tuning": false,
+          "organization": "*",
+          "group": null,
+          "is_blocking": false
+        }
+      ]
+    }
+  ]
+}

@@ -3,8 +3,9 @@
 [![Tests](https://github.com/cvassort/supervox/actions/workflows/tests.yml/badge.svg)](https://github.com/cvassort/supervox/actions/workflows/tests.yml)
 
 supervox sera une application macOS de dictée et d'entretien vocal. Elle est en cours de construction.
-Ce dépôt contient pour l'instant le banc d'essai : `supervox-bench`, un outil en ligne de commande qui mesure
-la qualité de transcription de plusieurs moteurs et le délai de réponse de bout en bout.
+Ce dépôt contient le socle de l'application (voir « Application ») et le banc d'essai : `supervox-bench`, un outil
+en ligne de commande qui mesure la qualité de transcription de plusieurs moteurs et le délai de réponse de bout en
+bout.
 
 ## Prérequis
 
@@ -28,6 +29,85 @@ Ils ne tournent pas dans le pipeline.
   fabriquent leur audio avec la voix française `Thomas` de macOS (commande `say`) : elle doit être installée.
 - `SUPERVOX_MIC=1 swift test` : capture d'environ une seconde de bruit ambiant avec le vrai micro (en mémoire,
   rien n'est écrit sur disque).
+- `SUPERVOX_KEYCHAIN=1 swift test` : écrit, lit, remplace et supprime une entrée de test dans le vrai trousseau.
+- `SUPERVOX_KEYBOARD=1 swift test` : interroge la vraie disposition de clavier.
+- `SUPERVOX_WINDOWS=1 swift test` : construit de vraies fenêtres d'AppKit, sans les afficher.
+
+## Application
+
+Supervox est une application de barre de menus : pas d'icône dans le Dock, une icône d'onde dans la barre de menus.
+La dictée elle-même n'est pas encore branchée ; l'application tient aujourd'hui le panneau, les fournisseurs, le
+raccourci et les permissions.
+
+### Construire
+
+```sh
+Scripts/make-app.sh
+```
+
+Le script compile en mode release, écrit `build/Supervox.app` (avec son `Info.plist`), signe le paquet puis vérifie la
+signature (`codesign --verify --strict`).
+
+### Signature
+
+- Avec `SUPERVOX_SIGN_IDENTITY` (le nom d'une identité de signature du trousseau), le paquet est signé avec elle :
+
+  ```sh
+  SUPERVOX_SIGN_IDENTITY="Supervox local" Scripts/make-app.sh
+  ```
+
+- Sans cette variable, la signature est ad hoc : macOS ne reconnaît pas l'application d'une compilation à l'autre, et
+  redemande le micro et l'Accessibilité après chaque compilation. Le script le rappelle.
+- Pour un usage local, un certificat auto-signé suffit. Dans « Trousseaux d'accès », menu Trousseaux d'accès,
+  Assistant de certification, « Créer un certificat… » : un nom (par exemple « Supervox local »), type d'identité
+  « Racine auto-signée », type de certificat « Signature de code ». Ce nom est la valeur de `SUPERVOX_SIGN_IDENTITY`.
+  `security find-identity -p codesigning` liste les identités disponibles.
+
+### Lancer
+
+```sh
+open build/Supervox.app
+```
+
+- Raccourci par défaut : ⌃⌥Espace (contrôle, option, espace). Il ouvre et ferme le panneau, depuis n'importe quelle
+  application.
+- Au premier lancement (aucun fichier de réglages), le panneau s'ouvre seul : il dit à quoi sert le raccourci et où
+  sont les réglages, et propose d'autoriser le micro puis l'Accessibilité. Rien n'est demandé avant ce clic.
+- Relancer l'application déjà ouverte (`open build/Supervox.app`) ouvre le panneau, sans second exemplaire. Vérifié
+  ainsi sur l'application construite ; la relance depuis le Finder ou le Dock ne l'a pas été.
+- Un avis sur le fichier de réglages (mis de côté, illisible, version plus récente) ouvre aussi le panneau au
+  lancement ; ce n'est pas l'accueil d'un nouvel utilisateur.
+- Les réglages (fournisseurs, raccourci, permissions) s'ouvrent par « Réglages… », dans le menu « … » du panneau ou
+  dans celui de l'icône de la barre de menus.
+- Si le raccourci est refusé par macOS, le panneau s'ouvre au lancement pour le dire. S'il est aussi un raccourci de
+  macOS activé sur ce Mac, le panneau s'ouvre pour le dire au premier lancement où c'est le cas ; ensuite l'avis
+  reste dans le panneau, qui ne s'ouvre plus seul pour ce raccourci. macOS ne signale pas les conflits avec une autre application : si le raccourci
+  n'ouvre pas le panneau, choisissez-en un autre.
+
+### Ce qui est stocké, et où
+
+- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode) : `~/Library/Application Support/Supervox/settings.json`.
+  Un fichier au contenu illisible est mis de côté dans le même dossier (`settings.json.illisible-<date>`), jamais
+  écrasé ; un fichier qui ne peut pas être lu (droits, disque) reste en place et rien n'y est écrit jusqu'à la fin de
+  la session, même s'il redevient lisible ; un fichier écrit par une version plus récente de Supervox est gardé tel
+  quel et n'est pas réécrit.
+- Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
+  identifiant). Jamais dans un fichier. Elles ne sont lues qu'au moment d'une requête qui en a besoin.
+- Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et
+  ne suivent aucune redirection vers une autre origine.
+
+### Rendre les écrans en images
+
+```sh
+swift run supervox-snapshots /chemin/vers/un/dossier
+```
+
+`supervox-snapshots` écrit chaque écran du panneau et des réglages en PNG, en clair et en sombre, avec des données
+d'exemple (`example.com`) : aucun accès au trousseau, au réseau ni aux réglages réels. Les onglets des réglages
+sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas fidèlement.
+
+Le logo est dessiné par le code (`BrandMark`) : aucune image n'est suivie dans le dépôt. `Scripts/make-app.sh`
+fabrique l'icône de l'application avec `supervox-snapshots --iconset <dossier.iconset>` puis `iconutil`.
 
 ## Le banc d'essai
 
