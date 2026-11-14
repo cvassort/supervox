@@ -97,12 +97,17 @@ struct DictationSessionCancelsWorkTests {
     }
 
     @Test func leavingRecordingCancelsThePreviewPassInProgress() async {
-        // Le moteur d'aperçu peut être le même que le moteur final : une passe d'aperçu ne le retient pas pendant `finalizing`.
-        let (rig, preview) = await rigWithAPreviewPassInProgress()
-
-        await rig.session.finish()
+        // Le moteur d'aperçu peut être le même que le moteur final : une passe d'aperçu ne le retient pas pendant
+        // `finalizing`. Le moteur final est retenu : la passe doit être annulée **avant** la fin de la prise.
+        let final = ScriptedTranscriber(reply: { _ in .hold })
+        let (rig, preview) = await rigWithAPreviewPassInProgress(final: final)
+        let finishing = Task { await rig.session.finish() }
+        await final.waitForCalls(1)
 
         await preview.cancellation(of: 0).wait()
+        final.release(call: 0, text: "texte")   // (aussi quand l'attente précédente a échoué : rien ne reste pendu)
+        await finishing.value
+
         #expect(await rig.outcome() == .finished("texte"))
     }
 
@@ -116,6 +121,7 @@ struct DictationSessionCancelsWorkTests {
         await rig.session.cancel()
 
         await final.cancellation(of: 0).wait()
+        final.release(call: 0, text: "texte")   // (aussi quand l'attente précédente a échoué : rien ne reste pendu)
         await finishing.value
         #expect(await rig.outcome() == .cancelled)
         #expect(await rig.session.phase == .cancelled)
@@ -131,6 +137,7 @@ struct DictationSessionCancelsWorkTests {
         finishing.cancel()
 
         await final.cancellation(of: 0).wait()
+        final.release(call: 0, text: "texte")   // (aussi quand l'attente précédente a échoué : rien ne reste pendu)
         await finishing.value
         #expect(await rig.outcome() == .cancelled)
     }
