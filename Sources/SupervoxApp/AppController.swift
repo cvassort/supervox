@@ -32,6 +32,8 @@ public final class AppController {
     public let systemHotKeys: any SystemHotKeys
     /// Réglages en vigueur.
     public private(set) var settings: AppSettings
+    /// Aucun fichier de réglages au lancement.
+    private let isFirstLaunch: Bool
 
     private let panel: PanelController
     private let settingsView: SettingsViewProvider
@@ -68,6 +70,7 @@ public final class AppController {
 
         let loaded = settingsStore.load()
         settings = loaded.settings
+        isFirstLaunch = loaded.isFirstLaunch
 
         let panelModel = PanelModel(lastModeID: loaded.settings.lastModeID)
         panelModel.setNotice(loaded.notice, for: .settingsLoad)
@@ -114,7 +117,38 @@ public final class AppController {
     /// l'application déjà en politique `.accessory`.
     public func start() {
         installStatusItem()
+        launch()
+    }
+
+    /// Le lancement, sans l'élément de barre de menus : raccourci, puis accueil s'il n'existe pas encore de fichier
+    /// de réglages.
+    ///
+    /// Au premier lancement, le panneau s'ouvre seul avec l'accueil et, s'il en manque, la ligne des permissions et
+    /// son bouton « Autoriser… » : rien n'est demandé au système avant ce clic. Le fichier de réglages est créé à la
+    /// fin de ce lancement, avec les réglages en vigueur : l'accueil ne revient pas.
+    func launch() {
         applyHotKeyAtLaunch()
+        guard isFirstLaunch else { return }
+        panelModel.welcome = Self.welcome(hotKeyLabel: panelModel.hotKeyLabel)
+        panel.open()
+        do {
+            try updateSettings { _ in }
+        } catch {
+            panelModel.setNotice(error.localizedDescription, for: .save)
+            log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    static func welcome(hotKeyLabel: String?) -> String {
+        let opening =
+            hotKeyLabel.map { "\($0) ouvre et ferme ce panneau, depuis n'importe quelle application." }
+            ?? "Ouvrez ce panneau depuis l'icône de Supervox dans la barre de menus."
+        return "Bienvenue dans Supervox. \(opening) Les réglages (fournisseurs, raccourci, permissions) s'ouvrent par « Réglages… », dans le menu « … » ci-dessous ou dans celui de l'icône de la barre de menus."
+    }
+
+    /// Relance de l'application déjà ouverte : le panneau s'ouvre, ou reste ouvert.
+    func openPanelOnReopen() {
+        panel.open()
     }
 
     /// Enregistre le raccourci des réglages. S'il est refusé, ou s'il est aussi un raccourci de macOS activé (il peut

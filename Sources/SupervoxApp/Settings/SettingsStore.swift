@@ -21,10 +21,13 @@ public enum SettingsError: Error, Equatable, LocalizedError {
 public struct SettingsLoad: Equatable {
     public var settings: AppSettings
     public var notice: String?
+    /// Vrai seulement si le fichier n'existe pas : rien n'a encore été enregistré sur ce Mac.
+    public var isFirstLaunch: Bool
 
-    public init(settings: AppSettings, notice: String?) {
+    public init(settings: AppSettings, notice: String?, isFirstLaunch: Bool = false) {
         self.settings = settings
         self.notice = notice
+        self.isFirstLaunch = isFirstLaunch
     }
 }
 
@@ -69,7 +72,7 @@ public struct SettingsStore: Sendable {
             data = try Data(contentsOf: file)
         } catch {
             if !FileManager.default.fileExists(atPath: file.path) {
-                return SettingsLoad(settings: .defaults, notice: nil)
+                return SettingsLoad(settings: .defaults, notice: nil, isFirstLaunch: true)
             }
             // Une erreur de lecture ne dit rien du contenu : le fichier peut être valide. Il reste à sa place.
             return SettingsLoad(

@@ -21,6 +21,9 @@ public struct PanelView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             chips
+            if let welcome = model.welcome {
+                welcomeLine(welcome)
+            }
             ready
             if let summary = permissions.summary {
                 permissionsLine(summary)
@@ -55,6 +58,16 @@ public struct PanelView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 84)
+    }
+
+    private func welcomeLine(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "hand.wave.fill")
+                .foregroundStyle(Color.accentColor)
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func permissionsLine(_ summary: String) -> some View {

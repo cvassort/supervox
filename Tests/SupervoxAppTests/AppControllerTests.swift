@@ -118,6 +118,96 @@ import Testing
         #expect(controller.panelModel.notices[.hotKey] == nil)
     }
 
+    // MARK: - Premier lancement, réouverture
+
+    /// I3 : sans fichier de réglages, le panneau s'ouvre seul avec l'accueil et la ligne des permissions manquantes ;
+    /// rien n'est demandé au système sans clic. Le fichier est créé à la fin du lancement : l'accueil ne revient pas.
+    @Test func firstLaunchOpensThePanelWithAWelcomeAndCreatesTheFile() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        probe.set(microphone: .notDetermined, accessibility: .denied)
+        #expect(!FileManager.default.fileExists(atPath: store.file.path))
+        let controller = makeController()
+
+        controller.launch()
+        #expect(controller.panelModel.isOpen)
+        #expect(surface.isShown)
+        let welcome = try #require(controller.panelModel.welcome)
+        #expect(welcome.contains(HotKey.standard.label))
+        #expect(welcome.contains("Réglages"))
+        #expect(controller.permissions.summary != nil)
+        #expect(controller.permissions.canRequest)
+        #expect(probe.microphoneRequests == 0)
+        #expect(probe.accessibilityPrompts == 0)
+        #expect(store.load().settings == .defaults)
+        #expect(!store.load().isFirstLaunch)
+
+        // Lancement suivant : silencieux.
+        let next = AppController(
+            settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
+            escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
+            makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+        next.launch()
+        #expect(!next.panelModel.isOpen)
+        #expect(next.panelModel.welcome == nil)
+    }
+
+    /// Premier lancement sans raccourci (refusé par macOS) : l'accueil renvoie à la barre de menus.
+    @Test func welcomeWithoutAHotKeyPointsToTheMenuBar() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        hotKeys.refused = [.standard]
+        let controller = makeController()
+
+        controller.launch()
+        let welcome = try #require(controller.panelModel.welcome)
+        #expect(!welcome.contains(HotKey.standard.label))
+        #expect(welcome.contains("barre de menus"))
+        #expect(controller.panelModel.notices[.hotKey] != nil)
+    }
+
+    /// L'accueil ne sert qu'à la première ouverture : il disparaît quand le panneau se ferme.
+    @Test func welcomeGoesAwayWhenThePanelCloses() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        controller.launch()
+        #expect(controller.panelModel.welcome != nil)
+
+        hotKeys.press()
+        #expect(!controller.panelModel.isOpen)
+        #expect(controller.panelModel.welcome == nil)
+        hotKeys.press()
+        #expect(controller.panelModel.welcome == nil)
+    }
+
+    /// Un fichier présent : lancement silencieux, et le fichier n'est pas réécrit.
+    @Test func launchWithExistingSettingsStaysSilentAndWritesNothing() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try store.save(.defaults)
+        let before = try Data(contentsOf: store.file)
+        let modified = try FileManager.default.attributesOfItem(atPath: store.file.path)[.modificationDate] as? Date
+        let controller = makeController()
+
+        controller.launch()
+        #expect(!controller.panelModel.isOpen)
+        #expect(controller.panelModel.welcome == nil)
+        #expect(try Data(contentsOf: store.file) == before)
+        #expect(try FileManager.default.attributesOfItem(atPath: store.file.path)[.modificationDate] as? Date == modified)
+    }
+
+    /// I3 (b) : relancer l'application déjà ouverte ouvre le panneau, et ne le referme pas s'il l'est déjà.
+    @Test func reopeningTheRunningAppOpensThePanel() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        controller.applyHotKeyAtLaunch()
+        let delegate = ApplicationDelegate(controller: controller)
+
+        #expect(!delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: false))
+        #expect(controller.panelModel.isOpen)
+        #expect(surface.isShown)
+        _ = delegate.applicationShouldHandleReopen(NSApplication.shared, hasVisibleWindows: true)
+        #expect(controller.panelModel.isOpen)
+    }
+
     @Test func acceptedHotKeyAtLaunchLeavesThePanelClosed() {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()

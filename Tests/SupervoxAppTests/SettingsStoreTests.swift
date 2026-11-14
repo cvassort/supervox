@@ -68,8 +68,23 @@ private func sampleSettings() -> AppSettings {
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
         let result = SettingsStore(file: file).load()
-        #expect(result == SettingsLoad(settings: .defaults, notice: nil))
+        #expect(result == SettingsLoad(settings: .defaults, notice: nil, isFirstLaunch: true))
         #expect(try names(in: directory).isEmpty)
+    }
+
+    /// I3 : seul un fichier absent fait un premier lancement ; un fichier présent, même abîmé ou illisible, non.
+    @Test func onlyAMissingFileIsAFirstLaunch() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file)
+        #expect(store.load().isFirstLaunch)
+
+        try store.save(.defaults)
+        #expect(!store.load().isFirstLaunch)
+
+        try Data("pas du json".utf8).write(to: file)
+        #expect(!store.load().isFirstLaunch)  // abîmé : mis de côté, mais ce n'est pas un premier lancement
     }
 
     @Test func defaultsMatchTheSpecification() {

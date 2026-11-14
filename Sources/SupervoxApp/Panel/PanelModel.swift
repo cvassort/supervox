@@ -45,6 +45,8 @@ public final class PanelModel {
 
     /// Libellé du raccourci global effectivement enregistré, `nil` s'il n'y en a aucun.
     public var hotKeyLabel: String?
+    /// Accueil du premier lancement ; effacé quand le panneau se ferme.
+    public internal(set) var welcome: String?
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 
@@ -70,11 +72,12 @@ public final class PanelModel {
     /// Réservé à `PanelController`, qui montre et cache la fenêtre en même temps.
     func toggle() {
         isOpen.toggle()
-        if isOpen { onOpen?() }
+        if isOpen { onOpen?() } else { welcome = nil }
     }
 
     func close() {
         isOpen = false
+        welcome = nil
     }
 
     /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement.
