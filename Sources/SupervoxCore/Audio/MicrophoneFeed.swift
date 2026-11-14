@@ -49,3 +49,25 @@ public final class ScriptedMicrophoneFeed: MicrophoneFeed {
         stopped.withLock { $0 = true }
     }
 }
+
+/// Le vrai micro, vu comme une `MicrophoneFeed` : possède une `AudioCapture` qui ne déclenche jamais l'invite système
+/// (l'application demande l'autorisation par son propre parcours) ; sans autorisation, `start` lève
+/// `AudioCaptureError.microphoneAccessDenied`. Les tranches sont à la fréquence native du micro, premier canal.
+///
+/// `@unchecked Sendable` : `AudioCapture` n'est pas thread-safe pour `start`/`stop`, que l'appelant sérialise
+/// (la session les appelle depuis un seul contexte). La livraison des tranches, elle, est protégée par `AudioCapture`.
+public final class LiveMicrophoneFeed: MicrophoneFeed, @unchecked Sendable {
+    private let capture: AudioCapture
+
+    public init(voiceProcessing: Bool = true) {
+        capture = AudioCapture(voiceProcessing: voiceProcessing, promptsForAccess: false)
+    }
+
+    public func start(onChunk: @escaping @Sendable (AudioChunk) -> Void) throws {
+        try capture.start(onChunk: onChunk)
+    }
+
+    public func stop() {
+        _ = capture.stop()
+    }
+}
