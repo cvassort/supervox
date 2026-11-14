@@ -3,7 +3,7 @@ import AppKit
 /// Le presse-papiers général du système (`NSPasteboard.general`).
 ///
 /// Le texte dicté est une donnée privée : il n'est jamais écrit dans un journal ni un message d'erreur.
-@MainActor public final class SystemPasteboard: Pasteboard {
+@MainActor public final class SystemPasteboard: PasteboardAccess {
     /// Type du texte (`public.utf8-plain-text`).
     static let textType = NSPasteboard.PasteboardType.string.rawValue
     /// Les marques que les gestionnaires de presse-papiers respectent (convention publiée sur nspasteboard.org) :

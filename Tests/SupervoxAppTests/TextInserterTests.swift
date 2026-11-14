@@ -11,9 +11,9 @@ import Testing
     var entries: [String] = []
 }
 
-/// Presse-papiers double (le nom `Pasteboard` est qualifié : Carbon, importé ici pour les codes de touche, a son propre `Pasteboard`), avec les mêmes règles que le vrai sur ce qui compte ici : `changeCount` monte à chaque
+/// Presse-papiers double, avec les mêmes règles que le vrai sur ce qui compte ici : `changeCount` monte à chaque
 /// écriture (`write` comme `writeText`), `write` remplace tout le contenu. Aucune écriture ne sort du processus.
-@MainActor final class FakePasteboard: SupervoxApp.Pasteboard {
+@MainActor final class FakePasteboard: PasteboardAccess {
     nonisolated static let textType = "public.utf8-plain-text"
 
     let log: CallLog

@@ -10,7 +10,7 @@ public struct PasteboardContents: Equatable, Sendable {
 }
 
 /// Le presse-papiers, vu par l'insertion. La réalisation système est `SystemPasteboard` ; les tests injectent un double.
-@MainActor public protocol Pasteboard: AnyObject {
+@MainActor public protocol PasteboardAccess: AnyObject {
     /// Compteur du système, qui monte à chaque écriture, par n'importe quelle application.
     var changeCount: Int { get }
     /// Tout le contenu, tous types et tous éléments.
@@ -49,7 +49,7 @@ public enum InsertionOutcome: Equatable, Sendable {
     /// Intervalle de sondage des modificateurs. Choix de conception du plan de l'étape « dictée » (non mesuré).
     private static let modifierPollInterval = 0.05
 
-    private let pasteboard: any Pasteboard
+    private let pasteboard: any PasteboardAccess
     private let keys: any KeyPoster
     private let layout: any KeyboardLayout
     private let isTrusted: @MainActor () -> Bool
@@ -65,7 +65,7 @@ public enum InsertionOutcome: Equatable, Sendable {
     ///   - modifierPatience: durée maximale d'attente du relâchement des modificateurs. 1 s : choix de conception du
     ///     plan de l'étape « dictée », non mesuré.
     public init(
-        pasteboard: any Pasteboard, keys: any KeyPoster, layout: any KeyboardLayout,
+        pasteboard: any PasteboardAccess, keys: any KeyPoster, layout: any KeyboardLayout,
         isTrusted: @escaping @MainActor () -> Bool, wait: @escaping @MainActor (Double) async -> Void,
         restoreDelay: Double = 0.4, modifierPatience: Double = 1.0
     ) {
