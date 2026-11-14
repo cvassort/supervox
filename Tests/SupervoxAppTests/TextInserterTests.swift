@@ -76,8 +76,12 @@ import Testing
     let releaseAfterPolls = 1000
     private var polls = 0
 
+    /// Appelé à chaque sondage, avant la réponse : un test y annule la tâche, par exemple.
+    var onPoll: (() -> Void)?
+
     func modifiersHeld() -> Bool {
         log.entries.append("modifiersHeld")
+        onPoll?()
         polls += 1
         if polls > releaseAfterPolls { return false }
         return held.count > 1 ? held.removeFirst() : (held.first ?? false)
@@ -143,6 +147,20 @@ import Testing
                 restoreDelay: delay, modifierPatience: patience)
         }
     }
+}
+
+/// Garde la tâche qui exécute `insert`, pour que les doubles puissent l'annuler à un point précis.
+@MainActor final class InsertTaskBox {
+    var task: Task<InsertionOutcome, Never>?
+
+    /// Lance `insert` sur le fil principal et rend son résultat ; `cancel()` agit sur cette tâche.
+    func run(_ inserter: TextInserter, _ text: String) async -> InsertionOutcome {
+        let task = Task { @MainActor in await inserter.insert(text) }
+        self.task = task
+        return await task.value
+    }
+
+    func cancel() { task?.cancel() }
 }
 
 enum FakeInsertion {
@@ -324,6 +342,30 @@ enum FakeInsertion {
         #expect(rig.log.entries.isEmpty)
         #expect(rig.board.contents == FakeInsertion.original)
         #expect(rig.board.changeCount == 0)
+    }
+
+    @Test("annulée pendant les sondages des modificateurs : le contenu d'origine est rendu, aucun ⌘V, .nothing")
+    func cancellationDuringModifierPollsRestoresAndDoesNotPaste() async {
+        let rig = InsertionRig(held: [true])
+        let box = InsertTaskBox()
+        rig.waiter.onWait = { _ in box.cancel() }
+        let outcome = await box.run(rig.inserter, FakeInsertion.dictated)
+        #expect(outcome == .nothing)
+        #expect(rig.log.entries == [
+            "read", "writeText(transient: true)", "modifiersHeld", "wait(0.05)", "write",
+        ])
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
+    @Test("annulée au moment où les modificateurs sont relâchés : le contenu d'origine est rendu, aucun ⌘V, .nothing")
+    func cancellationWhenModifiersAreReleasedDoesNotPaste() async {
+        let rig = InsertionRig(held: [false])
+        let box = InsertTaskBox()
+        rig.keys.onPoll = { box.cancel() }
+        let outcome = await box.run(rig.inserter, FakeInsertion.dictated)
+        #expect(outcome == .nothing)
+        #expect(rig.log.entries == ["read", "writeText(transient: true)", "modifiersHeld", "write"])
+        #expect(rig.board.contents == FakeInsertion.original)
     }
 
     // MARK: - Échec de ⌘V

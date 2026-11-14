@@ -92,14 +92,29 @@ public enum InsertionOutcome: Equatable, Sendable {
         pasteboard.writeText(text, transient: true)
         let changeCountAfterWrite = pasteboard.changeCount
 
-        guard await modifiersReleased() else { return .copied(reason: Self.modifiersReason) }
+        // Annulée avant le collage : rien n'est collé, et le presse-papiers est rendu (le texte dicté n'y reste pas).
+        func restoreIfUnchanged() {
+            if pasteboard.changeCount == changeCountAfterWrite { pasteboard.write(original) }
+        }
+
+        guard await modifiersReleased() else {
+            if Task.isCancelled {
+                restoreIfUnchanged()
+                return .nothing
+            }
+            return .copied(reason: Self.modifiersReason)
+        }
+        if Task.isCancelled {
+            restoreIfUnchanged()
+            return .nothing
+        }
         guard keys.postPaste(keyCode: Self.pasteKeyCode(layout: layout)) else {
             return .copied(reason: Self.postFailureReason)
         }
 
         await wait(restoreDelay)
         // Une autre application a écrit entre-temps : son contenu est plus récent que la sauvegarde, on n'y touche pas.
-        if pasteboard.changeCount == changeCountAfterWrite { pasteboard.write(original) }
+        restoreIfUnchanged()
         return .pasted
     }
 
@@ -113,7 +128,7 @@ public enum InsertionOutcome: Equatable, Sendable {
         return (0..<128).map(UInt16.init).first(where: producesV) ?? ansiV
     }
 
-    /// Sonde les modificateurs jusqu'à ce qu'ils soient relâchés ; faux si la patience est épuisée. Les sondages sont
+    /// Sonde les modificateurs jusqu'à ce qu'ils soient relâchés ; faux si la patience est épuisée ou si la tâche est annulée. Les sondages sont
     /// comptés en entiers : sommer des 0,05 en virgule flottante ferait dériver le total.
     private func modifiersReleased() async -> Bool {
         // Une patience négative, infinie ou NaN n'a pas de sens : zéro attente (et `Int(_:)` planterait sur NaN
@@ -124,6 +139,8 @@ public enum InsertionOutcome: Equatable, Sendable {
             if remaining == 0 { return false }
             remaining -= 1
             await wait(Self.modifierPollInterval)
+            // Une attente annulée rend la main aussitôt : sans cette sortie, les sondages défileraient sans attendre.
+            if Task.isCancelled { return false }
         }
         return true
     }
