@@ -332,8 +332,6 @@ public final class TranscriptionModel {
                 .error, in: .vocabulary)
         } else if count == nil, settings.engine == "whisperkit" {
             show(Self.modelAbsentWarning, .warning, in: .vocabulary)
-        } else if messageArea == .vocabulary {
-            clearMessage()
         }
     }
 

@@ -239,7 +239,7 @@ import Testing
         #expect(catalog.countRequests.count == 1)
     }
 
-    @Test func aPassingRecountClearsTheVocabularyMessageAndOnlyThat() async {
+    @Test func aShortEnoughVocabularyLeavesNoMessageAfterAModelChange() async {
         let model = makeModel(settings(vocabulary: ["Docker"]))
         catalog.setTokenCount(150)
         model.setWhisperModel("small")
@@ -260,6 +260,11 @@ import Testing
         catalog.holdFirstCount(gate)
         model.setWhisperModel("small")
         await settle { gate.isWaiting }
+        guard gate.isWaiting else {
+            Issue.record("le recomptage n'a pas démarré")
+            gate.open()  // ne laisse personne pendu sur la barrière
+            return
+        }
 
         #expect(await model.setVocabulary(text: "Nouveau") == .saved)
         catalog.setTokenCount(150)
