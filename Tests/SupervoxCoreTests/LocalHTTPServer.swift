@@ -24,16 +24,20 @@ final class LocalHTTPServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "serveur-http-local")
     private let respond: @Sendable (Request) -> Response
     private let received = Mutex<[Request]>([])
+    private let accepted = Mutex(0)
     private var connections: [NWConnection] = []
     private(set) var port: UInt16 = 0
 
     init(respond: @escaping @Sendable (Request) -> Response) throws {
         self.respond = respond
-        listener = try NWListener(using: .tcp, on: .any)
+        listener = try NWListener.loopbackOnly()
     }
 
     /// Requêtes reçues jusqu'ici, dans l'ordre.
     var requests: [Request] { received.withLock { $0 } }
+
+    /// Connexions acceptées jusqu'ici, y compris celles qui n'ont porté aucune requête HTTP lisible (TLS, par exemple).
+    var connectionsAccepted: Int { accepted.withLock { $0 } }
 
     /// `http://127.0.0.1:<port>`
     var base: String { "http://127.0.0.1:\(port)" }
@@ -41,6 +45,7 @@ final class LocalHTTPServer: @unchecked Sendable {
     func start() async throws {
         let queue = self.queue
         listener.newConnectionHandler = { connection in
+            self.accepted.withLock { $0 += 1 }
             self.connections.append(connection)
             connection.start(queue: queue)
             self.serve(connection, buffer: Data())
@@ -90,5 +95,14 @@ final class LocalHTTPServer: @unchecked Sendable {
         for (name, value) in response.headers { head += "\(name): \(value)\r\n" }
         head += "\r\n"
         connection.send(content: Data(head.utf8) + response.body, completion: .contentProcessed { _ in connection.cancel() })
+    }
+}
+
+extension NWListener {
+    /// Écoute TCP sur un port libre de la boucle locale (127.0.0.1) seulement.
+    static func loopbackOnly() throws -> NWListener {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        return try NWListener(using: parameters)
     }
 }

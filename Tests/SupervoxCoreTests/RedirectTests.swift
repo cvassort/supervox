@@ -12,6 +12,9 @@ struct RedirectTests {
         case otherPort
         /// Même port, autre nom d'hôte (`localhost` au lieu de `127.0.0.1`).
         case otherHost
+        /// Même hôte, même port, autre schéma (`https` au lieu de `http`). Suivie, la redirection ouvrirait une
+        /// connexion TLS vers le serveur d'origine : elle se voit dans `connectionsAccepted`, pas dans `requests`.
+        case otherScheme
     }
 
     /// Le serveur configuré redirige tout vers `target` ; `elsewhere` est le serveur de l'autre port.
@@ -29,6 +32,7 @@ struct RedirectTests {
             let location = switch target {
             case .otherPort: "http://127.0.0.1:\(otherPort)\(request.path)"
             case .otherHost: "http://localhost:\(portBox.port)/ailleurs\(request.path)"
+            case .otherScheme: "https://127.0.0.1:\(portBox.port)/ailleurs\(request.path)"
             }
             return .init(status: status, headers: ["Location": location])
         }
@@ -37,9 +41,11 @@ struct RedirectTests {
         return (origin, elsewhere)
     }
 
-    /// Requêtes reçues par l'autre origine : sur l'autre serveur, ou sur le chemin `/ailleurs` du même port.
+    /// Requêtes reçues par l'autre origine : sur l'autre serveur, ou sur le chemin `/ailleurs` du même port, plus
+    /// toute connexion du serveur d'origine qui n'a pas porté de requête lisible (TLS de l'autre schéma).
     private func requestsElsewhere(_ servers: (origin: LocalHTTPServer, elsewhere: LocalHTTPServer)) -> Int {
-        servers.elsewhere.requests.count + servers.origin.requests.filter { $0.path.hasPrefix("/ailleurs") }.count
+        servers.elsewhere.connectionsAccepted + servers.origin.requests.filter { $0.path.hasPrefix("/ailleurs") }.count
+            + (servers.origin.connectionsAccepted - servers.origin.requests.count)
     }
 
     @Test(arguments: Target.allCases, [ModelListingKind.openAICompatible, .anthropic])
@@ -54,7 +60,9 @@ struct RedirectTests {
         #expect(servers.origin.requests.count == 1)
     }
 
-    @Test func listerFollowsARedirectOnTheSameOrigin() async throws {
+    /// La clé suit la redirection de même origine, dans l'en-tête du type : `Authorization` ou `x-api-key`.
+    @Test(arguments: [ModelListingKind.openAICompatible, .anthropic])
+    func listerFollowsARedirectOnTheSameOrigin(kind: ModelListingKind) async throws {
         let server = try LocalHTTPServer { request in
             request.path.hasPrefix("/nouveau")
                 ? .init(status: 200, headers: ["Content-Type": "application/json"], body: Data(#"{"data":[{"id":"m"}]}"#.utf8))
@@ -63,11 +71,21 @@ struct RedirectTests {
         try await server.start()
         defer { server.stop() }
         let lister = ModelLister(config: EndpointConfig(baseURL: URL(string: server.base)!, apiKey: "cle-test"),
-                                 kind: .openAICompatible, requestTimeout: 5)
+                                 kind: kind, requestTimeout: 5)
 
         #expect(try await lister.listModels() == ["m"])
-        #expect(server.requests.map(\.path) == ["/v1/models", "/nouveau/v1/models"])
-        #expect(server.requests.last?.headers["authorization"] == "Bearer cle-test")
+        // Chemins sans la requête (`?limit=…` pour le type anthropic).
+        #expect(server.requests.map { $0.path.prefix { $0 != "?" } } == ["/v1/models", "/nouveau/v1/models"])
+        let first = try #require(server.requests.first?.headers)
+        let followed = try #require(server.requests.last?.headers)
+        switch kind {
+        case .openAICompatible:
+            #expect(first["authorization"] == "Bearer cle-test")
+            #expect(followed["authorization"] == "Bearer cle-test")
+        case .anthropic:
+            #expect(first["x-api-key"] == "cle-test")
+            #expect(followed["x-api-key"] == "cle-test")
+        }
     }
 
     /// Transcription et synthèse (`upload`), flux de chat (`bytes`) : la même garde sur chaque route.

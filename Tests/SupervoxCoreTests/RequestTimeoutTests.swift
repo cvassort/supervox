@@ -10,7 +10,7 @@ private final class MuteServer: @unchecked Sendable {
     private let queue = DispatchQueue(label: "serveur-muet")
     private var connections: [NWConnection] = []
 
-    init() throws { listener = try NWListener(using: .tcp, on: .any) }
+    init() throws { listener = try NWListener.loopbackOnly() }
 
     /// Démarre l'écoute et rend le port.
     func start() async throws -> UInt16 {

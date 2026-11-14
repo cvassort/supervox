@@ -15,7 +15,7 @@ private final class KeepAliveWavServer: @unchecked Sendable {
 
     init(wav: Data) throws {
         self.wav = wav
-        listener = try NWListener(using: .tcp, on: .any)
+        listener = try NWListener.loopbackOnly()
     }
 
     func start() async throws -> UInt16 {
