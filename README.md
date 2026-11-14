@@ -73,19 +73,24 @@ open build/Supervox.app
   application.
 - Au premier lancement (aucun fichier de réglages), le panneau s'ouvre seul : il dit à quoi sert le raccourci et où
   sont les réglages, et propose d'autoriser le micro puis l'Accessibilité. Rien n'est demandé avant ce clic.
-- Relancer l'application déjà ouverte ouvre le panneau.
+- Relancer l'application déjà ouverte (`open build/Supervox.app`) ouvre le panneau, sans second exemplaire. Vérifié
+  ainsi sur l'application construite ; la relance depuis le Finder ou le Dock ne l'a pas été.
+- Un avis sur le fichier de réglages (mis de côté, illisible, version plus récente) ouvre aussi le panneau au
+  lancement ; ce n'est pas l'accueil d'un nouvel utilisateur.
 - Les réglages (fournisseurs, raccourci, permissions) s'ouvrent par « Réglages… », dans le menu « … » du panneau ou
   dans celui de l'icône de la barre de menus.
-- Si le raccourci est refusé par macOS, ou s'il est aussi un raccourci de macOS activé sur ce Mac, le panneau
-  s'ouvre au lancement pour le dire. macOS ne signale pas les conflits avec une autre application : si le raccourci
+- Si le raccourci est refusé par macOS, le panneau s'ouvre au lancement pour le dire. S'il est aussi un raccourci de
+  macOS activé sur ce Mac, le panneau s'ouvre pour le dire au premier lancement où c'est le cas ; ensuite l'avis
+  reste dans le panneau, qui ne s'ouvre plus seul pour ce raccourci. macOS ne signale pas les conflits avec une autre application : si le raccourci
   n'ouvre pas le panneau, choisissez-en un autre.
 
 ### Ce qui est stocké, et où
 
 - Les réglages (fournisseurs sans leur clé, raccourci, dernier mode) : `~/Library/Application Support/Supervox/settings.json`.
   Un fichier au contenu illisible est mis de côté dans le même dossier (`settings.json.illisible-<date>`), jamais
-  écrasé ; un fichier qui ne peut pas être lu reste en place ; un fichier écrit par une version plus récente de
-  Supervox est gardé tel quel et n'est pas réécrit.
+  écrasé ; un fichier qui ne peut pas être lu (droits, disque) reste en place et rien n'y est écrit jusqu'à la fin de
+  la session, même s'il redevient lisible ; un fichier écrit par une version plus récente de Supervox est gardé tel
+  quel et n'est pas réécrit.
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
   identifiant). Jamais dans un fichier. Elles ne sont lues qu'au moment d'une requête qui en a besoin.
 - Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et

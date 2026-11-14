@@ -168,13 +168,15 @@ public final class AppController {
 
     /// Relance de l'application déjà ouverte : le panneau s'ouvre, ou reste ouvert.
     func openPanelOnReopen() {
+        log.notice("relance de l'application : ouverture du panneau")
         panel.open()
     }
 
     // MARK: - Raccourci
 
     /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :
-    /// le raccourci bascule toujours. Rend vrai si rien n'est à signaler.
+    /// le raccourci bascule toujours.
+    ///
     /// Enregistre le raccourci des réglages et pose l'avis qui le concerne. Rend `true` si le panneau doit s'ouvrir
     /// pour le montrer : raccourci refusé, ou raccourci de macOS activé pas encore signalé. Ce dernier cas n'ouvre le
     /// panneau qu'une fois : la combinaison signalée est gardée dans les réglages (`systemConflictShown`), et l'avis
