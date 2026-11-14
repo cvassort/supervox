@@ -310,6 +310,22 @@ enum FakeInsertion {
         #expect(rig.waiter.durations == Array(repeating: 0.05, count: 20))
     }
 
+    // MARK: - Annulation de la tâche
+
+    @Test("une tâche déjà annulée à l'entrée n'écrit rien, ne colle rien et rend .nothing")
+    func taskCancelledOnEntryDoesNothing() async {
+        let rig = InsertionRig()
+        // La tâche démarre sur le fil principal, que ce test occupe jusqu'au prochain `await` : l'annulation
+        // est donc posée avant que `insert` ne s'exécute.
+        let task = Task { @MainActor in await rig.inserter.insert(FakeInsertion.dictated) }
+        task.cancel()
+        let outcome = await task.value
+        #expect(outcome == .nothing)
+        #expect(rig.log.entries.isEmpty)
+        #expect(rig.board.contents == FakeInsertion.original)
+        #expect(rig.board.changeCount == 0)
+    }
+
     // MARK: - Échec de ⌘V
 
     @Test("si ⌘V n'a pas pu être posté, le texte reste dans le presse-papiers et la raison dit de faire ⌘V")

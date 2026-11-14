@@ -79,6 +79,8 @@ public enum InsertionOutcome: Equatable, Sendable {
     }
 
     public func insert(_ text: String) async -> InsertionOutcome {
+        // Annulée avant d'avoir commencé (Échap, fermeture du panneau) : rien n'est écrit, rien n'est collé.
+        guard !Task.isCancelled else { return .nothing }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .nothing }
 
         guard isTrusted() else {
