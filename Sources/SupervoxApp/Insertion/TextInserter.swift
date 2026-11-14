@@ -78,6 +78,10 @@ public enum InsertionOutcome: Equatable, Sendable {
         self.modifierPatience = modifierPatience
     }
 
+    /// Annulation de la tâche appelante : avant le ⌘V, rien n'est collé, le presse-papiers est rendu (sauf si une autre
+    /// application y a écrit) et le résultat est `.nothing` ; après le ⌘V, la restauration a lieu quand même au délai
+    /// prévu. Dans les deux replis `.copied` (modificateurs tenus, ⌘V non posté), le contenu d'origine n'est pas rendu :
+    /// le texte dicté reste dans le presse-papiers pour que l'utilisateur le colle.
     public func insert(_ text: String) async -> InsertionOutcome {
         // Annulée avant d'avoir commencé (Échap, fermeture du panneau) : rien n'est écrit, rien n'est collé.
         guard !Task.isCancelled else { return .nothing }
