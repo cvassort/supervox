@@ -8,6 +8,7 @@ import Testing
 
     let registrar = FakeRegistrar()
     let system = FakeSystemHotKeys()
+    let monitor = FakeKeyMonitor()
     let center: HotKeyCenter
     var saved: [(HotKey, HotKeyBehavior)] { saves.values }
     let saves = SaveLog()
@@ -34,6 +35,7 @@ import Testing
         let saves = saves
         return HotKeySettingsModel(
             hotKey: hotKey, active: center.active, behavior: behavior, layout: layout, systemHotKeys: system,
+            keyMonitor: monitor,
             control: GlobalHotKeyControl(
                 apply: { center.apply($0, onPress: {}) }, suspend: { center.suspend() },
                 resume: { center.resume() }, clear: { center.clear() }),
@@ -238,6 +240,45 @@ import Testing
         #expect(registrar.registered == Self.keyA)
     }
 
+    /// N1 : le moniteur de touches n'est posé que pendant la capture, et retiré quelle que soit la fin.
+    @Test func keyMonitorIsPosedOnlyDuringTheCapture() {
+        let model = makeModel()
+        #expect(!monitor.isActive)
+
+        model.startRecording()
+        #expect(monitor.isActive)
+        monitor.send(keyCode: 0x0B, flags: [.control, .option])  // fin par une combinaison acceptée
+        #expect(model.hotKey == Self.keyB)
+        #expect(!monitor.isActive)
+
+        model.startRecording()
+        monitor.send(keyCode: 0x35, flags: [])  // fin par Échap
+        #expect(!model.isRecording)
+        #expect(!monitor.isActive)
+
+        model.startRecording()
+        monitor.send(keyCode: 0x00, flags: [])  // fin par une combinaison refusée
+        #expect(model.message != nil)
+        #expect(!monitor.isActive)
+
+        model.startRecording()
+        model.cancelRecording()  // fin par la fenêtre (onglet changé, fenêtre quittée)
+        #expect(!monitor.isActive)
+        #expect(monitor.starts == 4)
+    }
+
+    /// N1 : le raccourci suspendu pendant la capture ne peut pas être réenregistré ; l'onglet le dit.
+    @Test func failedRestoreAfterTheCaptureIsSaid() {
+        let model = makeModel()
+        model.startRecording()
+        registrar.refused = [Self.keyA]
+
+        model.cancelRecording()
+        #expect(registrar.registered == nil)
+        #expect(model.message?.contains("⌃⌥A") == true)
+        #expect(model.message?.contains("n'a pas pu être rétabli") == true)
+    }
+
     @Test func escapeWhileRecordingRestoresThePreviousHotKey() {
         let model = makeModel()
         model.startRecording()
@@ -271,4 +312,20 @@ import Testing
         #expect(hold.label.contains("à venir"))
         #expect(options.first { $0.behavior == .toggle }?.isEnabled == true)
     }
+}
+
+/// Moniteur de touches double : `send` imite une touche pressée dans l'application pendant que le moniteur est posé.
+@MainActor final class FakeKeyMonitor: KeyEventMonitor {
+    private var handler: (@MainActor (UInt16, NSEvent.ModifierFlags) -> Void)?
+    private(set) var starts = 0
+    var isActive: Bool { handler != nil }
+
+    func start(_ handler: @escaping @MainActor (UInt16, NSEvent.ModifierFlags) -> Void) {
+        starts += 1
+        self.handler = handler
+    }
+
+    func stop() { handler = nil }
+
+    func send(keyCode: UInt16, flags: NSEvent.ModifierFlags) { handler?(keyCode, flags) }
 }

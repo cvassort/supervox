@@ -12,11 +12,14 @@ import os
 public final class AppController {
     /// Fournit le contenu de la fenêtre « Réglages ». Point d'extension : la fenêtre est vide
     /// tant qu'aucune vue n'est fournie.
-    public typealias SettingsViewProvider = @MainActor (AppController) -> AnyView
+    public typealias SettingsViewProvider = @MainActor (AppController) -> SettingsContent
+    /// Construit la fenêtre de réglages autour de son contenu ; `onLeave` est appelé quand l'utilisateur la quitte.
+    public typealias SettingsWindowMaker =
+        @MainActor (_ content: AnyView, _ onLeave: @escaping @MainActor () -> Void) -> any SettingsWindowSurface
 
     /// Fenêtre de réglages vide, en attendant la vraie.
     public static let emptySettings: SettingsViewProvider = { _ in
-        AnyView(Color.clear.frame(width: 520, height: 360))
+        SettingsContent(view: AnyView(Color.clear.frame(width: 520, height: 360)))
     }
 
     public let settingsStore: SettingsStore
@@ -32,9 +35,14 @@ public final class AppController {
 
     private let panel: PanelController
     private let settingsView: SettingsViewProvider
+    private let makeSettingsWindow: SettingsWindowMaker
+    private let terminate: @MainActor () -> Void
     private var statusItem: NSStatusItem?
     private var statusMenuRefresher: MenuRefresher?
-    private var settingsWindow: NSWindow?
+    private var settingsWindow: (any SettingsWindowSurface)?
+    private var settingsContent: SettingsContent?
+    /// La dernière demande faite à la présentation de la fenêtre ; les tests l'attendent.
+    private(set) var settingsPresentation: Task<Void, Never>?
     private let log = Logger(subsystem: "dev.supervox.app", category: "app")
 
     public init(
@@ -45,12 +53,16 @@ public final class AppController {
         permissionsProbe: any PermissionsProbe,
         systemHotKeys: any SystemHotKeys,
         settingsView: @escaping SettingsViewProvider = AppController.emptySettings,
-        makePanelSurface: @MainActor (AnyView) -> any PanelSurface = { FloatingPanelSurface(content: $0) },
-        clickMonitor: any OutsideClickMonitor = GlobalClickMonitor()
+        makePanelSurface: @MainActor (AnyView) -> any PanelSurface,
+        clickMonitor: any OutsideClickMonitor,
+        makeSettingsWindow: @escaping SettingsWindowMaker,
+        terminate: @escaping @MainActor () -> Void
     ) {
         self.settingsStore = settingsStore
         self.secrets = secrets
         self.settingsView = settingsView
+        self.makeSettingsWindow = makeSettingsWindow
+        self.terminate = terminate
         self.systemHotKeys = systemHotKeys
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar)
 
@@ -91,7 +103,11 @@ public final class AppController {
             escapeRegistrar: CarbonHotKeyRegistrar(),
             permissionsProbe: SystemPermissions(),
             systemHotKeys: SymbolicHotKeys(),
-            settingsView: settingsView)
+            settingsView: settingsView,
+            makePanelSurface: { FloatingPanelSurface(content: $0) },
+            clickMonitor: GlobalClickMonitor(),
+            makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
+            terminate: { NSApp.terminate(nil) })
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,
@@ -173,10 +189,17 @@ public final class AppController {
         hotKeys.suspend()
     }
 
-    /// Fin de capture : le raccourci suspendu est réenregistré, s'il l'est encore.
-    func resumeHotKeys() {
-        hotKeys.resume()
+    /// Fin de capture : le raccourci suspendu est réenregistré, s'il l'est encore. Rend faux si le système le refuse.
+    func resumeHotKeys() -> Bool {
+        let restored = hotKeys.resume()
         panelModel.hotKeyLabel = hotKeys.active?.label
+        if !restored {
+            panelModel.setNotice(
+                "Le raccourci \(settings.hotKey.label) n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages.",
+                for: .hotKey)
+            log.notice("raccourci non rétabli après la capture")
+        }
+        return restored
     }
 
     /// Plus aucun raccourci global.
@@ -234,32 +257,25 @@ public final class AppController {
 
     // MARK: - Actions
 
-    /// Met la fenêtre de réglages au premier plan ; remplacé dans les tests, où rien ne doit s'afficher.
-    var presentSettingsWindow: @MainActor (NSWindow) -> Void = { window in
-        NSApp.activate()
-        window.makeKeyAndOrderFront(nil)
-    }
-    /// Fin de l'application ; remplacé dans les tests.
-    var terminate: @MainActor () -> Void = { NSApp.terminate(nil) }
-
+    /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`.
     func openSettings() {
         panel.close()
-        let window = settingsWindow ?? makeSettingsWindow()
-        settingsWindow = window
-        presentSettingsWindow(window)
+        let window: any SettingsWindowSurface
+        let content: SettingsContent
+        if let settingsWindow, let settingsContent {
+            window = settingsWindow
+            content = settingsContent
+        } else {
+            content = settingsView(self)
+            // Sans menu principal, ⌘X, ⌘C, ⌘V et ⌘A ne font rien dans les champs de la fenêtre.
+            NSApp.mainMenu = MainMenu.make(quit: { [weak self] in self?.quit() })
+            window = makeSettingsWindow(content.view, content.onLeave)
+            settingsWindow = window
+            settingsContent = content
+        }
+        settingsPresentation = Task { await content.onPresent() }
+        window.present()
         log.notice("réglages ouverts")
-    }
-
-    func makeSettingsWindow() -> NSWindow {
-        let hosting = NSHostingController(rootView: settingsView(self))
-        let window = NSWindow(contentViewController: hosting)
-        window.title = "Réglages"
-        // Sans menu principal, ⌘X, ⌘C, ⌘V et ⌘A ne font rien dans les champs de la fenêtre.
-        NSApp.mainMenu = MainMenu.make(quit: { [weak self] in self?.quit() })
-        window.styleMask = [.titled, .closable, .miniaturizable]
-        window.isReleasedWhenClosed = false
-        window.center()
-        return window
     }
 
     func quit() {

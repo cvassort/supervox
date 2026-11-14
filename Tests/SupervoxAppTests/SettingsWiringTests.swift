@@ -15,6 +15,8 @@ import Testing
     let escape = HotKeyTests.FakeRegistrar()
     let surface = FakePanelSurface()
     let clicks = FakeClickMonitor()
+    let presenter = Presenter()
+    let monitor = FakeKeyMonitor()
 
     init() throws {
         directory = FileManager.default.temporaryDirectory
@@ -30,7 +32,96 @@ import Testing
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
             escapeRegistrar: escape,
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
-            systemHotKeys: FakeSystemHotKeys(), settingsView: settingsView, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks)
+            systemHotKeys: FakeSystemHotKeys(), settingsView: settingsView,
+            makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+    }
+
+    /// Les modèles que la fenêtre de test a reçus, pour agir comme l'utilisateur.
+    @MainActor final class Built {
+        var hotKey: HotKeySettingsModel?
+    }
+
+    /// La vraie composition de la fenêtre (`SettingsView.content`), avec disposition et moniteur de touches doubles.
+    func testProvider(_ built: Built) -> AppController.SettingsViewProvider {
+        { [monitor] controller in
+            let hotKey = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi, keyMonitor: monitor)
+            built.hotKey = hotKey
+            return SettingsView.content(
+                providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
+                permissions: controller.permissions, openSystemSettings: { _ in })
+        }
+    }
+
+    /// N1 : fenêtre fermée, quittée ou application passée en arrière-plan pendant une capture : la capture prend fin,
+    /// le moniteur de touches est retiré et le raccourci global est réenregistré.
+    @Test func leavingTheSettingsWindowEndsTheCaptureAndRestoresTheHotKey() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.applyHotKeyAtLaunch()
+        controller.openSettings()
+        let window = try #require(presenter.windows.first)
+        let hotKey = try #require(built.hotKey)
+
+        hotKey.startRecording()
+        #expect(registrar.registered == nil)
+        #expect(monitor.isActive)
+
+        window.leave()
+        #expect(!hotKey.isRecording)
+        #expect(!monitor.isActive)
+        #expect(registrar.registered == .standard)
+        registrar.press()
+        #expect(controller.panelModel.isOpen)
+    }
+
+    /// N1 : le raccourci ne peut pas être réenregistré à la fin de la capture ; le panneau le dit.
+    @Test func failedRestoreAfterTheCaptureIsAnnouncedInThePanel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.applyHotKeyAtLaunch()
+        controller.openSettings()
+        let window = try #require(presenter.windows.first)
+        let hotKey = try #require(built.hotKey)
+
+        hotKey.startRecording()
+        registrar.refused = [.standard]
+        window.leave()
+
+        let notice = try #require(controller.panelModel.notices[.hotKey])
+        #expect(notice.contains(HotKey.standard.label(layout: HotKeyTests.ansi)))
+        #expect(notice.contains("n'a pas pu être rétabli"))
+        #expect(controller.panelModel.hotKeyLabel == nil)
+    }
+
+    /// L'ouverture de la fenêtre demande quelles clés existent, sans en lire aucune. Une fois l'état connu,
+    /// une nouvelle ouverture ne redemande rien (`checkKeys` ne demande que les états inconnus).
+    @Test func openingTheSettingsChecksWhichKeysExist() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let provider = Provider(id: UUID(), name: "Local", baseURL: "http://localhost:1", kind: .openAICompatible, models: [])
+        try store.save(AppSettings(version: 1, providers: [provider], hotKey: .standard, hotKeyBehavior: .toggle, lastModeID: "prompt"))
+        let controller = makeController(settingsView: testProvider(Built()))
+        #expect(secrets.calls.isEmpty)
+
+        controller.openSettings()
+        await controller.settingsPresentation?.value
+        #expect(secrets.calls.map(\.name) == ["contains"])
+
+        controller.openSettings()
+        await controller.settingsPresentation?.value
+        #expect(secrets.calls.map(\.name) == ["contains"])
+        #expect(secrets.readCount == 0)
     }
 
     /// Changement de mode dans le panneau, puis ajout d'un fournisseur dans la fenêtre : les deux restent.
@@ -53,7 +144,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
         let providers = SettingsView.makeProvidersModel(controller)
-        let hotKey = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi)
+        let hotKey = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi, keyMonitor: monitor)
 
         try await providers.add(name: "Local", baseURL: "http://localhost:1", kind: .openAICompatible, key: "")
         hotKey.record(HotKeyTests.keyB)
@@ -101,7 +192,7 @@ import Testing
         try store.save(AppSettings(version: 1, providers: [provider], hotKey: .standard, hotKeyBehavior: .toggle, lastModeID: "prompt"))
         let controller = makeController(settingsView: SettingsView.provider)
 
-        let view = NSHostingView(rootView: SettingsView.provider(controller))
+        let view = NSHostingView(rootView: SettingsView.provider(controller).view)
         view.frame = NSRect(x: 0, y: 0, width: 640, height: 480)
         view.layoutSubtreeIfNeeded()
         _ = view.fittingSize
@@ -130,7 +221,7 @@ import Testing
         #expect(controller.panelModel.isOpen)
         #expect(escape.registered != nil)
 
-        let model = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi)
+        let model = SettingsView.makeHotKeyModel(controller, layout: HotKeyTests.ansi, keyMonitor: monitor)
         model.startRecording()
         #expect(registrar.registered == nil)
         #expect(escape.registered == nil)

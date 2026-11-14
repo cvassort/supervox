@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import SupervoxApp
@@ -16,6 +17,7 @@ import Testing
     let system = FakeSystemHotKeys()
     let surface = FakePanelSurface()
     let clicks = FakeClickMonitor()
+    let presenter = Presenter()
 
     init() throws {
         directory = FileManager.default.temporaryDirectory
@@ -28,7 +30,8 @@ import Testing
         AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
             escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system,
-            makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks)
+            makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
     }
 
     func corruptTheSettingsFile() throws {
@@ -179,17 +182,9 @@ import Testing
 
     // MARK: - Réglages et Quitter
 
-    /// Fenêtres présentées et demandes de fin, à la place de l'écran et de `NSApp.terminate`.
-    @MainActor final class Presenter {
-        var windows: [NSWindow] = []
-        var terminations = 0
-    }
-
-    func makeOpenPanel(_ presenter: Presenter) -> AppController {
+    func makeOpenPanel() -> AppController {
         _ = NSApplication.shared  // `NSApp` doit exister pour le menu principal ; rien n'est affiché.
         let controller = makeController()
-        controller.presentSettingsWindow = { presenter.windows.append($0) }
-        controller.terminate = { presenter.terminations += 1 }
         controller.applyHotKeyAtLaunch()
         hotKeys.press()
         return controller
@@ -197,10 +192,9 @@ import Testing
 
     @Test func openingSettingsClosesThePanel() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
-        let presenter = Presenter()
         let previousMenu = NSApplication.shared.mainMenu
         defer { NSApplication.shared.mainMenu = previousMenu }
-        let controller = makeOpenPanel(presenter)
+        let controller = makeOpenPanel()
         #expect(escape.registered != nil)
         #expect(clicks.isWatching)
 
@@ -210,21 +204,20 @@ import Testing
         #expect(!surface.isShown)
         #expect(escape.registered == nil)
         #expect(!clicks.isWatching)
-        #expect(presenter.windows.count == 1)
+        let window = try #require(presenter.windows.first)
+        #expect(window.presentations == 1)
         // Fenêtre gardée : une seconde ouverture présente la même.
         controller.openSettings()
-        #expect(presenter.windows.count == 2)
-        try #require(presenter.windows.count == 2)
-        #expect(presenter.windows[0] === presenter.windows[1])
+        #expect(presenter.windows.count == 1)
+        #expect(window.presentations == 2)
     }
 
     @Test func settingsWindowInstallsTheMainMenu() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
-        let presenter = Presenter()
         let previousMenu = NSApplication.shared.mainMenu
         defer { NSApplication.shared.mainMenu = previousMenu }
         NSApplication.shared.mainMenu = nil
-        let controller = makeOpenPanel(presenter)
+        let controller = makeOpenPanel()
 
         controller.openSettings()
 
@@ -241,8 +234,7 @@ import Testing
 
     @Test func quittingClosesThePanel() {
         defer { try? FileManager.default.removeItem(at: directory) }
-        let presenter = Presenter()
-        let controller = makeOpenPanel(presenter)
+        let controller = makeOpenPanel()
 
         controller.quit()
 
@@ -263,4 +255,29 @@ import Testing
         #expect(controller.panelModel.notices[.settingsLoad] == nil)
         #expect(store.load().settings.lastModeID == "prompt")
     }
+}
+
+/// Fenêtres de réglages et demandes de fin, à la place de l'écran et de `NSApp.terminate`.
+@MainActor final class Presenter {
+    private(set) var windows: [FakeSettingsWindow] = []
+    private(set) var terminations = 0
+
+    func make(_ content: AnyView, onLeave: @escaping @MainActor () -> Void) -> any SettingsWindowSurface {
+        let window = FakeSettingsWindow(onLeave: onLeave)
+        windows.append(window)
+        return window
+    }
+
+    func terminate() { terminations += 1 }
+}
+
+/// Fenêtre de réglages double : rien ne s'affiche ; `leave` imite une fenêtre fermée ou quittée.
+@MainActor final class FakeSettingsWindow: SettingsWindowSurface {
+    private let onLeave: @MainActor () -> Void
+    private(set) var presentations = 0
+
+    init(onLeave: @escaping @MainActor () -> Void) { self.onLeave = onLeave }
+
+    func present() { presentations += 1 }
+    func leave() { onLeave() }
 }

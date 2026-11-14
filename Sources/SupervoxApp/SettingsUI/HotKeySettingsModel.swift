@@ -9,14 +9,15 @@ public struct GlobalHotKeyControl {
     public var apply: @MainActor (HotKey) -> Result<Void, HotKeyError>
     /// Rend au système le raccourci actif et Échap, le temps d'une capture.
     public var suspend: @MainActor () -> Void
-    /// Réenregistre ce que `suspend` a rendu ; sans effet s'il n'y a rien de suspendu.
-    public var resume: @MainActor () -> Void
+    /// Réenregistre ce que `suspend` a rendu ; sans effet s'il n'y a rien de suspendu. Rend faux si le système refuse :
+    /// il n'y a alors plus de raccourci actif.
+    public var resume: @MainActor () -> Bool
     /// Ne laisse aucun raccourci actif.
     public var clear: @MainActor () -> Void
 
     public init(
         apply: @escaping @MainActor (HotKey) -> Result<Void, HotKeyError>,
-        suspend: @escaping @MainActor () -> Void, resume: @escaping @MainActor () -> Void,
+        suspend: @escaping @MainActor () -> Void, resume: @escaping @MainActor () -> Bool,
         clear: @escaping @MainActor () -> Void
     ) {
         self.apply = apply
@@ -65,6 +66,7 @@ public final class HotKeySettingsModel {
 
     @ObservationIgnored private let layout: any KeyboardLayout
     @ObservationIgnored private let systemHotKeys: any SystemHotKeys
+    @ObservationIgnored private let keyMonitor: any KeyEventMonitor
     @ObservationIgnored private let control: GlobalHotKeyControl
     @ObservationIgnored private let save: Save
 
@@ -72,12 +74,14 @@ public final class HotKeySettingsModel {
     /// diffère de `hotKey`, le message le dit.
     public init(
         hotKey: HotKey, active: HotKey?, behavior: HotKeyBehavior, layout: any KeyboardLayout,
-        systemHotKeys: any SystemHotKeys, control: GlobalHotKeyControl, save: @escaping Save
+        systemHotKeys: any SystemHotKeys, keyMonitor: any KeyEventMonitor, control: GlobalHotKeyControl,
+        save: @escaping Save
     ) {
         self.hotKey = hotKey
         self.behavior = behavior
         self.layout = layout
         self.systemHotKeys = systemHotKeys
+        self.keyMonitor = keyMonitor
         self.control = control
         self.save = save
         let label = hotKey.label(layout: layout)
@@ -91,16 +95,32 @@ public final class HotKeySettingsModel {
     /// Libellé du raccourci enregistré, d'après la disposition de clavier.
     public var label: String { hotKey.label(layout: layout) }
 
+    /// Rend le raccourci global au système et pose le moniteur de touches.
     public func startRecording() {
         guard !isRecording else { return }
         isRecording = true
         control.suspend()
+        keyMonitor.start { [weak self] keyCode, flags in self?.keyDown(keyCode: keyCode, flags: flags) }
     }
 
+    /// Fin de capture sans nouveau raccourci (Échap, onglet changé, fenêtre quittée) : le moniteur est retiré et le
+    /// raccourci global revient.
     public func cancelRecording() {
         guard isRecording else { return }
+        endRecording()
+        resumeAfterCapture()
+    }
+
+    private func endRecording() {
         isRecording = false
-        control.resume()
+        keyMonitor.stop()
+    }
+
+    /// Si le système refuse de réenregistrer le raccourci suspendu, plus aucun raccourci n'est actif : il faut le dire.
+    private func resumeAfterCapture() {
+        guard !control.resume() else { return }
+        message =
+            "\(hotKey.label(layout: layout)) n'a pas pu être rétabli après la capture : macOS l'a refusé. Aucun raccourci n'est actif ; choisissez-en un autre."
     }
 
     /// Une touche pressée pendant la capture. Échap seul annule ; toute autre combinaison est proposée.
@@ -117,10 +137,10 @@ public final class HotKeySettingsModel {
     /// Propose `candidate` comme nouveau raccourci et met fin à la capture.
     public func record(_ candidate: HotKey) {
         let wasRecording = isRecording
-        isRecording = false
+        if wasRecording { endRecording() }
         // Ce qu'une capture a suspendu est rendu à la fin, quel que soit le chemin ; après un `apply`, il n'y
         // a déjà plus rien de suspendu et `resume` ne fait rien.
-        defer { if wasRecording { control.resume() } }
+        defer { if wasRecording { resumeAfterCapture() } }
 
         let candidateLabel = candidate.label(layout: layout)
         let validation = candidate.validate(layout: layout)

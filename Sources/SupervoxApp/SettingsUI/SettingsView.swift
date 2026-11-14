@@ -15,31 +15,52 @@ public enum SystemSettingsPane: Sendable {
     }
 }
 
+/// Les onglets de la fenêtre de réglages.
+public enum SettingsTab: Hashable, Sendable {
+    case providers, hotKey, permissions
+}
+
 /// Fenêtre de réglages : fournisseurs, raccourci, permissions.
 public struct SettingsView: View {
     let providers: ProvidersModel
     let hotKey: HotKeySettingsModel
     let permissions: PermissionsModel
     let openSystemSettings: @MainActor (SystemSettingsPane) -> Void
+    @State private var tab: SettingsTab
 
+    /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut).
     public init(
         providers: ProvidersModel, hotKey: HotKeySettingsModel, permissions: PermissionsModel,
-        openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void
+        openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void, initialTab: SettingsTab = .providers
     ) {
         self.providers = providers
         self.hotKey = hotKey
         self.permissions = permissions
         self.openSystemSettings = openSystemSettings
+        _tab = State(initialValue: initialTab)
     }
 
     /// La vraie fenêtre, branchée sur le contrôleur : toutes ses écritures passent par
     /// `AppController.updateSettings`, qui tient la seule copie vivante des réglages.
     public static let provider: AppController.SettingsViewProvider = { controller in
-        AnyView(
-            SettingsView(
-                providers: makeProvidersModel(controller), hotKey: makeHotKeyModel(controller),
-                permissions: controller.permissions,
-                openSystemSettings: { NSWorkspace.shared.open($0.url) }))
+        content(
+            providers: makeProvidersModel(controller),
+            hotKey: makeHotKeyModel(controller, layout: SystemKeyboardLayout(), keyMonitor: LocalKeyDownMonitor()),
+            permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
+    }
+
+    /// La fenêtre et ses deux moments : à chaque présentation, demander quelles clés existent ; quand l'utilisateur la
+    /// quitte, mettre fin à une capture de raccourci (le raccourci global revient).
+    static func content(
+        providers: ProvidersModel, hotKey: HotKeySettingsModel, permissions: PermissionsModel,
+        openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void
+    ) -> SettingsContent {
+        SettingsContent(
+            view: AnyView(
+                SettingsView(
+                    providers: providers, hotKey: hotKey, permissions: permissions,
+                    openSystemSettings: openSystemSettings)),
+            onPresent: { await providers.checkKeys() }, onLeave: { hotKey.cancelRecording() })
     }
 
     /// Construit sans appeler le magasin de secrets.
@@ -50,16 +71,17 @@ public struct SettingsView: View {
             save: { [weak controller] providers in try controller?.updateSettings { $0.providers = providers } })
     }
 
-    static func makeHotKeyModel(_ controller: AppController, layout: any KeyboardLayout = SystemKeyboardLayout())
-        -> HotKeySettingsModel
-    {
+    static func makeHotKeyModel(
+        _ controller: AppController, layout: any KeyboardLayout, keyMonitor: any KeyEventMonitor
+    ) -> HotKeySettingsModel {
         HotKeySettingsModel(
             hotKey: controller.settings.hotKey, active: controller.hotKeys.active,
             behavior: controller.settings.hotKeyBehavior, layout: layout, systemHotKeys: controller.systemHotKeys,
+            keyMonitor: keyMonitor,
             control: GlobalHotKeyControl(
                 apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.refused) },
                 suspend: { [weak controller] in controller?.suspendHotKeysForCapture() },
-                resume: { [weak controller] in controller?.resumeHotKeys() },
+                resume: { [weak controller] in controller?.resumeHotKeys() ?? false },
                 clear: { [weak controller] in controller?.clearHotKey() }),
             save: { [weak controller] hotKey, behavior in
                 try controller?.updateSettings {
@@ -70,13 +92,15 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        TabView {
-            Tab("Fournisseurs", systemImage: "server.rack") { ProvidersPane(model: providers) }
-            Tab("Raccourci", systemImage: "keyboard") { HotKeyPane(model: hotKey) }
-            Tab("Permissions", systemImage: "lock.shield") {
+        TabView(selection: $tab) {
+            Tab("Fournisseurs", systemImage: "server.rack", value: .providers) { ProvidersPane(model: providers) }
+            Tab("Raccourci", systemImage: "keyboard", value: .hotKey) { HotKeyPane(model: hotKey) }
+            Tab("Permissions", systemImage: "lock.shield", value: .permissions) {
                 PermissionsPane(model: permissions, openSystemSettings: openSystemSettings)
             }
         }
+        // Une capture ne survit pas à un changement d'onglet (en plus de `onDisappear` de l'onglet Raccourci).
+        .onChange(of: tab) { hotKey.cancelRecording() }
         .frame(width: 600, height: 460)
     }
 }
@@ -135,7 +159,6 @@ private struct ProvidersPane: View {
         }
         .formStyle(.grouped)
         // Présence des clés demandée (sans les lire) quand la liste s'affiche.
-        .task { await model.checkKeys() }
         .safeAreaInset(edge: .bottom) {
             HStack {
                 Spacer()
@@ -349,11 +372,10 @@ private struct HotKeyPane: View {
     }
 }
 
-/// Bouton qui capte la prochaine combinaison tapée. La logique est dans `HotKeySettingsModel` ; ici,
-/// seulement le moniteur d'événements local, posé pendant la capture.
+/// Bouton qui capte la prochaine combinaison tapée. Toute la logique, moniteur de touches compris, est dans
+/// `HotKeySettingsModel`.
 private struct HotKeyRecorder: View {
     let model: HotKeySettingsModel
-    @State private var monitor = KeyDownMonitor()
 
     var body: some View {
         Button {
@@ -364,33 +386,6 @@ private struct HotKeyRecorder: View {
                 .frame(minWidth: 160)
         }
         .help(model.isRecording ? "Échap pour annuler" : "Cliquer pour changer")
-        .onChange(of: model.isRecording) { _, recording in
-            if recording {
-                monitor.start { model.keyDown(keyCode: $0.keyCode, flags: $0.modifierFlags) }
-            } else {
-                monitor.stop()
-            }
-        }
-        .onDisappear { monitor.stop() }
-    }
-}
-
-/// Moniteur local des touches pressées : chaque touche est donnée à `handler` et n'atteint pas la fenêtre.
-@MainActor
-private final class KeyDownMonitor {
-    private var token: Any?
-
-    func start(_ handler: @escaping @MainActor (NSEvent) -> Void) {
-        stop()
-        token = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            MainActor.assumeIsolated { handler(event) }
-            return nil
-        }
-    }
-
-    func stop() {
-        if let token { NSEvent.removeMonitor(token) }
-        token = nil
     }
 }
 
