@@ -342,8 +342,9 @@ import SupervoxCore
 
     // MARK: - Règle 11 : Échap pendant le collage
 
-    @Test("règle 11 : Échap pendant le collage, avant le ⌘V : la tâche est annulée, rien n'est collé, le presse-papiers est rendu")
-    func escapeWhilePastingBeforeTheKeystrokeCancelsTheInsertion() async {
+    @Test("règle 11 : Échap ou la fermeture du panneau pendant le collage, avant le ⌘V : la tâche est annulée, rien n'est collé, le presse-papiers est rendu",
+        arguments: ["escape", "closed"])
+    func escapeWhilePastingBeforeTheKeystrokeCancelsTheInsertion(path: String) async {
         let log = CallLog()
         let sleeper = SleepingWait(log: log)
         // Les modificateurs sont tenus : l'insertion attend leur relâchement, dans une attente qui rend la main à l'annulation.
@@ -355,7 +356,7 @@ import SupervoxCore
         #expect(h.rig.board.text == "Texte à ne pas coller.", "l'insertion est en route : le texte est dans le presse-papiers")
         #expect(h.controller.view.stage == .pasting)
 
-        h.controller.escapePressed()
+        if path == "escape" { h.controller.escapePressed() } else { h.panel.close() }
         #expect(!h.panel.isOpen)
         #expect(await until { !h.controller.isInserting })
         #expect(h.rig.board.contents == FakeInsertion.original, "le presse-papiers d'origine est rendu")
@@ -458,19 +459,50 @@ import SupervoxCore
 
     // MARK: - Règle 17 : Échap pendant l'attente de la frappe
 
-    @Test("règle 17 : Échap pendant l'attente de la passation de la frappe : insert n'est jamais appelé")
-    func escapeDuringTheHandoverWaitNeverInserts() async {
+    @Test("règle 17 : Échap ou la fermeture du panneau pendant l'attente de la passation de la frappe : insert n'est jamais appelé",
+        arguments: ["escape", "closed"])
+    func escapeDuringTheHandoverWaitNeverInserts(path: String) async {
         let h = harness()
         await pastingAtHandover(h)
         #expect(h.rig.log.entries == ["keyboard(none)", "wait(0.15)"])
 
-        h.controller.escapePressed()
+        if path == "escape" { h.controller.escapePressed() } else { h.panel.close() }
         #expect(!h.panel.isOpen)
         #expect(await until { !h.controller.isInserting })
         await settle()
         #expect(h.rig.log.entries.filter { $0 != "keyboard(none)" && $0 != "wait(0.15)" }.isEmpty)
         #expect(h.pasted.isEmpty)
         #expect(h.rig.board.contents == FakeInsertion.original)
+        #expect(h.controller.lastTranscript == Self.text)
+        #expect(h.controller.view == DictationViewState(lastTranscript: Self.text))
+    }
+
+    /// Une attente de passation qui ignore l'annulation se réveille quand même après Échap : la tâche, annulée et plus
+    /// courante, ne doit alors toucher à rien. Le journal de l'insertion le dit par une assertion (aucune lecture ni écriture du
+    /// presse-papiers, aucun sondage des modificateurs, aucun ⌘V), non par un blocage.
+    @Test("règle 17 : une attente qui ignore l'annulation se réveille après Échap : aucune lecture ni écriture du presse-papiers, aucun ⌘V",
+        arguments: ["escape", "closed"])
+    func aHandoverWaitThatIgnoresCancellationStillNeverInserts(path: String) async {
+        let h = harness()
+        let gate = TestGate()
+        defer { gate.open() }
+        h.handover.gate = gate
+        await review(h)
+        h.controller.pasteReview()
+        #expect(await until { h.rig.log.entries.contains("wait(0.15)") })
+        #expect(h.controller.isInserting)
+
+        if path == "escape" { h.controller.escapePressed() } else { h.panel.close() }
+        #expect(!h.panel.isOpen)
+        // L'attente est encore là (elle ignore l'annulation) : la tâche vit toujours.
+        #expect(h.controller.isInserting)
+        gate.open()
+        #expect(await until { !h.controller.isInserting })
+        await settle()
+        #expect(h.rig.log.entries == ["keyboard(none)", "wait(0.15)"], "ni read, ni write, ni modifiersHeld, ni postPaste")
+        #expect(h.pasted.isEmpty)
+        #expect(h.rig.board.contents == FakeInsertion.original)
+        #expect(h.rig.board.changeCount == 0)
         #expect(h.controller.lastTranscript == Self.text)
         #expect(h.controller.view == DictationViewState(lastTranscript: Self.text))
     }

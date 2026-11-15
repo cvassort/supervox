@@ -568,6 +568,54 @@ final class TimeoutLog: Sendable {
         #expect(rig.board.contents == FakeInsertion.original)
     }
 
+    /// Règles 10, 11 et 17 : la fermeture du panneau par chaque chemin, pendant le collage, en finit avec lui sans rien insérer
+    /// de plus. « passation » : l'attente de `focusHandoverDelay`, retenue par le test ; « sondage » : l'insertion attend le
+    /// relâchement des modificateurs, avant le ⌘V.
+    @Test(arguments: ["escape", "menu", "settings", "quit"], ["passation", "sondage"])
+    func closingThePanelWhilePastingInsertsNothingMore(path: String, phase: String) async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+        controller.panelModel.editDraft("Le brouillon à ne pas coller.")
+        rig.log.entries.removeAll()
+        if phase == "passation" {
+            handover.holds = true
+        } else {
+            rig.keys.held = [true]
+            blocksInsertion.on = true
+        }
+        controller.panelModel.paste()
+        #expect(controller.panelModel.dictation.stage == .pasting)
+        if phase == "passation" {
+            #expect(await until { handover.sleeper.isSleeping })
+            #expect(!rig.log.entries.contains("read"), "rien n'est encore inséré")
+        } else {
+            #expect(await until { insertionSleeper.isSleeping })
+            #expect(rig.board.text == "Le brouillon à ne pas coller.", "l'insertion est en route, avant le ⌘V")
+        }
+
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        switch path {
+        case "escape": escape.press()
+        case "menu": controller.togglePanelFromMenu()
+        case "settings": controller.openSettings()
+        default: controller.quit()
+        }
+        #expect(!controller.panelModel.isOpen)
+        #expect(await until { !controller.dictation.isInserting })
+        await settle()
+        #expect(controller.dictation.lastTranscript == "Le brouillon à ne pas coller.")
+        #expect(
+            controller.panelModel.dictation == DictationViewState(lastTranscript: "Le brouillon à ne pas coller."))
+        #expect(!rig.log.entries.contains { $0.hasPrefix("postPaste") }, "aucun ⌘V")
+        #expect(rig.board.contents == FakeInsertion.original, "le presse-papiers d'origine est intact ou rendu")
+        if phase == "passation" {
+            #expect(rig.log.entries.filter { !$0.hasPrefix("keyboard") && !$0.hasPrefix("wait") }.isEmpty, "ni lecture ni écriture")
+        }
+    }
+
     /// Règle 14 : changer de pastille pendant la relecture ne touche ni le texte ni l'étape ; la dictée suivante suit le mode.
     @Test func changingTheModeDuringTheReviewKeepsItAndTheNextDictationFollowsTheNewMode() async {
         defer { try? FileManager.default.removeItem(at: directory) }

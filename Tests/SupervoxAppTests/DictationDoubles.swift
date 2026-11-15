@@ -235,6 +235,9 @@ final class FakeEngines: Sendable {
     let sleeper: SleepingWait
     private(set) var durations: [Double] = []
     var holds = false
+    /// Une attente qui ignore l'annulation de la tâche qui l'attend (comme celle de restauration de l'insertion) : elle dure
+    /// jusqu'à `gate.open()`, puis rend la main même à une tâche annulée. Prime sur `holds`.
+    var gate: TestGate?
 
     init(log: CallLog) {
         self.log = log
@@ -243,7 +246,10 @@ final class FakeEngines: Sendable {
 
     func wait(_ seconds: Double) async {
         durations.append(seconds)
-        if holds {
+        if let gate {
+            log.entries.append("wait(\(seconds))")
+            await gate.wait()
+        } else if holds {
             await sleeper.wait(seconds)
         } else {
             log.entries.append("wait(\(seconds))")
