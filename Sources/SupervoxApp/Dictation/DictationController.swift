@@ -358,13 +358,13 @@ public final class DictationController {
 
     // MARK: - État
 
-    /// `run` est la dictée courante : une dictée annulée ou finie n'est plus `self.run`.
     /// La dictée est finie : elle n'est plus la dictée courante et sa surveillance des modificateurs s'arrête.
     private func retire(_ run: Run) {
         run.watch?.cancel()
         if self.run === run { self.run = nil }
     }
 
+    /// `run` est la dictée courante : une dictée annulée ou finie n'est plus `self.run`.
     private func isLive(_ run: Run) -> Bool { self.run === run }
 
     private func setView(_ next: DictationViewState) {
