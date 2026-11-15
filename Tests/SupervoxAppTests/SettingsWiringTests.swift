@@ -56,6 +56,7 @@ import Testing
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller),
                 permissions: controller.permissions, openSystemSettings: { _ in })
         }
     }
@@ -150,6 +151,41 @@ import Testing
         #expect(onDisk.transcription.vocabulary == ["Docker"])
         #expect(onDisk.lastModeID == "prompt")
         #expect(controller.settings == onDisk)
+    }
+
+    /// Les choix de l'onglet Modes passent par `updateSettings`, comme le reste : le fichier, puis les réglages en vigueur.
+    @Test func reviewChoicesAreSavedThroughTheController() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let modes = SettingsView.makeModesModel(controller)
+        #expect(!controller.settings.reviewsBeforePaste(ModeChip.rawID))
+
+        modes.setReview(true, for: ModeChip.rawID)
+
+        let onDisk = store.load().settings
+        #expect(onDisk.modeOptions[ModeChip.rawID] == ModeOptions(reviewBeforePaste: true))
+        #expect(onDisk.reviewsBeforePaste(ModeChip.rawID))
+        #expect(controller.settings == onDisk)
+        #expect(controller.settings.reviewsBeforePaste(ModeChip.rawID))
+        #expect(modes.rows.first { $0.id == ModeChip.rawID }?.reviews == true)
+        #expect(modes.message == nil)
+
+        // Un modèle construit plus tard part des choix enregistrés.
+        let reopened = SettingsView.makeModesModel(controller)
+        #expect(reopened.rows.map(\.reviews) == [true, false, true, true])
+    }
+
+    @Test func aRefusedSaveLeavesTheReviewChoiceAsItWas() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let modes = SettingsView.makeModesModel(controller)
+        try Data("pas du json".utf8).write(to: store.file)
+
+        modes.setReview(true, for: ModeChip.rawID)
+
+        #expect(!controller.settings.reviewsBeforePaste(ModeChip.rawID))
+        #expect(modes.rows.first { $0.id == ModeChip.rawID }?.reviews == false)
+        #expect(modes.message?.contains("settings.json") == true)
     }
 
     @Test func aRefusedSaveRestoresTheDisplayedTranscriptionSetting() throws {

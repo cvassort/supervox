@@ -70,11 +70,15 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var systemConflictShown: HotKey?
     /// Moteur, modèle, langue et vocabulaire de la dictée. Absent d'un fichier plus ancien : les défauts s'appliquent.
     public var transcription: TranscriptionSettings
+    /// Les options de chaque mode, par identifiant de mode. Un mode sans entrée, ou une entrée sans choix, prend les
+    /// valeurs par défaut du mode. Un identifiant inconnu est gardé tel quel (modes personnalisés d'une étape suivante).
+    /// Absent d'un fichier plus ancien : `[:]`.
+    public var modeOptions: [String: ModeOptions]
 
     public init(
         version: Int, providers: [Provider], hotKey: HotKey,
         hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil,
-        transcription: TranscriptionSettings = .defaults
+        transcription: TranscriptionSettings = .defaults, modeOptions: [String: ModeOptions] = [:]
     ) {
         self.version = version
         self.providers = providers
@@ -83,10 +87,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.lastModeID = lastModeID
         self.systemConflictShown = systemConflictShown
         self.transcription = transcription
+        self.modeOptions = modeOptions
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription
+        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription, modeOptions
     }
 
     /// Un champ absent prend sa valeur par défaut ; un champ inconnu est ignoré ; un champ présent mais d'une autre
@@ -102,11 +107,34 @@ public struct AppSettings: Codable, Equatable, Sendable {
         systemConflictShown = try container.decodeIfPresent(HotKey.self, forKey: .systemConflictShown)
         transcription =
             try container.decodeIfPresent(TranscriptionSettings.self, forKey: .transcription) ?? defaults.transcription
+        modeOptions = try container.decodeIfPresent([String: ModeOptions].self, forKey: .modeOptions) ?? [:]
     }
 
     public static var defaults: AppSettings {
         AppSettings(
             version: current, providers: [], hotKey: .standard,
-            hotKeyBehavior: .toggle, lastModeID: "dictee-brute")
+            hotKeyBehavior: .toggle, lastModeID: ModeChip.rawID)
+    }
+
+    // MARK: - Relire avant de coller
+
+    /// Les modes dont le texte passe toujours par la relecture : leur choix enregistré, quel qu'il soit, n'y change rien.
+    public static let alwaysReviewed: Set<String> = [ModeChip.interviewID]
+
+    /// Le choix d'un mode qui n'en a pas enregistré : relire pour Prompt et Entretien, coller tout de suite pour le reste.
+    public static func reviewDefault(_ modeID: String) -> Bool {
+        modeID == ModeChip.promptID || modeID == ModeChip.interviewID
+    }
+
+    /// Vrai si le texte de ce mode s'affiche pour relecture avant d'être collé. Entretien l'est toujours, même si le fichier
+    /// de réglages dit le contraire : la règle est ici, à la lecture, pas dans ce que le fichier porte.
+    public func reviewsBeforePaste(_ modeID: String) -> Bool {
+        Self.reviews(modeID, options: modeOptions)
+    }
+
+    /// La même règle pour des options prises hors d'un `AppSettings` (l'onglet Modes).
+    static func reviews(_ modeID: String, options: [String: ModeOptions]) -> Bool {
+        if alwaysReviewed.contains(modeID) { return true }
+        return options[modeID]?.reviewBeforePaste ?? reviewDefault(modeID)
     }
 }

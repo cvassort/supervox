@@ -21,7 +21,7 @@ import os
 @MainActor @Observable
 public final class DictationController {
     /// Le seul mode dont la dictée est mise en œuvre à cette étape.
-    static let rawModeID = "dictee-brute"
+    static let rawModeID = ModeChip.rawID
     // Les phrases que le panneau montre, publiques pour que l'outil de rendu des écrans montre celles de l'application.
     public static let laterModeNotice = "Ce mode arrive à une étape suivante."
     public static let downloadNotice = "Téléchargement du modèle…"

@@ -112,7 +112,8 @@ swift run supervox-snapshots /chemin/vers/un/dossier
 `supervox-snapshots` écrit les écrans du panneau et des réglages en PNG, en clair et en sombre : pour la dictée, la
 préparation (avec « Téléchargement du modèle… », puis avec « Chargement du modèle… »), l'enregistrement (sans texte, avec
 un texte long), la transcription, « rien à transcrire », l'échec de préparation, le texte copié faute d'Accessibilité, le
-texte refusé par le presse-papiers, le dernier texte (avec « Copié » et « Copie impossible »), et un mode non disponible. Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
+texte refusé par le presse-papiers, le dernier texte (avec « Copié » et « Copie impossible »), et un mode non disponible ; pour
+les réglages, l'onglet Modes (par défaut, puis avec un enregistrement refusé). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
 d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au presse-papiers ni aux réglages
 réels. Les onglets des réglages sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas
 fidèlement.

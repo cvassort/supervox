@@ -12,14 +12,23 @@ public struct ModeChip: Equatable, Identifiable, Sendable {
 
     /// Les quatre modes fixes de cette étape, dans l'ordre d'affichage. Aucun mode personnalisé.
     public static let fixed: [ModeChip] = [
-        ModeChip(id: "dictee-brute", title: "Dictée brute"),
-        ModeChip(id: "dictee-nettoyee", title: "Dictée nettoyée"),
-        ModeChip(id: "prompt", title: "Prompt"),
-        ModeChip(id: "entretien", title: "Entretien"),
+        ModeChip(id: rawID, title: "Dictée brute"),
+        ModeChip(id: cleanedID, title: "Dictée nettoyée"),
+        ModeChip(id: promptID, title: "Prompt"),
+        ModeChip(id: interviewID, title: "Entretien"),
     ]
 
     /// Mode retenu quand le dernier mode enregistré n'existe plus.
-    public static let fallbackID = "dictee-brute"
+    public static let fallbackID = rawID
+}
+
+/// Les identifiants des modes fixes, écrits ici et nulle part ailleurs (un contrôle de sources le vérifie) : ils sont
+/// enregistrés dans `settings.json`, où ils servent de clés (`AppSettings.modeOptions`).
+extension ModeChip {
+    public static let rawID = "dictee-brute"
+    public static let cleanedID = "dictee-nettoyee"
+    public static let promptID = "prompt"
+    public static let interviewID = "entretien"
 }
 
 /// D'où vient un avis. L'ordre des cas est l'ordre d'affichage.

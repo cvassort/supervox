@@ -474,4 +474,95 @@ private func sampleSettings() -> AppSettings {
         let file = try SettingsStore.defaultFile()
         #expect(file.pathComponents.suffix(3) == ["Application Support", "Supervox", "settings.json"])
     }
+
+    // MARK: - Migration : un fichier d'avant « relire avant de coller »
+
+    /// Un fichier au format de cette version avant l'ajout de `modeOptions`, tous les autres champs remplis (clés triées,
+    /// comme l'écrit le magasin).
+    private static let formerFile = #"""
+    {
+      "hotKey": {"keyCode": 49, "modifiers": 6144},
+      "hotKeyBehavior": "hold",
+      "lastModeID": "prompt",
+      "providers": [
+        {"baseURL": "https://api.example.com/v1", "id": "00000000-0000-0000-0000-0000000000A1",
+         "kind": "openAICompatible", "models": ["modele-a", "modele-b"], "name": "Exemple"}
+      ],
+      "systemConflictShown": {"keyCode": 40, "modifiers": 768},
+      "transcription": {"engine": "parakeet", "language": "en", "vocabulary": ["Kubernetes", "Docker"],
+                        "whisperModel": "small"},
+      "version": 1
+    }
+    """#
+
+    private static let formerSettings = AppSettings(
+        version: 1,
+        providers: [
+            Provider(
+                id: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, name: "Exemple",
+                baseURL: "https://api.example.com/v1", kind: .openAICompatible, models: ["modele-a", "modele-b"])
+        ],
+        hotKey: .standard, hotKeyBehavior: .hold, lastModeID: "prompt",
+        systemConflictShown: HotKey(keyCode: 40, modifiers: [.command, .shift]),
+        transcription: TranscriptionSettings(
+            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["Kubernetes", "Docker"]),
+        modeOptions: [:])
+
+    @Test func aFileWrittenBeforeModeOptionsDecodesWithEveryFieldAndNoChoice() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(Self.formerFile.utf8))
+        #expect(decoded.version == 1)
+        #expect(decoded.providers.map(\.name) == ["Exemple"])
+        #expect(decoded.providers.first?.baseURL == "https://api.example.com/v1")
+        #expect(decoded.providers.first?.models == ["modele-a", "modele-b"])
+        #expect(decoded.hotKey == .standard)
+        #expect(decoded.hotKeyBehavior == .hold)
+        #expect(decoded.lastModeID == "prompt")
+        #expect(decoded.systemConflictShown == HotKey(keyCode: 40, modifiers: [.command, .shift]))
+        #expect(decoded.transcription.engine == "parakeet")
+        #expect(decoded.transcription.whisperModel == "small")
+        #expect(decoded.transcription.language == "en")
+        #expect(decoded.transcription.vocabulary == ["Kubernetes", "Docker"])
+        #expect(decoded.modeOptions == [:])
+        #expect(decoded == Self.formerSettings)
+    }
+
+    @Test func theStoreReadsAFormerFileWithoutANoticeOrASetAsideCopy() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(Self.formerFile.utf8).write(to: file)
+
+        let result = SettingsStore(file: file, now: fixedClock).load()
+        #expect(result.notice == nil)
+        #expect(result.saveRefusal == nil)
+        #expect(!result.isFirstLaunch)
+        #expect(result.settings == Self.formerSettings)
+        #expect(result.settings.modeOptions == [:])
+        #expect(try names(in: directory) == ["settings.json"])
+        #expect(try Data(contentsOf: file) == Data(Self.formerFile.utf8))
+    }
+
+    /// Enregistré puis relu : égal ; et le JSON écrit garde toutes les clés d'origine avec leurs valeurs (`modeOptions` mis à
+    /// part, que le fichier d'origine n'avait pas).
+    @Test func aFormerFileSurvivesASaveWithAllItsKeysAndValues() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        try Data(Self.formerFile.utf8).write(to: file)
+
+        let loaded = store.load().settings
+        try store.save(loaded)
+        #expect(store.load().settings == loaded)
+        #expect(store.load().notice == nil)
+        #expect(try names(in: directory) == ["settings.json"])
+
+        let original = try #require(
+            try JSONSerialization.jsonObject(with: Data(Self.formerFile.utf8)) as? [String: Any])
+        var written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(written["modeOptions"] != nil)
+        written["modeOptions"] = nil
+        #expect(Set(written.keys) == Set(original.keys))
+        #expect((written as NSDictionary).isEqual(to: original), "\(written) \(original)")
+    }
 }

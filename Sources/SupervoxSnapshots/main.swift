@@ -181,6 +181,18 @@ let secondProvider = Provider(
     return model
 }
 
+/// L'onglet Modes. `refusing` : l'enregistrement est refusé (fichier de réglages illisible), et la bascule de Dictée brute le
+/// montre.
+@MainActor func modesModel(refusing: Bool = false) -> ModesModel {
+    let model = ModesModel(
+        modes: ModeChip.fixed, options: [:],
+        save: { _ in
+            if refusing { throw SettingsError.unreadableFileKept(fileName: "settings.json") }
+        })
+    if refusing { model.setReview(true, for: ModeChip.rawID) }
+    return model
+}
+
 @MainActor func panelModel(mode: String) -> PanelModel {
     let model = PanelModel(lastModeID: mode)
     model.hotKeyLabel = standardLabel
@@ -351,7 +363,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel(list), hotKey: hotKeyModel(),
-                transcription: await transcriptionModel(UnavailableModelCatalog()),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -361,7 +373,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(refusing: refusing),
-                transcription: await transcriptionModel(UnavailableModelCatalog()),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .hotKey),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -371,15 +383,25 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(),
-                transcription: await transcriptionModel(UnavailableModelCatalog()),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
                 permissions: PermissionsModel(probe: probe), openSystemSettings: { _ in }, initialTab: .permissions),
+            name: name, dark: dark, background: window, size: settingsSize)
+    }
+
+    // Onglet Modes : les défauts, puis un enregistrement refusé. À la taille de la vraie fenêtre.
+    for (name, refusing) in [("modes", false), ("modes-erreur", true)] {
+        try render(
+            SettingsView(
+                providers: await providersModel([]), hotKey: hotKeyModel(),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(refusing: refusing),
+                permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
 
     // Onglet Transcription. La barre d'onglets n'est pas rendue (voir `render`).
     func transcriptionTab(_ model: TranscriptionModel) async -> SettingsView {
         SettingsView(
-            providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model,
+            providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model, modes: modesModel(),
             permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .transcription)
     }
     let allAbsentModels = exampleModels(parakeet: .absent, turbo: .absent, small: .absent, base: .absent, voice: .absent)
