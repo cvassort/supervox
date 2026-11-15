@@ -106,25 +106,9 @@ public final class OpenAICompatibleClient: Sendable {
 
     // MARK: - Requêtes
 
-    /// `<base>/v1/<path>`. La base peut avoir un `/` final, se terminer par `/v1` ou porter un préfixe de chemin :
-    /// dans tous les cas on obtient exactement un `/v1`, sans `//`. La requête et le fragment de la base sont ignorés.
-    private func endpointURL(path: [String]) throws -> URL {
-        guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false),
-              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = components.host, !host.isEmpty
-        else {
-            throw EndpointError.transport("\(EndpointConfig.baseURLVariable) doit être une adresse http(s) complète")
-        }
-        var segments = components.path.split(separator: "/").map(String.init)
-        if segments.last == "v1" { segments.removeLast() }
-        components.path = "/" + (segments + ["v1"] + path).joined(separator: "/")
-        components.query = nil
-        components.fragment = nil
-        guard let url = components.url else {
-            throw EndpointError.transport("\(EndpointConfig.baseURLVariable) donne une adresse inutilisable")
-        }
-        return url
-    }
+    private var endpoint: EndpointRequest { EndpointRequest(config: config, session: session, timeout: requestTimeout) }
+
+    private func endpointURL(path: [String]) throws -> URL { try endpoint.url(path: path) }
 
     /// Envoie la requête et rend le corps et la réponse d'un statut 2xx. Toute autre issue est une `EndpointError`,
     /// sauf l'annulation de la tâche, qui reste une `CancellationError`. Une redirection vers une autre origine
@@ -146,26 +130,11 @@ public final class OpenAICompatibleClient: Sendable {
         return (data, http)
     }
 
-    /// Erreur de `URLSession` (ou levée en cours de lecture) rendue au format du client : l'annulation reste une
-    /// `CancellationError`, une `EndpointError` passe telle quelle, tout le reste est une panne de transport.
-    private func mapped(_ error: any Error) -> any Error {
-        switch error {
-        case is CancellationError: return CancellationError()
-        case let error as URLError where error.code == .cancelled: return CancellationError()
-        case let error as EndpointError: return error
-        default: return EndpointError.transport(error.localizedDescription)
-        }
-    }
+    private func mapped(_ error: any Error) -> any Error { endpoint.mapped(error) }
 
-    /// Corps d'erreur affichable : la clé est masquée d'abord (une troncature ne doit pas en laisser un morceau),
-    /// puis le texte est limité à 500 caractères.
-    private func errorBody(_ data: Data) -> String {
-        errorBody(String(decoding: data, as: UTF8.self))
-    }
+    private func errorBody(_ data: Data) -> String { endpoint.errorBody(data) }
 
-    private func errorBody(_ text: String) -> String {
-        String(text.replacingOccurrences(of: config.apiKey, with: "***").prefix(500))
-    }
+    private func errorBody(_ text: String) -> String { endpoint.errorBody(text) }
 
     // MARK: - Flux de chat
 
@@ -195,7 +164,7 @@ public final class OpenAICompatibleClient: Sendable {
             var body = Data()
             for try await byte in bytes {
                 body.append(byte)
-                if body.count >= Self.errorBodyReadLimit { break }
+                if body.count >= EndpointRequest.errorBodyReadLimit { break }
             }
             throw EndpointError.http(status: http.statusCode, body: errorBody(body))
         }
@@ -215,9 +184,6 @@ public final class OpenAICompatibleClient: Sendable {
         try Task.checkCancellation()
         throw parser.endWithoutDone()
     }
-
-    /// Un corps d'erreur HTTP n'est lu que jusqu'à cette taille : on n'en garde de toute façon que 500 caractères.
-    private static let errorBodyReadLimit = 64 * 1024
 
     /// Un corps 2xx qui n'est pas de l'audio est refusé (voir `speech`).
     private func checkIsAudio(_ data: Data, response: HTTPURLResponse, format: String) throws {
@@ -297,43 +263,6 @@ private struct MultipartForm {
     }
 
     private mutating func append(_ string: String) { body.append(Data(string.utf8)) }
-}
-
-/// Découpe un flux d'octets en lignes selon les règles SSE : fin de ligne `\n`, `\r\n` ou `\r` seul, quelle que soit
-/// la façon dont le réseau a coupé les morceaux (un `\r` et son `\n` peuvent arriver séparés).
-/// Une ligne est décodée en UTF-8 une fois complète : un caractère coupé en deux par le réseau est recollé.
-private struct SSELineSplitter {
-    /// Au-delà, la ligne n'est plus un événement de chat : le corps n'est pas un flux utilisable.
-    static let maxLineBytes = 1 << 20
-
-    private var line: [UInt8] = []
-    private var skipLineFeed = false
-
-    mutating func push(_ byte: UInt8) throws -> [String] {
-        switch byte {
-        case 0x0D:
-            skipLineFeed = true
-            return [take()]
-        case 0x0A:
-            if skipLineFeed { skipLineFeed = false; return [] }
-            return [take()]
-        default:
-            skipLineFeed = false
-            line.append(byte)
-            if line.count > Self.maxLineBytes { throw EndpointError.malformedResponse }
-            return []
-        }
-    }
-
-    /// La dernière ligne, quand le flux s'arrête sans fin de ligne.
-    mutating func finish() -> String? {
-        line.isEmpty ? nil : take()
-    }
-
-    private mutating func take() -> String {
-        defer { line.removeAll(keepingCapacity: true) }
-        return String(decoding: line, as: UTF8.self)
-    }
 }
 
 /// Lit les lignes d'un flux de chat et en tire les morceaux de texte. Une ligne = un événement : les serveurs

@@ -17,6 +17,8 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         case response(status: Int, body: Data, headers: [String: String] = [:])
         /// Échec réseau avant toute réponse HTTP.
         case failure(URLError.Code)
+        /// Échec avant toute réponse HTTP, avec une erreur choisie par le test (son texte peut contenir ce que le test veut).
+        case failureWith(any Error)
         /// Statut puis morceaux livrés l'un après l'autre (le client lit donc les octets au fil de l'eau), puis `end`.
         case stream(status: Int, chunks: [Data], end: End)
     }
@@ -48,17 +50,33 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
 
     // MARK: Fabrication
 
-    static func makeClient(reply: Reply, baseURL: String, apiKey: String,
-                           requestTimeout: TimeInterval = OpenAICompatibleClient.defaultRequestTimeout) -> OpenAICompatibleClient {
+    /// Une session dont le « serveur » rejoue `reply`, et ce qu'elle a reçu. Pour tout client qui prend une `URLSession`.
+    struct StubSession: Sendable {
+        let session: URLSession
+        let id: String
+
+        var lastRequest: URLRequest? { StubURLProtocol.read(id) { $0.requests.last } }
+        var lastBody: Data { StubURLProtocol.read(id) { $0.lastBody } }
+        var requestCount: Int { StubURLProtocol.read(id) { $0.requests.count } }
+        /// Nombre de fois où le client a arrêté sa requête (annulation) ou où elle s'est terminée.
+        var stopLoadingCount: Int { StubURLProtocol.read(id) { $0.stopLoadingCount } }
+    }
+
+    static func makeSession(reply: Reply) -> StubSession {
         let id = UUID().uuidString
         entries.withLock { $0[id] = Entry(reply: reply) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         configuration.httpAdditionalHeaders = [idHeader: id]
+        return StubSession(session: URLSession(configuration: configuration), id: id)
+    }
+
+    static func makeClient(reply: Reply, baseURL: String, apiKey: String,
+                           requestTimeout: TimeInterval = OpenAICompatibleClient.defaultRequestTimeout) -> OpenAICompatibleClient {
+        let stub = makeSession(reply: reply)
         let config = EndpointConfig(baseURL: URL(string: baseURL)!, apiKey: apiKey)
-        let client = OpenAICompatibleClient(config: config, session: URLSession(configuration: configuration),
-                                            requestTimeout: requestTimeout)
-        clients.withLock { $0[ObjectIdentifier(client)] = (client, id) }
+        let client = OpenAICompatibleClient(config: config, session: stub.session, requestTimeout: requestTimeout)
+        clients.withLock { $0[ObjectIdentifier(client)] = (client, stub.id) }
         return client
     }
 
@@ -72,8 +90,11 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     private static func read<T>(_ client: OpenAICompatibleClient, _ body: (Entry) -> T) -> T {
-        let id = id(of: client)
-        return entries.withLock { body($0[id]!) }
+        read(id(of: client), body)
+    }
+
+    private static func read<T>(_ id: String, _ body: (Entry) -> T) -> T {
+        entries.withLock { body($0[id]!) }
     }
 
     static func lastRequest(of client: OpenAICompatibleClient) -> URLRequest? { read(client) { $0.requests.last } }
@@ -124,6 +145,8 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         switch reply {
         case .failure(let code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
+        case .failureWith(let error):
+            client?.urlProtocol(self, didFailWithError: error)
         case .response(let status, let data, let headers):
             client?.urlProtocol(self, didReceive: httpResponse(status, headers), cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: data)

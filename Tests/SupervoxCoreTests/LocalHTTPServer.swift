@@ -5,7 +5,8 @@ import Synchronization
 /// Petit serveur HTTP/1.1 sur la boucle locale : vraie pile réseau, pas de double. Chaque requête complète (en-têtes,
 /// puis `Content-Length` octets de corps) est notée, puis reçoit la réponse que rend `respond`, et la connexion est
 /// fermée. Sert aux tests de redirection : une redirection rendue par un `URLProtocol` ne passe pas par la même
-/// mécanique que celle d'un vrai serveur.
+/// mécanique que celle d'un vrai serveur. Une réponse peut aussi être un flux (`Response.stream`) : morceaux envoyés
+/// sans `Content-Length`, puis fermeture par le serveur ou silence jusqu'à ce que le client ferme.
 final class LocalHTTPServer: @unchecked Sendable {
     struct Request: Sendable {
         let method: String
@@ -18,6 +19,23 @@ final class LocalHTTPServer: @unchecked Sendable {
         var status: Int
         var headers: [String: String] = [:]
         var body = Data()
+        /// Si présent, la réponse est un flux : pas de `Content-Length`, `Content-Type: text/event-stream`,
+        /// `Connection: close` ; `body` est ignoré.
+        var stream: Stream?
+    }
+
+    /// Réponse en flux : les morceaux sont envoyés dans l'ordre, puis `end`.
+    struct Stream: Sendable {
+        var chunks: [Data]
+        var end: End
+    }
+
+    enum End: Sendable {
+        /// Le serveur ferme la connexion après le dernier morceau : le corps est complet pour HTTP (sans longueur,
+        /// la fin du corps est la fermeture), mais le flux d'événements peut être coupé.
+        case close
+        /// Le serveur se tait sans fermer : seul le client peut y mettre fin (voir `closedByClient`).
+        case hang
     }
 
     private let listener: NWListener
@@ -25,6 +43,8 @@ final class LocalHTTPServer: @unchecked Sendable {
     private let respond: @Sendable (Request) -> Response
     private let received = Mutex<[Request]>([])
     private let accepted = Mutex(0)
+    private let closedClients = Mutex(0)
+    private let stopped = Mutex(false)
     private var connections: [NWConnection] = []
     private(set) var port: UInt16 = 0
 
@@ -38,6 +58,10 @@ final class LocalHTTPServer: @unchecked Sendable {
 
     /// Connexions acceptées jusqu'ici, y compris celles qui n'ont porté aucune requête HTTP lisible (TLS, par exemple).
     var connectionsAccepted: Int { accepted.withLock { $0 } }
+
+    /// Connexions que le client a fermées pendant un `hang` (fin de flux ou erreur vue par le serveur). L'arrêt du
+    /// serveur par `stop()` n'en fait pas partie.
+    var closedByClient: Int { closedClients.withLock { $0 } }
 
     /// `http://127.0.0.1:<port>`
     var base: String { "http://127.0.0.1:\(port)" }
@@ -63,7 +87,11 @@ final class LocalHTTPServer: @unchecked Sendable {
         }
     }
 
-    func stop() { listener.cancel(); queue.sync { connections.forEach { $0.cancel() } } }
+    func stop() {
+        stopped.withLock { $0 = true }
+        listener.cancel()
+        queue.sync { connections.forEach { $0.cancel() } }
+    }
 
     private func serve(_ connection: NWConnection, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { data, _, done, error in
@@ -91,10 +119,34 @@ final class LocalHTTPServer: @unchecked Sendable {
     }
 
     private func reply(_ response: Response, on connection: NWConnection) {
+        if let stream = response.stream { return replyStream(response, stream, on: connection) }
         var head = "HTTP/1.1 \(response.status) Statut\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n"
         for (name, value) in response.headers { head += "\(name): \(value)\r\n" }
         head += "\r\n"
         connection.send(content: Data(head.utf8) + response.body, completion: .contentProcessed { _ in connection.cancel() })
+    }
+
+    private func replyStream(_ response: Response, _ stream: Stream, on connection: NWConnection) {
+        var head = "HTTP/1.1 \(response.status) Statut\r\nContent-Type: text/event-stream\r\nConnection: close\r\n"
+        for (name, value) in response.headers { head += "\(name): \(value)\r\n" }
+        head += "\r\n"
+        let parts = [Data(head.utf8)] + stream.chunks
+        for part in parts.dropLast() { connection.send(content: part, completion: .idempotent) }
+        connection.send(content: parts.last, completion: .contentProcessed { _ in
+            switch stream.end {
+            case .close: connection.cancel()
+            case .hang: self.watchForClientClose(connection)
+            }
+        })
+    }
+
+    /// Pendant un `hang`, une lecture reste en attente : elle ne rend que si le client ferme (ou si le serveur s'arrête).
+    private func watchForClientClose(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 10) { data, _, done, error in
+            if data?.isEmpty == false, !done, error == nil { return self.watchForClientClose(connection) }
+            if !self.stopped.withLock({ $0 }) { self.closedClients.withLock { $0 += 1 } }
+            connection.cancel()
+        }
     }
 }
 
