@@ -278,21 +278,9 @@ public final class DictationController {
         switch snapshot.phase {
         case .idle:
             return
-        case .preparing, .recording, .finalizing:
-            var next = view
-            next.stage = Self.stage(of: snapshot.phase)
-            next.liveText = snapshot.liveText
-            next.elapsed = snapshot.elapsed
-            if snapshot.phase == .recording {
-                run.downloadNotice = nil
-                run.loadingNotice = nil
-                next.levels = Array((view.levels + [snapshot.level]).suffix(DictationViewState.levelCount))
-            }
-            next.notice = notice(for: run, stage: next.stage)
-            setView(next)
-            // La prise est finie : plus rien à surveiller.
-            if snapshot.phase == .finalizing { run.watch?.cancel() }
-            replayPendingFinish(run)
+        case .preparing: handleActive(snapshot, run, stage: .preparing)
+        case .recording: handleActive(snapshot, run, stage: .recording)
+        case .finalizing: handleActive(snapshot, run, stage: .finalizing)
         case .finished(let text):
             finished(text, run)
         case .cancelled:
@@ -306,6 +294,25 @@ public final class DictationController {
             log.notice("dictée en échec : \(Self.kind(of: failure), privacy: .public)")
             finishRun(run, with: .failed(failure), notice: message)
         }
+    }
+
+    /// Une phase active de la session (`preparing`, `recording`, `finalizing`) : l'étape d'écran est donnée par chacun des trois
+    /// cas de `handle`, de sorte qu'un futur cas de `DictationPhase` ne puisse pas être avalé par un défaut.
+    private func handleActive(_ snapshot: DictationSnapshot, _ run: Run, stage: DictationStage) {
+        var next = view
+        next.stage = stage
+        next.liveText = snapshot.liveText
+        next.elapsed = snapshot.elapsed
+        if stage == .recording {
+            run.downloadNotice = nil
+            run.loadingNotice = nil
+            next.levels = Array((view.levels + [snapshot.level]).suffix(DictationViewState.levelCount))
+        }
+        next.notice = notice(for: run, stage: stage)
+        setView(next)
+        // La prise est finie : plus rien à surveiller.
+        if stage == .finalizing { run.watch?.cancel() }
+        replayPendingFinish(run)
     }
 
     private func finished(_ text: String, _ run: Run) {
@@ -434,15 +441,6 @@ public final class DictationController {
         next.lastTranscript = lastTranscript
         view = next
         onViewChange?(next)
-    }
-
-    /// L'étape d'écran d'une phase de session active (`preparing`, `recording`, `finalizing`).
-    private static func stage(of phase: DictationPhase) -> DictationStage {
-        switch phase {
-        case .recording: .recording
-        case .finalizing: .finalizing
-        default: .preparing
-        }
     }
 
     private func refreshNotice(_ run: Run) {

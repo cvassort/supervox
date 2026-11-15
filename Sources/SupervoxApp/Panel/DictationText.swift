@@ -176,8 +176,9 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .failure
         }
 
-        // Le texte récupérable : jamais pendant une dictée. Après une copie, c'est le texte de cette dictée, sans étiquette.
-        if !stage.isActive, let text = Self.nonBlank(state.lastTranscript) {
+        // Le texte récupérable : jamais pendant une dictée, ni pendant la relecture et le collage (le texte y est celui que
+        // l'on relit). Après une copie, c'est le texte de cette dictée, sans étiquette.
+        if !stage.holdsPanel, let text = Self.nonBlank(state.lastTranscript) {
             self.transcript = Transcript(
                 label: stage == .copied ? nil : "Dernière dictée",
                 text: DictationText.tail(text, maxCharacters: DictationText.transcriptLimit), copy: copy)

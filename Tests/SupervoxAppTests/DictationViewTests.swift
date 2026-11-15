@@ -280,6 +280,36 @@ import Testing
         }
     }
 
+    /// La vue de relecture (tâche 5) se pose par-dessus : la carte « Dernière dictée » ne doit pas se montrer en même temps
+    /// qu'elle, ni pendant le collage.
+    @Test(arguments: [DictationStage.review, .pasting])
+    func theLastTranscriptCardIsHiddenWhileTheTextIsReviewedOrPasted(_ stage: DictationStage) {
+        let state = DictationViewState(stage: stage, lastTranscript: "Le texte d'avant.", draft: "Le texte relu.")
+        #expect(display(state).transcript == nil, "\(stage)")
+    }
+
+    @Test func theToneAndTheHeadlineOfReviewAndPastingAreFixed() {
+        let review = display(DictationViewState(stage: .review, lastTranscript: "t", draft: "t"))
+        #expect(review.mood == .info)
+        #expect(review.headline == "À relire")
+        #expect(review.showsHotKey == false)
+        let pasting = display(DictationViewState(stage: .pasting, lastTranscript: "t", draft: "t"))
+        #expect(pasting.mood == .working)
+        #expect(pasting.headline == "Collage…")
+        #expect(pasting.showsHotKey == false)
+    }
+
+    @Test func reviewKeepsItsNoticeAsDetailAndNeverShowsTheDraftInTheHeadline() {
+        let shown = display(DictationViewState(stage: .review, notice: "Un avis.", draft: "Texte privé"))
+        #expect(shown.detail == "Un avis.")
+        #expect(!shown.headline.contains("Texte privé"))
+    }
+
+    @Test func theDraftIsEmptyByDefaultAndPartOfTheState() {
+        #expect(DictationViewState().draft == "")
+        #expect(DictationViewState(stage: .review, draft: "a") != DictationViewState(stage: .review, draft: "b"))
+    }
+
     @Test func noTranscriptNoCardAndABlankOneNeither() {
         #expect(display(DictationViewState()).transcript == nil)
         #expect(display(DictationViewState(lastTranscript: "")).transcript == nil)

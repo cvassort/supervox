@@ -94,10 +94,13 @@ public struct DictationViewState: Equatable, Sendable {
     /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : copie de `DictationController.lastTranscript`,
     /// posée à chaque changement de la vue. En mémoire seulement.
     public var lastTranscript: String?
+    /// Le texte en relecture, tel que l'utilisateur le corrige ; `""` hors relecture (étapes `review` et `pasting`). Donnée
+    /// privée, en mémoire seulement.
+    public var draft: String
 
     public init(
         stage: DictationStage = .idle, liveText: String = "", levels: [Float] = [], elapsed: Double = 0,
-        notice: String? = nil, lastTranscript: String? = nil
+        notice: String? = nil, lastTranscript: String? = nil, draft: String = ""
     ) {
         self.stage = stage
         self.liveText = liveText
@@ -105,6 +108,7 @@ public struct DictationViewState: Equatable, Sendable {
         self.elapsed = elapsed
         self.notice = notice
         self.lastTranscript = lastTranscript
+        self.draft = draft
     }
 
     /// Nombre de niveaux gardés.
