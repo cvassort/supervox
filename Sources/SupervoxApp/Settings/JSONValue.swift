@@ -3,9 +3,12 @@ import Foundation
 /// Une valeur JSON quelconque : ce que le fichier de réglages porte et que cette version ne connaît pas (champs d'une version
 /// plus récente, options d'un mode d'un fichier plus ancien) est lu sous cette forme et réécrit tel quel.
 ///
-/// Les nombres sont lus en `Double` : un entier plus grand que 2^53 perdrait des chiffres. Aucun réglage connu n'en approche.
+/// Un nombre entier tient dans `integer` (essayé avant `Double` à la lecture) : un entier plus grand que 2^53, comme les bornes
+/// d'un `Int64`, se réécrit sans perdre un chiffre. Seuls un nombre à partie décimale ou à exposant, ou un entier hors d'un
+/// `Int64`, passent par `number` ; ce dernier est réécrit avec la précision d'un `Double`.
 public enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
+    case integer(Int64)
     case number(Double)
     case bool(Bool)
     case null
@@ -19,6 +22,8 @@ public enum JSONValue: Codable, Equatable, Sendable {
             self = .null
         } else if let bool = try? container.decode(Bool.self) {
             self = .bool(bool)
+        } else if let integer = try? container.decode(Int64.self) {
+            self = .integer(integer)
         } else if let number = try? container.decode(Double.self) {
             self = .number(number)
         } else if let string = try? container.decode(String.self) {
@@ -34,6 +39,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
         var container = encoder.singleValueContainer()
         switch self {
         case .string(let value): try container.encode(value)
+        case .integer(let value): try container.encode(value)
         case .number(let value): try container.encode(value)
         case .bool(let value): try container.encode(value)
         case .null: try container.encodeNil()

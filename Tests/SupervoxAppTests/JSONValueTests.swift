@@ -18,12 +18,13 @@ import Testing
 
     @Test func eachKindOfValueIsReadAsItsOwnCase() throws {
         #expect(try decode(#""texte""#) == .string("texte"))
-        #expect(try decode("12") == .number(12))
+        #expect(try decode("12") == .integer(12))
+        #expect(try decode("2.5") == .number(2.5))
         #expect(try decode("-0.5") == .number(-0.5))
         #expect(try decode("true") == .bool(true))
         #expect(try decode("false") == .bool(false))
         #expect(try decode("null") == .null)
-        #expect(try decode(#"[1, "a", null]"#) == .array([.number(1), .string("a"), .null]))
+        #expect(try decode(#"[1, "a", null]"#) == .array([.integer(1), .string("a"), .null]))
         #expect(try decode(#"{"a": {"b": []}}"#) == .object(["a": .object(["b": .array([])])]))
     }
 
@@ -37,6 +38,7 @@ import Testing
 
     @Test(arguments: [
         #""texte""#, #""""#, "0", "12", "6144", "-3", "1.5", "true", "false", "null", "[]", "{}",
+        "9007199254740993", "-9223372036854775808", "9223372036854775807", "-9007199254740993",
         #"[1,"a",true,null,[2],{"b":false}]"#, #"{"a":null,"b":[],"c":{"d":{"e":1.25}},"f":true,"g":"x"}"#,
     ])
     func everyKindSurvivesARoundTripIdentically(json: String) throws {
@@ -47,8 +49,29 @@ import Testing
 
     /// Les nombres entiers se réécrivent sans partie décimale : `6144` reste `6144` (les modificateurs d'un raccourci).
     @Test func anIntegerIsWrittenWithoutADecimalPart() throws {
-        #expect(try encoded(.number(6144)) == "6144")
-        #expect(try encoded(.array([.number(0), .number(-1), .number(2.5)])) == "[0,-1,2.5]")
+        #expect(try encoded(.integer(6144)) == "6144")
+        #expect(try encoded(.array([.integer(0), .integer(-1), .number(2.5)])) == "[0,-1,2.5]")
+    }
+
+    /// Min-2 : un entier plus grand que 2^53 ne passe pas par un `Double` (il y perdrait des chiffres), et les bornes d'un
+    /// `Int64` se réécrivent de façon qu'un `Int64` les relise.
+    @Test func integersBeyondTwoToTheFiftyThirdKeepEveryDigit() throws {
+        #expect(try decode("9007199254740993") == .integer(9_007_199_254_740_993))
+        #expect(try decode("-9223372036854775808") == .integer(Int64.min))
+        #expect(try decode("9223372036854775807") == .integer(Int64.max))
+        for value in [Int64.min, Int64.max, 9_007_199_254_740_993] {
+            let written = try JSONEncoder().encode([JSONValue.integer(value)])
+            #expect(try JSONDecoder().decode([Int64].self, from: written) == [value])
+        }
+        // Au-delà d'un `Int64`, la valeur reste un nombre (approchée) : elle est lue, jamais refusée.
+        #expect(try decode("12345678901234567890") == .number(12_345_678_901_234_567_890))
+    }
+
+    /// Un nombre à partie décimale ou à exposant n'est pas un entier : il reste un `Double`.
+    @Test func aNumberWithAFractionStaysADouble() throws {
+        #expect(try decode("0.1") == .number(0.1))
+        #expect(try decode("-0.5") == .number(-0.5))
+        #expect(try decode("1.5") != .integer(1))
     }
 
     @Test func aStringKeepsItsCharactersAndEscapes() throws {
