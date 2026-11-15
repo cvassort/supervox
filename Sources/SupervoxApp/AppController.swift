@@ -127,8 +127,12 @@ public final class AppController {
     }
 
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
-    /// AVFoundation et Accessibilité.
-    public convenience init(settingsView: @escaping SettingsViewProvider = SettingsView.provider) {
+    /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, que la cible `Supervox` construit
+    /// (`SupervoxApp` ne dépend pas d'eux).
+    public convenience init(
+        settingsView: @escaping SettingsViewProvider = SettingsView.provider,
+        dictation: DictationEnvironment = .unavailable
+    ) {
         let file = (try? SettingsStore.defaultFile())
             ?? URL.applicationSupportDirectory.appending(path: "Supervox/settings.json")
         self.init(
@@ -143,7 +147,8 @@ public final class AppController {
             makePanelSurface: { FloatingPanelSurface(content: $0) },
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
-            terminate: { NSApp.terminate(nil) })
+            terminate: { NSApp.terminate(nil) },
+            dictation: dictation, inserter: .system())
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,

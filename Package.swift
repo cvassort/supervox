@@ -31,7 +31,10 @@ let package = Package(
             name: "SupervoxApp",
             dependencies: ["SupervoxCore"]
         ),
-        .executableTarget(name: "Supervox", dependencies: ["SupervoxApp"]),
+        .executableTarget(
+            name: "Supervox",
+            dependencies: ["SupervoxApp", "SupervoxCore", "SupervoxEngines"]
+        ),
         .executableTarget(name: "SupervoxSnapshots", dependencies: ["SupervoxApp"]),
         .executableTarget(
             name: "SupervoxBench",
@@ -47,6 +50,7 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
         .testTarget(name: "SupervoxAppTests", dependencies: ["SupervoxApp"]),
+        .testTarget(name: "SupervoxTests", dependencies: ["Supervox", "SupervoxApp", "SupervoxCore"]),
         .testTarget(name: "SupervoxBenchTests", dependencies: ["SupervoxBench", "SupervoxEngines"]),
     ]
 )
