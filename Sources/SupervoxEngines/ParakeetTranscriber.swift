@@ -45,18 +45,43 @@ public actor ParakeetTranscriber: Transcriber {
         }
         return text
     }
+    /// Charge (ou télécharge, puis charge) la reconnaissance. Injecté par les tests, qui ne chargent aucun vrai modèle.
+    typealias Loader = @Sendable () async throws -> AsrManager
+
+    private let loader: Loader
+    /// Un seul chargement à la fois : `prepare()` est appelé par toutes les sessions qui partagent ce moteur.
+    private let loading = SingleFlight()
     private var manager: AsrManager?
     private var ctcModels: CtcModels?
     private var boosting: (terms: [String], session: VocabularyBoostingSession, retained: Int, ignored: [String])?
 
-    public init() {}
+    public init() {
+        self.init(loader: Self.defaultLoader)
+    }
 
-    public func prepare() async throws {
-        if manager != nil { return }
+    init(loader: @escaping Loader) {
+        self.loader = loader
+    }
+
+    /// Le vrai chargement. N'est lancé que par `prepare()`, jamais à la construction.
+    private static let defaultLoader: Loader = {
         let models = try await AsrModels.downloadAndLoad(version: .v3)
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
-        self.manager = manager
+        return manager
+    }
+
+    /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier
+    /// verrait `manager == nil` et lancerait un second chargement. Les appels qui arrivent pendant un chargement attendent le
+    /// même ; un chargement qui échoue peut être retenté.
+    public func prepare() async throws {
+        if manager != nil { return }
+        try await loading.run { [self] in try await load() }
+    }
+
+    private func load() async throws {
+        if manager != nil { return }
+        manager = try await loader()
     }
 
     public func warmUp(vocabulary: [String]) async throws {

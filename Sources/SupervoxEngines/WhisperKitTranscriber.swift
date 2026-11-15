@@ -19,16 +19,37 @@ public actor WhisperKitTranscriber: Transcriber {
     /// Jetons d'amorce que WhisperKit garde : au-delà, il ne conserve que les derniers (TextDecoder, `suffix`).
     public static let promptTokenLimit = Constants.maxTokenContext / 2 - 1
 
+    /// Charge (ou télécharge, puis charge) WhisperKit pour ce modèle dans ce dossier. Injecté par les tests, qui ne
+    /// chargent aucun vrai modèle.
+    typealias Loader = @Sendable (_ model: String, _ downloadBase: URL?) async throws -> sending WhisperKit
+
     private let model: String
     private let downloadBase: URL?
+    private let loader: Loader
+    /// Un seul chargement à la fois : `prepare()` est appelé par toutes les sessions qui partagent ce moteur.
+    private let loading = SingleFlight()
     private var kit: WhisperKit?
 
     /// `model` : variante du dépôt de modèles WhisperKit (ex. `large-v3-v20240930_turbo`). `downloadBase` : dossier où le
     /// modèle (et son tokenizer) sont cherchés et, s'ils manquent, téléchargés ; `nil` : le dossier de WhisperKit par
     /// défaut, `Documents/huggingface` (le banc d'essai). L'application passe le dossier de ses modèles, jamais Documents.
     public init(model: String, downloadBase: URL? = nil) {
+        self.init(model: model, downloadBase: downloadBase, loader: Self.defaultLoader)
+    }
+
+    init(model: String, downloadBase: URL?, loader: @escaping Loader) {
         self.model = model
         self.downloadBase = downloadBase
+        self.loader = loader
+    }
+
+    /// Le vrai chargement. N'est lancé que par `prepare()`, jamais à la construction.
+    private static let defaultLoader: Loader = { model, downloadBase in
+        let kit = try await WhisperKit(configuration(model: model, downloadBase: downloadBase))
+        guard kit.modelState == .loaded else {
+            throw TranscriberError.engine("modèle WhisperKit \(model) non chargé (état : \(kit.modelState))")
+        }
+        return kit
     }
 
     /// Ce que `prepare` passe à WhisperKit. `load: true` : sans lui, WhisperKit charge le modèle au premier `transcribe`,
@@ -37,13 +58,17 @@ public actor WhisperKitTranscriber: Transcriber {
         WhisperKitConfig(model: model, downloadBase: downloadBase, load: true)
     }
 
+    /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier
+    /// verrait `kit == nil` et lancerait un second chargement (ou téléchargement) du même dossier. Les appels qui arrivent
+    /// pendant un chargement attendent le même ; un chargement qui échoue peut être retenté.
     public func prepare() async throws {
         if kit != nil { return }
-        let kit = try await WhisperKit(Self.configuration(model: model, downloadBase: downloadBase))
-        guard kit.modelState == .loaded else {
-            throw TranscriberError.engine("modèle WhisperKit \(model) non chargé (état : \(kit.modelState))")
-        }
-        self.kit = kit
+        try await loading.run { [self] in try await load() }
+    }
+
+    private func load() async throws {
+        if kit != nil { return }
+        kit = try await loader(model, downloadBase)
     }
 
     /// Mesuré : sur du silence, le décodeur s'arrête tout de suite et la 1re phrase restait ~0,1 s plus lente ; sans
