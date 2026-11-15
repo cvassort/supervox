@@ -1551,6 +1551,41 @@ import SupervoxCore
         #expect(h.knobs.modeModifierReads.isEmpty)
     }
 
+    // MARK: - Le propriétaire n'a plus de raccourci
+
+    /// Une dictée en bascule dont le raccourci propriétaire n'existe plus (mode supprimé, raccourci retiré) ne reste pas sans
+    /// issue : le raccourci global la termine, et le texte arrive comme d'habitude.
+    @Test func aToggleDictationWhoseOwnerHasNoHotKeyAnymoreEndsWithTheGlobalHotKey() async {
+        let h = DictationHarness()
+        let session = await h.startModeRecording(Self.raw)
+        h.knobs.unbound = [.mode(Self.raw)]
+
+        h.controller.hotKeyPressed()
+        #expect(await until { session.count(of: "finish") == 1 })
+        session.emit(.finalizing)
+        session.emit(.finished("Texte."))
+        #expect(await until { h.pasted == ["Texte."] }, "le texte n'est pas perdu")
+    }
+
+    @Test func aToggleDictationStartedByTheGlobalWhoseHotKeyIsGoneCanEndWithAModesHotKeyWithoutChangingTheMode() async {
+        let h = DictationHarness()
+        let session = await h.startRecording()
+        h.knobs.unbound = [.global]
+
+        h.controller.modeHotKeyPressed("perso-un")
+        #expect(await until { session.count(of: "finish") == 1 })
+        #expect(h.knobs.selectedModes.isEmpty)
+        #expect(h.knobs.modeID == Self.raw)
+    }
+
+    @Test func aDictationWhoseOwnerStillHasItsHotKeyKeepsIgnoringTheOthers() async {
+        let h = DictationHarness()
+        let session = await h.startModeRecording(Self.raw)
+        h.controller.hotKeyPressed()
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+    }
+
     // MARK: - Pendant la relecture
 
     @Test(arguments: [DictationStage.review, .pasting])

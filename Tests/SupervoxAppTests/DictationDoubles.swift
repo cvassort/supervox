@@ -225,6 +225,8 @@ final class FakeEngines: Sendable {
     var modeModifierReads: [String] = []
     /// Les modes que le raccourci d'un mode a fait choisir, dans l'ordre ; le mode choisi (`modeID`) les suit.
     var selectedModes: [String] = []
+    /// Les propriétaires dont le raccourci n'est plus enregistré (le mode a perdu le sien, ou n'existe plus).
+    var unbound: Set<HotKeyOwner> = []
     /// Ce que répond la sonde des modificateurs ; `probes` garde chaque question posée (les modificateurs demandés).
     var modifiersHeld = true
     var probes: [Modifiers] = []
@@ -305,6 +307,7 @@ final class FakeEngines: Sendable {
                 knobs.selectedModes.append(mode)
                 knobs.modeID = mode
             },
+            ownerIsBound: { !knobs.unbound.contains($0) },
             hold: HoldWatch(
                 anyHeld: { modifiers in
                     knobs.probes.append(modifiers)

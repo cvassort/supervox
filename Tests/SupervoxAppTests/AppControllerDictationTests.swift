@@ -179,6 +179,70 @@ final class TimeoutLog: Sendable {
         #expect(await until { session.count(of: "finish") == 1 })
     }
 
+    /// Une dictée de mode en bascule en cours : `change` retire ou change le raccourci du mode pendant qu'elle dure.
+    private func toggleDictationOfRaw(
+        _ controller: AppController, change: (inout AppSettings) -> Void
+    ) async throws -> FakeSession {
+        modeRegistrars.press(Self.keyB)
+        let session = await record(controller)
+        try controller.updateSettings(change)
+        return session
+    }
+
+    @Test func removingTheModesHotKeyDuringAToggleDictationLetsTheGlobalHotKeyEndItWithoutLosingTheText() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings())
+        let session = try await toggleDictationOfRaw(controller) { $0.modes[0].hotKey = nil }
+
+        hotKeys.press()
+        #expect(await until { session.count(of: "finish") == 1 })
+        session.emit(.finalizing)
+        session.emit(.finished("Texte dicté."))
+        #expect(await until { controller.dictation.lastTranscript == "Texte dicté." })
+    }
+
+    @Test func deletingTheModeDuringAToggleDictationLetsTheGlobalHotKeyEndIt() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings())
+        let session = try await toggleDictationOfRaw(controller) { $0.modes.removeAll { $0.id == ModeChip.rawID } }
+
+        hotKeys.press()
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func changingTheModesHotKeyDuringAToggleDictationMakesTheNewOneTheOwner() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings())
+        let newKey = HotKey(keyCode: 0x0D, modifiers: [.control, .option])
+        let session = try await toggleDictationOfRaw(controller) { $0.modes[0].hotKey = newKey }
+
+        hotKeys.press()
+        await settle()
+        #expect(session.count(of: "finish") == 0, "le raccourci du mode existe toujours : le global reste ignoré")
+        modeRegistrars.press(newKey)
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func aRefusedChangeKeepsTheOldHotKeyAndTheHoldWatchReadsItsModifiers() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings(rawKey: Self.keyB, hold: true))
+        // Les réglages passent à ⌘⇧D, que le système refuse : ⌃⌥B reste le raccourci actif du mode.
+        let refused = Self.holdKey
+        for registrar in modeRegistrars.made { registrar.refused = [refused] }
+        try controller.updateSettings { $0.modes[0].hotKey = refused }
+        #expect(controller.modeHotKeys.active[ModeChip.rawID] == Self.keyB)
+        #expect(modeRegistrars.registered.contains(Self.keyB))
+
+        modeRegistrars.press(Self.keyB)
+        _ = await record(controller)
+        #expect(await until { holdSleeper.isSleeping })
+        holdSleeper.release()
+        #expect(await until { !held.asked.isEmpty })
+        #expect(
+            held.asked.allSatisfy { $0 == Self.keyB.modifiers },
+            "les modificateurs du raccourci actif (⌃⌥), pas ceux des réglages (⌘⇧) : la prise n'est pas coupée")
+    }
+
     @Test func removingTheChosenModeMakesTheNextDictationFollowRawDictation() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         var settings = modesSettings(lastModeID: "perso-un")

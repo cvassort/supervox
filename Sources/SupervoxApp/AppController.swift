@@ -133,8 +133,16 @@ public final class AppController {
             panel: panel,
             hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
             // Le choix du mode passe par le panneau : il l'enregistre, comme un clic sur sa pastille.
-            modeHotKeyModifiers: { relay.settings?()?.mode($0)?.hotKey?.modifiers ?? [] },
+            // Le raccourci réellement enregistré, pas celui des réglages : un changement que le système a refusé laisse l'ancien
+            // actif, et c'est lui que l'on tient.
+            modeHotKeyModifiers: { [modeHotKeys] in modeHotKeys.active[$0]?.modifiers ?? [] },
             selectMode: { [panelModel] in panelModel.select($0) },
+            ownerIsBound: { [hotKeys, modeHotKeys] owner in
+                switch owner {
+                case .global: hotKeys.active != nil
+                case .mode(let id): modeHotKeys.active[id] != nil
+                }
+            },
             hold: holdWatch,
             // Lu une fois, à l'appui qui commence la dictée, pour le mode choisi.
             reviewBeforePaste: { relay.settings?()?.reviewsBeforePaste($0) ?? false },

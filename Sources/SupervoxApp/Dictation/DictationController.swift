@@ -68,6 +68,7 @@ public final class DictationController {
     @ObservationIgnored private let hotKeyModifiers: @MainActor () -> Modifiers
     @ObservationIgnored private let modeHotKeyModifiers: @MainActor (String) -> Modifiers
     @ObservationIgnored private let selectMode: @MainActor (String) -> Void
+    @ObservationIgnored private let ownerIsBound: @MainActor (HotKeyOwner) -> Bool
     @ObservationIgnored private let hold: HoldWatch
     @ObservationIgnored private let reviewBeforePaste: @MainActor (String) -> Bool
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
@@ -98,6 +99,8 @@ public final class DictationController {
     ///   - modeHotKeyModifiers: les modificateurs du raccourci de ce mode ; lus au début de chaque dictée en maintien que ce
     ///     raccourci commence.
     ///   - selectMode: choisit ce mode dans le panneau (et l'enregistre) quand son raccourci commence une dictée.
+    ///   - ownerIsBound: vrai si ce raccourci est encore enregistré. Une dictée dont le raccourci propriétaire ne l'est plus (mode
+    ///     supprimé, raccourci retiré pendant la dictée) peut être terminée par n'importe quel autre raccourci.
     ///   - hold: la surveillance des modificateurs, qui rattrape un relâchement perdu (jamais interrogée en bascule).
     ///   - reviewBeforePaste: vrai si le texte de ce mode passe par la relecture ; lu une fois, à l'appui qui commence la dictée.
     ///   - wait: attend ce nombre de secondes (`focusHandoverDelay`) ; injectée pour qu'aucun test n'attende une durée réelle.
@@ -111,6 +114,7 @@ public final class DictationController {
         hotKeyModifiers: @escaping @MainActor () -> Modifiers,
         modeHotKeyModifiers: @escaping @MainActor (String) -> Modifiers = { _ in [] },
         selectMode: @escaping @MainActor (String) -> Void = { _ in },
+        ownerIsBound: @escaping @MainActor (HotKeyOwner) -> Bool = { _ in true },
         hold: HoldWatch,
         reviewBeforePaste: @escaping @MainActor (String) -> Bool = { _ in false },
         wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
@@ -125,6 +129,7 @@ public final class DictationController {
         self.hotKeyModifiers = hotKeyModifiers
         self.modeHotKeyModifiers = modeHotKeyModifiers
         self.selectMode = selectMode
+        self.ownerIsBound = ownerIsBound
         self.hold = hold
         self.reviewBeforePaste = reviewBeforePaste
         self.wait = wait
@@ -162,7 +167,10 @@ public final class DictationController {
 
     private func press(by owner: HotKeyOwner) {
         if let run {
-            if run.owner == owner, view.stage == .recording, !run.startedByHold { requestFinish(run) }
+            // Le propriétaire seul la termine, tant que son raccourci existe ; sinon n'importe quel autre le peut (la dictée ne
+            // reste pas sans issue, et son texte n'est pas perdu avec Échap).
+            let ownerCanEnd = run.owner == owner || !ownerIsBound(run.owner)
+            if ownerCanEnd, view.stage == .recording, !run.startedByHold { requestFinish(run) }
             return
         }
         // Le texte attend d'être relu ou se colle : l'appui est ignoré, quel que soit le mode choisi entre-temps. Avant tout
