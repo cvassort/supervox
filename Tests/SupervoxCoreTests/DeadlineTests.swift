@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Testing
 @testable import SupervoxCore
 
@@ -110,18 +111,23 @@ struct DeadlineTests {
         #expect(result.failureValue is CancellationError, "\(result)")
     }
 
-    @Test func aCallerAlreadyCancelledOnEntryThrowsCancellationError() async {
+    /// Un appelant déjà annulé ne lance rien : ni l'opération, ni la minuterie. Sans la garde d'entrée, les deux tâches partent
+    /// avant que le gestionnaire d'annulation ne les arrête.
+    @Test func aCallerAlreadyCancelledOnEntryThrowsCancellationErrorAndStartsNothing() async {
         let sleeper = TickSleeper()
+        let operationRan = OSAllocatedUnfairLock(initialState: false)
         let go = Gate()
         let task = Task { () async throws -> Int in
             await go.wait()   // rend la main tout de suite : la tâche est annulée
-            return try await Deadline.run(seconds: 120, sleep: { try await sleeper.sleep($0) }) { 1 }
+            return try await Deadline.run(seconds: 120, sleep: { try await sleeper.sleep($0) }) { operationRan.withLock { $0 = true }; return 1 }
         }
         task.cancel()
         go.open()
 
         #expect((await task.result).failureValue is CancellationError)
-        #expect(await eventually { sleeper.cancelled == sleeper.started })
+        for _ in 0..<1000 { await Task.yield() }   // une absence : un nombre borné de passages, sans durée
+        #expect(sleeper.started == 0)
+        #expect(!operationRan.withLock { $0 })
     }
 
     /// Une attente qui lève sans rendre (annulée) n'est pas un délai écoulé : seule une attente qui rend normalement l'est.
@@ -135,9 +141,10 @@ struct DeadlineTests {
             }
         }
         await slept.wait()
-        // Laisse la minuterie, sur son fil, tirer ses conclusions de l'attente qui a levé : un retard ne peut que faire passer
-        // le test à tort sur une implémentation fautive, jamais le faire tomber sur la bonne.
-        for _ in 0..<20 { try await Task.sleep(for: .milliseconds(2)) }
+        // Laisse la minuterie, sur son fil, tirer ses conclusions de l'attente qui a levé (une absence à prouver : un nombre
+        // borné de passages, sans durée). Un retard ne peut que faire passer à tort une implémentation fautive, jamais faire
+        // tomber la bonne.
+        for _ in 0..<5000 { await Task.yield() }
         hold.open()
 
         #expect(try await task.value == 9)

@@ -129,6 +129,39 @@ struct RewriteTests {
         #expect(result == "Réponse")
     }
 
+    /// Un début de balise après un bloc fermé n'est montré qu'une fois fixé : `onText` ne reçoit jamais `<thi` puis un texte qui
+    /// ne le prolonge pas. Le second bloc reste dans le texte rendu (le brief ne retire qu'un bloc de tête).
+    @Test func aStartOfASecondThinkBlockIsNeverShownAndTheSecondBlockIsKept() async throws {
+        let texts = Texts()
+        let model = ScriptedModel([.text("<think>a</think>"), .text("<thi"), .text("nk>b</think>Réponse"), .finish])
+
+        let result = try await rewrite(model, texts: texts)
+
+        #expect(result == "<think>b</think>Réponse")
+        #expect(texts.all == ["<think>b</think>Réponse"])
+    }
+
+    /// La réponse finit sur ce début de balise : `onText` reçoit alors, à la fin, le texte rendu (le dernier appel est le résultat).
+    @Test func aResponseThatEndsOnAPendingTagPrefixGivesItToOnTextAtTheEnd() async throws {
+        let texts = Texts()
+        let result = try await rewrite(ScriptedModel([.text("<think>a</think>"), .text("<thi"), .stop(.complete), .finish]), texts: texts)
+        #expect(result == "<thi")
+        #expect(texts.all == ["<thi"])
+    }
+
+    @Test func theLastTextGivenToOnTextIsTheResult() async throws {
+        let texts = Texts()
+        let result = try await rewrite(ScriptedModel([.text("Bon"), .text("jour "), .finish]), texts: texts)
+        #expect(texts.all.last == result)
+    }
+
+    /// Les balises se lisent par scalaires : une marque combinante collée à `>` ne change pas leur sens.
+    @Test func aCombiningMarkAfterTheClosingTagDoesNotMakeTheResponseEmpty() async throws {
+        #expect(try await rewrite(ScriptedModel([.text("<think>a</think>\u{0301}Réponse"), .finish])) == "\u{0301}Réponse")
+        #expect(try await rewrite(ScriptedModel([.text("<think>\u{0301}a</think>Réponse"), .finish])) == "Réponse")
+        #expect(try await rewrite(ScriptedModel([.text("<thinking>a</thinking>\u{0301}Réponse"), .finish])) == "\u{0301}Réponse")
+    }
+
     // MARK: Fins (règle 5)
 
     @Test(arguments: [CompletionStop.complete, .other])
@@ -331,6 +364,20 @@ struct RewriteTests {
         #expect(!(result.failureValue is RewriteFailure))
         await model.terminated.wait()
         #expect(model.wasCancelled)
+    }
+
+    /// Le verdict posé, l'appelant annulé avant de reprendre : un succès ne lui est pas rendu. La reprise d'un appelant ne se
+    /// commande pas ; la conclusion, appelée par `run` juste après `Deadline.run`, se teste donc depuis une tâche déjà annulée.
+    @Test func aCallerCancelledAfterTheVerdictNeverGetsASuccess() async {
+        let go = Gate()
+        let task = Task { () async throws -> String in
+            await go.wait()   // rend la main tout de suite : la tâche est annulée
+            return try Rewriter.conclude(Rewriter.Collected(text: "Texte", stop: .complete))
+        }
+        task.cancel()
+        go.open()
+
+        #expect((await task.result).failureValue is CancellationError)
     }
 
     /// Le flux d'un modèle dont la lecture est annulée se termine normalement, sans erreur (contrat de `LanguageModel`) :

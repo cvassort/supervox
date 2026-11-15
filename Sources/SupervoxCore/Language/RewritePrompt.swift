@@ -32,8 +32,76 @@ public enum RewritePrompt {
         return "Vocabulaire personnel (orthographe exacte à respecter quand ces termes apparaissent) : \(terms.joined(separator: ", "))."
     }
 
-    /// Toute écriture d'une balise de délimitation (`<dictee>`, `</texte>`, `< / CONSIGNE >`…) perd son chevron ouvrant.
+    /// Toute écriture d'une balise de délimitation perd son chevron ouvrant (il devient `‹`) : `<dictee>`, `</Texte>`,
+    /// `< / CONSIGNE >`, mais aussi avec des attributs (`</dictee x>`), avec des chevrons pleine largeur (`＜/dictee＞`), ou
+    /// avec des caractères invisibles ou combinants collés aux chevrons, dans la balise ou dans son nom (`</dictee>` + U+0301).
+    ///
+    /// Le texte est lu **par scalaires Unicode**, non par graphèmes : un `>` suivi d'une marque combinante est un seul
+    /// graphème qui n'égale pas `>`, mais ses octets restent ceux d'une balise pour le modèle.
     private static func neutralized(_ text: String) -> String {
-        text.replacing(#/<(\s*/?\s*(?:dictee|texte|consigne)\s*>)/#.ignoresCase()) { "‹" + $0.output.1 }
+        let scalars = Array(text.unicodeScalars)
+        var result = String.UnicodeScalarView()
+        for (index, scalar) in scalars.enumerated() {
+            if opening.contains(scalar), isDelimiterTag(scalars, from: index) {
+                result.append("‹")
+            } else {
+                result.append(scalar)
+            }
+        }
+        return String(result)
+    }
+
+    private static let opening: Set<Unicode.Scalar> = ["<", "\u{FF1C}", "\u{FE64}", "\u{3008}"]
+    private static let closing: Set<Unicode.Scalar> = [">", "\u{FF1E}", "\u{FE65}", "\u{3009}"]
+    private static let names = ["dictee", "texte", "consigne"].map { Array($0.unicodeScalars) }
+
+    /// Blancs, caractères de format (largeur nulle, trait d'union conditionnel…) et marques combinantes : invisibles ou sans
+    /// sens à l'intérieur d'une balise.
+    private static func isFiller(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar.properties.isWhitespace { return true }
+        switch scalar.properties.generalCategory {
+        case .format, .nonspacingMark, .spacingMark, .enclosingMark: return true
+        default: return false
+        }
+    }
+
+    /// Une balise de délimitation commence-t-elle au chevron ouvrant `start` ? Après le chevron : des invisibles, un `/`
+    /// éventuel, des invisibles, un des noms (casse ASCII indifférente, invisibles tolérés entre ses lettres, sans lettre ni
+    /// chiffre derrière), puis n'importe quoi hors chevron jusqu'à un chevron fermant.
+    private static func isDelimiterTag(_ scalars: [Unicode.Scalar], from start: Int) -> Bool {
+        var index = start + 1
+        func skipFiller() { while index < scalars.count, isFiller(scalars[index]) { index += 1 } }
+        skipFiller()
+        if index < scalars.count, scalars[index] == "/" {
+            index += 1
+            skipFiller()
+        }
+        guard let end = names.lazy.compactMap({ matchEnd(of: $0, in: scalars, at: index) }).first else { return false }
+        if end < scalars.count {
+            let next = scalars[end]
+            if next.properties.isAlphabetic || next.properties.numericType != nil { return false }
+        }
+        index = end
+        while index < scalars.count {
+            if closing.contains(scalars[index]) { return true }
+            if opening.contains(scalars[index]) { return false }
+            index += 1
+        }
+        return false
+    }
+
+    /// Où finit `name` lu à partir de `start`, ou `nil`. Les invisibles entre deux lettres sont sautés, la casse ASCII ignorée.
+    private static func matchEnd(of name: [Unicode.Scalar], in scalars: [Unicode.Scalar], at start: Int) -> Int? {
+        var index = start
+        for (rank, letter) in name.enumerated() {
+            if rank > 0 { while index < scalars.count, isFiller(scalars[index]) { index += 1 } }
+            guard index < scalars.count, folded(scalars[index]) == letter else { return nil }
+            index += 1
+        }
+        return index
+    }
+
+    private static func folded(_ scalar: Unicode.Scalar) -> Unicode.Scalar {
+        (65...90).contains(scalar.value) ? Unicode.Scalar(scalar.value + 32)! : scalar
     }
 }

@@ -146,7 +146,14 @@ public enum Rewriter {
         } catch {
             throw RewriteFailure.from(error)
         }
-        // La raison d'arrêt passe avant le texte : une réponse coupée ou refusée sans aucun texte n'est pas « vide ».
+        return try conclude(collected)
+    }
+
+    /// Le verdict sur une réponse lue jusqu'au bout. Un appelant annulé n'en reçoit jamais un succès : `Deadline` a pu poser le
+    /// résultat avant l'annulation, et l'appelant reprend après. La raison d'arrêt passe avant le texte : une réponse coupée ou
+    /// refusée sans aucun texte n'est pas « vide ».
+    static func conclude(_ collected: Collected) throws -> String {
+        try Task.checkCancellation()
         switch collected.stop {
         case .truncated: throw RewriteFailure.truncated
         case .refused: throw RewriteFailure.refused
@@ -167,12 +174,16 @@ public enum Rewriter {
                         onText: @Sendable (String) -> Void) async throws -> Collected {
         var raw = ""
         var stop: CompletionStop?
+        var shown = ""
         for try await event in client.complete(request) {
             try Task.checkCancellation()
             switch event {
             case .text(let chunk):
                 raw += chunk
-                if let visible = ResponseText.visible(in: raw, isComplete: false), !visible.isEmpty { onText(visible) }
+                if let visible = ResponseText.visible(in: raw, isComplete: false), !visible.isEmpty {
+                    shown = visible
+                    onText(visible)
+                }
             case .reasoning:
                 break
             case .stop(let reason):
@@ -180,30 +191,32 @@ public enum Rewriter {
             }
         }
         try Task.checkCancellation()
-        return Collected(text: ResponseText.visible(in: raw, isComplete: true) ?? "", stop: stop)
+        let text = ResponseText.visible(in: raw, isComplete: true) ?? ""
+        // Une réponse qui finit sur un début de balise retenu (`<thi`) : le texte rendu n'a pas encore été montré.
+        if !text.isEmpty, text != shown { onText(text) }
+        return Collected(text: text, stop: stop)
     }
 }
 
 /// Le texte visible d'une réponse : sans le bloc de raisonnement `<think>…</think>` (ou `<thinking>…</thinking>`) qui la
-/// précède, rogné. Fonction du texte reçu jusque-là : une balise coupée entre deux morceaux ne coûte rien.
+/// précède, rogné. Fonction du texte reçu jusque-là : une balise coupée entre deux morceaux ne coûte rien. Lue par scalaires
+/// Unicode : une marque combinante collée à `>` n'empêche pas la balise de se fermer.
 enum ResponseText {
     private static let blocks = [(open: "<think>", close: "</think>"), (open: "<thinking>", close: "</thinking>")]
 
-    /// `nil` tant que la réponse peut encore commencer par un bloc de raisonnement (début de balise, ou bloc ouvert non
-    /// fermé) : rien n'est à montrer. `isComplete` : la réponse est finie, ce qui reste est tout ce qu'il y a (un début de
-    /// balise est alors du texte, un bloc jamais fermé n'en donne aucun).
+    /// `nil` tant que ce qui est à montrer peut encore changer de sens : réponse qui peut commencer par un bloc de
+    /// raisonnement (début de balise, ou bloc ouvert non fermé), ou texte qui n'est pour l'instant qu'un début de balise
+    /// (`<thi`, y compris après un bloc fermé). `isComplete` : la réponse est finie, ce qui reste est tout ce qu'il y a (un
+    /// début de balise est alors du texte, un bloc jamais fermé n'en donne aucun). Un second bloc de suite n'est pas retiré.
     static func visible(in raw: String, isComplete: Bool) -> String? {
-        let lead = raw.drop(while: \.isWhitespace)
-        for block in blocks where lead.hasPrefix(block.open) {
-            let body = lead.dropFirst(block.open.count)
-            if let close = body.range(of: block.close) { return trimmed(body[close.upperBound...]) }
-            return isComplete ? "" : nil
+        var rest = raw.unicodeScalars.drop(while: { $0.properties.isWhitespace })
+        for block in blocks where rest.starts(with: block.open.unicodeScalars) {
+            let body = rest.dropFirst(block.open.unicodeScalars.count)
+            guard let close = body.firstRange(of: block.close.unicodeScalars) else { return isComplete ? "" : nil }
+            rest = body[close.upperBound...].drop(while: { $0.properties.isWhitespace })
+            break
         }
-        if !isComplete, blocks.contains(where: { $0.open.hasPrefix(lead) }) { return nil }
-        return trimmed(lead)
-    }
-
-    private static func trimmed(_ text: Substring) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !isComplete, blocks.contains(where: { $0.open.unicodeScalars.starts(with: rest) }) { return nil }
+        return String(rest).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
