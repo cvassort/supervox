@@ -472,8 +472,9 @@ final class TickSleeper: @unchecked Sendable {
         }
     }
 
-    /// Le chien de garde de ce sleeper : 1 s sans tranche, vérifié toutes les 0,25 s (valeurs du réglage de l'application).
+    /// Le chien de garde de ce sleeper : 3 s pour la première tranche, 1 s ensuite, vérifié toutes les 0,25 s (valeurs du réglage de
+    /// l'application).
     var watchdog: MicrophoneWatchdog {
-        MicrophoneWatchdog(timeout: 1, pollInterval: 0.25, sleep: { [self] in try await sleep($0) })
+        MicrophoneWatchdog(timeout: 1, firstChunkTimeout: 3, pollInterval: 0.25, sleep: { [self] in try await sleep($0) })
     }
 }

@@ -121,22 +121,31 @@ public protocol DictationSessioning: Sendable {
 /// garde (le défaut), la session ne surveille rien : c'est le cas du micro scripté des tests et de `supervox-bench live`, qui
 /// livrent toutes leurs tranches d'un coup puis se taisent.
 public struct MicrophoneWatchdog: Sendable {
-    /// Secondes sans tranche au bout desquelles la prise échoue.
+    /// Secondes sans tranche, entre deux tranches, au bout desquelles la prise échoue.
     public var timeout: Double
+    /// Secondes accordées à la **première** tranche, comptées depuis le retour de `feed.start` : un moteur audio à traitement de
+    /// la voix, ou un casque sans fil qui change de profil, peut mettre plus d'une seconde à livrer sa première fenêtre.
+    public var firstChunkTimeout: Double
     /// Secondes entre deux vérifications.
     public var pollInterval: Double
     /// Attend ce nombre de secondes, et lève si la tâche est annulée.
     public var sleep: @Sendable (Double) async throws -> Void
 
-    public init(timeout: Double, pollInterval: Double, sleep: @escaping @Sendable (Double) async throws -> Void) {
+    /// `firstChunkTimeout` : `nil` = `timeout`.
+    public init(
+        timeout: Double, firstChunkTimeout: Double? = nil, pollInterval: Double,
+        sleep: @escaping @Sendable (Double) async throws -> Void
+    ) {
         self.timeout = timeout
+        self.firstChunkTimeout = firstChunkTimeout ?? timeout
         self.pollInterval = pollInterval
         self.sleep = sleep
     }
 
-    /// Le réglage de l'application : 1 s sans tranche, vérifié quatre fois par seconde. Choix de conception, non mesuré :
-    /// une tranche du micro dure bien moins d'une seconde (le plan en suppose environ 0,1 s), mais l'écart entre l'ouverture
-    /// du micro et la première tranche n'a pas été mesuré sur un vrai micro, ni sur un casque sans fil.
+    /// Le réglage de l'application : 3 s pour la première tranche après l'ouverture du micro, puis 1 s entre deux tranches,
+    /// vérifié quatre fois par seconde. Choix de conception, non mesuré : une tranche du micro dure bien moins d'une seconde (le
+    /// plan en suppose environ 0,1 s), mais l'écart entre l'ouverture du micro et la première tranche n'a été mesuré ni sur un
+    /// micro intégré ni sur un casque sans fil, d'où la tolérance de 3 s pour la première.
     public static let system = MicrophoneWatchdog(
-        timeout: 1, pollInterval: 0.25, sleep: { try await Task.sleep(for: .seconds($0)) })
+        timeout: 1, firstChunkTimeout: 3, pollInterval: 0.25, sleep: { try await Task.sleep(for: .seconds($0)) })
 }

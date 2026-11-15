@@ -360,6 +360,7 @@ import Testing
         let session = try await engines.environment.makeSession(Self.settings())
         let real = try #require(session as? DictationSession)
         #expect(await real.watchdogTimeout == 1)
+        #expect(await real.watchdogFirstChunkTimeout == 3)
     }
 
     /// Ce que la fenêtre de réglages supprime (son catalogue est celui de la dictée) abandonne le moteur gardé.

@@ -104,6 +104,7 @@ public actor DictationSession: DictationSessioning {
 
     /// Pour les tests : le délai du chien de garde du micro, `nil` s'il n'y en a pas.
     var watchdogTimeout: Double? { watchdog?.timeout }
+    var watchdogFirstChunkTimeout: Double? { watchdog?.firstChunkTimeout }
 
     /// Pour les tests : la phase courante, y compris après la fin du flux d'instantanés (qui, lui, ne montre plus rien
     /// après une phase terminale).
@@ -175,7 +176,7 @@ public actor DictationSession: DictationSessioning {
         do {
             // Le rappel ne fait que transmettre (et dater l'arrivée, sans verrou) : voir la description de la classe.
             try feed.start {
-                stamp.set(clock())
+                stamp.arrived(at: clock())
                 sink.yield($0)
             }
         } catch {
@@ -216,7 +217,10 @@ public actor DictationSession: DictationSessioning {
     /// Faux quand la tâche doit s'arrêter : la prise n'est plus en cours, ou le micro s'est tu (la prise échoue alors).
     private func microphoneIsAlive() -> Bool {
         guard snapshot.phase == .recording, let watchdog else { return false }
-        guard now() - lastChunkAt.value >= watchdog.timeout else { return true }
+        // Avant toute tranche, la tolérance est celle de l'ouverture du micro (la première tranche peut tarder) ; ensuite, celle
+        // de l'écart entre deux tranches.
+        let limit = lastChunkAt.hasSeenAChunk ? watchdog.timeout : watchdog.firstChunkTimeout
+        guard now() - lastChunkAt.value >= limit else { return true }
         fail(.microphone("le micro s'est arrêté pendant la prise"))
         return false
     }
@@ -481,6 +485,16 @@ public actor DictationSession: DictationSessioning {
 private final class ChunkStamp: Sendable {
     private let bits = Atomic<UInt64>(0)
 
+    private let chunks = Atomic<Int>(0)
+
     func set(_ time: Double) { bits.store(time.bitPattern, ordering: .relaxed) }
     var value: Double { Double(bitPattern: bits.load(ordering: .relaxed)) }
+
+    /// Une tranche est arrivée du micro (date et compte, sans verrou).
+    func arrived(at time: Double) {
+        chunks.add(1, ordering: .relaxed)
+        set(time)
+    }
+    /// Au moins une tranche est arrivée depuis l'ouverture du micro.
+    var hasSeenAChunk: Bool { chunks.load(ordering: .relaxed) > 0 }
 }

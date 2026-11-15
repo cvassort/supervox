@@ -148,11 +148,11 @@ struct DictationSessionWatchdogTests {
     }
 
     /// Le temps que met `feed.start` à rendre la main (le vrai micro construit un moteur audio à traitement de la voix à chaque
-    /// dictée) ne compte pas dans la seconde accordée : la date de départ est prise quand le micro est ouvert, pas avant.
+    /// dictée) ne compte pas dans le délai de la première tranche : il court depuis l'ouverture, pas avant.
     @Test func theTimeTheMicrophoneTakesToOpenIsNotChargedAgainstTheTimeout() async {
         let sleeper = TickSleeper()
         let clock = TestClock()
-        let feed = SlowStartFeed(duration: 2, clock: clock)
+        let feed = SlowStartFeed(duration: 5, clock: clock)
         let session = DictationSession(
             feed: feed, detector: ScriptedDetector(), preview: nil, final: ScriptedTranscriber(text: "texte"),
             config: DictationConfig(language: "fr", padding: 0), now: clock.reader, watchdog: sleeper.watchdog)
@@ -162,15 +162,71 @@ struct DictationSessionWatchdogTests {
         await sleeper.waitForSleeps(1)
         #expect(await session.phase == .recording)
 
-        // Premier sondage : le micro n'a rien livré, mais il vient de s'ouvrir (l'ouverture a duré 2 s).
+        // Premier sondage : le micro n'a rien livré, mais il vient de s'ouvrir (l'ouverture a duré 5 s).
         sleeper.tick()
         await sleeper.waitForSleeps(2)
         #expect(await session.phase == .recording)
 
-        // Une seconde sans tranche depuis l'ouverture : l'échec.
-        clock.advance(by: 1)
+        // Le délai de la première tranche écoulé depuis l'ouverture : l'échec.
+        clock.advance(by: 3)
         sleeper.tick()
         #expect(await log.waitForEnd().last?.phase == .failed(.microphone(Self.reason)))
+    }
+
+    // MARK: - Tolérance pour la première tranche (M3)
+
+    /// Aucune tranche depuis l'ouverture : trois secondes de tolérance, pas une.
+    @Test func theFirstChunkGetsThreeSecondsAfterTheMicrophoneOpened() async {
+        let sleeper = TickSleeper()
+        let clock = TestClock()
+        let session = DictationSession(
+            feed: SlowStartFeed(duration: 0, clock: clock), detector: ScriptedDetector(), preview: nil,
+            final: ScriptedTranscriber(text: "texte"), config: DictationConfig(language: "fr", padding: 0),
+            now: clock.reader, watchdog: sleeper.watchdog)
+        let log = SnapshotLog(session.snapshots)
+        await session.start()
+        await sleeper.waitForSleeps(1)
+
+        clock.advance(by: 2.9)
+        sleeper.tick()
+        await sleeper.waitForSleeps(2)
+        #expect(await session.phase == .recording)
+
+        clock.advance(by: 0.1)
+        sleeper.tick()
+        #expect(await log.waitForEnd().last?.phase == .failed(.microphone(Self.reason)))
+    }
+
+    /// Une première tranche tardive (2,5 s) reçue : la tolérance est celle de l'écart entre tranches, 1 s.
+    @Test func onceAChunkHasArrivedTheGapBetweenChunksIsOneSecond() async {
+        let sleeper = TickSleeper()
+        let rig = makeRig(chunks: [], events: [:], watchdog: sleeper.watchdog)
+        await rig.session.start()
+        await sleeper.waitForSleeps(1)
+
+        rig.clock.advance(by: 2.5)
+        rig.feed.push(AudioChunk(samples: [Float](repeating: 0, count: 1600), sampleRate: 16000))
+        sleeper.tick()
+        await sleeper.waitForSleeps(2)
+        #expect(await rig.session.phase == .recording)
+
+        rig.clock.advance(by: 0.9)
+        sleeper.tick()
+        await sleeper.waitForSleeps(3)
+        #expect(await rig.session.phase == .recording)
+
+        rig.clock.advance(by: 0.1)
+        sleeper.tick()
+        #expect(await rig.outcome() == .failed(.microphone(Self.reason)))
+    }
+
+    /// Une tranche livrée pendant l'ouverture compte comme première tranche : la limite d'une seconde s'applique ensuite.
+    @Test func aChunkDeliveredWhileTheMicrophoneOpensEndsTheFirstChunkTolerance() async {
+        let sleeper = TickSleeper()
+        let rig = await recordingRig(sleeper: sleeper)   // une tranche livrée à l'ouverture
+        rig.clock.advance(by: 1.0)
+        sleeper.tick()
+        #expect(await rig.outcome() == .failed(.microphone(Self.reason)))
     }
 
     /// Un micro qui ne démarre pas : la session échoue à l'ouverture, aucune surveillance n'est lancée.
@@ -198,6 +254,7 @@ struct DictationSessionWatchdogTests {
 
     @Test func theApplicationsWatchdogIsOneSecondChecked4TimesASecond() {
         #expect(MicrophoneWatchdog.system.timeout == 1)
+        #expect(MicrophoneWatchdog.system.firstChunkTimeout == 3)
         #expect(MicrophoneWatchdog.system.pollInterval == 0.25)
     }
 
