@@ -12,13 +12,31 @@ import Testing
     /// sa taille à l'affichage).
     var onShow: (@MainActor () -> Void)?
 
+    /// Ce que la surface a reçu, dans l'ordre : le contrôleur doit poser `.none` avant `hide`.
+    enum Call: Equatable {
+        case show
+        case hide
+        case keyboard(PanelKeyboard)
+    }
+    private(set) var calls: [Call] = []
+    /// Les seules valeurs de clavier reçues, dans l'ordre.
+    var keyboards: [PanelKeyboard] {
+        calls.compactMap { if case .keyboard(let keyboard) = $0 { keyboard } else { nil } }
+    }
+
     func show() {
         isShown = true
         showCount += 1
+        calls.append(.show)
         onShow?()
     }
 
-    func hide() { isShown = false }
+    func hide() {
+        isShown = false
+        calls.append(.hide)
+    }
+
+    func setKeyboard(_ keyboard: PanelKeyboard) { calls.append(.keyboard(keyboard)) }
 
     /// La hauteur que le contenu demande : le test la change comme le ferait un contenu qui grandit ou rétrécit.
     var height: CGFloat = 120
@@ -159,6 +177,63 @@ import Testing
         surface.height = 160
         for _ in 0..<5 { await Task.yield() }
         #expect(surface.resizes == [160])
+    }
+
+    // MARK: - Clavier
+
+    @Test func keyboardRequestedWhileClosedNeverReachesTheSurface() {
+        let controller = makeController()
+        controller.setKeyboard(.focused)
+        controller.setKeyboard(.available)
+        #expect(surface.calls.isEmpty)
+    }
+
+    @Test(arguments: [PanelKeyboard.none, .available, .focused])
+    func anOpenPanelPassesTheKeyboardToItsSurface(_ keyboard: PanelKeyboard) {
+        let controller = makeController()
+        controller.open()
+        controller.setKeyboard(keyboard)
+        #expect(surface.calls == [.show, .keyboard(keyboard)])
+    }
+
+    @Test func closingPutsNoKeyboardBeforeHiding() {
+        let controller = makeController()
+        controller.open()
+        controller.setKeyboard(.focused)
+        controller.close()
+        #expect(surface.calls == [.show, .keyboard(.focused), .keyboard(.none), .hide])
+    }
+
+    @Test func everyWayOfClosingPutsNoKeyboardBeforeHiding() {
+        let controller = makeController()
+        // La bascule du menu.
+        controller.open()
+        controller.setKeyboard(.focused)
+        controller.toggle()
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.none), .hide])
+        // Échap sans gestionnaire.
+        controller.open()
+        controller.setKeyboard(.available)
+        escape.press()
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.none), .hide])
+        // Le clic en dehors.
+        controller.open()
+        controller.setKeyboard(.focused)
+        clicks.clickOutside()
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.none), .hide])
+    }
+
+    @Test func reopeningCarriesNoKeyboardOverFromTheLastTime() {
+        let controller = makeController()
+        controller.open()
+        controller.setKeyboard(.focused)
+        controller.close()
+        controller.open()
+        #expect(Array(surface.calls.suffix(1)) == [.show])
+        // Rien n'a été remis sur la surface depuis la fermeture.
+        #expect(surface.keyboards == [.focused, .none])
+        controller.setKeyboard(.available)
+        #expect(surface.keyboards == [.focused, .none, .available])
     }
 
     // MARK: - Cadre redimensionné

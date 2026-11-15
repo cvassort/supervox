@@ -76,6 +76,8 @@ public protocol PanelOpening: AnyObject {
     var isOpen: Bool { get }
     func open()
     func close()
+    /// Ce que le panneau peut faire de la frappe ; sans effet panneau fermé.
+    func setKeyboard(_ keyboard: PanelKeyboard)
 }
 
 /// Ce que la vue du panneau montre d'une dictée.

@@ -73,6 +73,7 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
     private(set) var isOpen = false
     var onClosed: (@MainActor () -> Void)?
     func open() { isOpen = true }
+    func setKeyboard(_ keyboard: PanelKeyboard) {}
     func close() {
         guard isOpen else { return }
         isOpen = false

@@ -178,6 +178,8 @@ final class FakeEngines: Sendable {
     private(set) var isOpen = false
     private(set) var openCount = 0
     private(set) var closeCount = 0
+    /// Les valeurs de clavier demandées, dans l'ordre.
+    private(set) var keyboards: [PanelKeyboard] = []
     var onClosed: (@MainActor () -> Void)?
 
     func open() {
@@ -185,6 +187,8 @@ final class FakeEngines: Sendable {
         isOpen = true
         openCount += 1
     }
+
+    func setKeyboard(_ keyboard: PanelKeyboard) { keyboards.append(keyboard) }
 
     func close() {
         guard isOpen else { return }
