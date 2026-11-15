@@ -67,6 +67,45 @@ import Testing
         #expect(many > few + 40, "douze pastilles à noms longs doivent tenir sur plusieurs lignes : \(few) contre \(many)")
     }
 
+    /// La disposition elle-même, sur des enfants de taille fixe : cinq pastilles de 100 sur 250 de large font trois lignes
+    /// (deux, deux, une), l'espace entre lignes compris. Une seule rangée, même contrainte, ferait 20.
+    @Test func theLayoutStacksTheRowsItComputes() {
+        let host = NSHostingView(
+            rootView: ChipFlowLayout(spacing: 6, rowSpacing: 6) {
+                ForEach(0..<5, id: \.self) { _ in Color.clear.frame(width: 100, height: 20) }
+            }
+            .frame(width: 250))
+        host.layoutSubtreeIfNeeded()
+        #expect(abs(host.fittingSize.height - CGFloat(3 * 20 + 2 * 6)) < 0.5, "\(host.fittingSize.height)")
+        // La place suffit : une seule ligne.
+        let wide = NSHostingView(
+            rootView: ChipFlowLayout(spacing: 6, rowSpacing: 6) {
+                ForEach(0..<5, id: \.self) { _ in Color.clear.frame(width: 100, height: 20) }
+            }
+            .frame(width: 600))
+        wide.layoutSubtreeIfNeeded()
+        #expect(abs(wide.fittingSize.height - 20) < 0.5, "\(wide.fittingSize.height)")
+    }
+
+    /// Un nom plus large que le panneau reste lisible en entier : sa pastille passe sur plusieurs lignes au lieu d'être coupée.
+    @Test func aNameWiderThanThePanelWrapsInsteadOfBeingCut() {
+        let one = Self.panelHeight(modes: [ModeChip(id: "a", title: "Court")])
+        let long = Self.panelHeight(modes: [ModeChip(id: "a", title: String(repeating: "Un nom très long ", count: 12))])
+        #expect(long > one + 20)
+    }
+
+    /// Dans le panneau : deux pastilles trop larges pour tenir ensemble font deux lignes d'une pastille chacune, sans que leur
+    /// texte passe à la ligne (ce que ferait une rangée unique serrée dans la largeur du panneau).
+    @Test func twoChipsTooWideForOneRowMakeTwoSingleLineRows() {
+        let wide = String(repeating: "W", count: 24)
+        let none = Self.panelHeight(modes: [])
+        let one = Self.panelHeight(modes: [ModeChip(id: "a", title: wide)])
+        let two = Self.panelHeight(modes: [ModeChip(id: "a", title: wide), ModeChip(id: "b", title: wide)])
+        let chipHeight = one - none
+        #expect(chipHeight > 15 && chipHeight < 40, "\(none) \(one)")
+        #expect(abs(two - (one + chipHeight + 6)) < 0.5, "\(none) \(one) \(two)")
+    }
+
     @Test func fourShortChipsStayOnOneRow() {
         let four = Self.panelHeight(modes: ModeChip.fixed)
         let one = Self.panelHeight(modes: [ModeChip.fixed[0]])

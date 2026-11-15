@@ -180,6 +180,7 @@ import Testing
         controller.launch()
         let lines = hotKeyLines(controller)
         #expect(lines.count == 2)
+        guard lines.count == 2 else { return }
         #expect(lines[0].contains("Courriel"))
         #expect(lines[1].contains("Compte rendu"))
     }
@@ -193,6 +194,7 @@ import Testing
         controller.launch()
         var lines = hotKeyLines(controller)
         #expect(lines.count == 2)
+        guard lines.count == 2 else { return }
         #expect(lines[0].contains("refusé par macOS"))
         #expect(lines[0].contains("Compte rendu") == false)
         #expect(lines[1].contains("Compte rendu"))
@@ -202,7 +204,7 @@ import Testing
         #expect(HotKeyTests.failure(result) == nil)
         lines = hotKeyLines(controller)
         #expect(lines.count == 1)
-        #expect(lines[0].contains("Compte rendu"))
+        #expect(lines.first?.contains("Compte rendu") == true)
     }
 
     @Test func aModeRefusedAfterTheLaunchIsNamedToo() throws {
