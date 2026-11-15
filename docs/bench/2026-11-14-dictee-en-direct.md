@@ -1,7 +1,7 @@
 # Dictée en direct : mesure — 2026-11-14
 
-**État : mesure non faite.** Ce fichier fixe la méthode, la commande et le tableau. Les cases « à mesurer » se
-remplissent avec le résultat de `supervox-bench live`, sans autre source. Aucun chiffre n'est écrit ici avant la mesure.
+**État : mesure faite le 15 novembre 2026**, un passage par configuration. Chaque chiffre du tableau est recopié du
+`live.md` écrit par `supervox-bench live`, sans autre source.
 
 Les rapports bruts (`live.md`, `live.json`) contiennent ce qui a été dit : ils restent hors du dépôt, dans `bench-data/`
 (ignoré par git). Ce fichier ne cite ni phrase du corpus, ni nom de fournisseur.
@@ -71,22 +71,35 @@ et préchauffés avant la première phrase, hors mesure.
 
 ## Résultats
 
-Machine, version de macOS, date et heure du lancement : à noter depuis `live.md` (section « Lancement »).
+Lancements du 15 novembre 2026 (date lue dans `live.md`, section « Lancement »), sur un Mac à puce Apple, binaire compilé
+en mode release. Le modèle exact de la machine n'est pas publié ici ; il est dans les rapports bruts, hors du dépôt.
 
 | Configuration | Phrases comparées | Texte final de la session | Transcription en bloc | Écart (points) | Dernier aperçu | Aperçu vide | Délai médian (s) | Délai 90e centile (s) | Échecs | Sans parole |
 |---|---|---|---|---|---|---|---|---|---|---|
-| WhisperKit | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer |
-| WhisperKit + vocabulaire | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer |
-| Parakeet | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer |
-| Parakeet + vocabulaire | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer | à mesurer |
+| WhisperKit | 20 sur 20 | 12,4 % | 12,1 % | +0,3 | 14,5 % | 0 sur 20 | 0,57 | 0,61 | 0 | 0 |
+| WhisperKit + vocabulaire | 20 sur 20 | 9,7 % | 9,1 % | +0,6 | 11,2 % | 0 sur 20 | 1,30 | 1,36 | 0 | 0 |
+| Parakeet | 20 sur 20 | 15,2 % | 16,1 % | −0,9 | 14,5 % | 0 sur 20 | 0,09 | 0,09 | 0 | 0 |
+| Parakeet + vocabulaire | 20 sur 20 | 11,5 % | 12,7 % | −1,2 | 11,2 % | 0 sur 20 | 0,12 | 0,14 | 0 | 0 |
 
-Termes techniques retrouvés (texte final / bloc / aperçu) : à mesurer, par configuration.
+Le vocabulaire des passages « + vocabulaire » compte 30 termes. L'écart est la différence « session moins bloc », calculée
+ici à partir des deux colonnes voisines.
+
+Termes techniques retrouvés, sur 55 (texte final / bloc / aperçu) : WhisperKit 35 / 36 / 35 ; WhisperKit + vocabulaire
+44 / 44 / 44 ; Parakeet 35 / 34 / 35 ; Parakeet + vocabulaire 44 / 43 / 44.
 
 ### Lecture
 
-À écrire après la mesure : l'écart entre le texte final de la session et la transcription en bloc ; la distance du
-dernier aperçu au texte final ; le délai, comparé à ce qu'on tolère à l'écran avant que le texte apparaisse ; les
-phrases en échec ou sans parole, et pourquoi.
+- **Session contre bloc.** L'écart va de −1,2 à +0,6 point selon la configuration. Avec 20 phrases et un seul passage,
+  un écart de cette taille ne se distingue pas du hasard : la mesure ne montre pas que la session dégrade le texte, et
+  ne montre pas non plus qu'elle l'améliore.
+- **Dernier aperçu.** Il est à 14,5 % sans vocabulaire et à 11,2 % avec. Face à WhisperKit, il est moins juste que le
+  texte final (de 1,5 à 2,1 points) ; face à Parakeet, il est du même ordre, puisque c'est le même moteur. L'aperçu est
+  un guide pendant la parole, le texte final fait foi.
+- **Délai.** Le texte final arrive 0,09 à 0,14 s après `finish()` avec Parakeet, 0,57 s avec WhisperKit, 1,30 s avec
+  WhisperKit et le vocabulaire (médianes). Le vocabulaire coûte donc environ 0,7 s à WhisperKit sur ces phrases. Aucun
+  seuil n'avait été fixé avant la mesure.
+- **Vocabulaire.** Il fait passer les termes retrouvés de 35 à 44 sur 55 dans le texte final, pour les deux moteurs.
+- **Échecs.** Aucune phrase en échec, aucune sans parole entendue, aucun aperçu vide.
 
 ## Limite connue, non corrigée
 
@@ -98,11 +111,9 @@ limite : elle ne l'exerce que si le corpus contient des phrases de plus de 15 s 
 
 Ce qui n'a pas pu être établi, et pourquoi.
 
-- **Aucun chiffre.** Le corpus et les enregistrements ne sont pas accessibles à l'implémentation ; la commande est
-  testée avec des moteurs doubles seulement (cadence, aperçu sur des clips qui grandissent, `finish()` après le dernier
-  bloc, taux, rapport). Personne n'a encore vu un vrai passage.
-- **Durée des phrases du corpus : non vérifiée.** Si aucune phrase ne dépasse 15 s, la limite de l'aperçu n'est pas
-  exercée, et rien ici ne dit comment la dictée longue se comporte (essai à la main : `docs/essai-final.md`, essai 23).
+- **Dictée longue non exercée.** Les enregistrements durent de 6,0 à 10,1 s (mesuré sur les fichiers) : aucun ne
+  dépasse 15 s. La limite de l'aperçu n'est donc pas exercée, et rien ici ne dit comment une dictée longue se comporte
+  (essai à la main : `docs/essai-final.md`).
 - **Rejeu à 16 kHz.** Les enregistrements du banc sont à 16 kHz : le rééchantillonnage d'un vrai micro (44,1 ou 48 kHz)
   n'est pas exercé, ni sa durée.
 - **Cadence un peu plus lente que le temps réel.** Chaque bloc attend sa durée, puis le détecteur le traite : la durée du
