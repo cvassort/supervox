@@ -196,11 +196,41 @@ struct AnthropicClientTests {
         #expect(r.error as? EndpointError == .streamInterrupted)
     }
 
-    @Test func messageStopWithoutAnyTextIsAMalformedResponse() async {
-        let body = sse([messageStart, messageDelta("end_turn"), messageStop])
+    /// Sans aucun texte ni réflexion, une réponse coupée ou refusée garde sa raison : `.stop` seul, fin normale (un refus
+    /// avant toute sortie, ou une réflexion non affichée qui a épuisé `max_tokens`).
+    @Test(arguments: [
+        ("max_tokens", CompletionStop.truncated), ("model_context_window_exceeded", .truncated), ("refusal", .refused),
+    ])
+    func aTruncatedOrRefusedAnswerWithoutAnyTextKeepsItsStop(reason: String, stop: CompletionStop) async {
+        let body = sse([messageStart, messageDelta(reason), messageStop])
+        let r = await collectEvents(anthropic(body: body).complete(sampleRequest))
+        #expect(r.events == [.stop(stop)])
+        #expect(r.error == nil)
+    }
+
+    /// Les autres raisons sans texte ne sont pas une réponse : `.malformedResponse`, sans `.stop`.
+    @Test(arguments: ["end_turn", "stop_sequence", "tool_use", "pause_turn", "inconnue"])
+    func anyOtherEndWithoutAnyTextIsAMalformedResponse(reason: String) async {
+        let body = sse([messageStart, messageDelta(reason), messageStop])
         let r = await collectEvents(anthropic(body: body).complete(sampleRequest))
         #expect(r.events.isEmpty)
         #expect(r.error as? EndpointError == .malformedResponse)
+    }
+
+    @Test func messageStopWithoutAnyTextNorStopReasonIsAMalformedResponse() async {
+        let r = await collectEvents(anthropic(body: sse([messageStart, messageStop])).complete(sampleRequest))
+        #expect(r.events.isEmpty)
+        #expect(r.error as? EndpointError == .malformedResponse)
+    }
+
+    /// Le `.stop` ne vient qu'à `message_stop` : une raison d'arrêt déjà lue (`message_delta`) puis un événement `error`
+    /// ne livre aucun `.stop` (la raison d'un flux qui finit mal n'a pas de sens), seulement le texte et l'erreur.
+    @Test func noStopIsDeliveredWhenAMessageDeltaIsFollowedByAnErrorEvent() async {
+        let error = ("error", "{\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}")
+        let body = sse([messageStart, textDelta("Bon"), messageDelta("end_turn"), error])
+        let r = await collectEvents(anthropic(body: body).complete(sampleRequest))
+        #expect(r.events == [.text("Bon")])
+        #expect(r.error as? CompletionError == .provider(type: "overloaded_error"))
     }
 
     @Test func anErrorEventEndsTheStreamAfterTheTextAlreadySent() async {

@@ -44,6 +44,7 @@ final class LocalHTTPServer: @unchecked Sendable {
     private let received = Mutex<[Request]>([])
     private let accepted = Mutex(0)
     private let closedClients = Mutex(0)
+    private let endedWatches = Mutex(0)
     private let stopped = Mutex(false)
     private var connections: [NWConnection] = []
     private(set) var port: UInt16 = 0
@@ -62,6 +63,10 @@ final class LocalHTTPServer: @unchecked Sendable {
     /// Connexions que le client a fermées pendant un `hang` (fin de flux ou erreur vue par le serveur). L'arrêt du
     /// serveur par `stop()` n'en fait pas partie.
     var closedByClient: Int { closedClients.withLock { $0 } }
+
+    /// Surveillances de `hang` terminées, quelle qu'en soit la cause (fermeture du client ou `stop()`) : un test attend cet
+    /// état, jamais un délai, avant de lire `closedByClient`.
+    var hangWatchesEnded: Int { endedWatches.withLock { $0 } }
 
     /// `http://127.0.0.1:<port>`
     var base: String { "http://127.0.0.1:\(port)" }
@@ -145,6 +150,7 @@ final class LocalHTTPServer: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 10) { data, _, done, error in
             if data?.isEmpty == false, !done, error == nil { return self.watchForClientClose(connection) }
             if !self.stopped.withLock({ $0 }) { self.closedClients.withLock { $0 += 1 } }
+            self.endedWatches.withLock { $0 += 1 }
             connection.cancel()
         }
     }

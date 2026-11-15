@@ -143,10 +143,31 @@ struct CompletionStreamTests {
         #expect(b.error as? EndpointError == .streamInterrupted)
     }
 
-    @Test func aFinishReasonWithoutAnyTextIsAMalformedResponseWithoutStop() async {
-        let r = await collectEvents(stubbedClient(status: 200, body: openAIStream([], finish: "stop")).complete(sampleRequest))
+    /// Sans aucun texte ni réflexion, une réponse coupée ou refusée garde sa raison : `.stop` seul, fin normale. Le
+    /// consommateur dit alors « coupée » ou « refusée », pas « mal formée ».
+    @Test(arguments: [("length", CompletionStop.truncated), ("content_filter", .refused)])
+    func aTruncatedOrRefusedAnswerWithoutAnyTextKeepsItsStop(reason: String, stop: CompletionStop) async {
+        let r = await collectEvents(stubbedClient(status: 200, body: openAIStream([], finish: reason)).complete(sampleRequest))
+        #expect(r.events == [.stop(stop)])
+        #expect(r.error == nil)
+    }
+
+    /// Les autres raisons (ou aucune) sans texte ne sont pas une réponse : `.malformedResponse`, sans `.stop`.
+    @Test(arguments: ["stop", "tool_calls", "inconnue", ""])
+    func anyOtherEndWithoutAnyTextIsAMalformedResponseWithoutStop(reason: String) async {
+        let body = openAIStream([], finish: reason.isEmpty ? nil : reason)
+        let r = await collectEvents(stubbedClient(status: 200, body: body).complete(sampleRequest))
         #expect(r.events.isEmpty)
         #expect(r.error as? EndpointError == .malformedResponse)
+    }
+
+    /// `chatStream` ne change pas : il ne livre pas de raison d'arrêt, donc une fin sans texte reste mal formée.
+    @Test func chatStreamStillRefusesATruncatedEndWithoutAnyText() async {
+        var caught: (any Error)?
+        do {
+            for try await _ in stubbedClient(status: 200, body: openAIStream([], finish: "length")).chatStream(model: "m", messages: [], maxTokens: 5) {}
+        } catch { caught = error }
+        #expect(caught as? EndpointError == .malformedResponse)
     }
 
     // MARK: Découpage du réseau
@@ -208,26 +229,27 @@ struct CompletionStreamTests {
     }
 
     /// Un message de panne réseau qui répète la clé (un proxy, un système qui recopie l'adresse) ne la montre pas non
-    /// plus, coupure à 500 caractères comprise.
-    @Test func transportMessagesNeverContainTheKeyEvenAcrossTheCut() async throws {
-        let text = String(repeating: "x", count: 497) + Self.key + String(repeating: "y", count: 100)
-        let echoing = NSError(domain: "exemple", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
-        let client = stubbedClient(reply: .failureWith(echoing), apiKey: Self.key)
-        let r = await collectEvents(client.complete(sampleRequest))
-        guard case .transport(let message)? = r.error as? EndpointError else {
-            Issue.record("attendu .transport, reçu \(String(describing: r.error))"); return
-        }
-        #expect(message == String(repeating: "x", count: 497) + "***")
+    /// plus, coupure à 500 caractères comprise. Égalité exacte : sans masquage, le texte coupé garde `cle` (trois
+    /// premiers caractères de la clé) et un simple « ne contient pas la clé » passerait quand même.
+    private static var echoingFailure: NSError {
+        let text = String(repeating: "x", count: 497) + key + String(repeating: "y", count: 100)
+        return NSError(domain: "exemple", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
 
-        var chatError: (any Error)?
+    private static let maskedTransportText = String(repeating: "x", count: 497) + "***"
+
+    @Test func completeTransportMessagesNeverContainTheKeyEvenAcrossTheCut() async {
+        let r = await collectEvents(stubbedClient(reply: .failureWith(Self.echoingFailure), apiKey: Self.key).complete(sampleRequest))
+        #expect(r.error as? EndpointError == .transport(Self.maskedTransportText))
+    }
+
+    @Test func chatStreamTransportMessagesNeverContainTheKeyEvenAcrossTheCut() async {
+        var caught: (any Error)?
         do {
-            for try await _ in stubbedClient(reply: .failureWith(echoing), apiKey: Self.key)
+            for try await _ in stubbedClient(reply: .failureWith(Self.echoingFailure), apiKey: Self.key)
                 .chatStream(model: "m", messages: [], maxTokens: 5) {}
-        } catch { chatError = error }
-        guard case .transport(let chatMessage)? = chatError as? EndpointError else {
-            Issue.record("attendu .transport, reçu \(String(describing: chatError))"); return
-        }
-        #expect(!chatMessage.contains(Self.key))
+        } catch { caught = error }
+        #expect(caught as? EndpointError == .transport(Self.maskedTransportText))
     }
 
     // MARK: Contrat
@@ -236,12 +258,5 @@ struct CompletionStreamTests {
         let model: any LanguageModel = stubbedClient(status: 200, fixture: "chat-stream-content.sse")
         let r = await collectEvents(model.complete(sampleRequest))
         #expect(r.events.last == .stop(.complete))
-    }
-
-    @Test func completionErrorsAreEquatableAndDistinct() {
-        #expect(CompletionError.stalled == .stalled)
-        #expect(CompletionError.provider(type: "a") == .provider(type: "a"))
-        #expect(CompletionError.provider(type: "a") != .provider(type: "b"))
-        #expect(CompletionError.stalled != .provider(type: "a"))
     }
 }

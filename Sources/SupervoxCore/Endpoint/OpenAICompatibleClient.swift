@@ -239,7 +239,7 @@ private struct ChatChunkParser: SSEReader {
     /// La première raison d'arrêt non nulle du flux. Un serveur peut en redire une autre plus loin (l'enregistrement
     /// `chat-stream-reasoning.sse` dit `length`, puis `stop` sur un morceau vide) : la première est celle du texte.
     private(set) var finishReason: String?
-    private var deliveredSomething = false
+    private(set) var deliveredSomething = false
     private var sawDataLine = false
     /// Lignes qui ne sont ni un champ SSE ni un commentaire : le début d'un corps JSON d'erreur, par exemple.
     private var unrecognised: [String] = []
@@ -322,10 +322,13 @@ private struct OpenAICompletionReader: SSEReader {
         }
     }
 
+    /// Sans aucun morceau, `[DONE]` n'est pas une réponse (`.malformedResponse`), sauf si le serveur dit que la réponse
+    /// est coupée ou refusée : la raison est alors livrée, `.stop` seul, fin normale (même règle que pour Anthropic).
     mutating func finishAfterDone() throws -> [CompletionEvent] {
+        let stop = parser.finishReason.map(Self.stop(for:))
+        if !parser.deliveredSomething, let stop, stop == .truncated || stop == .refused { return [.stop(stop)] }
         _ = try parser.finishAfterDone()
-        guard let reason = parser.finishReason else { return [] }
-        return [.stop(Self.stop(for: reason))]
+        return stop.map { [.stop($0)] } ?? []
     }
 
     func endWithoutDone() -> any Error { parser.endWithoutDone() }

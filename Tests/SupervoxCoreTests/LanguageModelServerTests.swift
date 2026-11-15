@@ -132,7 +132,10 @@ struct LanguageModelServerTests {
         let chunks = afterSomeText ? kind.opening + [kind.textEvent("Bon")] : []
         let server = try await Self.serve(chunks: chunks, end: .hang)
         defer { server.stop() }
-        let r = await collectEvents(kind.model(base: server.base, requestTimeout: 0.5).complete(Self.request))
+        // Le délai est une horloge d'inactivité : il court dès la requête. Après un morceau, il doit être assez long pour
+        // que le morceau arrive avant lui, même sur une machine chargée ; sans morceau, la durée n'a pas d'effet sur le résultat.
+        let timeout: TimeInterval = afterSomeText ? 3 : 0.5
+        let r = await collectEvents(kind.model(base: server.base, requestTimeout: timeout).complete(Self.request))
         #expect(r.events == (afterSomeText ? [.text("Bon")] : []))
         #expect(r.error as? CompletionError == .stalled)
     }

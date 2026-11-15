@@ -61,8 +61,12 @@ import Testing
 
         connection.cancel()
         #expect(await Self.eventually { server.closedByClient == 1 })
+        #expect(server.hangWatchesEnded == 1)
     }
 
+    /// `stop()` ferme la connexion : la surveillance du `hang` se termine, mais ce n'est pas le client qui a fermé. On
+    /// attend l'état « surveillance terminée » (borné), jamais un délai : la surveillance a fini de compter quand
+    /// `hangWatchesEnded` vaut 1.
     @Test func stoppingTheServerIsNotACloseByTheClient() async throws {
         let stream = LocalHTTPServer.Stream(chunks: [Data("data: un\n\n".utf8)], end: .hang)
         let server = try LocalHTTPServer { _ in .init(status: 200, stream: stream) }
@@ -76,8 +80,9 @@ import Testing
                 if let error { continuation.resume(throwing: error) } else { continuation.resume(returning: data ?? Data()) }
             }
         }
+        #expect(server.hangWatchesEnded == 0)    // la surveillance est en cours : le serveur se tait, le client est là
         server.stop()
-        try await Task.sleep(for: .milliseconds(200))
+        #expect(await Self.eventually { server.hangWatchesEnded == 1 }, "la surveillance du hang ne s'est pas terminée")
         #expect(server.closedByClient == 0)
     }
 

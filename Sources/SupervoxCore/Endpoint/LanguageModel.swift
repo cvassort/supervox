@@ -51,7 +51,8 @@ public enum CompletionError: Error, Equatable, Sendable {
 ///
 /// Contrat de fin et d'annulation de `OpenAICompatibleClient.chatStream`, à quoi s'ajoute la raison d'arrêt : le flux
 /// se termine normalement seulement quand le serveur a dit que la réponse est finie et qu'au moins un morceau de texte
-/// ou de réflexion est arrivé ; toute autre fin est une erreur (`EndpointError`, `CompletionError`), jamais une fin
+/// ou de réflexion est arrivé (sans morceau, seule une raison `truncated` ou `refused` suffit : le flux livre alors
+/// `.stop` seul) ; toute autre fin est une erreur (`EndpointError`, `CompletionError`), jamais une fin
 /// silencieuse. La requête part dès l'appel de `complete`. L'arrêt de la lecture (boucle quittée, tâche annulée) annule
 /// la requête ; une tâche consommatrice annulée voit sa boucle se terminer sans erreur : tester `Task.isCancelled`.
 /// `.stop` vient au plus une fois et en dernier ; il n'est jamais livré avant une erreur.

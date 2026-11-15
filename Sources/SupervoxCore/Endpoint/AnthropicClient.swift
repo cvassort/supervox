@@ -20,7 +20,7 @@ public final class AnthropicClient: LanguageModel, Sendable {
     /// cette version d'API les refuse (référence locale de l'API, codes d'erreur 400).
     ///
     /// Le flux se termine normalement, et seulement, après l'événement `message_stop` et au moins un morceau de texte ou
-    /// de réflexion. Toute autre fin est une erreur : coupure avant `message_stop` (`.streamInterrupted`), événement
+    /// de réflexion (ou, sans morceau, une raison d'arrêt `truncated` ou `refused`, livrée en `.stop` seul). Toute autre fin est une erreur : coupure avant `message_stop` (`.streamInterrupted`), événement
     /// `error` (`CompletionError.provider`, après le texte déjà livré), flux sans contenu (`.malformedResponse`),
     /// silence (`CompletionError.stalled`), panne réseau (`.transport`), statut hors 2xx (`.http`).
     public func complete(_ request: CompletionRequest) -> AsyncThrowingStream<CompletionEvent, Error> {
@@ -114,12 +114,14 @@ struct AnthropicStreamReader: SSEReader {
         }
     }
 
-    /// `message_stop` sans un seul morceau de texte (ni réponse ni réflexion) n'est pas une réponse : on ne la fait pas
-    /// passer pour un succès, même si le modèle a dit pourquoi (un refus, par exemple).
+    /// `message_stop` sans un seul morceau de texte (ni réponse ni réflexion) n'est pas une réponse (`.malformedResponse`),
+    /// sauf si le modèle dit pourquoi : une réponse coupée (`max_tokens`, réflexion non affichée qui a tout consommé) ou
+    /// refusée (avant toute sortie) garde sa raison, `.stop` seul, fin normale. Le consommateur peut ainsi dire « coupée »
+    /// ou « refusée » au lieu de « mal formée ».
     mutating func finishAfterDone() throws -> [CompletionEvent] {
-        if !deliveredSomething { throw EndpointError.malformedResponse }
-        guard let reason = stopReason else { return [] }
-        return [.stop(Self.stop(for: reason))]
+        let stop = stopReason.map(Self.stop(for:))
+        if !deliveredSomething && stop != .truncated && stop != .refused { throw EndpointError.malformedResponse }
+        return stop.map { [.stop($0)] } ?? []
     }
 
     /// Sans aucune ligne `data:`, le corps n'est pas un flux : un objet JSON ou une page ne sont pas une coupure.
