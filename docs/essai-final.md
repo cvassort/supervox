@@ -17,6 +17,10 @@ Ce fichier est public : n'y écrivez ni texte dicté, ni clé, ni nom de personn
   (Terminal) et un champ de texte dans un navigateur.
 - Gardez sous la main du texte à dicter, dans un français courant, avec quelques mots techniques.
 - Le raccourci par défaut est ⌃⌥Espace (contrôle, option, espace).
+- **Chaque essai qui change un état le rétablit à sa fin** (raccourci, mode, permissions, réseau, moteur, langue,
+  vocabulaire, disposition du clavier) : les essais suivants supposent l'état de départ (raccourci ⌃⌥Espace, bascule,
+  mode « Dictée brute », micro et Accessibilité accordés, réseau actif, WhisperKit large-v3 turbo, français, vocabulaire
+  vide). Si un essai échoue pour une raison qui ressemble à un état oublié, rétablissez-le avant de conclure.
 
 ## Étape 2 — socle
 
@@ -47,7 +51,7 @@ n'apparaîtrait pas. Ne touchez pas au dossier `Models` voisin : ce sont les mod
    - Attendu : la ligne des permissions a disparu quand tout est accordé.
 4. Refusez l'une des deux dans les Réglages Système, puis rouvrez le panneau.
    - Attendu : la ligne dit ce qui manque et ce que cela empêche (micro : « la dictée est impossible » ;
-     Accessibilité : « le texte sera copié, pas collé »).
+     Accessibilité : « le texte sera copié, pas collé »). Accordez de nouveau la permission avant la suite.
 5. Ouvrez « Réglages… », onglet Permissions.
    - Attendu : « Autorisé », « Pas encore demandé » ou « Non autorisé » pour chacune ; un bouton « Ouvrir les réglages
      du système » pour une permission refusée.
@@ -66,12 +70,12 @@ n'apparaîtrait pas. Ne touchez pas au dossier `Models` voisin : ce sont les mod
 5. Ouvrez « Réglages… » depuis le menu « … » du panneau.
    - Attendu : le panneau se ferme et la fenêtre de réglages s'ouvre.
 6. Quittez par « Quitter Supervox ».
-   - Attendu : l'icône disparaît de la barre des menus.
+   - Attendu : l'icône disparaît de la barre des menus. Relancez l'application (`open build/Supervox.app`) pour la suite.
 7. Choisissez un autre raccourci dans Réglages, onglet Raccourci (cliquez sur le raccourci, tapez la nouvelle
    combinaison), puis essayez-le.
-   - Attendu : la nouvelle combinaison ouvre le panneau, l'ancienne ne fait plus rien. Une combinaison refusée par
-     macOS est dite dans la fenêtre, et l'ancien raccourci reste actif. **Comportement à confirmer** pour les
-     combinaisons que seul macOS refuse.
+   - Attendu : la nouvelle combinaison lance une dictée (et ouvre le panneau), l'ancienne ne fait plus rien ; annulez la
+     dictée par Échap. Une combinaison refusée par macOS est dite dans la fenêtre, et l'ancien raccourci reste actif.
+     **Comportement à confirmer** pour les combinaisons que seul macOS refuse. Remettez ⌃⌥Espace avant la suite.
 
 ### 4. Relance de l'application
 
@@ -119,8 +123,10 @@ première dictée, les modèles manquants se téléchargent : cela peut prendre 
 ### 8. Une dictée simple, par bascule
 
 1. Placez le curseur dans l'application de notes, tapez ⌃⌥Espace.
-   - Attendu : le panneau s'ouvre ; « Préparation… » (avec « Téléchargement du modèle… » si un modèle manque), puis
-     « Enregistrement » avec un point rouge, la durée qui avance et une forme d'onde qui bouge quand vous parlez.
+   - Attendu : le panneau s'ouvre ; « Préparation… » (avec « Téléchargement du modèle… » si un modèle manque, puis
+     « Chargement du modèle… » tant que les moteurs se chargent en mémoire ; moteurs déjà chargés : aucune des deux
+     mentions), puis « Enregistrement » avec un point rouge, la durée qui avance et une forme d'onde qui bouge quand vous
+     parlez.
 2. Parlez deux ou trois phrases.
    - Attendu : le texte en direct apparaît sous la forme d'onde, quatre lignes au plus, la fin du texte toujours
      visible. Ce texte est provisoire : il peut changer en cours de route.
@@ -173,7 +179,8 @@ Le collage envoie ⌘V avec la touche qui produit « v » dans la disposition en
 
 1. AZERTY (Français) ;
 2. une disposition où la touche V n'est pas au même endroit : Dvorak, par exemple.
-   - Attendu, pour chacune : le texte est collé (et non un autre caractère ni rien du tout).
+   - Attendu, pour chacune : le texte est collé (et non un autre caractère ni rien du tout). Rétablissez ensuite votre
+     disposition habituelle.
 
 ### 13. Mode maintien
 
@@ -183,18 +190,29 @@ Réglages, onglet Raccourci, choisissez « Maintenir pour dicter ».
    - Attendu : la dictée dure tant que vous maintenez ; au relâchement, « Transcription… » puis le texte est collé.
 2. Maintenez ⌃⌥Espace, parlez, puis relâchez **d'abord ⌃ et ⌥, ensuite Espace**.
    - Attendu : la dictée s'arrête en moins d'une seconde dans tous les cas (le système peut ne pas signaler ce
-     relâchement-là ; l'application vérifie quatre fois par seconde si les touches de modification du raccourci sont
+     relâchement-là ; l'application vérifie vingt fois par seconde si les touches de modification du raccourci sont
      encore enfoncées).
-3. Maintenez ⌃⌥Espace, et relâchez tout de suite (avant la fin de « Préparation… »).
-   - Attendu : le micro ne s'ouvre pas ; le panneau reste ouvert avec « Rien à transcrire » et « Aucune parole n'a été
-     entendue. ». Un nouvel appui relance une dictée.
+3. Maintenez ⌃⌥Espace, et relâchez pendant « Préparation… ».
+   - Attendu : si vous relâchez bien pendant « Préparation… », le micro ne s'ouvre pas ; le panneau reste ouvert avec
+     « Rien à transcrire » et « Aucune parole n'a été entendue. ». Un nouvel appui relance une dictée. Avec des moteurs
+     déjà chargés, « Préparation… » est trop brève pour relâcher avant sa fin : le micro s'ouvre alors un instant
+     (indicateur orange) et « Rien à transcrire » vient d'une prise vide, pas du micro resté fermé. Pour des moteurs
+     froids, lancez l'essai juste après le lancement de l'application, ou juste après avoir changé de variante WhisperKit
+     (essai 22.2). **Comportement à confirmer** : la brièveté de « Préparation… » avec des moteurs chargés.
 4. En mode maintien, pendant « Préparation… », appuyez de nouveau sur le raccourci.
    - Attendu : cet appui est ignoré, la préparation continue.
-5. Choisissez (onglet Raccourci) un raccourci **sans** touche de modification, si macOS et l'application l'acceptent
-   (par exemple une touche de fonction), puis dictez en maintien.
-   - Attendu : rien ne vérifie les touches de modification (il n'y en a pas) : la dictée s'arrête au relâchement que le
-     système signale, ou à la durée maximale de 5 minutes. **Comportement à confirmer** : ce que le système signale pour
-     ce raccourci.
+5. Dans l'onglet Raccourci, essayez d'enregistrer un raccourci **sans** touche de modification (une lettre, ou une
+   touche de fonction comme F5).
+   - Attendu : il est refusé, avec un message du genre « Ajoutez ⌃ ou ⌘ : … taperait du texte ». Un raccourci sans touche
+     de modification n'existe donc pas dans l'application (`HotKey.validate`) : il n'y a rien à essayer en maintien avec
+     lui. Seul un fichier de réglages écrit à la main pourrait en contenir un ; ce cas n'est pas essayé.
+6. Maintenez ⌃⌥Espace, parlez, puis, **sans lâcher ⌃⌥**, tenez Échap un instant (une pression franche, de l'ordre d'un
+   dixième de seconde ou plus).
+   - Attendu : la dictée est annulée, le panneau se ferme, rien n'est collé, l'indicateur du micro s'éteint. Avec ⌃⌥
+     tenus, Échap n'est pas l'Échap seul que l'application réserve : en maintien, elle lit donc elle-même l'état de la
+     touche vingt fois par seconde ; un effleurement plus bref qu'un vingtième de seconde peut passer entre deux lectures.
+     Refaites l'essai pendant « Préparation… » (juste après le lancement de l'application). **Comportement à confirmer** :
+     jamais essayé avec un vrai clavier ; notez si une pression normale suffit toujours.
 
 ### 14. Bascule : appui pendant la préparation
 
@@ -216,7 +234,8 @@ Revenez à « Appuyer pour commencer et pour terminer la dictée ».
    - Attendu : la dictée est annulée et le panneau se ferme. **Comportement à confirmer** : d'après le code, le modèle
      en cours de téléchargement finit en arrière-plan, et ceux qui venaient après dans la liste ne sont pas lancés ;
      vérifiez dans Réglages, onglet Transcription, que la ligne du premier passe à « Prêt » et que celle des suivants
-     reste « Non téléchargé ». Le téléchargement n'est pas relancé par l'annulation.
+     reste « Non téléchargé ». Le téléchargement n'est pas relancé par l'annulation. Retéléchargez les modèles supprimés
+     (onglet Transcription) avant la suite.
 4. Pendant une dictée, cliquez dans une autre application.
    - Attendu : le clic est sans effet sur le panneau, qui reste ouvert et continue d'enregistrer. En dehors d'une
      dictée, ce même clic le ferme.
@@ -227,21 +246,28 @@ Revenez à « Appuyer pour commencer et pour terminer la dictée ».
    - Attendu : une dictée démarre ; le raccourci ne ferme pas le panneau.
 2. Après une erreur (par exemple « Rien à transcrire »), tapez ⌃⌥Espace.
    - Attendu : une nouvelle dictée démarre.
-3. Le panneau se ferme dans ces cas, et seulement ceux-là : Échap, clic dans une autre application hors dictée, le menu
-   de l'icône, « Réglages… » ou « Quitter Supervox », ou un collage réussi.
+3. Le panneau se ferme dans ces cas : Échap, clic dans une autre application hors dictée, le menu de l'icône,
+   « Réglages… » ou « Quitter Supervox », un collage réussi, et, dans un mode autre que la dictée brute, le raccourci
+   lui-même (essai 5 ci-dessous).
 4. Ouvrez le panneau par le menu de l'icône, cliquez sur une autre pastille que « Dictée brute » (par exemple
    « Entretien »), puis fermez le panneau (Échap). Tapez ensuite ⌃⌥Espace.
    - Attendu : le panneau s'ouvre avec « Ce mode arrive à une étape suivante. » et aucune dictée ne démarre.
 5. Tapez de nouveau ⌃⌥Espace, panneau ouvert.
    - Attendu : le panneau se ferme (c'est le seul cas où le raccourci le ferme). Si vous tapiez le raccourci avec le
      panneau déjà ouvert sur ce mode, avant de l'avoir fermé, il se fermerait aussi, sans montrer le message.
+6. **Revenez à la pastille « Dictée brute »** (ouvrez le panneau par le menu de l'icône, cliquez sur « Dictée brute »).
+   - Attendu : l'application garde le dernier mode choisi, même après un redémarrage, et refuse de dicter dans un autre
+     (« Ce mode arrive à une étape suivante. ») : sans ce retour, les essais 17 et suivants échouent tous.
 
 ### 17. Silence complet
 
 1. Tapez ⌃⌥Espace, ne dites rien pendant quelques secondes, retapez.
    - Attendu : « Rien à transcrire » et « Aucune parole n'a été entendue. » ; rien n'est collé, le presse-papiers est
      intact ; le panneau reste ouvert. Si vous avez déjà dicté quelque chose depuis le lancement, la carte « Dernière
-     dictée » (le texte d'avant) est affichée dessous : ce n'est pas le résultat de cette dictée.
+     dictée » (le texte d'avant) est affichée dessous : ce n'est pas le résultat de cette dictée. **Comportement à
+     confirmer** : cela dépend du détecteur de voix sur un vrai bruit de pièce. Aucune durée minimale de parole n'est
+     exigée : un bruit pris pour de la voix part au moteur final, qui peut renvoyer un texte inventé, et ce texte serait
+     collé. Refaites l'essai en tapant au clavier, puis en soufflant près du micro, et notez ce qui est collé.
 
 ### 18. Refus de l'Accessibilité
 
@@ -253,7 +279,7 @@ Revenez à « Appuyer pour commencer et pour terminer la dictée ».
 3. Retirez le micro à Supervox, tapez ⌃⌥Espace.
    - Attendu : le panneau s'ouvre, aucune dictée ne démarre, la ligne des permissions dit que le micro manque (« la
      dictée est impossible »). Le titre du panneau reste « Prêt » : l'application ne le change pas dans ce cas ; notez si
-     c'est déroutant.
+     c'est déroutant. Rendez à Supervox le micro et l'Accessibilité avant la suite.
 
 ### 19. Premier téléchargement des modèles
 
@@ -268,8 +294,9 @@ d'autres applications).
      de suite (la reconnaissance, puis le petit modèle du vocabulaire) ; tant que celui-ci manque, une légende sous la
      ligne le dit.
 2. Supprimez un modèle, choisissez le moteur qui l'utilise, puis lancez une dictée : c'est la dictée qui le télécharge.
-   - Attendu : « Préparation… » et « Téléchargement du modèle… » dans le panneau ; la dictée démarre une fois le
-     modèle prêt. Une dictée ne télécharge que ce dont elle a besoin : le détecteur de voix, Parakeet (sa seule
+   - Attendu : « Préparation… » et « Téléchargement du modèle… » dans le panneau, puis « Chargement du modèle… » une fois
+     le téléchargement fini (la première mention ne reste pas pendant la seconde) ; la dictée démarre une fois le modèle
+     prêt. Une dictée ne télécharge que ce dont elle a besoin : le détecteur de voix, Parakeet (sa seule
      reconnaissance), la variante WhisperKit choisie si c'est le moteur, et le petit modèle du vocabulaire seulement si
      la liste de vocabulaire n'est pas vide. Les autres modèles restent « Non téléchargé ».
 3. Pendant ce téléchargement, ouvrez Réglages (menu « … » du panneau).
@@ -279,12 +306,15 @@ d'autres applications).
      voir la barre avancer toute seule si l'onglet était déjà ouvert.
 4. Coupez Internet puis lancez une dictée qui demande un téléchargement.
    - Attendu : un message d'échec (« La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet
-     Transcription… ») ; pas de blocage, un nouvel appui relance une dictée.
+     Transcription… ») ; un nouvel appui relance une dictée. **Comportement à confirmer** : le temps avant l'échec dépend
+     des délais du réseau, non mesurés ; notez s'il y a un blocage et combien de temps il dure (Échap en sort). Rétablissez
+     Internet avant la suite.
 5. Supprimez Parakeet puis lancez une dictée **sans vocabulaire** (le vocabulaire vide) : seule la reconnaissance se
    télécharge. Saisissez ensuite un vocabulaire, coupez Internet, et dictez.
    - Attendu : la dictée a lieu quand même, sans vocabulaire, et le panneau le dit : « Le vocabulaire n'a pas servi à
      cette dictée : le petit modèle qui le reconnaît n'a pas pu être téléchargé. Il sera retenté à la prochaine
-     dictée. » **Comportement à confirmer** : ce chemin n'a jamais été vu avec un vrai téléchargement.
+     dictée. » **Comportement à confirmer** : ce chemin n'a jamais été vu avec un vrai téléchargement. Rétablissez
+     Internet, puis videz le vocabulaire (essai 22.4) avant la suite.
 
 ### 20. Supprimer un modèle
 
@@ -328,6 +358,9 @@ Sans quitter l'application, changez chaque réglage puis faites une dictée.
    - Attendu : le terme est écrit comme dans la liste. Un avis apparaît dans le panneau si la liste a dû être raccourcie
      ou écartée pour cette dictée (trop longue pour le modèle, longueur impossible à vérifier, ou petit modèle du
      vocabulaire indisponible).
+5. **Rétablissez l'état de départ** : WhisperKit, large-v3 turbo, Français, vocabulaire vide.
+   - Attendu : les essais 23 et suivants dictent en français avec WhisperKit et sans vocabulaire ; avec Parakeet, la
+     langue ne compte pas, et avec un vocabulaire resté en place la dictée n'est pas celle que ces essais décrivent.
 
 ### 23. Une dictée longue
 
@@ -351,21 +384,102 @@ Sans quitter l'application, changez chaque réglage puis faites une dictée.
 Le panneau a la hauteur de son contenu : sa fenêtre est ancrée par le haut et grandit ou rétrécit vers le bas.
 
 1. Ouvrez le panneau par le menu de l'icône (« Prêt » seul), puis tapez ⌃⌥Espace.
-   - Attendu : le panneau grandit vers le bas, son bord haut ne bouge pas ; pas de saut, rien ne sort de l'écran.
+   - Attendu : à « Préparation… », le panneau est plus bas qu'au repos (la ligne du raccourci et les permissions font
+     place à l'état de la dictée) ; il grandit à « Enregistrement », qui est la hauteur la plus haute de cette séquence. Son
+     bord haut ne bouge pas ; rien ne sort de l'écran. **Comportement à confirmer** : le saut de hauteur, jamais vu à
+     l'écran (hauteurs relevées sur les images rendues : « Prêt » 183 points, préparation 139, enregistrement 229).
 2. Parlez longtemps, jusqu'à remplir plus de quatre lignes de texte en direct.
    - Attendu : la hauteur ne change pas à chaque ligne (la place de quatre lignes est réservée dès le début de
      l'enregistrement) ; le texte en direct ne dépasse jamais quatre lignes et montre sa fin.
 3. Terminez la dictée avec une erreur (silence : « Rien à transcrire »), puis laissez le panneau ouvert.
-   - Attendu : le panneau change de hauteur pour l'erreur, sans clignoter ; au repos (« Prêt » seul) il retrouve une
-     hauteur sans grand vide dessous.
-4. Faites apparaître un message long (le refus de l'Accessibilité, essai 18) avec un dernier texte long dessous.
+   - Attendu : le panneau change de hauteur pour l'erreur, sans clignoter. L'application ne ramène pas un panneau ouvert à
+     « Prêt » tant que vous ne l'avez pas fermé : fermez-le (Échap) puis rouvrez-le par le menu de l'icône ; il montre
+     « Prêt » seul et retrouve la hauteur de repos, sans grand vide dessous.
+4. Faites apparaître un message long (le refus de l'Accessibilité : retirez de nouveau l'autorisation comme à l'essai 18,
+   puis rendez-la après l'essai) avec un dernier texte long dessous.
    - Attendu : le panneau est plus haut, rien n'est coupé ni recouvert par le menu « … » ; le message long est coupé
      proprement par « … » s'il dépasse quatre lignes.
 5. Répétez l'essai 1 avec le panneau placé sur un écran plus petit ou la fenêtre de l'application de dessous proche du bas.
    - Attendu : le panneau reste entièrement visible. **Comportement à confirmer** : le redimensionnement a été vérifié
      sur une fenêtre hors écran seulement, jamais à l'écran.
 
-### 26. Retour à faire
+### 26. Dictée hors ligne, modèles présents
+
+Les modèles nécessaires aux réglages courants sont « Prêt » dans l'onglet Transcription (détecteur de voix, Parakeet, la
+variante WhisperKit choisie).
+
+1. Coupez Internet (Wi-Fi et câble), quittez l'application puis relancez-la, et dictez.
+   - Attendu : la dictée a lieu normalement : ni « Téléchargement du modèle… », ni « La transcription n'a pas pu être
+     préparée ». « Chargement du modèle… » peut s'afficher quelques instants. **Comportement à confirmer** : le chargement
+     de WhisperKit depuis son dossier, sans réseau, est lu dans le code mais n'a jamais été essayé hors ligne.
+2. Refaites l'essai avec le moteur Parakeet (essai 22.1), puis avec un vocabulaire non vide (le petit modèle du
+   vocabulaire doit être « Prêt » : la ligne de Parakeet n'a plus de légende).
+   - Attendu : même résultat, hors ligne.
+3. Essai pour qui veut voir une limite : un modèle WhisperKit « Prêt » dont le fichier du tokenizer manque (dossier
+   `Models/models/openai/` de Supervox, voir le README) ne se charge pas hors ligne, alors que l'onglet dit « Prêt ».
+   - Attendu : l'échec de préparation, avec une phrase qui renvoie à l'onglet Transcription : « s'il est indiqué « Prêt »,
+     supprimez-le puis téléchargez-le de nouveau ». **Comportement à confirmer** : déduit du code, jamais essayé.
+4. Rétablissez Internet.
+
+### 27. Micro coupé pendant la prise
+
+1. Choisissez un casque (USB ou sans fil) comme entrée (Réglages Système, Son, Entrée), commencez une dictée en bascule,
+   parlez, puis débranchez le casque (ou éteignez-le) en pleine prise.
+   - Attendu : une seconde environ après la coupure, la dictée échoue : « Micro indisponible » et « Le micro ne
+     fonctionne pas : le micro s'est arrêté pendant la prise. » ; rien n'est collé, l'indicateur du micro s'éteint.
+     **Comportement à confirmer** : l'arrêt du flux audio à un débranchement n'a jamais été observé sur un vrai appareil ;
+     si macOS bascule seul sur un autre micro et que le son continue, la dictée continue aussi (notez ce que vous voyez).
+2. Même chose en mode maintien (essai 13).
+3. Micro branché, ne dites rien pendant dix secondes.
+   - Attendu : aucun échec de micro ; seulement « Rien à transcrire » à la fin. Un vrai micro livre des tranches même dans
+     le silence. **Comportement à confirmer** : l'écart entre l'ouverture du micro et la première tranche n'a pas été
+     mesuré (casque sans fil compris) ; si un micro lent déclenche l'échec à tort, notez le matériel.
+
+### 28. Durée de « Chargement du modèle… »
+
+À chronométrer (aucune durée n'a été mesurée) :
+
+1. Quittez l'application, relancez-la, et tapez ⌃⌥Espace aussitôt (première dictée après le lancement).
+   - Attendu : « Préparation… » avec « Chargement du modèle… » (pas « Téléchargement du modèle… »), puis
+     « Enregistrement ». Notez la durée de « Chargement du modèle… » (variante large-v3 turbo, puis Parakeet).
+2. Relancez l'application, attendez quelques dizaines de secondes (le préchargement se fait en tâche de fond, sans
+   téléchargement), puis dictez.
+   - Attendu : « Préparation… » très brève, sans « Chargement du modèle… » si le préchargement est fini ; sinon la
+     mention s'affiche moins longtemps qu'à l'essai 1. Notez les deux durées. **Comportement à confirmer** : la durée du
+     préchargement et le fait qu'il ne ralentit pas l'affichage du panneau au lancement.
+3. Faites une seconde dictée tout de suite après la première.
+   - Attendu : aucune mention de chargement (les moteurs sont gardés d'une dictée à l'autre).
+4. Changez de variante WhisperKit (essai 22.2, modèle déjà téléchargé), puis dictez.
+   - Attendu : « Chargement du modèle… » revient (la variante n'était pas chargée). Rétablissez large-v3 turbo ensuite.
+
+### 29. Quitter pendant le collage
+
+Placez dans le presse-papiers un texte reconnaissable (⌘C), faites une dictée courte, et choisissez « Quitter Supervox »
+dans le menu de l'icône **juste après** que le texte est collé (la fenêtre est d'une fraction de seconde : plusieurs essais).
+
+1. Après la fermeture de l'application, collez (⌘V) dans une application de notes.
+   - Attendu : c'est votre texte reconnaissable qui est collé, pas la dictée : l'application attend, trois secondes au
+     plus, que le presse-papiers soit rendu avant de se terminer. **Comportement à confirmer** : jamais essayé ; cette
+     fenêtre est très courte et difficile à viser.
+
+### 30. Touches de modification restées enfoncées au collage
+
+1. En bascule, terminez une dictée en tapant ⌃⌥Espace et **gardez ⌃ ou ⌥ enfoncé** plus de deux secondes, le temps de la
+   transcription et du collage.
+   - Attendu : le texte n'est pas collé (une seconde d'attente, puis repli) ; le panneau reste ouvert avec « Texte
+     copié » et une phrase qui dit que des touches de modification sont restées enfoncées et qu'il faut relâcher puis
+     faire ⌘V. Le texte est dans le presse-papiers (votre contenu d'avant n'est pas rendu). Relâchées à temps, le collage
+     se fait normalement.
+
+### 31. Fin automatique à cinq minutes
+
+1. En bascule, lancez une dictée et parlez par moments, sans la terminer, pendant plus de cinq minutes.
+   - Attendu : à cinq minutes (durée affichée), la dictée se termine d'elle-même : « Transcription… », puis le texte est
+     collé comme si vous aviez retapé le raccourci. **Comportement à confirmer** : jamais vu ; la durée de transcription
+     d'une prise de cinq minutes n'a pas été mesurée. En maintien, avec ⌃⌥ encore tenus à ce moment, le texte est copié
+     et non collé (essai 30).
+
+### 32. Retour à faire
 
 À la fin, notez : les essais pas OK ; ce qui était lent (préparation, transcription, téléchargement) ; ce qui était
 déroutant dans le panneau ou les réglages ; si le message sur les « morceaux de mots » se comprend.
