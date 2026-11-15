@@ -12,6 +12,15 @@ public final class ApplicationDelegate: NSObject, NSApplicationDelegate {
         self.controller = controller
     }
 
+    /// Pendant un collage, la fin attend que le presse-papiers de l'utilisateur soit rendu (bornée) : `.terminateLater`, puis la
+    /// réponse du contrôleur.
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        switch controller.requestTermination(reply: { NSApp.reply(toApplicationShouldTerminate: $0) }) {
+        case .now: .terminateNow
+        case .afterInsertion: .terminateLater
+        }
+    }
+
     /// Rend faux : il n'y a pas de fenêtre que le système devrait rouvrir lui-même.
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         controller.openPanelOnReopen()

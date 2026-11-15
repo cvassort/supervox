@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Synchronization
 import SupervoxCore
 import os
 
@@ -65,6 +66,8 @@ public final class DictationController {
     @ObservationIgnored private var run: Run?
     /// La dernière insertion lancée : la suivante l'attend.
     @ObservationIgnored private var insertionTail: Task<Void, Never>?
+    /// Insertions lancées et pas encore finies (voir `isInserting`).
+    @ObservationIgnored private var insertionsInFlight = 0
 
     /// - Parameters:
     ///   - settings: les réglages de transcription, relus à chaque dictée.
@@ -315,15 +318,36 @@ public final class DictationController {
         onTranscriptChange?(text)
         log.notice("dictée terminée ; insertion")
         let previous = insertionTail
+        insertionsInFlight += 1
         let task = Task { [weak self] in
+            guard let self else { return }
+            defer { insertionsInFlight -= 1 }
             // Une insertion encore en route, même d'une dictée annulée, se termine avant celle-ci.
             await previous?.value
-            guard let self, self.isLive(run) else { return }
+            guard self.isLive(run) else { return }
             let outcome = await self.inserter.insert(text)
             self.insertionFinished(run, text: text, outcome: outcome)
         }
         run.insertion = task
         insertionTail = task
+    }
+
+    /// Vrai tant qu'une insertion est en route : le texte est (peut-être) dans le presse-papiers, le ⌘V est (peut-être) posté,
+    /// et le contenu d'origine n'est pas encore rendu. Quitter à ce moment le perdrait.
+    public var isInserting: Bool { insertionsInFlight > 0 }
+
+    /// Rend la main quand les insertions en route sont finies (restauration du presse-papiers comprise), ou au bout de `timeout`
+    /// secondes (`wait` : injectée, aucun test n'attend une durée réelle). Sans insertion en route, rend aussitôt. L'insertion
+    /// elle-même n'est pas interrompue par le délai : seule l'attente l'est.
+    public func finishInsertion(timeout: Double, wait: @escaping @Sendable (Double) async -> Void) async {
+        guard isInserting, let tail = insertionTail else { return }
+        // Une course entre la fin de l'insertion et le délai, sans `TaskGroup` : un groupe attendrait aussi la tâche perdante
+        // avant de rendre la main, et `await tail.value` ne s'interrompt pas.
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let first = FirstToFinish(continuation)
+            Task { await tail.value; first.resume() }
+            Task { await wait(timeout); first.resume() }
+        }
     }
 
     private func insertionFinished(_ run: Run, text: String, outcome: InsertionOutcome) {
@@ -444,6 +468,21 @@ public final class DictationController {
             default: "seuls les \(kept) premiers termes sur \(total) servent"
             }
         return "Vocabulaire trop long pour ce modèle : \(used) à cette dictée. Raccourcissez la liste dans Réglages, onglet Transcription."
+    }
+}
+
+/// Reprend la continuation une seule fois, par le premier qui arrive.
+private final class FirstToFinish: Sendable {
+    private let continuation: Mutex<CheckedContinuation<Void, Never>?>
+
+    init(_ continuation: CheckedContinuation<Void, Never>) { self.continuation = Mutex(continuation) }
+
+    func resume() {
+        let taken = continuation.withLock { value -> CheckedContinuation<Void, Never>? in
+            defer { value = nil }
+            return value
+        }
+        taken?.resume()
     }
 }
 

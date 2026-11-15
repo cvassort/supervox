@@ -49,6 +49,9 @@ public final class AppController {
     private let makeSettingsWindow: SettingsWindowMaker
     private let terminate: @MainActor () -> Void
     private let dictationEnvironment: DictationEnvironment
+    private let terminationWait: @Sendable (Double) async -> Void
+    /// La fin demandée pendant une insertion : l'attente en cours (une seule).
+    private var terminationTask: Task<Void, Never>?
     /// Le préchargement des moteurs lancé au lancement (les tests l'attendent).
     private(set) var preloadTask: Task<Void, Never>?
     private var statusItem: NSStatusItem?
@@ -74,8 +77,10 @@ public final class AppController {
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
         inserter: TextInserter,
-        holdWatch: HoldWatch = .system
+        holdWatch: HoldWatch = .system,
+        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
+        self.terminationWait = terminationWait
         self.settingsStore = settingsStore
         self.secrets = secrets
         self.settingsView = settingsView
@@ -415,6 +420,38 @@ public final class AppController {
         panel.close()
         log.notice("quitter")
         terminate()
+    }
+
+    // MARK: - Fin de l'application
+
+    /// Ce que l'application fait quand le système demande la fin.
+    public enum TerminationDecision: Equatable, Sendable {
+        /// Rien n'est en cours : se terminer.
+        case now
+        /// Un collage est en cours : attendre sa fin (restauration du presse-papiers comprise), puis `reply(true)`.
+        case afterInsertion
+    }
+
+    /// Durée maximale d'attente d'un collage en cours avant de se terminer quand même, en secondes. Un collage dure au plus la
+    /// patience des modificateurs (1 s) et le délai de restauration (0,4 s) ; 3 s laissent de la marge sans retenir
+    /// l'utilisateur. Choix de conception, non mesuré.
+    static let terminationTimeout = 3.0
+
+    /// Appelé par le délégué à la demande de fin. Pendant un collage, quitter laisserait le texte dicté dans le presse-papiers et
+    /// perdrait celui de l'utilisateur : la fin attend la restauration (bornée), puis appelle `reply(true)`. Une seconde demande
+    /// pendant l'attente ne lance pas une seconde attente.
+    public func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> TerminationDecision {
+        guard dictation.isInserting else { return .now }
+        if terminationTask == nil {
+            let dictation = dictation
+            let wait = terminationWait
+            log.notice("fin différée : collage en cours")
+            terminationTask = Task {
+                await dictation.finishInsertion(timeout: Self.terminationTimeout, wait: wait)
+                reply(true)
+            }
+        }
+        return .afterInsertion
     }
 }
 

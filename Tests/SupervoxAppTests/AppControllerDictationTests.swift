@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Synchronization
 import Testing
 import SupervoxCore
 
@@ -8,6 +9,13 @@ import SupervoxCore
 /// La dictée dans l'application assemblée : le raccourci, Échap, le panneau, le menu et les réglages vers le contrôleur de
 /// dictée. Réglages dans un dossier temporaire, enregistreurs, surface et moniteur de clics doubles ; sessions, presse-papiers
 /// et touches doubles : aucun micro, aucun ⌘V, aucun presse-papiers du système.
+/// Les durées d'attente demandées par la fin de l'application (sans attendre).
+final class TimeoutLog: Sendable {
+    private let state = Mutex<[Double]>([])
+    func record(_ seconds: Double) { state.withLock { $0.append(seconds) } }
+    var values: [Double] { state.withLock { $0 } }
+}
+
 @MainActor @Suite(.timeLimit(.minutes(1))) struct AppControllerDictationTests {
     let directory: URL
     let store: SettingsStore
@@ -18,10 +26,16 @@ import SupervoxCore
     let clicks = FakeClickMonitor()
     let presenter = Presenter()
     let engines = FakeEngines()
-    let rig = InsertionRig()
+    let rig: InsertionRig
+    /// L'attente du collage (entre ⌘V et la restauration) : instantanée, sauf quand `blocksInsertion` est vrai, où elle dure
+    /// jusqu'à `insertionSleeper.release()`.
+    let insertionSleeper = SleepingWait(log: CallLog())
+    let blocksInsertion = Flag()
     /// La surveillance du maintien : un sommeil qui dure jusqu'à `holdSleeper.release()`, et les modificateurs tenus.
     let holdSleeper = SleepingWait(log: CallLog())
     let held = HeldModifiers()
+
+    @MainActor final class Flag { var on = false }
 
     @MainActor final class HeldModifiers {
         var value = true
@@ -33,9 +47,14 @@ import SupervoxCore
             .appendingPathComponent("supervox-app-dictation-tests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
+        let sleeper = insertionSleeper
+        let blocks = blocksInsertion
+        rig = InsertionRig(wait: { seconds in if blocks.on { await sleeper.wait(seconds) } })
     }
 
-    func makeController(settings: AppSettings = .defaults) -> AppController {
+    func makeController(
+        settings: AppSettings = .defaults, terminationWait: (@Sendable (Double) async -> Void)? = nil
+    ) -> AppController {
         try? store.save(settings)
         let controller = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
@@ -48,7 +67,8 @@ import SupervoxCore
                     held.asked.append($0)
                     return held.value
                 },
-                wait: { [holdSleeper] in await holdSleeper.wait($0) }))
+                wait: { [holdSleeper] in await holdSleeper.wait($0) }),
+            terminationWait: terminationWait ?? { try? await Task.sleep(for: .seconds($0)) })
         controller.launch()
         return controller
     }
@@ -69,6 +89,95 @@ import SupervoxCore
         session.emit(.recording)
         #expect(await until { controller.panelModel.dictation.phase == .recording })
         return session
+    }
+
+    // MARK: - Quitter pendant un collage (m2)
+
+    /// Mène une dictée jusqu'au collage, retenu après ⌘V (le presse-papiers de l'utilisateur n'est pas encore rendu).
+    private func startPastingDictation(_ controller: AppController) async {
+        blocksInsertion.on = true
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finished("Texte dicté."))
+        #expect(await until { insertionSleeper.isSleeping })
+        #expect(rig.board.text == "Texte dicté.")
+    }
+
+    @Test func quittingWithNothingInProgressTerminatesNow() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        var replies: [Bool] = []
+        #expect(controller.requestTermination(reply: { replies.append($0) }) == .now)
+        await settle()
+        #expect(replies.isEmpty)
+    }
+
+    /// Quitter pendant le collage : la fin est différée, et ne répond qu'une fois le presse-papiers de l'utilisateur rendu.
+    @Test func quittingDuringAPasteWaitsForTheClipboardToBeRestored() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        await startPastingDictation(controller)
+
+        controller.quit()
+        #expect(presenter.terminations == 1)
+        var replies: [Bool] = []
+        var restoredWhenReplying: [Bool] = []
+        let decision = controller.requestTermination(reply: { [rig] in
+            replies.append($0)
+            restoredWhenReplying.append(rig.board.contents == FakeInsertion.original)
+        })
+        #expect(decision == .afterInsertion)
+        await settle()
+        // Le collage n'est pas fini : pas de réponse, le texte dicté est encore dans le presse-papiers.
+        #expect(replies.isEmpty)
+        #expect(rig.board.text == "Texte dicté.")
+
+        insertionSleeper.release()
+        #expect(await until { replies == [true] })
+        #expect(restoredWhenReplying == [true])
+        #expect(rig.board.contents == FakeInsertion.original)
+        // Plus rien en cours : une nouvelle demande se termine tout de suite.
+        #expect(controller.requestTermination(reply: { _ in }) == .now)
+    }
+
+    /// Le délégué traduit la décision : rien en cours, le système peut terminer l'application. (Le cas « plus tard » répondrait à
+    /// `NSApp` : il n'est pas exercé ici, la décision l'est ci-dessus.)
+    @Test func theDelegateLetsTheSystemTerminateWhenNothingIsInProgress() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let delegate = ApplicationDelegate(controller: controller)
+        #expect(delegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
+    }
+
+    /// Un collage qui ne finit jamais ne retient pas l'application : l'attente est bornée.
+    @Test func theWaitForAPasteIsBounded() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let waited = TimeoutLog()
+        let controller = makeController(terminationWait: { waited.record($0) })
+        await startPastingDictation(controller)
+        defer { insertionSleeper.release() }
+
+        var replies: [Bool] = []
+        #expect(controller.requestTermination(reply: { replies.append($0) }) == .afterInsertion)
+        // Le collage est toujours retenu, et pourtant la réponse vient (la borne est écoulée).
+        #expect(await until { replies == [true] })
+        #expect(insertionSleeper.isSleeping)
+        #expect(waited.values == [AppController.terminationTimeout])
+    }
+
+    /// Deux demandes de fin pendant le même collage : une seule attente, une seule réponse.
+    @Test func twoTerminationRequestsDuringTheSamePasteAnswerOnce() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        await startPastingDictation(controller)
+
+        var replies: [Bool] = []
+        #expect(controller.requestTermination(reply: { replies.append($0) }) == .afterInsertion)
+        #expect(controller.requestTermination(reply: { replies.append($0) }) == .afterInsertion)
+        insertionSleeper.release()
+        #expect(await until { !replies.isEmpty })
+        await settle()
+        #expect(replies == [true])
     }
 
     // MARK: - Préchargement au lancement (I4)
