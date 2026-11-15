@@ -12,10 +12,15 @@ struct DictationView: View {
     /// Le raccourci, montré sous « Prêt » ; `nil` s'il n'y en a aucun.
     let hotKeyLabel: String?
     let copy: @MainActor () -> Void
+    /// Le texte en relecture a changé (le texte entier, tel quel) ; sans effet hors relecture.
+    let edit: @MainActor (String) -> Void
+    let paste: @MainActor () -> Void
 
     var body: some View {
         VStack(spacing: 10) {
-            if display.mood == .ready, display.transcript == nil {
+            if let review = display.review {
+                ReviewView(display: display, review: review, edit: edit, paste: paste, copy: copy)
+            } else if display.mood == .ready, display.transcript == nil {
                 ready
                     .frame(maxWidth: .infinity, minHeight: 84)
             } else {
@@ -23,7 +28,7 @@ struct DictationView: View {
                 if let bars = display.bars { Waveform(bars: bars) }
                 // Pendant la prise (durée affichée), la place du texte est réservée même sans texte encore.
                 if display.duration != nil { liveText(display.liveText ?? "") }
-                if let detail = display.detail { detailLine(detail) }
+                if let detail = display.detail { DetailText(text: detail) }
                 if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: copy) }
             }
         }
@@ -85,8 +90,13 @@ struct DictationView: View {
             // la prise : `lineLimit(_:reservesSpace:)` ne la réservait pas ici (mesuré : une ligne pour un texte vide).
             .frame(maxWidth: .infinity, minHeight: 4 * 15 + 2, alignment: .topLeading)
     }
+}
 
-    private func detailLine(_ text: String) -> some View {
+/// Le message sous le titre : quatre lignes au plus en `caption` (`DictationText.detailLimit`).
+struct DetailText: View {
+    let text: String
+
+    var body: some View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -98,7 +108,7 @@ struct DictationView: View {
 
 /// L'icône du ton du titre : un point rouge pendant l'enregistrement, un indicateur d'attente pendant
 /// la préparation et la transcription.
-private struct MoodIcon: View {
+struct MoodIcon: View {
     let mood: DictationDisplay.Mood
 
     var body: some View {
@@ -114,6 +124,9 @@ private struct MoodIcon: View {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .failure:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+        case .review:
+            // Décorative : « À relire » est à côté, VoiceOver ne doit pas lire un nom de symbole avant lui.
+            Image(systemName: "square.and.pencil").foregroundStyle(.secondary).accessibilityHidden(true)
         case .info, .ready:
             Image(systemName: "info.circle.fill").foregroundStyle(.secondary)
         }
@@ -151,19 +164,7 @@ private struct TranscriptCard: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
-                if transcript.copy == .failed {
-                    Label(DictationText.copyFailure, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-                Button {
-                    copy()
-                } label: {
-                    let copied = transcript.copy == .copied
-                    Label(DictationText.copyLabel(for: transcript.copy), systemImage: copied ? "checkmark" : "doc.on.doc")
-                        .font(.caption)
-                }
-                .controlSize(.small)
+                CopyControls(state: transcript.copy, action: copy)
             }
             Text(transcript.text)
                 .font(.callout)
@@ -174,5 +175,27 @@ private struct TranscriptCard: View {
         }
         .padding(8)
         .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+/// « Copier » (« Copié » une fois fait), et à sa gauche « Copie impossible » quand le presse-papiers a refusé : le même bouton
+/// sur la carte du dernier texte et dans la relecture. Les deux vues sont des enfants directs de la rangée qui l'emploie.
+struct CopyControls: View {
+    let state: CopyState
+    let action: @MainActor () -> Void
+
+    var body: some View {
+        if state == .failed {
+            Label(DictationText.copyFailure, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+        Button {
+            action()
+        } label: {
+            Label(DictationText.copyLabel(for: state), systemImage: state == .copied ? "checkmark" : "doc.on.doc")
+                .font(.caption)
+        }
+        .controlSize(.small)
     }
 }

@@ -47,9 +47,13 @@ public struct PanelView: View {
     /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.
     private var dictation: some View {
         DictationView(
-            display: DictationDisplay(state: model.dictation, transcript: model.lastTranscript, copy: model.copyState),
+            display: model.dictationDisplay,
             hotKeyLabel: model.hotKeyLabel,
-            copy: { model.copyTranscript() })
+            copy: { model.copyTranscript() },
+            // Le texte tel que le champ le donne, sans rien y toucher et sans attendre : `editDraft` le garde et prévient le
+            // contrôleur de dictée.
+            edit: { model.editDraft($0) },
+            paste: { model.paste() })
     }
 
     private func welcomeLine(_ text: String) -> some View {

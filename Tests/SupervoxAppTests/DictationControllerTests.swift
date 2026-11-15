@@ -15,7 +15,7 @@ import SupervoxCore
 
         #expect(h.panel.isOpen)
         // Posé tout de suite : un second appui qui arrive avant la première session est déjà ignoré.
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
         let session = await h.session()
         #expect(await until { session.calls == ["start"] })
     }
@@ -34,13 +34,13 @@ import SupervoxCore
         let h = DictationHarness()
         let session = await h.startRecording()
         session.emit(.finalizing)
-        #expect(await until { h.controller.view.phase == .finalizing })
+        #expect(await until { h.controller.view.stage == .finalizing })
 
         h.controller.hotKeyPressed()
         await settle()
         #expect(session.count(of: "finish") == 0)
         #expect(h.engines.sessions.count == 1)
-        #expect(h.controller.view.phase == .finalizing)
+        #expect(h.controller.view.stage == .finalizing)
     }
 
     @Test func pressDuringPreparingIsIgnored() async {
@@ -76,7 +76,7 @@ import SupervoxCore
         await settle()
         #expect(h.engines.sessions.isEmpty)
         #expect(!h.panel.isOpen)
-        #expect(h.controller.view.phase == .idle)
+        #expect(h.controller.view.stage == .idle)
     }
 
     @Test func releaseAfterTheDictationEndedIsIgnored() async {
@@ -84,7 +84,7 @@ import SupervoxCore
         h.knobs.behavior = .hold
         let session = await h.startRecording()
         session.emit(.failed(.noSpeech))
-        #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
+        #expect(await until { h.controller.view.stage == .failed(.noSpeech) })
 
         h.controller.hotKeyReleased()
         await settle()
@@ -100,7 +100,7 @@ import SupervoxCore
         h.controller.hotKeyReleased()
         await settle()
         #expect(session.count(of: "finish") == 0)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
     }
 
     @Test func releaseDuringPreparingCallsFinish() async {
@@ -169,7 +169,7 @@ import SupervoxCore
         await settle()
         #expect(session.count(of: "finish") == 0)
         #expect(h.engines.sessions.count == 1)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
     }
 
     // MARK: - Le comportement d'une dictée ne change pas en cours de route (m4)
@@ -200,7 +200,7 @@ import SupervoxCore
         h.controller.hotKeyPressed()
         await settle()
         #expect(session.count(of: "finish") == 0)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
 
         h.controller.hotKeyReleased()
         #expect(await until { session.count(of: "finish") == 1 })
@@ -311,7 +311,7 @@ import SupervoxCore
         await settle()
         #expect(h.knobs.probes.isEmpty)
         #expect(session.count(of: "finish") == 0)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
 
         h.controller.hotKeyReleased()
         #expect(await until { session.count(of: "finish") == 1 })
@@ -396,7 +396,7 @@ import SupervoxCore
         await settle()
         #expect(h.knobs.escapeProbes == 0)
         #expect(session.count(of: "cancel") == 0)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
     }
 
     /// Une fois la prise finie, la surveillance s'arrête : Échap tenu pendant la transcription ou le collage n'est plus lu ici
@@ -481,36 +481,8 @@ import SupervoxCore
         #expect(await until { !h.panel.isOpen })
         #expect(h.pasted == ["Bonjour à tous."])
         #expect(h.writtenTexts == 1)
-        #expect(h.controller.view == DictationViewState())
+        #expect(h.controller.view == DictationViewState(lastTranscript: "Bonjour à tous."))
         #expect(h.controller.lastTranscript == "Bonjour à tous.")
-    }
-
-    @Test func theTranscriptIsHandedToThePanelWhateverBecomesOfThePaste() async {
-        for trusted in [true, false] {
-            let h = DictationHarness(trusted: trusted)
-            var handed: [String?] = []
-            h.controller.onTranscriptChange = { handed.append($0) }
-            let session = await h.startRecording()
-            session.emit(.finished("Bonjour à tous."))
-            #expect(await until { handed == ["Bonjour à tous."] }, "confiance : \(trusted)")
-        }
-    }
-
-    @Test func aFailureOrACancellationNeverReplacesTheTranscriptHandedToThePanel() async {
-        let h = DictationHarness()
-        var handed: [String?] = []
-        h.controller.onTranscriptChange = { handed.append($0) }
-        let first = await h.startRecording()
-        first.emit(.finished("Premier texte."))
-        #expect(await until { handed == ["Premier texte."] })
-        #expect(await until { !h.panel.isOpen })
-
-        let second = await h.startRecording(index: 1)
-        second.emit(.failed(.noSpeech))
-        #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
-        h.controller.escapePressed()
-        await settle()
-        #expect(handed == ["Premier texte."])
     }
 
     @Test func copiedKeepsThePanelOpenAndShowsTheReason() async {
@@ -518,7 +490,7 @@ import SupervoxCore
         let session = await h.startRecording()
         session.emit(.finished("Texte dicté."))
 
-        #expect(await until { h.controller.view.phase == .finished("Texte dicté.") })
+        #expect(await until { h.controller.view.stage == .copied })
         #expect(h.panel.isOpen)
         let notice = h.controller.view.notice ?? ""
         #expect(notice.contains("Accessibilité"))
@@ -537,10 +509,10 @@ import SupervoxCore
         let session = await h.startRecording()
         session.emit(.finished("Texte dicté."))
 
-        #expect(await until { h.controller.view.phase == .failed(.clipboard) })
+        #expect(await until { h.controller.view.stage == .failed(.clipboard) })
         #expect(h.panel.isOpen)
         #expect(h.controller.view.notice == DictationFailure.clipboard.message)
-        #expect(DictationText.status(for: h.controller.view.phase) == "Texte non copié")
+        #expect(DictationText.status(for: h.controller.view.stage) == "Texte non copié")
         #expect(h.pasted.isEmpty)
         #expect(h.rig.board.contents == FakeInsertion.original)
         // Récupérable par « Dernière dictée ».
@@ -557,7 +529,7 @@ import SupervoxCore
         session.emit(.finalizing)
         session.emit(.failed(failure))
 
-        #expect(await until { h.controller.view.phase == .failed(failure) })
+        #expect(await until { h.controller.view.stage == .failed(failure) })
         #expect(h.panel.isOpen)
         #expect(h.controller.view.notice == failure.message)
         #expect(h.pasted.isEmpty)
@@ -566,7 +538,7 @@ import SupervoxCore
 
         // Un nouvel appui relance une dictée.
         h.controller.hotKeyPressed()
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
         #expect(h.controller.view.notice == nil)
         let second = await h.session(1)
         #expect(await until { second.calls.contains("start") })
@@ -581,7 +553,7 @@ import SupervoxCore
 
         let second = await h.startRecording(index: 1)
         second.emit(.failed(.noSpeech))
-        #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
+        #expect(await until { h.controller.view.stage == .failed(.noSpeech) })
         #expect(h.controller.lastTranscript == "Premier texte.")
     }
 
@@ -591,14 +563,14 @@ import SupervoxCore
         let session = await h.startRecording()
         session.emit(.cancelled)
 
-        #expect(await until { h.controller.view.phase == .cancelled })
+        #expect(await until { h.controller.view.stage == .cancelled })
         #expect(h.panel.isOpen)
         #expect(h.controller.view.notice == "La dictée a été interrompue.")
         #expect(!h.controller.isBusy)
         #expect(h.pasted.isEmpty)
 
         h.controller.hotKeyPressed()
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
         _ = await h.session(1)
     }
 
@@ -607,7 +579,7 @@ import SupervoxCore
         let session = await h.startRecording()
         session.emit(.finished("   "))
 
-        #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
+        #expect(await until { h.controller.view.stage == .failed(.noSpeech) })
         #expect(h.panel.isOpen)
         #expect(h.pasted.isEmpty)
         // Un texte d'espaces n'est pas une dictée réussie : rien à récupérer.
@@ -647,7 +619,7 @@ import SupervoxCore
         case .finalizing:
             let session = await h.startRecording()
             session.emit(.finalizing)
-            #expect(await until { h.controller.view.phase == .finalizing })
+            #expect(await until { h.controller.view.stage == .finalizing })
             return session
         default:
             return await h.startRecording()
@@ -694,7 +666,7 @@ import SupervoxCore
         let h = DictationHarness()
         let session = await h.startRecording()
         session.emit(.failed(.noSpeech))
-        #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
+        #expect(await until { h.controller.view.stage == .failed(.noSpeech) })
 
         h.controller.escapePressed()
         #expect(!h.panel.isOpen)
@@ -731,7 +703,7 @@ import SupervoxCore
         #expect(await until { h.rig.board.contents == FakeInsertion.original })
         #expect(h.pasted.isEmpty)
         #expect(!log.entries.contains { $0.hasPrefix("postPaste") })
-        #expect(h.controller.view == DictationViewState())
+        #expect(h.controller.view == DictationViewState(lastTranscript: "texte"))
         #expect(!h.panel.isOpen)
     }
 
@@ -772,7 +744,7 @@ import SupervoxCore
         old.emit(.failed(.engine("ancien échec")))
         await settle()
         #expect(h.pasted.isEmpty)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
         #expect(h.controller.view.notice == nil)
         #expect(h.panel.isOpen)
 
@@ -830,7 +802,7 @@ import SupervoxCore
         await settle()
         #expect(h.panel.isOpen)
         #expect(second.count(of: "cancel") == 0)
-        #expect(h.controller.view.phase == .recording)
+        #expect(h.controller.view.stage == .recording)
     }
 
     // MARK: - Mode, micro, modèle
@@ -864,7 +836,7 @@ import SupervoxCore
         // Relue à chaque appui : une fois accordée, l'appui suivant dicte.
         h.knobs.microphoneAllowed = true
         h.controller.hotKeyPressed()
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
         _ = await h.session()
     }
 
@@ -886,11 +858,11 @@ import SupervoxCore
         }
         h.controller.hotKeyPressed()
         #expect(await until { h.controller.view.notice == DictationController.downloadNotice })
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
 
         download.open()
         #expect(await until { h.controller.view.notice == DictationController.loadingNotice })
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
 
         // La session se fabrique, puis prépare : la mention de chargement reste, celle de téléchargement ne revient pas.
         make.open()
@@ -901,7 +873,7 @@ import SupervoxCore
         #expect(h.controller.view.notice == DictationController.loadingNotice)
 
         session.emit(.recording)
-        #expect(await until { h.controller.view.phase == .recording })
+        #expect(await until { h.controller.view.stage == .recording })
         #expect(h.controller.view.notice == nil)
         // Aucun état montré n'a porté les deux mentions à la fois.
         #expect(h.views.allSatisfy { ($0.notice ?? "").contains("Téléchargement") == false || ($0.notice ?? "").contains("Chargement") == false })
@@ -998,12 +970,12 @@ import SupervoxCore
         let notice = h.controller.view.notice ?? ""
         #expect(notice.contains("vocabulaire n'a pas servi"))
         #expect(notice.contains("petit modèle"))
-        #expect(h.controller.view.phase == .preparing)
+        #expect(h.controller.view.stage == .preparing)
         // Le comptage n'a plus d'objet : la liste ne part pas.
         #expect(!h.engines.events.contains("count"))
 
         session.emit(.recording)
-        #expect(await until { h.controller.view.phase == .recording })
+        #expect(await until { h.controller.view.stage == .recording })
         #expect(h.controller.view.notice?.contains("vocabulaire n'a pas servi") == true)
     }
 
@@ -1045,7 +1017,7 @@ import SupervoxCore
         session.emit(.preparing)
         session.emit(.failed(.engine("raison brute https://exemple.invalid/clé")))
 
-        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(await until { h.controller.view.stage.isTerminal })
         #expect(h.panel.isOpen)
         let notice = h.controller.view.notice ?? ""
         #expect(notice == DictationController.preparationFailedNotice)
@@ -1065,7 +1037,7 @@ import SupervoxCore
         }
         h.controller.hotKeyPressed()
 
-        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(await until { h.controller.view.stage.isTerminal })
         #expect(h.panel.isOpen)
         let notice = h.controller.view.notice ?? ""
         #expect(notice == DictationController.preparationFailedNotice)
@@ -1134,7 +1106,7 @@ import SupervoxCore
         session.emit(.preparing)
         session.emit(.failed(.engine("échec de https://exemple.invalid/modele avec la clé sk-123")))
 
-        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(await until { h.controller.view.stage.isTerminal })
         #expect(h.panel.isOpen)
         let notice = h.controller.view.notice ?? ""
         #expect(notice.contains("Transcription"))
@@ -1149,7 +1121,7 @@ import SupervoxCore
         session.emit(.preparing)
         session.emit(.failed(.microphone("aucun micro utilisable n'a été trouvé")))
 
-        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(await until { h.controller.view.stage.isTerminal })
         let notice = h.controller.view.notice ?? ""
         #expect(notice == DictationFailure.microphone("aucun micro utilisable n'a été trouvé").message)
         #expect(!notice.contains("Transcription"))
@@ -1164,7 +1136,7 @@ import SupervoxCore
         h.engines.configure { $0.makeError = LeakyError() }
         h.controller.hotKeyPressed()
 
-        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(await until { h.controller.view.stage.isTerminal })
         #expect(h.panel.isOpen)
         let notice = h.controller.view.notice ?? ""
         #expect(notice.contains("Transcription"))
@@ -1182,7 +1154,7 @@ import SupervoxCore
         h.knobs.settings = first
         let one = await h.startRecording()
         one.emit(.failed(.noSpeech))
-        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(await until { h.controller.view.stage.isTerminal })
 
         let second = TranscriptionSettings(
             engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["beta", "gamma"])
@@ -1211,7 +1183,7 @@ import SupervoxCore
         #expect(notice.contains("Transcription"))
         // La dictée va au bout, avec l'avis toujours là.
         session.emit(.recording)
-        #expect(await until { h.controller.view.phase == .recording })
+        #expect(await until { h.controller.view.stage == .recording })
         #expect(h.controller.view.notice?.contains("2 premiers termes sur 5") == true)
     }
 
@@ -1310,6 +1282,87 @@ import SupervoxCore
         let h = DictationHarness()
         _ = await h.startRecording()
         #expect(h.views.last == h.controller.view)
-        #expect(h.views.first?.phase == .preparing)
+        #expect(h.views.first?.stage == .preparing)
+    }
+
+    // MARK: - Un seul dernier texte
+
+    /// Ce qui arrive après une première dictée réussie, sans jamais effacer son texte.
+    enum LaterEvent: CaseIterable, Sendable { case failure, sessionCancelled, escape, panelClosed, newDictation }
+
+    @Test(arguments: LaterEvent.allCases)
+    func theViewKeepsCarryingTheControllersLastTranscript(_ event: LaterEvent) async {
+        let h = DictationHarness()
+        let first = await h.startRecording()
+        first.emit(.finished("Premier texte."))
+        #expect(await until { !h.panel.isOpen })
+        #expect(h.controller.view == DictationViewState(lastTranscript: "Premier texte."))
+
+        switch event {
+        case .failure:
+            let second = await h.startRecording(index: 1)
+            second.emit(.failed(.noSpeech))
+            #expect(await until { h.controller.view.stage == .failed(.noSpeech) })
+        case .sessionCancelled:
+            let second = await h.startRecording(index: 1)
+            second.emit(.cancelled)
+            #expect(await until { h.controller.view.stage == .cancelled })
+        case .escape:
+            _ = await h.startRecording(index: 1)
+            h.controller.escapePressed()
+        case .panelClosed:
+            _ = await h.startRecording(index: 1)
+            h.panel.close()
+        case .newDictation:
+            h.controller.hotKeyPressed()
+            #expect(h.controller.view.stage == .preparing)
+        }
+        #expect(h.controller.lastTranscript == "Premier texte.")
+        #expect(h.controller.view.lastTranscript == h.controller.lastTranscript)
+    }
+
+    @Test func aPastedTextIsInTheViewOnceThePanelHasClosed() async {
+        let h = DictationHarness()
+        let session = await h.startRecording()
+        session.emit(.finished("Bonjour à tous."))
+        #expect(await until { !h.panel.isOpen })
+        #expect(h.controller.view == DictationViewState(lastTranscript: "Bonjour à tous."))
+        #expect(h.controller.view.lastTranscript == h.controller.lastTranscript)
+    }
+
+    /// Le repli sur la copie : l'écran dit « copié », avec la raison, et porte le texte.
+    @Test func aCopiedTextIsAScreenStageThatCarriesTheReasonAndTheText() async {
+        let h = DictationHarness(trusted: false)
+        let session = await h.startRecording()
+        session.emit(.finished("Texte dicté."))
+
+        #expect(await until { h.controller.view.stage == .copied })
+        let view = h.controller.view
+        #expect(view.notice?.contains("Accessibilité") == true)
+        #expect(view.lastTranscript == "Texte dicté.")
+        #expect(view.lastTranscript == h.controller.lastTranscript)
+        #expect(DictationText.status(for: view.stage) == "Texte copié")
+        #expect(h.panel.isOpen)
+    }
+
+    @Test func aRefusedPasteboardLeavesTheTextInTheView() async {
+        let h = DictationHarness()
+        h.rig.board.refusesTextWrites = true
+        let session = await h.startRecording()
+        session.emit(.finished("Texte dicté."))
+
+        #expect(await until { h.controller.view.stage == .failed(.clipboard) })
+        #expect(h.controller.view.lastTranscript == "Texte dicté.")
+        #expect(h.controller.view.lastTranscript == h.controller.lastTranscript)
+    }
+
+    /// Le panneau garde « Copier » à jour dès que la session rend le texte, sans attendre la fin de l'insertion.
+    @Test func theTextIsAnnouncedAsSoonAsTheSessionHandsItOver() async {
+        let h = DictationHarness()
+        let session = await h.startRecording()
+        session.emit(.finalizing)
+        session.emit(.finished("Annoncé."))
+        #expect(await until { !h.panel.isOpen })
+        #expect(h.views.contains { $0.stage == .finalizing && $0.lastTranscript == "Annoncé." })
     }
 }

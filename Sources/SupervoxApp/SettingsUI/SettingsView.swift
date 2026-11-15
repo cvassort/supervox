@@ -18,27 +18,29 @@ public enum SystemSettingsPane: Sendable {
 
 /// Les onglets de la fenêtre de réglages.
 public enum SettingsTab: Hashable, Sendable {
-    case providers, hotKey, permissions, transcription
+    case providers, hotKey, permissions, transcription, modes
 }
 
-/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription.
+/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription, modes.
 public struct SettingsView: View {
     let providers: ProvidersModel
     let hotKey: HotKeySettingsModel
     let transcription: TranscriptionModel
+    let modes: ModesModel
     let permissions: PermissionsModel
     let openSystemSettings: @MainActor (SystemSettingsPane) -> Void
     @State private var tab: SettingsTab
 
     /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut).
     public init(
-        providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel,
+        providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel, modes: ModesModel,
         permissions: PermissionsModel,
         openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void, initialTab: SettingsTab = .providers
     ) {
         self.providers = providers
         self.hotKey = hotKey
         self.transcription = transcription
+        self.modes = modes
         self.permissions = permissions
         self.openSystemSettings = openSystemSettings
         _tab = State(initialValue: initialTab)
@@ -62,6 +64,7 @@ public struct SettingsView: View {
                 providers: makeProvidersModel(controller),
                 hotKey: makeHotKeyModel(controller, keyMonitor: LocalKeyDownMonitor()),
                 transcription: makeTranscriptionModel(controller, catalog: catalog, promptTokenLimit: promptTokenLimit),
+                modes: makeModesModel(controller),
                 permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
         }
     }
@@ -69,14 +72,14 @@ public struct SettingsView: View {
     /// La fenêtre et ses deux moments : à chaque présentation, demander quelles clés existent et relire les modèles du
     /// disque ; quand l'utilisateur la quitte, mettre fin à une capture de raccourci (le raccourci global revient).
     static func content(
-        providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel,
+        providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel, modes: ModesModel,
         permissions: PermissionsModel, openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void
     ) -> SettingsContent {
         SettingsContent(
             view: AnyView(
                 SettingsView(
-                    providers: providers, hotKey: hotKey, transcription: transcription, permissions: permissions,
-                    openSystemSettings: openSystemSettings)),
+                    providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
+                    permissions: permissions, openSystemSettings: openSystemSettings)),
             onPresent: {
                 await providers.checkKeys()
                 await transcription.refresh()
@@ -94,6 +97,13 @@ public struct SettingsView: View {
             save: { [weak controller] transcription in
                 try controller?.updateSettings { $0.transcription = transcription }
             })
+    }
+
+    /// Les choix de relecture s'enregistrent par `AppController.updateSettings`, comme tous les autres.
+    static func makeModesModel(_ controller: AppController) -> ModesModel {
+        ModesModel(
+            modes: controller.panelModel.modes, options: controller.settings.modeOptions,
+            save: { [weak controller] options in try controller?.updateSettings { $0.modeOptions = options } })
     }
 
     /// Construit sans appeler le magasin de secrets.
@@ -134,6 +144,7 @@ public struct SettingsView: View {
             Tab("Transcription", systemImage: "waveform", value: .transcription) {
                 TranscriptionPane(model: transcription)
             }
+            Tab("Modes", systemImage: "square.stack", value: .modes) { ModesPane(model: modes) }
         }
         // Une capture ne survit pas à un changement d'onglet (en plus de `onDisappear` de l'onglet Raccourci).
         .onChange(of: tab) { hotKey.cancelRecording() }

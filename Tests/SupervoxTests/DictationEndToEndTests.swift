@@ -73,6 +73,7 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
     private(set) var isOpen = false
     var onClosed: (@MainActor () -> Void)?
     func open() { isOpen = true }
+    func setKeyboard(_ keyboard: PanelKeyboard) {}
     func close() {
         guard isOpen else { return }
         isOpen = false
@@ -135,8 +136,8 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
     /// se ferme.
     @Test func toggleDictationInsertsTheFinalTextExactlyOnce() async {
         controller.hotKeyPressed()
-        #expect(controller.view.phase == .preparing)
-        #expect(await until { controller.view.phase == .recording })
+        #expect(controller.view.stage == .preparing)
+        #expect(await until { controller.view.stage == .recording })
         #expect(feed.starts == 1)
         #expect(doubles.detector.prepares == 1)
         #expect(doubles.whisper("small").prepares == 1)
@@ -149,7 +150,7 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
         #expect(keys.pastes == 1)
         #expect(doubles.whisper("small").transcriptions == 1)
         #expect(feed.stops >= 1)
-        #expect(controller.view == DictationViewState())
+        #expect(controller.view == DictationViewState(lastTranscript: "texte whisper"))
         #expect(controller.lastTranscript == "texte whisper")
         #expect(!controller.isBusy)
     }
@@ -165,7 +166,7 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
 
         hold.controller.hotKeyPressed()
         #expect(await hold.until { hold.doubles.detector.prepares == 1 })
-        #expect(hold.controller.view.phase == .preparing)
+        #expect(hold.controller.view.stage == .preparing)
 
         hold.controller.hotKeyReleased()
         await hold.settle()
@@ -173,9 +174,8 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
         #expect(hold.feed.starts == 0)
         gate.open()
 
-        #expect(await hold.until { hold.controller.view.phase.isTerminal })
-        #expect(hold.controller.view.phase == .failed(.noSpeech))
-        #expect(DictationText.status(for: hold.controller.view.phase) == "Rien à transcrire")
+        #expect(await hold.until { hold.controller.view.stage == .failed(.noSpeech) })
+        #expect(DictationText.status(for: hold.controller.view.stage) == "Rien à transcrire")
         #expect(hold.feed.starts == 0)
         #expect(hold.doubles.whisper("small").transcriptions == 0)
         #expect(hold.board.texts.isEmpty)
@@ -192,10 +192,10 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
         doubles.whisper("small").hold(with: gate)
 
         controller.hotKeyPressed()
-        #expect(await until { controller.view.phase == .recording })
+        #expect(await until { controller.view.stage == .recording })
         controller.hotKeyPressed()
         #expect(await until { doubles.whisper("small").transcriptions == 1 })
-        #expect(await until { controller.view.phase == .finalizing })
+        #expect(await until { controller.view.stage == .finalizing })
 
         controller.escapePressed()
         #expect(!panel.isOpen)

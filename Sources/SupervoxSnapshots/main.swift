@@ -181,19 +181,28 @@ let secondProvider = Provider(
     return model
 }
 
+/// L'onglet Modes. `refusing` : l'enregistrement est refusé (fichier de réglages illisible), et la bascule de Dictée brute le
+/// montre.
+@MainActor func modesModel(refusing: Bool = false) -> ModesModel {
+    let model = ModesModel(
+        modes: ModeChip.fixed, options: [:],
+        save: { _ in
+            if refusing { throw SettingsError.unreadableFileKept(fileName: "settings.json") }
+        })
+    if refusing { model.setReview(true, for: ModeChip.rawID) }
+    return model
+}
+
 @MainActor func panelModel(mode: String) -> PanelModel {
     let model = PanelModel(lastModeID: mode)
     model.hotKeyLabel = standardLabel
     return model
 }
 
-/// Le panneau dans un état de dictée : `state`, et le dernier texte récupérable s'il y en a un.
-@MainActor func dictationPanelModel(
-    mode: String = "dictee-brute", state: DictationViewState, transcript: String? = nil
-) -> PanelModel {
+/// Le panneau dans un état de dictée : `state`, qui porte le dernier texte récupérable s'il y en a un.
+@MainActor func dictationPanelModel(mode: String = ModeChip.rawID, state: DictationViewState) -> PanelModel {
     let model = panelModel(mode: mode)
     model.dictation = state
-    model.setTranscript(transcript)
     return model
 }
 
@@ -209,6 +218,25 @@ func exampleLevels(_ count: Int) -> [Float] {
 let exampleShortText = "Bonjour à tous, voici le compte rendu de la réunion de ce matin."
 let exampleLongText =
     "Bonjour à tous, voici le compte rendu de la réunion de ce matin. Nous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée. Pensez aussi à relire le dernier paragraphe, car il manque encore une précision sur le budget."
+
+/// Un texte de relecture plus long que seize lignes (la borne haute du champ) : le champ défile.
+let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separator: "\n\n")
+
+/// Le panneau en relecture : le texte à relire, avec l'avis éventuel et ce qu'a donné « Copier ». `copy` : `true` ou `false`
+/// refait un clic sur « Copier » dont le presse-papiers accepte ou refuse le texte. `keyboard` : le panneau a la frappe (il
+/// est la fenêtre clé) ; l'aide en dépend, et l'image est rendue comme dans une fenêtre clé ou non (voir `render`).
+@MainActor func reviewPanelModel(
+    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true
+) -> PanelModel {
+    let model = dictationPanelModel(
+        state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
+    model.panelHasKeyboard = keyboard
+    if let copy {
+        model.onCopy = { _ in copy }
+        model.copyTranscript()
+    }
+    return model
+}
 
 /// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
 /// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
@@ -226,10 +254,18 @@ let exampleLongText =
 /// Pour les réglages, c'est le contenu de l'onglet sans la barre d'onglets : copiée par `cacheDisplay` avec la vue
 /// cadre de la fenêtre, la barre d'onglets (matériau du système) sort blanche, sans texte, surtout en sombre. Elle
 /// n'est donc pas rendue, plutôt que rendue fausse.
-@MainActor func render(_ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil) throws {
+///
+/// `keyWindow` : la vue est rendue comme dans une fenêtre clé (le bouton principal prend la couleur d'accent) ; la fenêtre hors
+/// écran ne l'est jamais, et un bouton principal y sort gris, comme dans une fenêtre inactive. À dire pour chaque image de
+/// relecture, selon que le panneau a la frappe dans cet état ou non.
+@MainActor func render(
+    _ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil, keyWindow: Bool = false
+) throws {
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
-        rootView: AnyView(view.background(Color(nsColor: background)).environment(\.colorScheme, dark ? .dark : .light)))
+        rootView: AnyView(
+            view.background(Color(nsColor: background)).environment(\.colorScheme, dark ? .dark : .light)
+                .environment(\.controlActiveState, keyWindow ? .key : .inactive)))
     host.appearance = appearance
     let window = NSWindow(
         contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: size ?? host.fittingSize),
@@ -264,19 +300,19 @@ for dark in [false, true] {
 
     // Panneau prêt.
     try render(
-        PanelView(model: panelModel(mode: "dictee-brute"), permissions: PermissionsModel(probe: granted),
+        PanelView(model: panelModel(mode: ModeChip.rawID), permissions: PermissionsModel(probe: granted),
                   openSettings: {}, quit: {}),
         name: "panneau-pret", dark: dark, background: panelBackground)
 
     // Panneau du premier lancement : accueil et permissions manquantes.
-    let first = panelModel(mode: "dictee-brute")
+    let first = panelModel(mode: ModeChip.rawID)
     first.welcome = AppController.welcome(hotKeyLabel: standardLabel)
     try render(
         PanelView(model: first, permissions: PermissionsModel(probe: missing), openSettings: {}, quit: {}),
         name: "panneau-premier-lancement", dark: dark, background: panelBackground)
 
     // Panneau avec avis et permissions manquantes.
-    let noticed = PanelModel(lastModeID: "prompt")
+    let noticed = PanelModel(lastModeID: ModeChip.promptID)
     noticed.setNotice(
         "Le raccourci \(standardLabel) a été refusé par macOS : ouvrez le panneau depuis la barre de menus, puis choisissez-en un autre dans Réglages.",
         for: .hotKey)
@@ -289,51 +325,55 @@ for dark in [false, true] {
     let reason = await accessibilityReason()
     let cases: [(String, PanelModel, any PermissionsProbe)] = [
         ("dictee-preparation-telechargement",
-         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.downloadNotice)), granted),
+         dictationPanelModel(state: DictationViewState(stage: .preparing, notice: DictationController.downloadNotice)), granted),
         ("dictee-preparation-chargement",
-         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.loadingNotice)), granted),
+         dictationPanelModel(state: DictationViewState(stage: .preparing, notice: DictationController.loadingNotice)), granted),
         ("dictee-enregistrement",
-         dictationPanelModel(state: DictationViewState(phase: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
+         dictationPanelModel(state: DictationViewState(stage: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
         ("dictee-enregistrement-texte-long",
          dictationPanelModel(
             state: DictationViewState(
-                phase: .recording, liveText: exampleLongText, levels: exampleLevels(48), elapsed: 65.2)), granted),
+                stage: .recording, liveText: exampleLongText, levels: exampleLevels(48), elapsed: 65.2)), granted),
         ("dictee-transcription",
          dictationPanelModel(
             state: DictationViewState(
-                phase: .finalizing, liveText: exampleShortText, levels: exampleLevels(48), elapsed: 12.9)), granted),
+                stage: .finalizing, liveText: exampleShortText, levels: exampleLevels(48), elapsed: 12.9)), granted),
         ("dictee-echec-aucune-voix",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)), granted),
+            state: DictationViewState(stage: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)), granted),
         ("dictee-echec-preparation",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.engine("x")), notice: DictationController.preparationFailedNotice),
-            transcript: exampleShortText), granted),
+            state: DictationViewState(
+                stage: .failed(.engine("x")), notice: DictationController.preparationFailedNotice,
+                lastTranscript: exampleShortText)), granted),
         ("dictee-texte-copie",
          dictationPanelModel(
-            state: DictationViewState(phase: .finished(exampleLongText), notice: reason), transcript: exampleLongText),
+            state: DictationViewState(stage: .copied, notice: reason, lastTranscript: exampleLongText)),
          ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)),
         // Le pire cas de hauteur : un message de quatre lignes et un dernier texte de trois lignes.
         ("dictee-echec-message-long",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.engine("x")), notice: reason + " " + reason), transcript: exampleLongText + " " + exampleLongText),
+            state: DictationViewState(
+                stage: .failed(.engine("x")), notice: reason + " " + reason,
+                lastTranscript: exampleLongText + " " + exampleLongText)),
          granted),
         ("dictee-mode-indisponible",
          dictationPanelModel(
-            mode: "entretien", state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
-        ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(), transcript: exampleShortText), granted),
+            mode: ModeChip.interviewID, state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
+        ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(lastTranscript: exampleShortText)), granted),
         ("dictee-dernier-texte-copie", {
-            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))
             model.onCopy = { _ in true }
             model.copyTranscript()
             return model
         }(), granted),
         ("dictee-presse-papiers-refuse",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.clipboard), notice: DictationFailure.clipboard.message),
-            transcript: exampleShortText), granted),
+            state: DictationViewState(
+                stage: .failed(.clipboard), notice: DictationFailure.clipboard.message,
+                lastTranscript: exampleShortText)), granted),
         ("dictee-copie-impossible", {
-            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))
             model.onCopy = { _ in false }
             model.copyTranscript()
             return model
@@ -342,7 +382,31 @@ for dark in [false, true] {
     for (name, model, probe) in cases {
         try render(
             PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
-            name: name, dark: dark, background: panelBackground)
+            name: name, dark: dark, background: panelBackground,)
+    }
+
+    // La relecture : le texte à corriger, puis coller ou copier. `keyboard` dit si le panneau a la frappe dans cet état : il
+    // l'a au début de la relecture (`.focused`) et après un clic sur « Copier » ; pas après un collage manqué (`.available` : la
+    // frappe est à l'application de dessous, jusqu'à un clic dans le panneau), ni après un clic dans une autre application,
+    // ni pendant le collage (`.none`). L'image est rendue comme dans une fenêtre clé exactement quand le panneau a la frappe.
+    let accessDenied = ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)
+    let reviewCases: [(name: String, model: PanelModel, probe: any PermissionsProbe)] = [
+        ("relecture-courte", reviewPanelModel(exampleShortText), granted),
+        ("relecture-longue", reviewPanelModel(exampleReviewText), granted),
+        ("relecture-vide", reviewPanelModel(""), granted),
+        ("relecture-collage", reviewPanelModel(exampleShortText, stage: .pasting, keyboard: false), granted),
+        ("relecture-sans-frappe", reviewPanelModel(exampleShortText, keyboard: false), granted),
+        ("relecture-copie-sans-accessibilite",
+         reviewPanelModel(exampleShortText, notice: reason, keyboard: false), accessDenied),
+        ("relecture-presse-papiers-refuse",
+         reviewPanelModel(exampleShortText, notice: DictationController.reviewClipboardNotice, keyboard: false), granted),
+        ("relecture-copiee", reviewPanelModel(exampleShortText, copy: true), granted),
+        ("relecture-copie-impossible", reviewPanelModel(exampleShortText, copy: false), granted),
+    ]
+    for (name, model, probe) in reviewCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
     }
 
     // Réglages : vides, puis deux fournisseurs.
@@ -350,7 +414,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel(list), hotKey: hotKeyModel(),
-                transcription: await transcriptionModel(UnavailableModelCatalog()),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -360,7 +424,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(refusing: refusing),
-                transcription: await transcriptionModel(UnavailableModelCatalog()),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .hotKey),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -370,15 +434,25 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(),
-                transcription: await transcriptionModel(UnavailableModelCatalog()),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
                 permissions: PermissionsModel(probe: probe), openSystemSettings: { _ in }, initialTab: .permissions),
+            name: name, dark: dark, background: window, size: settingsSize)
+    }
+
+    // Onglet Modes : les défauts, puis un enregistrement refusé. À la taille de la vraie fenêtre.
+    for (name, refusing) in [("modes", false), ("modes-erreur", true)] {
+        try render(
+            SettingsView(
+                providers: await providersModel([]), hotKey: hotKeyModel(),
+                transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(refusing: refusing),
+                permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
 
     // Onglet Transcription. La barre d'onglets n'est pas rendue (voir `render`).
     func transcriptionTab(_ model: TranscriptionModel) async -> SettingsView {
         SettingsView(
-            providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model,
+            providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model, modes: modesModel(),
             permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .transcription)
     }
     let allAbsentModels = exampleModels(parakeet: .absent, turbo: .absent, small: .absent, base: .absent, voice: .absent)

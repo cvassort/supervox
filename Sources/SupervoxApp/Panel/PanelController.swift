@@ -8,6 +8,7 @@ import os
 public protocol PanelSurface: AnyObject {
     /// Place le panneau et le montre, sans le rendre clé ni activer l'application.
     func show()
+    /// Cache le panneau et lui retire la frappe : un panneau caché n'est plus clé et ne peut plus le redevenir.
     func hide()
     /// La hauteur, en points, que le contenu demande maintenant ; `nil` si la surface ne sait pas la mesurer. Le contrôleur la
     /// compare à celle qu'il a vue pour décider d'un redimensionnement.
@@ -15,6 +16,8 @@ public protocol PanelSurface: AnyObject {
     /// Donne cette hauteur à la fenêtre : le haut ne bouge pas (la fenêtre grandit et rétrécit vers le bas) sauf pour ne pas
     /// sortir de l'écran.
     func resize(toHeight height: CGFloat)
+    /// Ce que le panneau peut faire de la frappe (voir `PanelKeyboard`).
+    func setKeyboard(_ keyboard: PanelKeyboard)
 }
 
 extension PanelSurface {
@@ -26,6 +29,14 @@ extension PanelSurface {
 @MainActor
 public protocol ContentSizeObserving: AnyObject {
     var onContentSizeChange: (@MainActor () -> Void)? { get set }
+}
+
+/// Une surface qui sait dire quand son panneau prend ou perd la frappe (devient ou cesse d'être la fenêtre clé).
+@MainActor
+public protocol KeyStateObserving: AnyObject {
+    /// Appelé avec `true` quand le panneau devient clé, `false` quand il cesse de l'être, quelle qu'en soit la cause : un clic
+    /// dans une autre application, dans le panneau, une manœuvre de `setKeyboard`, la fermeture.
+    var onKeyChange: (@MainActor (Bool) -> Void)? { get set }
 }
 
 /// Surveille les clics de souris adressés à d'autres applications, le temps que le panneau est ouvert.
@@ -41,9 +52,13 @@ public protocol OutsideClickMonitor: AnyObject {
 /// arrondis, présent sur tous les bureaux, centré dans le tiers supérieur de l'écran où se trouve
 /// la souris. Ce contrôleur décide quand il s'ouvre et se ferme ; la surface l'affiche.
 ///
-/// Focus. Le panneau est montré par `orderFrontRegardless()` et ne peut pas devenir clé
-/// (`canBecomeKey` faux) : l'application de dessous reste au premier plan et son champ de texte
-/// garde la frappe, même après un clic dans le panneau.
+/// Focus. Le panneau est montré par `orderFrontRegardless()`. Par défaut (`PanelKeyboard.none`) il ne peut pas devenir clé :
+/// l'application de dessous reste au premier plan et son champ de texte garde la frappe, même après un clic dans le panneau.
+/// Pour la relecture, `setKeyboard(.focused)` le rend clé, sans activer l'application, et le champ de relecture prend la
+/// frappe ; `.none` ou `.available` la rendent à l'application de dessous. `hide()` retire aussi la frappe au panneau :
+/// la fermeture est un seul retrait de l'écran. Que le panneau ait la frappe ou non, la surface le remonte au modèle
+/// (`PanelModel.panelHasKeyboard`, par `KeyStateObserving`) : un clic dans une autre application la lui prend sans que le
+/// contrôleur de dictée le sache, et l'aide de la relecture n'annonce ⌘↩ que si le panneau est clé.
 ///
 /// Échap. Tant que le panneau est ouvert, Échap est tenu comme raccourci global (Carbon, sans
 /// permission) par un enregistreur à part, et rendu dès la fermeture. Un moniteur d'événements
@@ -52,7 +67,8 @@ public protocol OutsideClickMonitor: AnyObject {
 /// Échap n'arrive plus à l'application de dessous. Si Échap ne peut pas être réservé, un avis le dit.
 ///
 /// Clic en dehors. Tant que le panneau est ouvert, un clic dans une autre application le ferme
-/// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`).
+/// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`), une
+/// relecture ou un collage (`review`, `pasting`).
 ///
 /// Dictée. Le panneau ne connaît de la dictée que son état (`PanelModel.dictation`). Sa fermeture est signalée par `onClosed`,
 /// et Échap peut être confié à un gestionnaire (`escapeHandler`).
@@ -82,6 +98,8 @@ public final class PanelController: PanelOpening {
         self.clickMonitor = clickMonitor
         self.surface = surface
         (surface as? any ContentSizeObserving)?.onContentSizeChange = { [weak self] in self?.contentChanged() }
+        // La frappe du panneau, telle que la surface la voit : seule source de ce que l'aide de la relecture annonce.
+        (surface as? any KeyStateObserving)?.onKeyChange = { [weak self] isKey in self?.model.panelHasKeyboard = isKey }
     }
 
     /// Le contenu du panneau a changé (l'état de la dictée, un texte, une permission) : si sa hauteur n'est plus celle de la
@@ -103,6 +121,12 @@ public final class PanelController: PanelOpening {
     }
 
     public var isOpen: Bool { model.isOpen }
+
+    /// Sans effet panneau fermé : la fermeture a posé `.none`, et rien n'est reporté à la réouverture.
+    public func setKeyboard(_ keyboard: PanelKeyboard) {
+        guard model.isOpen else { return }
+        surface.setKeyboard(keyboard)
+    }
 
     /// Appelé chaque fois qu'un panneau ouvert se ferme, par quelque chemin que ce soit (Échap, clic en dehors, menu,
     /// Quitter, Réglages, fin d'une dictée collée) : le contrôleur de dictée y annule la dictée en cours.
@@ -136,10 +160,11 @@ public final class PanelController: PanelOpening {
         if let escapeHandler { escapeHandler() } else { close() }
     }
 
-    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée : le clic qui sert à passer à la fenêtre
-    /// où le texte doit aller ne doit pas annuler ce qu'on dit.
+    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée, une relecture ou un collage
+    /// (`DictationStage.holdsPanel`) : le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas annuler ce
+    /// qu'on dit ni ce qu'on relit.
     private func outsideClick() {
-        guard !model.dictation.phase.isActive else { return }
+        guard !model.dictation.stage.holdsPanel else { return }
         close()
     }
 
@@ -159,10 +184,11 @@ public final class PanelController: PanelOpening {
         }
     }
 
-    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée :
-    /// seul le menu de l'icône ferme toujours.
+    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée comme
+    /// pendant une relecture (`DictationStage.holdsPanel`) : seul le menu de l'icône ferme toujours. (Pendant la relecture,
+    /// « Coller » ferme aussi, mais l'avis ne le dit pas : il parle du panneau en général.)
     private static let escapeRefusedNotice =
-        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors quand aucune dictée n'est en cours."
+        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors, sauf pendant une dictée ou une relecture."
 
     /// Le cadre de la fenêtre pour une nouvelle hauteur : le haut ne bouge pas, la fenêtre grandit et rétrécit vers le bas.
     /// Si le bas sortirait de la zone utile de l'écran, la fenêtre remonte ; plus haute que la zone utile, elle est bornée à
@@ -192,10 +218,15 @@ public final class PanelController: PanelOpening {
 
 /// La surface réelle : un `FloatingPanel`, placé sur l'écran de la souris.
 @MainActor
-public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving {
+public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving, KeyStateObserving {
     /// La fenêtre (visible des tests d'intégration, qui la placent hors écran).
     let panel: FloatingPanel
     private let log = Logger(subsystem: "dev.supervox.app", category: "panel")
+    private var keyObservers: [NSObjectProtocol] = []
+
+    /// Appelé quand le panneau devient clé (`true`) ou cesse de l'être (`false`) : `didBecomeKey` et `didResignKey` de ce
+    /// panneau seulement.
+    public var onKeyChange: (@MainActor (Bool) -> Void)?
 
     /// Appelé quand le contenu de la vue change de taille (voir `PanelController.contentChanged`).
     public var onContentSizeChange: (@MainActor () -> Void)? {
@@ -205,6 +236,39 @@ public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving {
 
     public init<Content: View>(content: Content) {
         panel = FloatingPanel(content: content)
+        let center = NotificationCenter.default
+        func observe(_ name: Notification.Name, isKey: Bool) -> NSObjectProtocol {
+            center.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onKeyChange?(isKey) }
+            }
+        }
+        keyObservers = [
+            observe(NSWindow.didBecomeKeyNotification, isKey: true),
+            observe(NSWindow.didResignKeyNotification, isKey: false),
+        ]
+    }
+
+    isolated deinit {
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    public func setKeyboard(_ keyboard: PanelKeyboard) {
+        panel.keyboard = keyboard
+        switch keyboard {
+        case .focused:
+            panel.makeKey()
+        case .available, .none:
+            // Un panneau ouvert et clé doit rendre la frappe : le retirer de l'écran puis le remettre fait reprendre la clé à la
+            // fenêtre de l'application au premier plan, sans que le panneau ait activé la sienne. Sans animation autour : le
+            // panneau ne doit pas visiblement disparaître et reparaître.
+            if panel.isKeyWindow {
+                let animation = panel.animationBehavior
+                panel.animationBehavior = .none
+                panel.orderOut(nil)
+                panel.orderFrontRegardless()
+                panel.animationBehavior = animation
+            }
+        }
     }
 
     public func contentHeight() -> CGFloat? {
@@ -230,7 +294,10 @@ public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving {
         )
     }
 
+    /// Un seul retrait de l'écran, sans remise devant : le panneau perd la frappe en même temps (`keyboard = .none`), donc la
+    /// fermeture n'a pas besoin de `setKeyboard(.none)` ni de la manœuvre qui rend la frappe panneau ouvert.
     public func hide() {
+        panel.keyboard = .none
         panel.orderOut(nil)
     }
 
@@ -265,7 +332,7 @@ public final class GlobalClickMonitor: OutsideClickMonitor {
     }
 }
 
-/// Le `NSPanel` lui-même. Ne devient jamais clé ni principal : il ne prend jamais la frappe.
+/// Le `NSPanel` lui-même. Jamais principal ; clé seulement si `keyboard` le permet.
 final class FloatingPanel: NSPanel {
     private static let cornerRadius: CGFloat = 20
 
@@ -306,8 +373,42 @@ final class FloatingPanel: NSPanel {
         contentView = background
     }
 
-    override var canBecomeKey: Bool { false }
+    /// Les retraits et mises devant du panneau, avec l'animation en vigueur à ce moment : le journal des tests d'intégration
+    /// (la fermeture est un seul retrait ; la manœuvre de la frappe se fait sans animation).
+    struct Ordering: Equatable {
+        enum Kind { case out, front }
+        var kind: Kind
+        var animation: NSWindow.AnimationBehavior
+    }
+    private(set) var orderings: [Ordering] = []
+
+    override func orderOut(_ sender: Any?) {
+        orderings.append(Ordering(kind: .out, animation: animationBehavior))
+        super.orderOut(sender)
+    }
+
+    override func orderFrontRegardless() {
+        orderings.append(Ordering(kind: .front, animation: animationBehavior))
+        super.orderFrontRegardless()
+    }
+
+    /// Ce que le panneau fait de la frappe (voir `PanelKeyboard`) ; posé par `FloatingPanelSurface.setKeyboard`.
+    var keyboard: PanelKeyboard = .none
+
+    override var canBecomeKey: Bool { keyboard != .none }
     override var canBecomeMain: Bool { false }
+
+    /// La vue répond d'abord (un bouton, le champ). Sinon, une commande d'édition (⌘Z, ⌘C…) part dans la chaîne des
+    /// répondeurs de **ce** panneau, à partir de son premier répondeur : l'application n'a pas de menu Édition qui le ferait,
+    /// et `NSApp.sendAction(to: nil)` déborderait sur la fenêtre principale et le délégué de l'application.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if super.performKeyEquivalent(with: event) { return true }
+        guard event.type == .keyDown, keyboard != .none,
+            let command = PanelEditingKeys.command(
+                characters: event.charactersIgnoringModifiers ?? "", modifiers: event.modifierFlags)
+        else { return false }
+        return firstResponder?.tryToPerform(PanelEditingKeys.selector(for: command), with: self) ?? false
+    }
 
     /// Image étirable aux coins arrondis : seule façon fiable d'arrondir le flou « derrière la
     /// fenêtre » d'un `NSVisualEffectView`.

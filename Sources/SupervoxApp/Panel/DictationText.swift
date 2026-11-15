@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import SupervoxCore
 
@@ -10,6 +11,33 @@ public enum DictationText {
     public static let transcriptLimit = 170
     /// Message sous le titre (raison d'un échec, d'une copie) : quatre lignes en `caption`.
     public static let detailLimit = 320
+
+    /// La ligne d'aide sous le champ de relecture.
+    public static let reviewHint = "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée »."
+
+    /// L'aide sous le champ quand le panneau n'a pas la frappe (un collage manqué la lui a fait rendre, ou un clic dans une autre
+    /// application la lui a prise) : ⌘↩ partirait dans l'autre application, et n'est donc pas annoncé. Une seule phrase pour
+    /// les deux cas, et sans « réessayer » : sans Accessibilité, un nouveau « Coller » échouerait de la même façon.
+    public static let reviewNoKeyboardHint =
+        "Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller. Échap ferme sans coller."
+    /// L'aide sous un champ vide : « Coller » est inactif, ⌘↩ ne fait rien.
+    public static let reviewEmptyHint = "Tapez un texte, ou appuyez sur Échap pour fermer sans coller."
+    /// Ce que dit un champ vide.
+    public static let reviewPlaceholder = "Le texte est vide."
+
+    /// Hauteur la plus basse du champ de relecture : quatre lignes de `callout` à 15 points plus 2, la même mesure que la place
+    /// du texte en direct (relevée sur les images de l'étape 3 ; voir `DictationView.liveText`).
+    public static let editorMinHeight: CGFloat = 62
+    /// Hauteur la plus haute : seize lignes. Choix de mise en page, non mesuré. Au-delà, le champ défile.
+    public static let editorMaxHeight: CGFloat = 242
+
+    /// La hauteur du champ de relecture pour un contenu de cette hauteur : celle du contenu, entre les deux bornes. Une valeur
+    /// négative ou non finie (que la mesure ne devrait pas donner) vaut la borne basse : y compris +∞, par cohérence avec
+    /// `duration` (une valeur absurde ne doit pas ouvrir le champ au maximum) ; le brief ne tranche que NaN et le négatif.
+    public static func editorHeight(contentHeight: CGFloat) -> CGFloat {
+        guard contentHeight.isFinite else { return editorMinHeight }
+        return min(max(contentHeight, editorMinHeight), editorMaxHeight)
+    }
 
     private static let ellipsis = "…"
 
@@ -69,14 +97,16 @@ public enum DictationText {
     /// Ce que le panneau dit quand le presse-papiers n'a pas accepté le texte.
     public static let copyFailure = "Copie impossible"
 
-    /// Le libellé d'une phase, en mots simples. Il ne porte jamais le texte dicté.
-    public static func status(for phase: DictationPhase) -> String {
-        switch phase {
+    /// Le libellé d'une étape, en mots simples. Il ne porte jamais le texte dicté.
+    public static func status(for stage: DictationStage) -> String {
+        switch stage {
         case .idle: "Prêt"
         case .preparing: "Préparation…"
         case .recording: "Enregistrement"
         case .finalizing: "Transcription…"
-        case .finished: "Texte copié"
+        case .review: "À relire"
+        case .pasting: "Collage…"
+        case .copied: "Texte copié"
         case .cancelled: "Dictée interrompue"
         case .failed(.noSpeech): "Rien à transcrire"
         case .failed(.microphone): "Micro indisponible"
@@ -100,6 +130,8 @@ public struct DictationDisplay: Equatable, Sendable {
     /// Le ton du titre : choisit l'icône et la couleur.
     public enum Mood: Equatable, Sendable {
         case ready, info, working, recording, success, failure
+        /// Le texte attend d'être relu.
+        case review
     }
 
     /// Le dernier texte dicté, que l'on peut copier.
@@ -126,13 +158,35 @@ public struct DictationDisplay: Equatable, Sendable {
     public var showsHotKey: Bool
     public var transcript: Transcript?
 
+    /// Le texte à relire : la vue de relecture à la place de la carte « Dernière dictée », pendant la relecture et le collage.
+    public struct Review: Equatable, Sendable {
+        /// Le texte entier, tel que l'utilisateur le corrige : jamais coupé ni rogné.
+        public var text: String
+        /// On peut écrire dans le champ (relecture, pas collage).
+        public var isEditable: Bool
+        public var canPaste: Bool
+        public var canCopy: Bool
+        /// Le collage est en cours.
+        public var isPasting: Bool
+        /// Ce qu'a donné le dernier clic sur « Copier ».
+        public var copy: CopyState
+        /// La ligne d'aide sous le champ ; aucune pendant le collage. Elle n'annonce ⌘↩ que si ⌘↩ colle : le texte n'est pas
+        /// blanc et le panneau a la frappe.
+        public var hint: String?
+        /// Le champ est vide (aucun caractère) : il dit « Le texte est vide. ».
+        public var showsPlaceholder: Bool
+    }
+
+    public var review: Review?
+
     /// - Parameters:
-    ///   - transcript: le texte de la dernière dictée réussie (`DictationController.lastTranscript`).
     ///   - copy: ce qu'a donné le dernier clic sur « Copier » (`PanelModel.copyState`).
-    public init(state: DictationViewState, transcript: String?, copy: CopyState = .idle) {
+    ///   - panelHasKeyboard: le panneau est la fenêtre clé (`PanelModel.panelHasKeyboard`) : seul cas où l'aide annonce ⌘↩.
+    ///     Sans information, le choix sûr : ne pas l'annoncer.
+    public init(state: DictationViewState, copy: CopyState = .idle, panelHasKeyboard: Bool = false) {
         let notice = state.notice.map { DictationText.head($0, maxCharacters: DictationText.detailLimit) }
-        let phase = state.phase
-        headline = DictationText.status(for: phase)
+        let stage = state.stage
+        headline = DictationText.status(for: stage)
         duration = nil
         bars = nil
         liveText = nil
@@ -142,7 +196,7 @@ public struct DictationDisplay: Equatable, Sendable {
             DictationText.tail($0, maxCharacters: DictationText.liveTextLimit)
         }
 
-        switch phase {
+        switch stage {
         case .idle:
             if let notice {
                 mood = .info
@@ -163,7 +217,11 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .working
             duration = DictationText.duration(state.elapsed)
             liveText = live
-        case .finished:
+        case .review:
+            mood = .review
+        case .pasting:
+            mood = .working
+        case .copied:
             mood = .success
         case .cancelled:
             mood = .info
@@ -171,14 +229,27 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .failure
         }
 
-        // Le texte récupérable : jamais pendant une dictée. Après une copie, c'est le texte de cette dictée, sans étiquette.
-        var phaseText: String?
-        if case .finished(let text) = phase { phaseText = text }
-        if !phase.isActive, let text = Self.nonBlank(transcript) ?? Self.nonBlank(phaseText) {
-            let isThisDictation: Bool
-            if case .finished = phase { isThisDictation = true } else { isThisDictation = false }
+        // La relecture : le texte entier, à corriger, coller ou copier. Rien d'autre ne le montre.
+        if stage == .review || stage == .pasting {
+            let usable = stage == .review && Self.nonBlank(state.draft) != nil
+            let hint: String? =
+                stage == .pasting
+                ? nil
+                : !usable
+                    ? DictationText.reviewEmptyHint
+                    : panelHasKeyboard ? DictationText.reviewHint : DictationText.reviewNoKeyboardHint
+            review = Review(
+                text: state.draft, isEditable: stage == .review, canPaste: usable, canCopy: usable,
+                isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: state.draft.isEmpty)
+        } else {
+            review = nil
+        }
+
+        // Le texte récupérable : jamais pendant une dictée, ni pendant la relecture et le collage (le texte y est celui que
+        // l'on relit). Après une copie, c'est le texte de cette dictée, sans étiquette.
+        if !stage.holdsPanel, let text = Self.nonBlank(state.lastTranscript) {
             self.transcript = Transcript(
-                label: isThisDictation ? nil : "Dernière dictée",
+                label: stage == .copied ? nil : "Dernière dictée",
                 text: DictationText.tail(text, maxCharacters: DictationText.transcriptLimit), copy: copy)
         } else {
             self.transcript = nil

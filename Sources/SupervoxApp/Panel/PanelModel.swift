@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// Une pastille de mode en haut du panneau.
@@ -12,14 +13,24 @@ public struct ModeChip: Equatable, Identifiable, Sendable {
 
     /// Les quatre modes fixes de cette étape, dans l'ordre d'affichage. Aucun mode personnalisé.
     public static let fixed: [ModeChip] = [
-        ModeChip(id: "dictee-brute", title: "Dictée brute"),
-        ModeChip(id: "dictee-nettoyee", title: "Dictée nettoyée"),
-        ModeChip(id: "prompt", title: "Prompt"),
-        ModeChip(id: "entretien", title: "Entretien"),
+        ModeChip(id: rawID, title: "Dictée brute"),
+        ModeChip(id: cleanedID, title: "Dictée nettoyée"),
+        ModeChip(id: promptID, title: "Prompt"),
+        ModeChip(id: interviewID, title: "Entretien"),
     ]
 
     /// Mode retenu quand le dernier mode enregistré n'existe plus.
-    public static let fallbackID = "dictee-brute"
+    public static let fallbackID = rawID
+}
+
+/// Les identifiants des modes fixes, écrits ici et nulle part ailleurs dans `Sources/SupervoxApp` (un contrôle de sources le
+/// vérifie ; l'outil de rendu des écrans les nomme par ces constantes) : ils sont
+/// enregistrés dans `settings.json`, où ils servent de clés (`AppSettings.modeOptions`).
+extension ModeChip {
+    public static let rawID = "dictee-brute"
+    public static let cleanedID = "dictee-nettoyee"
+    public static let promptID = "prompt"
+    public static let interviewID = "entretien"
 }
 
 /// D'où vient un avis. L'ordre des cas est l'ordre d'affichage.
@@ -58,12 +69,14 @@ public final class PanelModel {
     public var welcome: String?
     /// La dictée telle que la vue la montre ; mise à jour par le contrôleur de dictée.
     public var dictation = DictationViewState()
-    /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : en mémoire seulement, jamais écrit.
-    public private(set) var lastTranscript: String?
-    /// Ce qu'a donné le dernier clic sur « Copier » ; oublié à la fermeture du panneau, à l'ouverture, au texte suivant et
-    /// au début d'une nouvelle dictée.
+    /// Ce qu'a donné le dernier clic sur « Copier » ; oublié à la fermeture du panneau, à l'ouverture, quand le dernier texte
+    /// de la dictée change et au début d'une nouvelle dictée.
     public private(set) var copyState = CopyState.idle
     public var transcriptCopied: Bool { copyState == .copied }
+    /// Le panneau a la frappe : c'est la fenêtre clé. Seule source de ce fait (la surface le remonte à chaque prise et perte de
+    /// la clé : un clic dans une autre application la lui prend, un clic dans le panneau la lui rend) ; l'aide de la relecture
+    /// n'annonce ⌘↩ que s'il est vrai. Faux panneau fermé.
+    public var panelHasKeyboard = false
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 
@@ -80,6 +93,10 @@ public final class PanelModel {
     /// Ce que fait « Copier » : met le texte entier dans le presse-papiers (par l'insertion, qui tient le presse-papiers) et
     /// rend vrai si le système l'a accepté.
     @ObservationIgnored public var onCopy: (@MainActor (String) -> Bool)?
+    /// Appelé quand l'utilisateur modifie le texte en relecture, avec le texte entier : le contrôleur de dictée le garde.
+    @ObservationIgnored public var onDraftChange: (@MainActor (String) -> Void)?
+    /// Ce que fait « Coller » : le contrôleur de dictée insère le texte en relecture.
+    @ObservationIgnored public var onPaste: (@MainActor () -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
 
@@ -89,37 +106,62 @@ public final class PanelModel {
         selectedModeID = modes.contains { $0.id == lastModeID } ? lastModeID : ModeChip.fallbackID
     }
 
-    /// Un nouveau dernier texte ; vide ou fait d'espaces, il n'y a rien à garder.
-    public func setTranscript(_ text: String?) {
-        let blank = text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        lastTranscript = blank ? nil : text
-        copyState = .idle
-    }
-
-    /// L'état de la dictée tel que la vue le montre. Une dictée qui commence remet « Copier » à neuf ; un échec ou une
-    /// interruption n'y touchent pas (le dernier texte est toujours là).
+    /// L'état de la dictée tel que la vue le montre. Un nouveau dernier texte, un brouillon modifié, ou une dictée qui commence,
+    /// remet « Copier » à neuf ; un échec ou une interruption n'y touchent pas (le dernier texte est toujours là).
     public func setDictation(_ state: DictationViewState) {
+        let textChanged = state.lastTranscript != dictation.lastTranscript || state.draft != dictation.draft
         dictation = state
-        if state.phase.isActive { copyState = .idle }
+        if textChanged || state.stage.isActive { copyState = .idle }
     }
 
-    /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre.
+    /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre. En relecture, c'est le brouillon que l'on est en
+    /// train de corriger ; ailleurs, le dernier texte. Un texte blanc ne se copie pas : rien ne change.
     public func copyTranscript() {
-        guard let lastTranscript, let onCopy else { return }
-        copyState = onCopy(lastTranscript) ? .copied : .failed
+        let text = dictation.stage == .review ? dictation.draft : dictation.lastTranscript
+        guard let text, !Self.isBlank(text), let onCopy else { return }
+        copyState = onCopy(text) ? .copied : .failed
     }
+
+    /// On peut coller en relecture, quand le brouillon n'est pas blanc.
+    public var canPaste: Bool { dictation.stage == .review && !Self.isBlank(dictation.draft) }
+
+    /// « Coller » : ne fait rien si l'on ne peut pas coller.
+    public func paste() {
+        guard canPaste else { return }
+        onPaste?()
+    }
+
+    /// L'utilisateur a modifié le texte en relecture. Ignoré hors relecture. La vue montre tout de suite le nouveau texte, le
+    /// contrôleur de dictée est prévenu, et « Copier » repart à neuf : le texte n'est plus celui qui a été copié.
+    public func editDraft(_ text: String) {
+        guard dictation.stage == .review else { return }
+        dictation.draft = text
+        copyState = .idle
+        onDraftChange?(text)
+    }
+
+    private static func isBlank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// Réservé à `PanelController`, qui montre et cache la fenêtre en même temps.
     func toggle() {
         isOpen.toggle()
         copyState = .idle
-        if isOpen { onOpen?() } else { welcome = nil }
+        if isOpen { onOpen?() } else {
+            welcome = nil
+            panelHasKeyboard = false
+        }
     }
 
     func close() {
         isOpen = false
         welcome = nil
         copyState = .idle
+        panelHasKeyboard = false
+    }
+
+    /// Ce que la vue de dictée montre : l'état de la dictée, ce qu'a donné « Copier », et si le panneau a la frappe.
+    public var dictationDisplay: DictationDisplay {
+        DictationDisplay(state: dictation, copy: copyState, panelHasKeyboard: panelHasKeyboard)
     }
 
     /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement.

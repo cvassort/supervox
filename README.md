@@ -3,7 +3,8 @@
 [![Tests](https://github.com/cvassort/supervox/actions/workflows/tests.yml/badge.svg)](https://github.com/cvassort/supervox/actions/workflows/tests.yml)
 
 supervox sera une application macOS de dictée et d'entretien vocal. Elle est en cours de construction.
-Ce dépôt contient l'application telle qu'elle est (le socle et la dictée brute, voir « Application » et « Dictée ») et
+Ce dépôt contient l'application telle qu'elle est (le socle, la dictée brute et sa relecture, voir « Application »,
+« Dictée » et « Relecture ») et
 le banc d'essai : `supervox-bench`, un outil en ligne de commande qui mesure la qualité de transcription de plusieurs
 moteurs, le délai de réponse de bout en bout et la dictée en direct.
 
@@ -37,7 +38,8 @@ Ils ne tournent pas dans le pipeline.
 
 Supervox est une application de barre de menus : pas d'icône dans le Dock, une icône d'onde dans la barre de menus.
 L'application tient le panneau, la dictée brute (voir « Dictée »), les fournisseurs, le raccourci et les permissions.
-Les trois autres modes du panneau (dictée nettoyée, prompt, entretien) ne sont pas encore faits : le panneau le dit.
+Les trois autres modes du panneau (dictée nettoyée, prompt, entretien) ne sont pas encore faits : le panneau le dit. Leur
+réglage de relecture existe déjà (Réglages, onglet Modes) et vaudra dès qu'ils seront là.
 
 ### Construire
 
@@ -72,17 +74,18 @@ open build/Supervox.app
 - Raccourci par défaut : ⌃⌥Espace (contrôle, option, espace). Il ouvre le panneau et lance la dictée, depuis n'importe
   quelle application ; selon le réglage, un second appui la termine (bascule) ou le relâcher la termine (maintien).
   Le raccourci ne ferme pas le panneau : un appui, panneau ouvert et sans dictée en cours, relance une dictée. Le panneau
-  se ferme par Échap, par un clic dans une autre application (sauf pendant une dictée), par le menu de l'icône, par
-  « Réglages… » et « Quitter Supervox », ou après un collage réussi. Seule exception : dans un mode autre que la dictée
-  brute, un second appui, panneau ouvert, le ferme.
+  se ferme par Échap, par un clic dans une autre application (sauf pendant une dictée ou une relecture), par le menu de
+  l'icône, par « Réglages… » et « Quitter Supervox », ou après un collage réussi. Seule exception : dans un mode autre que
+  la dictée brute, un second appui, panneau ouvert, le ferme. Pendant une relecture (voir « Relecture »), le raccourci ne
+  fait rien.
 - Au premier lancement (aucun fichier de réglages), le panneau s'ouvre seul : il dit à quoi sert le raccourci et où
   sont les réglages, et propose d'autoriser le micro puis l'Accessibilité. Rien n'est demandé avant ce clic.
 - Relancer l'application déjà ouverte (`open build/Supervox.app`) ouvre le panneau, sans second exemplaire. Vérifié
   ainsi sur l'application construite ; la relance depuis le Finder ou le Dock ne l'a pas été.
 - Un avis sur le fichier de réglages (mis de côté, illisible, version plus récente) ouvre aussi le panneau au
   lancement ; ce n'est pas l'accueil d'un nouvel utilisateur.
-- Les réglages (fournisseurs, raccourci, permissions) s'ouvrent par « Réglages… », dans le menu « … » du panneau ou
-  dans celui de l'icône de la barre de menus.
+- Les réglages (cinq onglets : fournisseurs, raccourci, permissions, transcription, modes) s'ouvrent par « Réglages… »,
+  dans le menu « … » du panneau ou dans celui de l'icône de la barre de menus.
 - Si le raccourci est refusé par macOS, le panneau s'ouvre au lancement pour le dire. S'il est aussi un raccourci de
   macOS activé sur ce Mac, le panneau s'ouvre pour le dire au premier lancement où c'est le cas ; ensuite l'avis
   reste dans le panneau, qui ne s'ouvre plus seul pour ce raccourci. macOS ne signale pas les conflits avec une autre application : si le raccourci
@@ -90,14 +93,17 @@ open build/Supervox.app
 
 ### Ce qui est stocké, et où
 
-- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode, réglages de transcription) : `~/Library/Application Support/Supervox/settings.json`.
+- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode, réglages de transcription, choix de relecture par
+  mode) : `~/Library/Application Support/Supervox/settings.json`.
   Un fichier au contenu illisible est mis de côté dans le même dossier (`settings.json.illisible-<date>`), jamais
   écrasé ; un fichier qui ne peut pas être lu (droits, disque) reste en place et rien n'y est écrit jusqu'à la fin de
   la session, même s'il redevient lisible ; un fichier écrit par une version plus récente de Supervox est gardé tel
   quel et n'est pas réécrit.
-- Le texte dicté n'est écrit dans aucun fichier ni journal ; le panneau n'en garde que le dernier, en mémoire. Le bouton
-  « Copier » le met dans le presse-papiers comme une copie ordinaire : un gestionnaire d'historique du presse-papiers peut
-  alors le garder (le collage automatique, lui, marque sa copie comme provisoire et confidentielle pour qu'ils l'ignorent).
+- Le texte dicté n'est écrit dans aucun fichier ni journal ; le panneau n'en garde que le dernier, en mémoire (le texte
+  corrigé en relecture compris : quitter l'application le perd). Le bouton « Copier » le met dans le presse-papiers comme
+  une copie ordinaire : un gestionnaire d'historique du presse-papiers peut alors le garder (le collage d'une dictée sans
+  relecture, lui, marque sa copie comme provisoire et confidentielle pour qu'ils l'ignorent ; le « Coller » de la
+  relecture laisse, après coup, une copie ordinaire : voir « Relecture »).
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
   identifiant). Jamais dans un fichier. Elles ne sont lues qu'au moment d'une requête qui en a besoin.
 - Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et
@@ -112,7 +118,8 @@ swift run supervox-snapshots /chemin/vers/un/dossier
 `supervox-snapshots` écrit les écrans du panneau et des réglages en PNG, en clair et en sombre : pour la dictée, la
 préparation (avec « Téléchargement du modèle… », puis avec « Chargement du modèle… »), l'enregistrement (sans texte, avec
 un texte long), la transcription, « rien à transcrire », l'échec de préparation, le texte copié faute d'Accessibilité, le
-texte refusé par le presse-papiers, le dernier texte (avec « Copié » et « Copie impossible »), et un mode non disponible. Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
+texte refusé par le presse-papiers, un message long sous un dernier texte long, le dernier texte (avec « Copié » et « Copie impossible »), un mode non disponible, et la relecture (texte court, texte plus long que le champ, texte vide, collage en cours, panneau sans la frappe, texte copié faute d'Accessibilité, texte refusé par le presse-papiers, « Copié », « Copie impossible ») ; pour
+les réglages, l'onglet Modes (par défaut, puis avec un enregistrement refusé). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
 d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au presse-papiers ni aux réglages
 réels. Les onglets des réglages sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas
 fidèlement.
@@ -140,7 +147,8 @@ premier plan.
   (point rouge, durée, forme d'onde, texte en direct sur quatre lignes au plus, la fin toujours visible), transcription,
   puis le résultat. Échap annule la dictée : rien n'est collé.
 - **Le collage est un ⌘V simulé** : le texte est mis dans le presse-papiers, collé, puis le contenu d'origine du
-  presse-papiers (texte, image et les autres types lisibles) est rendu, sauf si une autre application y a écrit entre-temps ;
+  presse-papiers (texte, image et les autres types lisibles) est rendu, sauf si une autre application y a écrit entre-temps
+  (le « Coller » de la relecture fait exception : il laisse le texte copié, voir « Relecture ») ;
   un type dont les données ne se lisent pas (données promises par l'application d'origine, par exemple) n'est pas rendu.
   La touche envoyée est celle qui produit « v » dans la disposition de clavier en cours. Cela demande l'autorisation
   d'Accessibilité ; sans elle, ou si des touches de modification restent enfoncées, le texte est copié, laissé dans le
@@ -167,6 +175,55 @@ premier plan.
   panneau le dit. Échap pendant un téléchargement annule la dictée : le modèle en cours finit, les suivants ne sont pas lancés.
 - **Durée maximale** d'une prise : 5 minutes, après quoi la dictée se termine d'elle-même (choix de conception, non
   mesuré).
+
+### Relecture
+
+À la fin d'une dictée, le texte peut s'afficher dans le panneau au lieu d'être collé tout de suite : on le corrige au
+clavier, puis on choisit « Coller » ou « Copier ». Rien n'est collé sans ce geste. À cette étape, seule la dictée brute
+dicte. Cette section dit ce que le code fait ; ce qu'aucun test automatique ne peut voir est à essayer à la main (étape 4
+de `docs/essai-final.md`).
+
+- **Où se règle la relecture.** Réglages, onglet Modes : un interrupteur « Relire avant de coller » par mode. Sans choix
+  enregistré : éteint pour la dictée brute et la dictée nettoyée, allumé pour Prompt ; Entretien est toujours relu (sa ligne
+  n'a pas d'interrupteur). Le réglage des modes qui ne dictent pas encore est déjà enregistré. Le choix est lu à l'appui qui
+  commence la dictée : le changer pendant une dictée ne vaut qu'à la suivante. Il est écrit dans `settings.json`, sans
+  nouveau numéro de version du fichier : un fichier d'avant la relecture se lit sans rien mettre de côté, et reçoit une
+  entrée `modeOptions` à son premier enregistrement. Si l'enregistrement est refusé (fichier devenu illisible ou plus
+  récent), l'onglet le dit et l'interrupteur revient à sa valeur enregistrée.
+- **Le champ.** Le texte s'affiche en entier dans un champ de texte brut (titre « À relire »), qui prend la frappe tout de
+  suite : le panneau devient la fenêtre clé sans activer Supervox (la barre des menus devrait rester celle de l'application
+  de dessous). Rien ne modifie le texte dans le dos de l'utilisateur : ni guillemets ni tirets typographiques, ni
+  remplacement, correction ou complétion automatiques. ⌘Z, ⇧⌘Z, ⌘X, ⌘C, ⌘V et ⌘A sont traduits par le panneau lui-même
+  (l'application n'a pas de menu Édition tant que les Réglages n'ont pas été ouverts) et suivent la lettre de la
+  disposition du clavier en cours. Le champ fait la hauteur de son texte, de quatre à seize lignes, puis défile ; le panneau
+  grandit avec lui.
+- **Coller (le bouton, ou ⌘↩).** Le panneau rend la frappe à l'application de dessous, attend 0,15 s (choix de conception,
+  non mesuré), puis colle par le même ⌘V simulé que la dictée directe, sous les mêmes conditions (Accessibilité accordée,
+  touches de modification relâchées). **Contrairement à une dictée sans relecture, qui rend toujours le presse-papiers
+  d'origine, « Coller » colle le texte et le laisse copié** : un second ⌘V ailleurs le recolle, et un gestionnaire
+  d'historique du presse-papiers peut le garder. Si le système refuse de garder cette copie après le collage, le contenu
+  d'origine est rendu, sans avis. « Coller » est inactif, et ⌘↩ sans effet, quand le texte est vide ou ne contient que des
+  espaces (le champ dit alors « Le texte est vide. » s'il n'a aucun caractère).
+- **Si le collage est impossible** (Accessibilité refusée, touches de modification restées enfoncées, ⌘V non envoyé,
+  presse-papiers qui refuse le texte), le panneau revient à la relecture avec le texte intact et la raison sous le champ :
+  les mêmes phrases qu'à une dictée directe, sauf pour le presse-papiers refusé, dont la phrase est adaptée. Il n'a plus la
+  frappe : l'aide dit de cliquer dans le texte pour le corriger, ou sur « Coller » pour le coller, et ⌘↩ n'y serait pas
+  reçu. C'est la même aide chaque fois que le panneau n'est pas la fenêtre clé (le panneau le remonte lui-même, à chaque
+  prise et perte de la clé) : après un clic dans une autre application, ⌘↩ n'est plus annoncé, et il l'est de nouveau
+  dès que le panneau reprend la frappe. Ce suivi est testé sur une fenêtre hors écran ; sur un vrai écran, il reste à
+  confirmer (liste d'essai, essai 38).
+- **Copier** met le texte entier du champ dans le presse-papiers (copie ordinaire), indique « Copié », et laisse le panneau
+  ouvert ; une modification du texte remet « Copier ».
+- **Échap** ferme sans coller ni copier, comme toute autre fermeture du panneau (menu de l'icône, « Réglages… », « Quitter
+  Supervox »). Le texte corrigé devient « Dernière dictée » (un champ vidé laisse le texte d'origine). Un collage qui n'a pas
+  encore envoyé ⌘V est annulé.
+- **Pendant la relecture**, le raccourci global ne fait rien et un clic en dehors du panneau ne le ferme pas (comme pendant
+  une dictée) : le clic sert à choisir où coller. Changer de pastille ne touche pas la relecture ; la dictée suivante suit
+  le mode choisi. La relecture n'utilise aucun modèle : supprimer un modèle reste possible.
+- **Le texte n'est gardé qu'en mémoire.** Quitter Supervox pendant une relecture le perd, sans demander confirmation.
+  Quitter pendant le collage attend, trois secondes au plus, la fin du collage.
+- **Pas encore là** : « Corriger à la voix » (étape suivante), l'historique sur disque, l'annulation après fermeture du
+  panneau.
 
 ### Où sont les modèles
 

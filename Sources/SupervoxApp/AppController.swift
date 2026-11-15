@@ -78,7 +78,8 @@ public final class AppController {
         dictation: DictationEnvironment = .unavailable,
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
-        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
         self.terminationWait = terminationWait
         self.settingsStore = settingsStore
@@ -123,18 +124,19 @@ public final class AppController {
             },
             panel: panel,
             hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
-            hold: holdWatch)
+            hold: holdWatch,
+            // Lu une fois, à l'appui qui commence la dictée, pour le mode choisi.
+            reviewBeforePaste: { relay.settings?()?.reviewsBeforePaste($0) ?? false },
+            wait: reviewHandoverWait)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
             panelModel.setDictation($0)
             panel.contentChanged()
         }
-        dictationController.onTranscriptChange = { [panelModel, panel] in
-            panelModel.setTranscript($0)
-            panel.contentChanged()
-        }
         // Le presse-papiers passe par l'insertion, qui le tient : un seul accès, injecté.
         panelModel.onCopy = { [inserter] in inserter.copy($0) }
+        panelModel.onDraftChange = { [dictationController] in dictationController.reviewEdited($0) }
+        panelModel.onPaste = { [dictationController] in dictationController.pasteReview() }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }
@@ -433,8 +435,9 @@ public final class AppController {
     }
 
     /// Durée maximale d'attente d'un collage en cours avant de se terminer quand même, en secondes. Un collage dure au plus la
-    /// patience des modificateurs (1 s) et le délai de restauration (0,4 s) ; 3 s laissent de la marge sans retenir
-    /// l'utilisateur. Choix de conception, non mesuré.
+    /// patience des modificateurs (1 s) et le délai de restauration (0,4 s), plus, pour le collage d'une relecture, l'attente
+    /// de passation de la frappe (0,15 s), soit 1,55 s au plus ; 3 s laissent de la marge sans retenir l'utilisateur. Choix de
+    /// conception, non mesuré.
     static let terminationTimeout = 3.0
 
     /// Appelé par le délégué à la demande de fin. Pendant un collage, quitter laisserait le texte dicté dans le presse-papiers et

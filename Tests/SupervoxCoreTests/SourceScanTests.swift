@@ -192,4 +192,20 @@ import Testing
             #expect(!code.contains(pattern), "\(code)")
         }
     }
+
+    /// Les identifiants de mode fixes (`ModeChip.rawID`, `cleanedID`, `interviewID`) ne sont écrits qu'à un endroit, dans
+    /// `Panel/PanelModel.swift` : le reste de l'application les nomme par ces constantes. (`"prompt"`, trop courant, n'est pas
+    /// balayé.) Le fichier d'origine doit bien les porter, sans quoi le balayage ne vérifierait rien.
+    static let modeIdentifiers = ["\"dictee-brute\"", "\"dictee-nettoyee\"", "\"entretien\""]
+
+    @Test func fixedModeIdentifiersAreSpelledOnlyInPanelModel() throws {
+        let sources = try Self.sources(under: "Sources/SupervoxApp")
+        let home = try #require(sources.first { $0.place == "Panel/PanelModel.swift" })
+        for literal in Self.modeIdentifiers {
+            #expect(home.code.contains(literal), "\(literal) absent de Panel/PanelModel.swift")
+        }
+        let offending = sources.filter { $0.place != "Panel/PanelModel.swift" }
+            .flatMap { source in Self.modeIdentifiers.filter { source.code.contains($0) }.map { "\(source.place) : \($0)" } }
+        #expect(offending.isEmpty, "\(offending)")
+    }
 }

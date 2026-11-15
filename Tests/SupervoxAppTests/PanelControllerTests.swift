@@ -5,20 +5,44 @@ import Testing
 @testable import SupervoxApp
 
 /// Surface de panneau double : rien n'est affiché à l'écran.
-@MainActor final class FakePanelSurface: PanelSurface, ContentSizeObserving {
+@MainActor final class FakePanelSurface: PanelSurface, ContentSizeObserving, KeyStateObserving {
     private(set) var isShown = false
     private(set) var showCount = 0
     /// Appelé à chaque affichage : le test y lit ce que le panneau contient à ce moment-là (la vraie surface prend
     /// sa taille à l'affichage).
     var onShow: (@MainActor () -> Void)?
 
+    /// Ce que la surface a reçu, dans l'ordre : la fermeture est un seul `hide`, sans `setKeyboard` ni `show`.
+    enum Call: Equatable {
+        case show
+        case hide
+        case keyboard(PanelKeyboard)
+    }
+    private(set) var calls: [Call] = []
+    /// Les seules valeurs de clavier reçues, dans l'ordre.
+    var keyboards: [PanelKeyboard] {
+        calls.compactMap { if case .keyboard(let keyboard) = $0 { keyboard } else { nil } }
+    }
+
     func show() {
         isShown = true
         showCount += 1
+        calls.append(.show)
         onShow?()
     }
 
-    func hide() { isShown = false }
+    func hide() {
+        isShown = false
+        calls.append(.hide)
+    }
+
+    /// Le journal de l'insertion, partagé pour comparer l'ordre des appels.
+    var log: CallLog?
+
+    func setKeyboard(_ keyboard: PanelKeyboard) {
+        calls.append(.keyboard(keyboard))
+        log?.entries.append("keyboard(\(keyboard))")
+    }
 
     /// La hauteur que le contenu demande : le test la change comme le ferait un contenu qui grandit ou rétrécit.
     var height: CGFloat = 120
@@ -31,6 +55,10 @@ import Testing
     /// taille ; le test l'appelle par `signalContentSizeChange()`.
     var onContentSizeChange: (@MainActor () -> Void)?
     func signalContentSizeChange() { onContentSizeChange?() }
+
+    /// Comme la vraie surface : le contrôleur y pose sa fermeture, que la surface appelle quand le panneau prend ou perd la clé.
+    var onKeyChange: (@MainActor (Bool) -> Void)?
+    func signalKeyChange(_ isKey: Bool) { onKeyChange?(isKey) }
 }
 
 /// Moniteur de clics double : le test déclenche lui-même un clic hors de l'application.
@@ -161,6 +189,67 @@ import Testing
         #expect(surface.resizes == [160])
     }
 
+    // MARK: - Clavier
+
+    @Test func keyboardRequestedWhileClosedNeverReachesTheSurface() {
+        let controller = makeController()
+        controller.setKeyboard(.focused)
+        controller.setKeyboard(.available)
+        #expect(surface.calls.isEmpty)
+    }
+
+    @Test(arguments: [PanelKeyboard.none, .available, .focused])
+    func anOpenPanelPassesTheKeyboardToItsSurface(_ keyboard: PanelKeyboard) {
+        let controller = makeController()
+        controller.open()
+        controller.setKeyboard(keyboard)
+        #expect(surface.calls == [.show, .keyboard(keyboard)])
+    }
+
+    /// La fermeture ne passe plus par `setKeyboard(.none)` : `hide()` retire lui-même la frappe au panneau, en un seul retrait
+    /// de l'écran (la manœuvre « retirer puis remettre » de `setKeyboard` n'a de sens que panneau ouvert).
+    @Test func closingHidesOnceWithoutAKeyboardRequestOrAReshow() {
+        let controller = makeController()
+        controller.open()
+        controller.setKeyboard(.focused)
+        controller.close()
+        #expect(surface.calls == [.show, .keyboard(.focused), .hide])
+    }
+
+    @Test func everyWayOfClosingHidesOnceWithoutAKeyboardRequestOrAReshow() {
+        let controller = makeController()
+        // La bascule du menu.
+        controller.open()
+        controller.setKeyboard(.focused)
+        controller.toggle()
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.focused), .hide])
+        // Échap sans gestionnaire.
+        controller.open()
+        controller.setKeyboard(.available)
+        escape.press()
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.available), .hide])
+        // Le clic en dehors.
+        controller.open()
+        controller.setKeyboard(.focused)
+        clicks.clickOutside()
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.focused), .hide])
+        #expect(surface.calls.filter { $0 == .hide }.count == 3)
+        #expect(surface.calls.filter { $0 == .show }.count == 3)
+    }
+
+    @Test func reopeningCarriesNoKeyboardOverFromTheLastTime() {
+        let controller = makeController()
+        controller.open()
+        controller.setKeyboard(.focused)
+        controller.close()
+        controller.open()
+        #expect(Array(surface.calls.suffix(1)) == [.show])
+        // Rien n'a été remis sur la surface depuis la fermeture.
+        #expect(surface.keyboards == [.focused])
+        controller.setKeyboard(.available)
+        #expect(surface.keyboards == [.focused, .available])
+    }
+
     // MARK: - Cadre redimensionné
 
     private let visible = CGRect(x: 0, y: 40, width: 1_000, height: 800)
@@ -237,11 +326,12 @@ import Testing
         let notice = try #require(model.notices[.escape])
         #expect(notice.contains("Échap"))
         // L'avis dit comment fermer quand même : le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en
-        // dehors est ignoré pendant une dictée ; le menu de la barre de menus ferme toujours.
+        // dehors est ignoré pendant une dictée comme pendant une relecture (`holdsPanel`) ; le menu de la barre de menus ferme
+        // toujours.
         #expect(notice.contains("menu"))
         #expect(notice.contains("barre de menus"))
-        #expect(notice.contains("clic en dehors"))
-        #expect(notice.contains("aucune dictée"))
+        #expect(notice.contains("clic en dehors, sauf pendant une dictée ou une relecture"))
+        #expect(!notice.contains("aucune dictée"), "pendant la relecture aucune dictée ne court, et le clic est ignoré")
         #expect(!notice.contains("⌃⌥Espace"))
 
         controller.close()
@@ -250,13 +340,31 @@ import Testing
         #expect(model.notices[.escape] == nil)
     }
 
-    // MARK: - Dictée
+    // MARK: - La frappe du panneau
 
-    @Test(arguments: [DictationPhase.preparing, .recording, .finalizing])
-    func outsideClickIsIgnoredWhileADictationRuns(_ phase: DictationPhase) {
+    @Test func theModelFollowsTheKeyStateTheSurfaceReports() {
         let controller = makeController()
         controller.open()
-        model.dictation = DictationViewState(phase: phase)
+        #expect(!model.panelHasKeyboard)
+
+        surface.signalKeyChange(true)
+        #expect(model.panelHasKeyboard)
+        surface.signalKeyChange(false)
+        #expect(!model.panelHasKeyboard)
+        surface.signalKeyChange(true)
+        #expect(model.panelHasKeyboard)
+
+        controller.close()
+        #expect(!model.panelHasKeyboard, "un panneau fermé n'a pas la frappe")
+    }
+
+    // MARK: - Dictée
+
+    @Test(arguments: [DictationStage.preparing, .recording, .finalizing])
+    func outsideClickIsIgnoredWhileADictationRuns(_ stage: DictationStage) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(stage: stage)
 
         clicks.clickOutside()
         #expect(model.isOpen)
@@ -264,13 +372,40 @@ import Testing
         #expect(clicks.isWatching)
     }
 
-    @Test(arguments: [
-        DictationPhase.idle, .finished("texte"), .cancelled, .failed(.noSpeech),
-    ])
-    func outsideClickStillClosesThePanelWhenNoDictationRuns(_ phase: DictationPhase) {
+    /// Le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas fermer la relecture : le panneau est tenu tant que
+    /// le texte attend d'être relu ou se colle (`holdsPanel`), pas seulement pendant l'enregistrement (`isActive`).
+    @Test("règle 13 : le clic en dehors est ignoré en relecture et pendant le collage", arguments: [DictationStage.review, .pasting])
+    func outsideClickIsIgnoredWhileTheTextIsReviewedOrPasted(_ stage: DictationStage) {
         let controller = makeController()
         controller.open()
-        model.dictation = DictationViewState(phase: phase)
+        model.dictation = DictationViewState(stage: stage, lastTranscript: "Un texte.", draft: "Un texte.")
+
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        #expect(surface.isShown)
+        #expect(clicks.isWatching)
+        #expect(!surface.calls.contains(.hide))
+    }
+
+    @Test("règle 13 : le clic en dehors ferme comme avant en copie, au repos, après un échec, une interruption", arguments: [
+        DictationStage.copied, .idle, .cancelled, .failed(.clipboard),
+    ])
+    func outsideClickClosesAfterTheReviewToo(_ stage: DictationStage) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(stage: stage, lastTranscript: "Un texte.")
+        clicks.clickOutside()
+        #expect(!model.isOpen)
+        #expect(surface.calls.last == .hide)
+    }
+
+    @Test(arguments: [
+        DictationStage.idle, .copied, .cancelled, .failed(.noSpeech),
+    ])
+    func outsideClickStillClosesThePanelWhenNoDictationRuns(_ stage: DictationStage) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(stage: stage)
 
         clicks.clickOutside()
         #expect(!model.isOpen)

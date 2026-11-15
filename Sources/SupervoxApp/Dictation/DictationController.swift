@@ -16,12 +16,17 @@ import os
 /// - Un seul collage à la fois : les insertions s'enchaînent, même quand la dictée qui a lancé la précédente est annulée
 ///   (le collage, lui, ne s'annule plus une fois ⌘V posté).
 /// - Les réglages de transcription sont relus à chaque dictée.
+/// - Relecture. Si le réglage « relire avant de coller » du mode est actif à l'appui qui commence la dictée (lu une seule
+///   fois), la fin de la dictée n'insère rien : la dictée est finie (`run` est `nil`, `isBusy` est faux) et le texte passe en
+///   relecture, un objet `Review` relu comme une `Run` (`isLive`). Seul `pasteReview()` insère, par la même file que les autres
+///   insertions ; un résultat qui arrive après la fin de la relecture ne touche plus ni l'écran ni le panneau. Le raccourci est
+///   ignoré tant que la relecture dure (étapes `review` et `pasting`).
 /// - Le texte dicté est une donnée privée : il n'est écrit dans aucun journal ni message. `lastTranscript` le garde en
 ///   mémoire seulement, jamais dans un fichier.
 @MainActor @Observable
 public final class DictationController {
     /// Le seul mode dont la dictée est mise en œuvre à cette étape.
-    static let rawModeID = "dictee-brute"
+    static let rawModeID = ModeChip.rawID
     // Les phrases que le panneau montre, publiques pour que l'outil de rendu des écrans montre celles de l'application.
     public static let laterModeNotice = "Ce mode arrive à une étape suivante."
     public static let downloadNotice = "Téléchargement du modèle…"
@@ -35,17 +40,23 @@ public final class DictationController {
     public static let preparationFailedNotice =
         "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription : vérifiez le moteur et le modèle choisis ; si le modèle manque, téléchargez-le ; s'il est indiqué « Prêt », vous pouvez le supprimer puis le télécharger de nouveau (cela demande une connexion à Internet)."
 
+    /// Entre le retrait de la frappe (le panneau la rend à l'application de dessous) et l'insertion : le temps que cette
+    /// application reprenne la touche clé avant que le ⌘V parte. Choix de conception, non mesuré.
+    public static let focusHandoverDelay = 0.15
+    /// Ce que le panneau dit quand le presse-papiers refuse le texte de la relecture. Le texte reste dans le champ.
+    public static let reviewClipboardNotice =
+        "Le presse-papiers a refusé le texte : il n'a été ni collé ni copié. Il est toujours ci-dessus : réessayez « Coller » ou « Copier »."
+
     /// Ce que la vue du panneau montre.
     public private(set) var view = DictationViewState()
     /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : `.pasted` ne prouve pas que
     /// l'application cible a reçu le texte, et l'utilisateur doit pouvoir le récupérer (bouton « Copier »). En mémoire
-    /// seulement ; un échec ou une annulation ultérieure ne l'efface pas.
+    /// seulement ; un échec ou une annulation ultérieure ne l'efface pas. C'est la seule copie stockée : `view.lastTranscript`
+    /// en est le reflet, posé par `setView`.
     public private(set) var lastTranscript: String?
 
     /// Appelé à chaque changement de `view` : le modèle du panneau la relaie à la vue.
     @ObservationIgnored public var onViewChange: (@MainActor (DictationViewState) -> Void)?
-    /// Appelé avec le texte de chaque dictée réussie (donc de `lastTranscript`) : le panneau le garde pour « Copier ».
-    @ObservationIgnored public var onTranscriptChange: (@MainActor (String) -> Void)?
 
     @ObservationIgnored private let environment: DictationEnvironment
     @ObservationIgnored private let inserter: TextInserter
@@ -56,14 +67,21 @@ public final class DictationController {
     @ObservationIgnored private let panel: any PanelOpening
     @ObservationIgnored private let hotKeyModifiers: @MainActor () -> Modifiers
     @ObservationIgnored private let hold: HoldWatch
+    @ObservationIgnored private let reviewBeforePaste: @MainActor (String) -> Bool
+    @ObservationIgnored private let wait: @MainActor (Double) async -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
-    /// Vrai de l'appui jusqu'à la fin du collage (ou de l'échec, de l'annulation) : une dictée est en cours. Les réglages s'en
-    /// servent pour refuser de supprimer un modèle que la dictée utilise.
+    /// Vrai de l'appui jusqu'à la fin de la dictée : fin du collage (sans relecture), échec, annulation, ou arrivée du texte en
+    /// relecture. Faux pendant la relecture et le collage qui la suit : la dictée est finie, plus aucun modèle ne sert. Les
+    /// réglages s'en servent pour refuser de supprimer un modèle que la dictée utilise ; `isInserting`, lui, reste vrai pendant
+    /// le collage d'une relecture.
     public var isBusy: Bool { run != nil }
 
-    /// La dictée en cours, `nil` hors dictée (y compris pendant que le panneau montre un échec ou une copie).
+    /// La dictée en cours, `nil` hors dictée (y compris pendant que le panneau montre un échec ou une copie, et pendant la
+    /// relecture).
     @ObservationIgnored private var run: Run?
+    /// La relecture en cours (étapes `review` et `pasting`), `nil` sinon. Jamais en même temps qu'une dictée.
+    @ObservationIgnored private var review: Review?
     /// La dernière insertion lancée : la suivante l'attend.
     @ObservationIgnored private var insertionTail: Task<Void, Never>?
     /// Insertions lancées et pas encore finies (voir `isInserting`).
@@ -76,6 +94,8 @@ public final class DictationController {
     ///   - microphoneAllowed: vrai si le micro est autorisé ; relu (et non supposé) à chaque appui.
     ///   - hotKeyModifiers: les modificateurs du raccourci en vigueur ; relus au début de chaque dictée en maintien.
     ///   - hold: la surveillance des modificateurs, qui rattrape un relâchement perdu (jamais interrogée en bascule).
+    ///   - reviewBeforePaste: vrai si le texte de ce mode passe par la relecture ; lu une fois, à l'appui qui commence la dictée.
+    ///   - wait: attend ce nombre de secondes (`focusHandoverDelay`) ; injectée pour qu'aucun test n'attende une durée réelle.
     public init(
         environment: DictationEnvironment, inserter: TextInserter,
         settings: @escaping @MainActor () -> TranscriptionSettings,
@@ -84,7 +104,9 @@ public final class DictationController {
         microphoneAllowed: @escaping @MainActor () -> Bool,
         panel: any PanelOpening,
         hotKeyModifiers: @escaping @MainActor () -> Modifiers,
-        hold: HoldWatch
+        hold: HoldWatch,
+        reviewBeforePaste: @escaping @MainActor (String) -> Bool = { _ in false },
+        wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
         self.environment = environment
         self.inserter = inserter
@@ -95,6 +117,8 @@ public final class DictationController {
         self.panel = panel
         self.hotKeyModifiers = hotKeyModifiers
         self.hold = hold
+        self.reviewBeforePaste = reviewBeforePaste
+        self.wait = wait
     }
 
     // MARK: - Raccourci
@@ -106,20 +130,25 @@ public final class DictationController {
     /// le réglage n'est lu que pour en commencer une nouvelle.
     public func hotKeyPressed() {
         if let run {
-            if view.phase == .recording, !run.startedByHold { requestFinish(run) }
+            if view.stage == .recording, !run.startedByHold { requestFinish(run) }
             return
         }
+        // Le texte attend d'être relu ou se colle : l'appui est ignoré, quel que soit le mode choisi entre-temps.
+        guard review == nil else { return }
         begin(hold: behavior() == .hold)
     }
 
     /// Maintien : le relâchement termine la dictée que ce maintien a commencée. Sans dictée, ou en bascule : ignoré.
     public func hotKeyReleased() {
-        guard let run, run.startedByHold, view.phase == .preparing || view.phase == .recording else { return }
+        guard let run, run.startedByHold, view.stage == .preparing || view.stage == .recording else { return }
         requestFinish(run)
     }
 
     /// Pendant une dictée : annule (rien n'est collé ni copié) et ferme le panneau. Hors dictée : ferme le panneau.
+    /// En relecture ou pendant le collage : rien n'est inséré ni copié (un collage qui n'a pas encore posé ⌘V est annulé), et le
+    /// brouillon devient le dernier texte.
     public func escapePressed() {
+        closeReview()
         cancelCurrentRun()
         panel.close()
         setView(DictationViewState())
@@ -127,6 +156,7 @@ public final class DictationController {
 
     /// Le panneau s'est fermé (menu, Quitter, Réglages, Échap, clic en dehors) : une dictée en cours est annulée.
     public func panelClosedByUser() {
+        closeReview()
         cancelCurrentRun()
         setView(DictationViewState())
     }
@@ -134,7 +164,8 @@ public final class DictationController {
     // MARK: - Démarrage
 
     private func begin(hold: Bool) {
-        guard modeID() == Self.rawModeID else {
+        let mode = modeID()
+        guard mode == Self.rawModeID else {
             // Rien à dicter dans ce mode : l'appui ouvre le panneau, ou le ferme s'il est déjà ouvert.
             if panel.isOpen {
                 panel.close()
@@ -151,10 +182,11 @@ public final class DictationController {
             log.notice("dictée refusée : micro non autorisé")
             return
         }
-        let run = Run(startedByHold: hold)
+        // Lu ici, une seule fois : le changer pendant l'enregistrement ne change pas cette dictée.
+        let run = Run(startedByHold: hold, reviewsBeforePaste: reviewBeforePaste(mode))
         self.run = run
         // Posé tout de suite : un appui qui arrive avant la première session est déjà ignoré.
-        setView(DictationViewState(phase: .preparing))
+        setView(DictationViewState(stage: .preparing))
         if !panel.isOpen { panel.open() }
         // Relus à chaque dictée : un changement de moteur, de modèle, de langue ou de vocabulaire vaut dès la suivante.
         let current = settings()
@@ -172,10 +204,10 @@ public final class DictationController {
         // Sans touche de modification, la sonde ne peut rien dire (« aucune enfoncée » serait toujours vrai) : le relâchement
         // du système, ou la durée maximale de la session, termine la dictée.
         guard !modifiers.isEmpty else { return }
-        while isLive(run), view.phase == .preparing || view.phase == .recording {
+        while isLive(run), view.stage == .preparing || view.stage == .recording {
             await self.hold.wait(self.hold.interval)
             // Une attente annulée rend la main aussitôt : sans cette sortie, la boucle tournerait sans attendre.
-            guard !Task.isCancelled, isLive(run), view.phase == .preparing || view.phase == .recording else { return }
+            guard !Task.isCancelled, isLive(run), view.stage == .preparing || view.stage == .recording else { return }
             // Échap d'abord : annuler l'emporte sur terminer, si les deux se produisent dans le même intervalle.
             if self.hold.escapeHeld() {
                 log.notice("maintien : Échap lu pendant la dictée")
@@ -279,21 +311,9 @@ public final class DictationController {
         switch snapshot.phase {
         case .idle:
             return
-        case .preparing, .recording, .finalizing:
-            var next = view
-            next.phase = snapshot.phase
-            next.liveText = snapshot.liveText
-            next.elapsed = snapshot.elapsed
-            if snapshot.phase == .recording {
-                run.downloadNotice = nil
-                run.loadingNotice = nil
-                next.levels = Array((view.levels + [snapshot.level]).suffix(DictationViewState.levelCount))
-            }
-            next.notice = notice(for: run, phase: snapshot.phase)
-            setView(next)
-            // La prise est finie : plus rien à surveiller.
-            if snapshot.phase == .finalizing { run.watch?.cancel() }
-            replayPendingFinish(run)
+        case .preparing: handleActive(snapshot, run, stage: .preparing)
+        case .recording: handleActive(snapshot, run, stage: .recording)
+        case .finalizing: handleActive(snapshot, run, stage: .finalizing)
         case .finished(let text):
             finished(text, run)
         case .cancelled:
@@ -303,10 +323,29 @@ public final class DictationController {
         case .failed(let failure):
             // Une panne du moteur pendant la préparation : le texte de la raison peut porter une adresse, la phrase est fixe.
             var message = failure.message
-            if case .engine = failure, view.phase == .preparing { message = Self.preparationFailedNotice }
+            if case .engine = failure, view.stage == .preparing { message = Self.preparationFailedNotice }
             log.notice("dictée en échec : \(Self.kind(of: failure), privacy: .public)")
             finishRun(run, with: .failed(failure), notice: message)
         }
+    }
+
+    /// Une phase active de la session (`preparing`, `recording`, `finalizing`) : l'étape d'écran est donnée par chacun des trois
+    /// cas de `handle`, de sorte qu'un futur cas de `DictationPhase` ne puisse pas être avalé par un défaut.
+    private func handleActive(_ snapshot: DictationSnapshot, _ run: Run, stage: DictationStage) {
+        var next = view
+        next.stage = stage
+        next.liveText = snapshot.liveText
+        next.elapsed = snapshot.elapsed
+        if stage == .recording {
+            run.downloadNotice = nil
+            run.loadingNotice = nil
+            next.levels = Array((view.levels + [snapshot.level]).suffix(DictationViewState.levelCount))
+        }
+        next.notice = notice(for: run, stage: stage)
+        setView(next)
+        // La prise est finie : plus rien à surveiller.
+        if stage == .finalizing { run.watch?.cancel() }
+        replayPendingFinish(run)
     }
 
     private func finished(_ text: String, _ run: Run) {
@@ -315,7 +354,12 @@ public final class DictationController {
             return
         }
         lastTranscript = text
-        onTranscriptChange?(text)
+        if run.reviewsBeforePaste {
+            startReview(text, after: run)
+            return
+        }
+        // Le panneau garde « Copier » à jour dès que le texte existe, sans attendre la fin de l'insertion.
+        setView(view)
         log.notice("dictée terminée ; insertion")
         let previous = insertionTail
         insertionsInFlight += 1
@@ -360,7 +404,7 @@ public final class DictationController {
             panel.close()
         case .copied(let reason):
             log.notice("texte copié, non collé")
-            finishRun(run, with: .finished(text), notice: reason)
+            finishRun(run, with: .copied, notice: reason)
         case .clipboardRefused:
             // Rien n'est collé ni copié : le texte reste dans « Dernière dictée » (`lastTranscript`), que l'on peut copier.
             log.notice("presse-papiers : texte refusé")
@@ -372,13 +416,107 @@ public final class DictationController {
     }
 
     /// La dictée est finie : le panneau reste ouvert avec ce qu'il y a à dire.
-    private func finishRun(_ run: Run, with phase: DictationPhase, notice: String) {
+    private func finishRun(_ run: Run, with stage: DictationStage, notice: String) {
         guard isLive(run) else { return }
         retire(run)
         var next = view
-        next.phase = phase
+        next.stage = stage
         next.notice = notice
         setView(next)
+    }
+
+    // MARK: - Relecture
+
+    /// Le texte final n'est pas inséré : la dictée est finie, le texte attend dans `draft` et le panneau prend la frappe.
+    private func startReview(_ text: String, after run: Run) {
+        log.notice("dictée terminée ; relecture")
+        let carried = notice(for: run, stage: .review)
+        retire(run)
+        review = Review()
+        setView(DictationViewState(stage: .review, notice: carried, draft: text))
+        if !panel.isOpen { panel.open() }
+        panel.setKeyboard(.focused)
+    }
+
+    /// L'utilisateur a modifié le texte. Ignoré hors relecture (et pendant le collage : le texte qui part est celui qu'on a vu).
+    public func reviewEdited(_ text: String) {
+        guard review != nil, view.stage == .review else { return }
+        var next = view
+        next.draft = text
+        setView(next)
+    }
+
+    /// « Coller » : le brouillon est inséré dans l'application de dessous. Dans l'ordre : l'étape `pasting` et le dernier texte,
+    /// la frappe rendue à l'application, l'attente de `focusHandoverDelay`, l'insertion qui laisse le texte copié. Le tout par
+    /// la file des insertions. Ignoré hors relecture, pendant un collage déjà lancé, et si le brouillon est blanc.
+    public func pasteReview() {
+        guard let review, view.stage == .review else { return }
+        let text = view.draft
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        log.notice("relecture : collage")
+        // Dès l'étape `pasting` : quitter attend la fin du collage, la tâche qui suit défait ce compte.
+        insertionsInFlight += 1
+        lastTranscript = text
+        var next = view
+        next.stage = .pasting
+        next.notice = nil
+        setView(next)
+        panel.setKeyboard(.none)
+        let previous = insertionTail
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { insertionsInFlight -= 1 }
+            await self.wait(Self.focusHandoverDelay)
+            // Une insertion encore en route, même d'une dictée annulée, se termine avant celle-ci.
+            await previous?.value
+            // Échap ou la fermeture du panneau pendant l'attente : rien n'est inséré.
+            guard self.isLive(review), !Task.isCancelled else { return }
+            let outcome = await self.inserter.insert(text, leaveCopied: true)
+            self.reviewInsertionFinished(review, outcome: outcome)
+        }
+        review.pasting = task
+        insertionTail = task
+    }
+
+    private func reviewInsertionFinished(_ review: Review, outcome: InsertionOutcome) {
+        guard isLive(review) else { return }
+        switch outcome {
+        case .pasted:
+            log.notice("texte collé")
+            self.review = nil
+            setView(DictationViewState())
+            panel.close()
+        case .copied(let reason):
+            log.notice("relecture : texte copié, non collé")
+            backToReview(review, notice: reason)
+        case .clipboardRefused:
+            log.notice("relecture : presse-papiers : texte refusé")
+            backToReview(review, notice: Self.reviewClipboardNotice)
+        case .nothing:
+            // Ne peut pas arriver pour un texte non blanc et une tâche non annulée : le texte reste à relire.
+            backToReview(review, notice: nil)
+        }
+    }
+
+    /// Le collage n'a pas eu lieu : le texte revient en relecture, intact, avec ce qu'il y a à dire. La frappe reste à
+    /// l'application de dessous tant que l'utilisateur n'a pas cliqué dans le panneau.
+    private func backToReview(_ review: Review, notice: String?) {
+        review.pasting = nil
+        var next = view
+        next.stage = .review
+        next.notice = notice
+        setView(next)
+        panel.setKeyboard(.available)
+    }
+
+    /// La relecture est finie sans collage (Échap, fermeture du panneau) : un collage qui n'a pas posé ⌘V est annulé, et le
+    /// brouillon, s'il n'est pas blanc, devient le dernier texte (sinon le texte d'origine reste).
+    private func closeReview() {
+        guard let review else { return }
+        review.pasting?.cancel()
+        self.review = nil
+        if !view.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lastTranscript = view.draft }
+        log.notice("relecture fermée")
     }
 
     // MARK: - Fin et annulation
@@ -428,24 +566,30 @@ public final class DictationController {
     /// `run` est la dictée courante : une dictée annulée ou finie n'est plus `self.run`.
     private func isLive(_ run: Run) -> Bool { self.run === run }
 
+    /// `review` est la relecture courante : une relecture fermée ou collée n'est plus `self.review`.
+    private func isLive(_ review: Review) -> Bool { self.review === review }
+
+    /// Toute vue passe ici : elle porte toujours le dernier texte du contrôleur, jamais une autre copie.
     private func setView(_ next: DictationViewState) {
+        var next = next
+        next.lastTranscript = lastTranscript
         view = next
         onViewChange?(next)
     }
 
     private func refreshNotice(_ run: Run) {
-        guard isLive(run), view.phase.isActive else { return }
+        guard isLive(run), view.stage.isActive else { return }
         var next = view
-        next.notice = notice(for: run, phase: view.phase)
+        next.notice = notice(for: run, stage: view.stage)
         setView(next)
     }
 
     /// L'avis d'une dictée en cours : la mention de téléchargement (pendant le téléchargement), celle de chargement (pendant le
     /// chargement des moteurs), puis celui du vocabulaire.
-    private func notice(for run: Run, phase: DictationPhase) -> String? {
+    private func notice(for run: Run, stage: DictationStage) -> String? {
         var lines: [String] = []
-        if phase == .preparing, let download = run.downloadNotice { lines.append(download) }
-        if phase == .preparing, let loading = run.loadingNotice { lines.append(loading) }
+        if stage == .preparing, let download = run.downloadNotice { lines.append(download) }
+        if stage == .preparing, let loading = run.loadingNotice { lines.append(loading) }
         if let vocabulary = run.vocabularyNotice { lines.append(vocabulary) }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
     }
@@ -491,6 +635,8 @@ private final class FirstToFinish: Sendable {
 private final class Run {
     /// Commencée par un appui en maintien : seul le relâchement qui suit la termine.
     let startedByHold: Bool
+    /// Le réglage « relire avant de coller » du mode, tel qu'il était à l'appui.
+    let reviewsBeforePaste: Bool
     var session: (any DictationSessioning)?
     /// La dernière phase vue dans les instantanés de la session.
     var sessionPhase: DictationPhase = .idle
@@ -505,5 +651,18 @@ private final class Run {
     var loadingNotice: String?
     var vocabularyNotice: String?
 
-    init(startedByHold: Bool) { self.startedByHold = startedByHold }
+    init(startedByHold: Bool, reviewsBeforePaste: Bool) {
+        self.startedByHold = startedByHold
+        self.reviewsBeforePaste = reviewsBeforePaste
+    }
+}
+
+/// Une relecture : du texte final au collage, à l'annulation ou à la fermeture du panneau. Relue comme une `Run`
+/// (`DictationController.isLive`) : ce qui arrive d'une insertion de cette relecture ne compte que tant qu'elle est la
+/// relecture courante.
+@MainActor
+private final class Review {
+    /// La tâche de collage lancée par `pasteReview()` ; `nil` tant que le texte n'a pas été collé, et de nouveau `nil` si
+    /// le collage a laissé le texte en relecture.
+    var pasting: Task<Void, Never>?
 }

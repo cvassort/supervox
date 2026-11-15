@@ -275,6 +275,25 @@ enum FakeInsertion {
         #expect(rig.board.contents == FakeInsertion.original)
     }
 
+    // MARK: - Les trois raisons de repli
+
+    /// Le texte que l'on laisse copié est aussi, depuis la relecture, un texte que l'utilisateur a corrigé : « dicté » serait
+    /// faux. Les trois raisons parlent du « texte », sans plus.
+    @Test("les raisons de repli ne disent pas « texte dicté » : le texte peut avoir été corrigé en relecture",
+        arguments: ["accessibilité", "modificateurs", "touche"])
+    func theFallbackReasonsDoNotCallTheTextDictated(cause: String) async throws {
+        let rig =
+            switch cause {
+            case "accessibilité": InsertionRig(trusted: false)
+            case "modificateurs": InsertionRig(held: [true], modifierPatience: 0)
+            default: InsertionRig(postSucceeds: false)
+            }
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated)
+        let reason = try #require(reason(outcome))
+        #expect(!reason.contains("dicté"))
+        #expect(reason.hasPrefix("Le texte est copié dans le presse-papiers, mais "))
+    }
+
     // MARK: - Sans Accessibilité
 
     @Test("sans Accessibilité, le texte reste dans le presse-papiers, marqué transitoire, et la raison nomme ⌘V et l'Accessibilité")
@@ -574,5 +593,158 @@ enum FakeInsertion {
     @Test("le code de V vaut 9 : la valeur du brief est celle de la constante du système")
     func vKeyCodeIsNine() {
         #expect(kVK_ANSI_V == 9)
+    }
+
+    // MARK: - Texte laissé en copie (relecture : « Coller » le colle et le copie)
+
+    /// Ce que fait `leaveCopied: true` : seulement le point de restauration, après ⌘V. Tout ce qui précède est identique.
+    @Test("leaveCopied : après ⌘V le contenu d'origine n'est pas rendu, le texte est réécrit en copie ordinaire (non transitoire)")
+    func leaveCopiedKeepsTheTextAsAnOrdinaryCopyAfterThePaste() async {
+        let rig = InsertionRig()
+        var atPaste: String?
+        rig.keys.onPostPaste = { [board = rig.board] in atPaste = board.text }
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true)
+        #expect(outcome == .pasted)
+        #expect(atPaste == FakeInsertion.dictated)
+        #expect(rig.log.entries == [
+            "read", "writeText(transient: true)", "modifiersHeld", "postPaste(\(kVK_ANSI_V))", "wait(0.4)",
+            "writeText(transient: false)",
+        ])
+        #expect(rig.board.text == FakeInsertion.dictated)
+        #expect(!rig.log.entries.contains("write"), "le contenu d'origine n'est jamais rendu")
+    }
+
+    @Test("leaveCopied: false rend le contenu d'origine comme avant, et insert(_:) vaut leaveCopied: false")
+    func leaveCopiedFalseRestoresTheOriginal() async {
+        let explicit = InsertionRig()
+        #expect(await explicit.inserter.insert(FakeInsertion.dictated, leaveCopied: false) == .pasted)
+        #expect(explicit.board.contents == FakeInsertion.original)
+
+        let plain = InsertionRig()
+        #expect(await plain.inserter.insert(FakeInsertion.dictated) == .pasted)
+        #expect(plain.log.entries == explicit.log.entries)
+        #expect(plain.log.entries.last == "write")
+        #expect(plain.board.contents == FakeInsertion.original)
+    }
+
+    @Test("leaveCopied : annulée pendant les sondages des modificateurs, avant le ⌘V, le contenu d'origine est rendu")
+    func leaveCopiedCancelledDuringPollsRestoresTheOriginal() async {
+        let rig = InsertionRig(held: [true])
+        let box = InsertTaskBox()
+        rig.waiter.onWait = { _ in box.cancel() }
+        let task = Task { @MainActor in await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) }
+        box.task = task
+        let outcome = await task.value
+        #expect(outcome == .nothing)
+        #expect(rig.log.entries == [
+            "read", "writeText(transient: true)", "modifiersHeld", "wait(0.05)", "write",
+        ])
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
+    @Test("leaveCopied : annulée au moment où les modificateurs sont relâchés, avant le ⌘V, le contenu d'origine est rendu")
+    func leaveCopiedCancelledJustBeforeThePasteRestoresTheOriginal() async {
+        let rig = InsertionRig(held: [false])
+        let box = InsertTaskBox()
+        rig.keys.onPoll = { box.cancel() }
+        let task = Task { @MainActor in await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) }
+        box.task = task
+        let outcome = await task.value
+        #expect(outcome == .nothing)
+        #expect(rig.log.entries == ["read", "writeText(transient: true)", "modifiersHeld", "write"])
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
+    @Test("leaveCopied : une tâche annulée avant d'avoir commencé n'écrit rien")
+    func leaveCopiedCancelledOnEntryDoesNothing() async {
+        let rig = InsertionRig()
+        let task = Task { @MainActor in await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) }
+        task.cancel()
+        #expect(await task.value == .nothing)
+        #expect(rig.log.entries.isEmpty)
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
+    @Test("leaveCopied : annulée après le ⌘V, le collage a eu lieu, l'attente prévue se fait et le texte reste copié")
+    func leaveCopiedCancelledAfterThePasteKeepsTheCopy() async throws {
+        let log = CallLog()
+        let sleeper = SleepingWait(log: log)
+        let rig = InsertionRig(log: log, wait: { await sleeper.wait($0) })
+        let task = Task { @MainActor in await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) }
+        for _ in 0..<1000 where !sleeper.isSleeping { await Task.yield() }
+        try #require(sleeper.isSleeping)
+        task.cancel()
+        for _ in 0..<100 { await Task.yield() }
+        #expect(!log.entries.contains { $0.hasPrefix("writeText(transient: false)") })
+
+        sleeper.release()
+        #expect(await task.value == .pasted)
+        #expect(rig.board.text == FakeInsertion.dictated)
+        #expect(log.entries.last == "writeText(transient: false)")
+        #expect(!log.entries.contains("write"))
+    }
+
+    @Test("leaveCopied : une autre application a écrit pendant l'attente, son contenu n'est pas touché")
+    func leaveCopiedLeavesAnotherApplicationsContentAlone() async {
+        let rig = InsertionRig()
+        rig.waiter.onWait = { [board = rig.board] _ in board.changeFromElsewhere("copié ailleurs entre-temps") }
+        #expect(await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) == .pasted)
+        #expect(rig.board.text == "copié ailleurs entre-temps")
+        #expect(!rig.log.entries.contains("write"))
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") } == ["writeText(transient: true)"])
+    }
+
+    @Test("leaveCopied : si le système refuse la réécriture en copie, le contenu d'origine est rendu plutôt qu'un presse-papiers vidé")
+    func leaveCopiedRefusedRewriteRestoresTheOriginal() async {
+        let rig = InsertionRig()
+        rig.keys.onPostPaste = { [board = rig.board] in board.refusesTextWrites = true }
+        #expect(await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) == .pasted)
+        #expect(rig.board.contents == FakeInsertion.original)
+        #expect(rig.log.entries.suffix(2) == ["writeText(transient: false)", "write"])
+    }
+
+    @Test("leaveCopied : sans Accessibilité, le repli est celui de toujours (texte transitoire, aucune réécriture)")
+    func leaveCopiedWithoutAccessibilityFallsBackAsBefore() async throws {
+        let plain = InsertionRig(trusted: false)
+        let plainOutcome = await plain.inserter.insert(FakeInsertion.dictated)
+        let rig = InsertionRig(trusted: false)
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true)
+        #expect(outcome == plainOutcome)
+        #expect(try #require(reason(outcome)).contains("Accessibilité"))
+        #expect(rig.log.entries == ["read", "writeText(transient: true)"])
+        #expect(rig.board.text == FakeInsertion.dictated)
+    }
+
+    @Test("leaveCopied : modificateurs tenus jusqu'au bout, le repli est celui de toujours")
+    func leaveCopiedWithHeldModifiersFallsBackAsBefore() async throws {
+        let plain = InsertionRig(held: [true], modifierPatience: 0.1)
+        let plainOutcome = await plain.inserter.insert(FakeInsertion.dictated)
+        let rig = InsertionRig(held: [true], modifierPatience: 0.1)
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true)
+        #expect(outcome == plainOutcome)
+        #expect(try #require(reason(outcome)).contains("relâchez"))
+        #expect(rig.log.entries == plain.log.entries)
+        #expect(rig.board.text == FakeInsertion.dictated)
+    }
+
+    @Test("leaveCopied : ⌘V non posté, le repli est celui de toujours")
+    func leaveCopiedWithAFailedPostFallsBackAsBefore() async throws {
+        let plain = InsertionRig(postSucceeds: false)
+        let plainOutcome = await plain.inserter.insert(FakeInsertion.dictated)
+        let rig = InsertionRig(postSucceeds: false)
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true)
+        #expect(outcome == plainOutcome)
+        #expect(try #require(reason(outcome)).contains("⌘V"))
+        #expect(rig.log.entries == plain.log.entries)
+        #expect(rig.board.text == FakeInsertion.dictated)
+    }
+
+    @Test("leaveCopied : le texte refusé par le presse-papiers donne « refusé » et rend le contenu d'origine")
+    func leaveCopiedWithARefusedTextWriteIsRefused() async {
+        let rig = InsertionRig()
+        rig.board.refusesTextWrites = true
+        #expect(await rig.inserter.insert(FakeInsertion.dictated, leaveCopied: true) == .clipboardRefused)
+        #expect(rig.board.contents == FakeInsertion.original)
+        #expect(!rig.log.entries.contains { $0.hasPrefix("postPaste") })
     }
 }
