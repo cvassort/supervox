@@ -5,7 +5,7 @@ import Testing
 @testable import SupervoxApp
 
 /// Surface de panneau double : rien n'est affiché à l'écran.
-@MainActor final class FakePanelSurface: PanelSurface {
+@MainActor final class FakePanelSurface: PanelSurface, ContentSizeObserving {
     private(set) var isShown = false
     private(set) var showCount = 0
     /// Appelé à chaque affichage : le test y lit ce que le panneau contient à ce moment-là (la vraie surface prend
@@ -26,6 +26,11 @@ import Testing
 
     func contentHeight() -> CGFloat? { height }
     func resize(toHeight height: CGFloat) { resizes.append(height) }
+
+    /// Comme la vraie surface : le contrôleur y pose sa fermeture, que la vue d'hébergement appelle quand son contenu change de
+    /// taille ; le test l'appelle par `signalContentSizeChange()`.
+    var onContentSizeChange: (@MainActor () -> Void)?
+    func signalContentSizeChange() { onContentSizeChange?() }
 }
 
 /// Moniteur de clics double : le test déclenche lui-même un clic hors de l'application.
@@ -104,6 +109,25 @@ import Testing
         surface.height = 100
         controller.contentChanged()
         #expect(surface.resizes == [100])
+    }
+
+    /// N3 : le lien « la vue signale un changement de hauteur → le contrôleur redimensionne ». C'est le seul déclencheur des
+    /// changements qui ne passent pas par l'état de la dictée (ligne de permission, avis du pied, « Copie impossible »,
+    /// accueil) : sans lui, le panneau garde sa hauteur.
+    @Test func aContentSizeChangeSignalledByTheViewResizesTheOpenPanel() {
+        let controller = makeController()
+        controller.open()
+        #expect(surface.onContentSizeChange != nil)
+        surface.height = 140
+        surface.signalContentSizeChange()
+        #expect(surface.resizes == [140])
+    }
+
+    @Test func aContentSizeChangeSignalledWhileClosedResizesNothing() {
+        _ = makeController()
+        surface.height = 140
+        surface.signalContentSizeChange()
+        #expect(surface.resizes.isEmpty)
     }
 
     @Test func aClosedPanelIsNeverResizedAndReopensFresh() {
