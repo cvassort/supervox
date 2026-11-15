@@ -78,14 +78,16 @@ import Testing
         #expect(offending.isEmpty, "\(offending.map(\.place))")
     }
 
-    /// Un `TextInserter` du système (presse-papiers général, ⌘V réel) ne se donne jamais par défaut : `inserter` est
-    /// toujours passé explicitement, et seule la cible `Supervox` (le programme) ou le constructeur de production
-    /// d'`AppController` (`inserter: .system()` passé, non défini comme défaut) le construit. La forme interdite est une
-    /// valeur par défaut `= .system(` ou `= TextInserter.system(`, quelle que soit la coupure de ligne.
-    static let forbiddenSystemInserterDefault = #"=\s*(TextInserter\s*)?\.\s*system\s*\("#
+    /// Un `TextInserter` du système (presse-papiers général, ⌘V réel) n'est construit que par la cible `Supervox`, le programme :
+    /// `AppController` reçoit son `inserter` de l'extérieur, sans valeur par défaut, et aucun test ne le construit. Formes
+    /// interdites ailleurs, quelles que soient les espaces et la coupure de ligne : une valeur par défaut `= .system(` ou
+    /// `= TextInserter.system(`, un argument `inserter: .system(` ou `inserter: TextInserter.system(`, et tout appel
+    /// `TextInserter.system(`.
+    static let forbiddenSystemInserter =
+        #"(=|inserter\s*:)\s*(TextInserter\s*)?\.\s*system\s*\(|TextInserter\s*\.\s*system\s*\("#
 
-    @Test func noSourceDefaultsAnInserterToTheSystemOne() throws {
-        let pattern = try Regex(Self.forbiddenSystemInserterDefault)
+    @Test func onlyTheSupervoxTargetBuildsTheSystemInserter() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserter)
         let offending = try Self.sources(under: "Sources")
             .filter { !$0.place.hasPrefix("Supervox/") && $0.code.contains(pattern) }
         #expect(offending.isEmpty, "\(offending.map(\.place))")
@@ -93,10 +95,32 @@ import Testing
 
     /// Les tests ne construisent jamais l'insertion du système : un collage fautif viserait le vrai presse-papiers.
     @Test func noTestBuildsTheSystemInserter() throws {
-        let pattern = try Regex(#"TextInserter\s*\.\s*system\s*\(|=\s*\.\s*system\s*\("#)
+        let pattern = try Regex(Self.forbiddenSystemInserter)
         let offending = try Self.sources(under: "Tests")
             .filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(pattern) }
         #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    @Test(arguments: [
+        "inserter: TextInserter = .system()", "inserter: TextInserter = TextInserter.system()",
+        "inserter: TextInserter =\n    .system()", "= .system (", "x = TextInserter . system(",
+        "inserter: .system()", "inserter : .system ()", "inserter:\n    .system()", "inserter: TextInserter.system()",
+        "inserter: TextInserter\n    .system()", "dictation: dictation, inserter: .system())",
+        "let i = TextInserter.system()", "return TextInserter\n.system()",
+    ])
+    func theSystemInserterPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenSystemInserter)))
+    }
+
+    @Test func theSystemInserterPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserter)
+        for code in [
+            "inserter: rig.inserter)", "inserter: TextInserter,", "let system = SystemPermissions()",
+            "public static func system() -> TextInserter {", "inserter: InsertionRig().inserter)",
+            "let inserter: TextInserter",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
     }
 
     /// Aucun test ne touche le presse-papiers général : ni `SystemPasteboard()` (qui prend `NSPasteboard.general`), ni
@@ -118,21 +142,6 @@ import Testing
     @Test func theGeneralPasteboardPatternLeavesANamedBoardAlone() throws {
         let pattern = try Regex(Self.forbiddenGeneralPasteboard)
         for code in ["SystemPasteboard(board: board)", "NSPasteboard(name: .init(\"x\"))", "board.name != .general"] {
-            #expect(!code.contains(pattern), "\(code)")
-        }
-    }
-
-    @Test(arguments: [
-        "inserter: TextInserter = .system()", "inserter: TextInserter = TextInserter.system()",
-        "inserter: TextInserter =\n    .system()", "= .system (", "x = TextInserter . system(",
-    ])
-    func theSystemInserterDefaultPatternSeesNeighbouringSpellings(code: String) throws {
-        #expect(code.contains(try Regex(Self.forbiddenSystemInserterDefault)))
-    }
-
-    @Test func theSystemInserterDefaultPatternLeavesOrdinaryUsesAlone() throws {
-        let pattern = try Regex(Self.forbiddenSystemInserterDefault)
-        for code in ["inserter: .system())", "inserter: TextInserter,", "let system = SystemPermissions()", "static func system() -> TextInserter {"] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }

@@ -11,7 +11,9 @@ let engines = LiveDictationEngines()
 let controller = AppController(
     settingsView: SettingsView.provider(
         catalog: engines.catalog, promptTokenLimit: WhisperKitTranscriber.promptTokenLimit),
-    dictation: engines.environment)
+    dictation: engines.environment,
+    // L'insertion du système (presse-papiers général, ⌘V réel) n'est construite que par le programme.
+    inserter: .system())
 // `NSApplication.delegate` est faible : la constante globale le garde jusqu'à la fin du processus.
 let delegate = ApplicationDelegate(controller: controller)
 application.delegate = delegate

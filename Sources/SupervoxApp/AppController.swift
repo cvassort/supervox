@@ -137,7 +137,8 @@ public final class AppController {
     /// (`SupervoxApp` ne dépend pas d'eux).
     public convenience init(
         settingsView: @escaping SettingsViewProvider = SettingsView.provider,
-        dictation: DictationEnvironment = .unavailable
+        dictation: DictationEnvironment = .unavailable,
+        inserter: TextInserter
     ) {
         let file = (try? SettingsStore.defaultFile())
             ?? URL.applicationSupportDirectory.appending(path: "Supervox/settings.json")
@@ -154,7 +155,7 @@ public final class AppController {
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
-            dictation: dictation, inserter: .system())
+            dictation: dictation, inserter: inserter)
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,
