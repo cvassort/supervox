@@ -66,6 +66,9 @@ final class FakeSession: DictationSessioning {
     var finishPhases: [DictationPhase] { state.withLock { $0.finishPhases } }
     func count(of call: String) -> Int { calls.filter { $0 == call }.count }
 
+    /// Le flux de la session se termine (le contrôleur n'a plus rien à lire).
+    func end() { sink.finish() }
+
     func emit(_ snapshot: DictationSnapshot) {
         state.withLock { $0.phase = snapshot.phase }
         sink.yield(snapshot)
@@ -181,6 +184,10 @@ final class FakeEngines: Sendable {
     /// Les valeurs de clavier demandées, dans l'ordre.
     private(set) var keyboards: [PanelKeyboard] = []
     var onClosed: (@MainActor () -> Void)?
+    /// Le journal de l'insertion, partagé pour comparer l'ordre des appels (« keyboard(none) » avant l'attente et l'insertion).
+    var log: CallLog?
+    /// Appelé à chaque `setKeyboard`, avant l'enregistrement : le test y lit ce que le contrôleur montre à cet instant.
+    var onSetKeyboard: (@MainActor (PanelKeyboard) -> Void)?
 
     func open() {
         guard !isOpen else { return }
@@ -188,7 +195,11 @@ final class FakeEngines: Sendable {
         openCount += 1
     }
 
-    func setKeyboard(_ keyboard: PanelKeyboard) { keyboards.append(keyboard) }
+    func setKeyboard(_ keyboard: PanelKeyboard) {
+        onSetKeyboard?(keyboard)
+        keyboards.append(keyboard)
+        log?.entries.append("keyboard(\(keyboard))")
+    }
 
     func close() {
         guard isOpen else { return }
@@ -212,6 +223,32 @@ final class FakeEngines: Sendable {
     /// Ce que répond la sonde d'Échap ; `escapeProbes` compte les questions posées.
     var escapeHeld = false
     var escapeProbes = 0
+    /// Les modes dont le réglage « relire avant de coller » est actif, et chaque lecture que le contrôleur en a faite.
+    var reviewing: Set<String> = []
+    var reviewReads: [String] = []
+}
+
+/// L'attente du contrôleur entre le retrait de la frappe et l'insertion : elle journalise sa durée, n'attend rien, sauf si le
+/// test la retient (`holds`) : elle dure alors jusqu'à `sleeper.release()` ou jusqu'à l'annulation de la tâche qui l'attend.
+@MainActor final class HandoverWait {
+    private let log: CallLog
+    let sleeper: SleepingWait
+    private(set) var durations: [Double] = []
+    var holds = false
+
+    init(log: CallLog) {
+        self.log = log
+        sleeper = SleepingWait(log: log)
+    }
+
+    func wait(_ seconds: Double) async {
+        durations.append(seconds)
+        if holds {
+            await sleeper.wait(seconds)
+        } else {
+            log.entries.append("wait(\(seconds))")
+        }
+    }
 }
 
 /// Le contrôleur et tous ses doubles : vrai `TextInserter` sur presse-papiers, touches et attente doubles.
@@ -222,6 +259,8 @@ final class FakeEngines: Sendable {
     let knobs = DictationKnobs()
     /// L'attente du sondage des modificateurs : elle dure jusqu'à `holdSleeper.release()` (un « tic »), ou à l'annulation.
     let holdSleeper = SleepingWait(log: CallLog())
+    /// L'attente de la relecture avant l'insertion (voir `HandoverWait`).
+    let handover: HandoverWait
     let controller: DictationController
     /// Le contenu du presse-papiers double à chaque ⌘V posté : les textes réellement collés, dans l'ordre.
     private(set) var pasted: [String] = []
@@ -236,6 +275,9 @@ final class FakeEngines: Sendable {
         rig = InsertionRig(log: log, trusted: trusted, held: heldModifiers, wait: wait)
         engines.configure { $0.limit = limit }
         let knobs = knobs
+        let handover = HandoverWait(log: log)
+        self.handover = handover
+        panel.log = log
         controller = DictationController(
             environment: engines.environment, inserter: rig.inserter,
             settings: { knobs.settings }, behavior: { knobs.behavior }, modeID: { knobs.modeID },
@@ -250,7 +292,12 @@ final class FakeEngines: Sendable {
                     knobs.escapeProbes += 1
                     return knobs.escapeHeld
                 },
-                wait: { [holdSleeper] in await holdSleeper.wait($0) }))
+                wait: { [holdSleeper] in await holdSleeper.wait($0) }),
+            reviewBeforePaste: { mode in
+                knobs.reviewReads.append(mode)
+                return knobs.reviewing.contains(mode)
+            },
+            wait: { await handover.wait($0) })
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
         controller.onViewChange = { [weak self] in self?.views.append($0) }
