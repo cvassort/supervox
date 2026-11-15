@@ -110,9 +110,9 @@ swift run supervox-snapshots /chemin/vers/un/dossier
 ```
 
 `supervox-snapshots` écrit les écrans du panneau et des réglages en PNG, en clair et en sombre : pour la dictée, la
-préparation, l'enregistrement (sans texte, avec un texte long), la transcription, « rien à transcrire », l'échec de
-préparation, le texte copié faute d'Accessibilité, le dernier texte (avec « Copié » et « Copie impossible »), et un mode
-non disponible. Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
+préparation (avec « Téléchargement du modèle… », puis avec « Chargement du modèle… »), l'enregistrement (sans texte, avec
+un texte long), la transcription, « rien à transcrire », l'échec de préparation, le texte copié faute d'Accessibilité, le
+texte refusé par le presse-papiers, le dernier texte (avec « Copié » et « Copie impossible »), et un mode non disponible. Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
 d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au presse-papiers ni aux réglages
 réels. Les onglets des réglages sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas
 fidèlement.
@@ -129,16 +129,28 @@ premier plan.
 
 - **Bascule ou maintien** (Réglages, onglet Raccourci). En maintien, la dictée s'arrête dès que les touches de
   modification du raccourci sont relâchées, même si le système ne signale pas le relâchement de la touche principale
-  (vérifié quatre fois par seconde). Un raccourci sans touche de modification n'a rien à vérifier : seul le relâchement
-  signalé par le système termine la dictée, ou la durée maximale.
-- **Le panneau suit la hauteur de son contenu** (sa fenêtre est ancrée par le haut). **Il montre la dictée** : préparation (avec « Téléchargement du modèle… » si un modèle manque), enregistrement
+  (vérifié vingt fois par seconde). L'application refuse d'enregistrer un raccourci sans touche de modification (il
+  taperait du texte) ; une garde interne, qui ne se déclenche que si les réglages en contenaient un écrit à la main, laisse
+  alors seul le relâchement signalé par le système terminer la dictée, ou la durée maximale. **Échap** annule aussi une
+  dictée en maintien : avec ⌃⌥ encore tenus, Échap n'est pas l'Échap seul que l'application réserve, donc la même
+  surveillance lit l'état de la touche (lecture seule du clavier, comme pour les touches de modification, sans autorisation
+  de plus) ; en bascule, Échap garde son chemin habituel. Une dictée garde le comportement (bascule ou maintien) avec lequel
+  elle a commencé, même si le réglage change pendant.
+- **Le panneau suit la hauteur de son contenu** (sa fenêtre est ancrée par le haut). **Il montre la dictée** : préparation (avec « Téléchargement du modèle… » pendant un téléchargement, puis « Chargement du modèle… » tant que les moteurs se chargent en mémoire ; rien s'ils le sont déjà), enregistrement
   (point rouge, durée, forme d'onde, texte en direct sur quatre lignes au plus, la fin toujours visible), transcription,
   puis le résultat. Échap annule la dictée : rien n'est collé.
 - **Le collage est un ⌘V simulé** : le texte est mis dans le presse-papiers, collé, puis le contenu d'origine du
-  presse-papiers (texte, image, tout ce qui s'y trouvait) est rendu, sauf si une autre application y a écrit entre-temps.
+  presse-papiers (texte, image et les autres types lisibles) est rendu, sauf si une autre application y a écrit entre-temps ;
+  un type dont les données ne se lisent pas (données promises par l'application d'origine, par exemple) n'est pas rendu.
   La touche envoyée est celle qui produit « v » dans la disposition de clavier en cours. Cela demande l'autorisation
   d'Accessibilité ; sans elle, ou si des touches de modification restent enfoncées, le texte est copié, laissé dans le
-  presse-papiers, et le panneau dit pourquoi.
+  presse-papiers, et le panneau dit pourquoi. Si le presse-papiers refuse le texte lui-même, le contenu d'origine est rendu,
+  rien n'est collé, et le panneau dit « Texte non copié » (le texte reste dans « Dernière dictée »). Quitter l'application
+  pendant un collage attend, trois secondes au plus, que le presse-papiers soit rendu.
+- **Un micro qui s'arrête en pleine prise** (casque débranché, par exemple) fait échouer la dictée après une seconde sans
+  son (« le micro s'est arrêté pendant la prise ») : rien n'est collé. Un vrai micro livre des tranches même dans le silence.
+- **Au lancement**, si tous les modèles des réglages courants sont déjà sur le disque (et, pour WhisperKit, son tokenizer),
+  les moteurs se préparent en tâche de fond, sans téléchargement et sans retarder l'affichage ; un échec y est silencieux.
 - **« Collé » ne prouve pas que l'application visée a reçu le texte** : l'application ne sait que ce qu'elle a envoyé. Le
   texte de la dernière dictée reste donc dans le panneau (carte « Dernière dictée », avec un bouton « Copier » qui copie
   le texte entier). Il n'est gardé qu'en mémoire : ni fichier, ni journal, et il disparaît quand on quitte l'application.
@@ -156,6 +168,21 @@ premier plan.
 
 Rien n'est embarqué : les modèles se téléchargent depuis Internet, à la demande (bouton « Télécharger » de l'onglet
 Transcription, ou à la première dictée qui en a besoin), puis tournent sur ce Mac.
+
+**Ce qui touche le réseau et ce qui ne le touche pas.**
+- Le réseau sert au téléchargement des modèles, et à lui seul : le dépôt de modèles de WhisperKit (le modèle et son
+  tokenizer) et les modèles de FluidAudio (Parakeet, son petit modèle de vocabulaire, le détecteur de voix). Le texte dicté
+  et l'audio ne partent nulle part : les moteurs sont locaux. (Les fournisseurs de l'étape 2 ne servent pas à la dictée.)
+- Un modèle WhisperKit « Prêt » se charge depuis son dossier, sans requête réseau : le dossier du modèle, l'interdiction de
+  télécharger et le dossier du tokenizer sont donnés à WhisperKit (code et dépendance lus, jamais essayé hors ligne). Le
+  tokenizer n'y fait exception que si son fichier (`models/openai/whisper-<variante>/tokenizer.json` et
+  `tokenizer_config.json`, sous le dossier des modèles de Supervox) manque ou ne se lit pas : WhisperKit va alors le chercher
+  en ligne. Un nom de variante saisi à la main dans les réglages, inconnu du catalogue et absent du disque, est téléchargé
+  par WhisperKit lui-même à la première dictée.
+- Parakeet et le détecteur de voix ne vont pas sur le réseau quand leurs fichiers sont là (d'après la lecture de la
+  bibliothèque à la revue finale ; non essayé hors ligne ici).
+- Si un modèle indiqué « Prêt » ne se charge pas, la phrase du panneau renvoie à l'onglet Transcription : le supprimer, puis
+  le télécharger de nouveau.
 
 - WhisperKit : `~/Library/Application Support/Supervox/Models/` (sous-dossier `models/argmaxinc/whisperkit-coreml/`).
 - Parakeet (avec son petit modèle de vocabulaire) et le détecteur de voix : le dossier de la bibliothèque FluidAudio,
