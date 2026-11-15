@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Synchronization
 import SupervoxCore
+import SupervoxEngines
 import Testing
 
 @testable import SupervoxBench
@@ -376,7 +377,7 @@ private func temporaryFolder() throws -> URL {
     return url
 }
 
-@Suite struct LiveCommandTests {
+@Suite(.timeLimit(.minutes(1))) struct LiveCommandTests {
     @Test func theOptionsAreParsedWithTheirDefaults() throws {
         let command = try LiveCommand.parse(["--audio", "a", "--corpus", "c.tsv", "--out", "o"])
         #expect(command.engine == "whisperkit")
@@ -455,9 +456,9 @@ private func temporaryFolder() throws -> URL {
         var calls: [(engine: String, model: String)] { asked.withLock { $0 } }
         func make(_ engine: String, _ model: String) -> LiveEngines {
             asked.withLock { $0.append((engine, model)) }
-            return LiveEngines(
-                detector: DoubleDetector(), preview: preview, final: engine == "parakeet" ? preview : final,
-                models: engine == "parakeet" ? ["Parakeet (aperçu)"] : ["Parakeet (aperçu)", "WhisperKit `\(model)`"])
+            // La règle de choix est celle de la commande (`LiveEngines.assemble`), pas une copie.
+            return LiveEngines.assemble(
+                engine: engine, whisperModel: model, parakeet: preview, whisper: final, detector: DoubleDetector())
         }
     }
 
@@ -575,5 +576,48 @@ private func temporaryFolder() throws -> URL {
         let names = BenchCommand.configuration.subcommands.map { $0.configuration.commandName }
         #expect(names.contains("live"))
         #expect(LiveCommand.reportFiles == ["live.md", "live.json"])
+    }
+}
+
+// MARK: - Le choix réel des moteurs (N4)
+
+/// `LiveEngines.real` : ce que `--engine` décide vraiment. Construire les moteurs ne charge rien (aucun modèle, aucun réseau).
+@Suite(.timeLimit(.minutes(1))) struct LiveEnginesTests {
+    @Test func withParakeetThePreviewAndTheFinalEngineAreTheSameInstance() {
+        let engines = LiveEngines.real(engine: "parakeet", whisperModel: "small")
+        #expect(engines.final is ParakeetTranscriber)
+        #expect(engines.preview is ParakeetTranscriber)
+        #expect((engines.final as AnyObject) === (engines.preview.map { $0 as AnyObject }))
+        #expect(engines.models == ["Parakeet (aperçu)"])
+    }
+
+    @Test func withWhisperKitTheFinalEngineIsWhisperKitAndThePreviewStaysParakeet() {
+        let engines = LiveEngines.real(engine: "whisperkit", whisperModel: "small")
+        #expect(engines.final is WhisperKitTranscriber)
+        #expect(engines.preview is ParakeetTranscriber)
+        #expect((engines.final as AnyObject) !== (engines.preview.map { $0 as AnyObject }))
+        #expect(engines.models == ["Parakeet (aperçu)", "WhisperKit `small`"])
+    }
+
+    @Test func theDetectorIsTheStreamingOne() {
+        #expect(LiveEngines.real(engine: "whisperkit", whisperModel: "small").detector is FluidStreamingVoiceDetector)
+    }
+
+    /// WhisperKit ne se construit qu'avec le modèle demandé, et seulement si le moteur final est WhisperKit.
+    @Test func theWhisperEngineIsOnlyBuiltWhenItIsTheChosenEngine() {
+        let built = Mutex(0)
+        let parakeet = ParakeetTranscriber()
+        func make() -> any Transcriber {
+            built.withLock { $0 += 1 }
+            return WhisperKitTranscriber(model: "small")
+        }
+        _ = LiveEngines.assemble(
+            engine: "parakeet", whisperModel: "small", parakeet: parakeet, whisper: make(),
+            detector: FluidStreamingVoiceDetector())
+        #expect(built.withLock { $0 } == 0)
+        _ = LiveEngines.assemble(
+            engine: "whisperkit", whisperModel: "small", parakeet: parakeet, whisper: make(),
+            detector: FluidStreamingVoiceDetector())
+        #expect(built.withLock { $0 } == 1)
     }
 }

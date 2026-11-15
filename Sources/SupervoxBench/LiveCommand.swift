@@ -481,13 +481,24 @@ struct LiveEngines: Sendable {
     let final: any Transcriber
     let models: [String]
 
-    /// Les vrais moteurs. Rien n'est chargé ni téléchargé avant que la session les prépare.
+    /// Les vrais moteurs. Rien n'est chargé ni téléchargé avant que la session les prépare (construire un moteur ne charge rien).
     static func real(engine: String, whisperModel: String) -> LiveEngines {
-        let parakeet = ParakeetTranscriber()
-        let final: any Transcriber = engine == "parakeet" ? parakeet : WhisperKitTranscriber(model: whisperModel)
+        assemble(
+            engine: engine, whisperModel: whisperModel, parakeet: ParakeetTranscriber(),
+            whisper: WhisperKitTranscriber(model: whisperModel), detector: FluidStreamingVoiceDetector())
+    }
+
+    /// La règle de choix, seule : l'aperçu est toujours Parakeet ; le moteur final est **le même exemplaire** que l'aperçu avec
+    /// `--engine parakeet` (un seul chargement, un seul état), et WhisperKit sinon ; le rapport nomme les modèles utilisés. Les
+    /// tests la lisent ici avec des moteurs doubles, sans la réécrire.
+    static func assemble(
+        engine: String, whisperModel: String, parakeet: any Transcriber, whisper: @autoclosure () -> any Transcriber,
+        detector: any StreamingVoiceDetector
+    ) -> LiveEngines {
+        let final: any Transcriber = engine == "parakeet" ? parakeet : whisper()
         var models = ["Parakeet (aperçu)"]
         if engine == "whisperkit" { models.append("WhisperKit `\(whisperModel)`") }
-        return LiveEngines(detector: FluidStreamingVoiceDetector(), preview: parakeet, final: final, models: models)
+        return LiveEngines(detector: detector, preview: parakeet, final: final, models: models)
     }
 }
 
