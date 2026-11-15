@@ -364,6 +364,23 @@ import SupervoxCore
         #expect(h.controller.lastTranscript == "Premier texte.")
     }
 
+    /// Une session qui s'annule seule (rien ne le demandait) : le panneau le dit au lieu de rester vide sur « Prêt ».
+    @Test func aSessionThatCancelsItselfIsSaidAndTheNextPressStartsAgain() async {
+        let h = DictationHarness()
+        let session = await h.startRecording()
+        session.emit(.cancelled)
+
+        #expect(await until { h.controller.view.phase == .cancelled })
+        #expect(h.panel.isOpen)
+        #expect(h.controller.view.notice == "La dictée a été interrompue.")
+        #expect(!h.controller.isBusy)
+        #expect(h.pasted.isEmpty)
+
+        h.controller.hotKeyPressed()
+        #expect(h.controller.view.phase == .preparing)
+        _ = await h.session(1)
+    }
+
     @Test func aBlankResultIsAFailureAndNeverCrashes() async {
         let h = DictationHarness()
         let session = await h.startRecording()

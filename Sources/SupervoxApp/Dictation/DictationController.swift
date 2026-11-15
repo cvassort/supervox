@@ -23,6 +23,7 @@ public final class DictationController {
     static let rawModeID = "dictee-brute"
     static let laterModeNotice = "Ce mode arrive à une étape suivante."
     static let downloadNotice = "Téléchargement du modèle…"
+    static let interruptedNotice = "La dictée a été interrompue."
     static let uncountableNotice =
         "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
     static let preparationFailedNotice =
@@ -218,7 +219,7 @@ public final class DictationController {
             session = try await environment.makeSession(effective)
         } catch {
             guard isLive(run) else { return }
-            log.error("session non fabriquée")
+            log.error("session non fabriquée : \(type(of: error), privacy: .public)")
             finishRun(run, with: .failed(.engine("la préparation de la transcription a échoué")), notice: Self.preparationFailedNotice)
             return
         }
@@ -257,15 +258,14 @@ public final class DictationController {
         case .finished(let text):
             finished(text, run)
         case .cancelled:
-            // Nous n'avons rien demandé : la session s'est arrêtée seule. Plus rien à montrer.
+            // Nous n'avons rien demandé : la session s'est arrêtée seule. Le panneau le dit.
             log.notice("session annulée sans demande")
-            retire(run)
-            setView(DictationViewState())
+            finishRun(run, with: .cancelled, notice: Self.interruptedNotice)
         case .failed(let failure):
             // Une panne du moteur pendant la préparation : le texte de la raison peut porter une adresse, la phrase est fixe.
             var message = failure.message
             if case .engine = failure, view.phase == .preparing { message = Self.preparationFailedNotice }
-            log.notice("dictée en échec")
+            log.notice("dictée en échec : \(Self.kind(of: failure), privacy: .public)")
             finishRun(run, with: .failed(failure), notice: message)
         }
     }
@@ -381,6 +381,15 @@ public final class DictationController {
         if phase == .preparing, let download = run.downloadNotice { lines.append(download) }
         if let vocabulary = run.vocabularyNotice { lines.append(vocabulary) }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
+    }
+
+    /// La nature d'un échec pour le journal : jamais sa raison (qui peut porter une adresse).
+    private static func kind(of failure: DictationFailure) -> String {
+        switch failure {
+        case .noSpeech: "aucune parole"
+        case .microphone: "micro"
+        case .engine: "moteur"
+        }
     }
 
     private static func trimmedNotice(kept: Int, of total: Int) -> String {
