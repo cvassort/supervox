@@ -79,9 +79,11 @@ struct DictationView: View {
             .font(.callout)
             // Pendant la transcription finale, le texte en direct s'efface : il va être remplacé.
             .foregroundStyle(display.mood == .working ? .secondary : .primary)
-            .lineLimit(4, reservesSpace: true)
+            .lineLimit(4)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // La place de quatre lignes (une ligne de `callout` fait 15 points, relevé sur les images), réservée pendant
+            // la prise : `lineLimit(_:reservesSpace:)` ne la réservait pas ici (mesuré : une ligne pour un texte vide).
+            .frame(maxWidth: .infinity, minHeight: 4 * 15 + 2, alignment: .topLeading)
     }
 
     private func detailLine(_ text: String) -> some View {
