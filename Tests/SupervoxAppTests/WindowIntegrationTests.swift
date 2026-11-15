@@ -166,6 +166,45 @@ struct WindowIntegrationTests {
         #expect(field.string == "")
     }
 
+    /// La pile d'annulation est celle du champ, pas celle du panneau (qui sert d'une relecture à la suivante) : au début d'une
+    /// relecture, rien ne se défait, et ⌘Z ne fait rien revenir de la relecture d'avant.
+    @Test func theUndoStackDoesNotPassFromOneReviewToTheNext() async throws {
+        let slot = FieldSlot()
+        let (surface, first) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        first.insertText("bonjour", replacementRange: NSRange(location: 0, length: 0))
+        try #require(first.undoManager?.canUndo == true, "la première relecture n'a rien à annuler : le test ne prouve rien")
+
+        // Fin de la relecture : le champ part, le panneau est caché puis remontré pour la suivante.
+        slot.present = false
+        #expect(await waitUntil { reviewField(in: panel) == nil })
+        surface.hide()
+        panel.orderFrontRegardless()
+        slot.text = "Un autre texte."
+        slot.present = true
+        #expect(await waitUntil { reviewField(in: panel) != nil })
+        let second = try #require(reviewField(in: panel))
+        try #require(second !== first)
+        surface.setKeyboard(.focused)
+        try #require(panel.isKeyWindow, "le panneau n'est pas devenu clé")
+        #expect(await waitUntil { panel.firstResponder === second })
+        #expect(second.string == "Un autre texte.")
+
+        // `#require` : sans pile propre, le ⌘Z qui suit défait la frappe d'un champ disparu et lève une exception d'AppKit.
+        try #require(second.undoManager?.canUndo == false, "la pile du panneau est passée à la relecture suivante")
+        // Rien à défaire : ⌘Z ne touche à rien (AppKit répond « pris » même sans rien à défaire : seul le texte compte).
+        _ = try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6))
+        #expect(second.string == "Un autre texte.")
+
+        // La relecture en cours garde la sienne.
+        second.insertText(" Ajout.", replacementRange: NSRange(location: second.string.utf16.count, length: 0))
+        try #require(second.undoManager?.canUndo == true)
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(second.string == "Un autre texte.")
+    }
+
     /// Un ⌘Z fabriqué, passé directement à la fenêtre (rien n'est posté au système) : annule comme `undoManager.undo()`.
     @Test func aCommandZEventPassedToThePanelUndoesTheTyping() async throws {
         let slot = FieldSlot()

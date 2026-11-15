@@ -4,7 +4,8 @@ import SwiftUI
 /// Le champ où l'on relit et corrige un texte avant de le coller : un `NSTextView` de texte brut dans un défileur.
 ///
 /// Rien ne modifie le texte dans le dos de l'utilisateur (c'est souvent un prompt) : ni guillemets ni tirets typographiques,
-/// ni remplacement, correction ou détection automatiques. L'annulation (⌘Z) est celle du champ.
+/// ni remplacement, correction ou détection automatiques. L'annulation (⌘Z) est celle du champ, et d'aucune autre relecture
+/// (voir `Coordinator`).
 struct ReviewTextView: NSViewRepresentable {
     var text: String
     var isEditable: Bool
@@ -125,8 +126,14 @@ struct ReviewTextView: NSViewRepresentable {
 
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
         var onEdit: @MainActor (String) -> Void
+        /// La pile d'annulation de ce champ, et d'aucun autre : sans elle, le champ prendrait celle de la fenêtre, que le
+        /// panneau garde d'une relecture à la suivante. Un ⌘Z au début d'une relecture défairait alors la frappe d'un champ
+        /// qui n'existe plus.
+        private let undoStack = UndoManager()
 
         init(onEdit: @escaping @MainActor (String) -> Void) { self.onEdit = onEdit }
+
+        func undoManager(for view: NSTextView) -> UndoManager? { undoStack }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
