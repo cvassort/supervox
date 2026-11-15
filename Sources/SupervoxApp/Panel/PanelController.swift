@@ -35,9 +35,12 @@ public protocol OutsideClickMonitor: AnyObject {
 /// Échap n'arrive plus à l'application de dessous. Si Échap ne peut pas être réservé, un avis le dit.
 ///
 /// Clic en dehors. Tant que le panneau est ouvert, un clic dans une autre application le ferme
-/// (le clic arrive quand même à cette application).
+/// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`).
+///
+/// Dictée. Le panneau ne connaît de la dictée que son état (`PanelModel.dictation`). Sa fermeture est signalée par `onClosed`,
+/// et Échap peut être confié à un gestionnaire (`escapeHandler`).
 @MainActor
-public final class PanelController {
+public final class PanelController: PanelOpening {
     private let model: PanelModel
     private let surface: any PanelSurface
     private let escapeRegistrar: any HotKeyRegistrar
@@ -57,10 +60,21 @@ public final class PanelController {
         self.surface = surface
     }
 
+    public var isOpen: Bool { model.isOpen }
+
+    /// Appelé chaque fois qu'un panneau ouvert se ferme, par quelque chemin que ce soit (Échap, clic en dehors, raccourci,
+    /// menu, Quitter, Réglages) : le contrôleur de dictée y annule la dictée en cours.
+    public var onClosed: (@MainActor () -> Void)?
+    /// Ce que fait Échap pendant que le panneau est ouvert. Sans gestionnaire, Échap ferme le panneau. Avec un
+    /// gestionnaire (la dictée), c'est lui qui décide, et il ferme le panneau lui-même.
+    public var escapeHandler: (@MainActor () -> Void)?
+
     /// Ouvre ou ferme, selon le modèle.
     public func toggle() {
+        let wasOpen = model.isOpen
         model.toggle()
         sync()
+        if wasOpen { onClosed?() }
     }
 
     public func open() {
@@ -70,15 +84,28 @@ public final class PanelController {
     /// Seul chemin de fermeture : Échap, le raccourci, les actions du menu y passent tous, pour
     /// qu'Échap soit toujours rendu.
     public func close() {
+        let wasOpen = model.isOpen
         model.close()
         sync()
+        if wasOpen { onClosed?() }
+    }
+
+    private func escapePressed() {
+        if let escapeHandler { escapeHandler() } else { close() }
+    }
+
+    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée : le clic qui sert à passer à la fenêtre
+    /// où le texte doit aller ne doit pas annuler ce qu'on dit.
+    private func outsideClick() {
+        guard !model.dictation.phase.isActive else { return }
+        close()
     }
 
     private func sync() {
         if model.isOpen {
-            let escapeHeld = escapeRegistrar.register(Self.escape) { [weak self] in self?.close() }
+            let escapeHeld = escapeRegistrar.register(Self.escape) { [weak self] in self?.escapePressed() }
             model.setNotice(escapeHeld ? nil : Self.escapeRefusedNotice(hotKeyLabel: model.hotKeyLabel), for: .escape)
-            clickMonitor.start { [weak self] in self?.close() }
+            clickMonitor.start { [weak self] in self?.outsideClick() }
             surface.show()
             log.notice("panneau ouvert ; Échap tenu : \(escapeHeld, privacy: .public)")
         } else {

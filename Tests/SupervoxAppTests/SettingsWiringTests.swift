@@ -300,7 +300,7 @@ import Testing
         #expect(registrar.registered == .standard)
         registrar.press()
         #expect(controller.panelModel.isOpen)
-        registrar.press()
+        controller.togglePanelFromMenu()
 
         model.startRecording()
         model.record(HotKeyTests.keyB)

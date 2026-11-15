@@ -126,4 +126,10 @@ import Testing
         #expect(frame.maxY == visible.maxY)
         #expect(frame.midX == visible.midX)
     }
+
+    @Test func theDictationStartsIdle() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(model.dictation == DictationViewState())
+        #expect(model.dictation.phase == .idle)
+    }
 }

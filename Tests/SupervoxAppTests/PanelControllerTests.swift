@@ -1,3 +1,4 @@
+import SupervoxCore
 import Testing
 
 @testable import SupervoxApp
@@ -108,5 +109,75 @@ import Testing
         escape.refused = []
         controller.open()
         #expect(model.notices[.escape] == nil)
+    }
+
+    // MARK: - Dictée
+
+    @Test(arguments: [DictationPhase.preparing, .recording, .finalizing])
+    func outsideClickIsIgnoredWhileADictationRuns(_ phase: DictationPhase) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(phase: phase)
+
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        #expect(surface.isShown)
+        #expect(clicks.isWatching)
+    }
+
+    @Test(arguments: [
+        DictationPhase.idle, .finished("texte"), .cancelled, .failed(.noSpeech),
+    ])
+    func outsideClickStillClosesThePanelWhenNoDictationRuns(_ phase: DictationPhase) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(phase: phase)
+
+        clicks.clickOutside()
+        #expect(!model.isOpen)
+    }
+
+    @Test func closedPanelReportsItsClosingOnlyWhenItWasOpen() {
+        let controller = makeController()
+        var closings = 0
+        controller.onClosed = { closings += 1 }
+
+        controller.close()
+        #expect(closings == 0)
+
+        controller.open()
+        controller.close()
+        #expect(closings == 1)
+
+        // Fermé par la bascule du menu : même signal.
+        controller.toggle()
+        controller.toggle()
+        #expect(closings == 2)
+
+        // Fermé par un clic en dehors, ou par Échap sans gestionnaire : même signal.
+        controller.open()
+        clicks.clickOutside()
+        controller.open()
+        escape.press()
+        #expect(closings == 4)
+    }
+
+    @Test func escapeGoesToItsHandlerWhenThereIsOne() {
+        let controller = makeController()
+        var escapes = 0
+        controller.escapeHandler = { escapes += 1 }
+        controller.open()
+
+        escape.press()
+        #expect(escapes == 1)
+        // Le gestionnaire décide : le panneau n'est pas fermé par le contrôleur de panneau lui-même.
+        #expect(model.isOpen)
+    }
+
+    @Test func theControllerAnswersTheDictationControllersQuestion() {
+        let controller = makeController()
+        #expect(!controller.isOpen)
+        controller.open()
+        #expect(controller.isOpen)
     }
 }

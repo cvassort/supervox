@@ -47,6 +47,8 @@ public final class PanelModel {
     public var hotKeyLabel: String?
     /// Accueil du premier lancement ; effacé quand le panneau se ferme.
     public var welcome: String?
+    /// La dictée telle que la vue la montre ; mise à jour par le contrôleur de dictée.
+    public var dictation = DictationViewState()
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 

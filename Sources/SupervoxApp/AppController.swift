@@ -28,6 +28,8 @@ public final class AppController {
     public let hotKeys: HotKeyCenter
     public let panelModel: PanelModel
     public let permissions: PermissionsModel
+    /// La dictée : le raccourci, Échap et la fermeture du panneau y mènent.
+    public let dictation: DictationController
     /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
     public let systemHotKeys: any SystemHotKeys
     /// Nomme les touches des raccourcis (libellés, avis) et reconnaît ⌘Q, ⌘W, ⌘H et ⌘M.
@@ -66,7 +68,9 @@ public final class AppController {
         makePanelSurface: @MainActor (AnyView) -> any PanelSurface,
         clickMonitor: any OutsideClickMonitor,
         makeSettingsWindow: @escaping SettingsWindowMaker,
-        terminate: @escaping @MainActor () -> Void
+        terminate: @escaping @MainActor () -> Void,
+        dictation: DictationEnvironment = .unavailable,
+        inserter: TextInserter = .system()
     ) {
         self.settingsStore = settingsStore
         self.secrets = secrets
@@ -93,9 +97,26 @@ public final class AppController {
         let content = PanelView(
             model: panelModel, permissions: permissions,
             openSettings: { relay.openSettings?() }, quit: { relay.quit?() })
-        panel = PanelController(
+        let panel = PanelController(
             model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
             surface: makePanelSurface(AnyView(content)))
+        self.panel = panel
+        let dictationController = DictationController(
+            environment: dictation, inserter: inserter,
+            settings: { relay.settings?()?.transcription ?? .defaults },
+            behavior: { relay.settings?()?.hotKeyBehavior ?? .toggle },
+            modeID: { [panelModel] in panelModel.selectedModeID },
+            // Relu à chaque appui : une permission accordée entre-temps compte tout de suite.
+            microphoneAllowed: { [permissions] in
+                permissions.refresh()
+                return permissions.microphone == .granted
+            },
+            panel: panel)
+        self.dictation = dictationController
+        dictationController.onViewChange = { [panelModel] in panelModel.dictation = $0 }
+        panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
+        panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
+        relay.settings = { [weak self] in self?.settings }
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
 
@@ -161,7 +182,7 @@ public final class AppController {
     /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.
     public static func welcome(hotKeyLabel: String?) -> String {
         let opening =
-            hotKeyLabel.map { "\($0) ouvre et ferme ce panneau, depuis n'importe quelle application." }
+            hotKeyLabel.map { "\($0) lance la dictée (et ouvre ce panneau), depuis n'importe quelle application." }
             ?? "Ouvrez ce panneau depuis l'icône de Supervox dans la barre de menus."
         return "Bienvenue dans Supervox. \(opening) Les réglages (fournisseurs, raccourci, permissions) s'ouvrent par « Réglages… », dans le menu « … » ci-dessous ou dans celui de l'icône de la barre de menus."
     }
@@ -174,20 +195,20 @@ public final class AppController {
 
     // MARK: - Raccourci
 
-    /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :
-    /// le raccourci bascule toujours.
-    ///
     /// Enregistre le raccourci des réglages et pose l'avis qui le concerne. Rend `true` si le panneau doit s'ouvrir
     /// pour le montrer : raccourci refusé, ou raccourci de macOS activé pas encore signalé. Ce dernier cas n'ouvre le
     /// panneau qu'une fois : la combinaison signalée est gardée dans les réglages (`systemConflictShown`), et l'avis
     /// reste posé aux lancements suivants sans ouvrir le panneau.
     private func applyHotKey() -> Bool {
         let hotKey = settings.hotKey
-        switch hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() }) {
+        switch hotKeys.apply(
+            hotKey, onPress: { [weak self] in self?.hotKeyPressed() },
+            onRelease: { [weak self] in self?.hotKeyReleased() })
+        {
         case .success:
             let label = hotKey.label(layout: keyboardLayout)
             panelModel.hotKeyLabel = label
-            log.notice("raccourci enregistré : \(label, privacy: .public)")
+            log.notice("raccourci enregistré : \(label, privacy: .public) ; rappels d'appui et de relâchement posés")
             guard systemHotKeys.enabled().contains(hotKey) else {
                 panelModel.setNotice(nil, for: .hotKey)
                 return false
@@ -249,7 +270,9 @@ public final class AppController {
     /// Enregistre `hotKey` comme raccourci global, avec le même effet que celui du lancement, et met à
     /// jour le libellé du panneau. N'enregistre pas les réglages. En cas de refus, l'ancien reste actif.
     public func changeHotKey(_ hotKey: HotKey) -> Result<Void, HotKeyError> {
-        let result = hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() })
+        let result = hotKeys.apply(
+            hotKey, onPress: { [weak self] in self?.hotKeyPressed() },
+            onRelease: { [weak self] in self?.hotKeyReleased() })
         panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
         if case .success = result { panelModel.setNotice(nil, for: .hotKey) }
         return result
@@ -282,9 +305,15 @@ public final class AppController {
 
     // MARK: - Panneau
 
-    private func togglePanel() {
+    /// Le raccourci mène à la dictée : bascule ou maintien, selon les réglages. Le panneau s'ouvre avec elle.
+    private func hotKeyPressed() {
         log.notice("raccourci pressé")
-        panel.toggle()
+        dictation.hotKeyPressed()
+    }
+
+    private func hotKeyReleased() {
+        log.notice("raccourci relâché")
+        dictation.hotKeyReleased()
     }
 
     /// Titre de l'entrée de barre de menus qui ouvre ou ferme le panneau.
@@ -362,6 +391,7 @@ public final class AppController {
 private final class ActionRelay {
     var openSettings: (@MainActor () -> Void)?
     var quit: (@MainActor () -> Void)?
+    var settings: (@MainActor () -> AppSettings?)?
 }
 
 /// Délégué de menu qui rafraîchit les titres juste avant l'affichage.

@@ -46,19 +46,19 @@ import Testing
         let controller = makeController()
         controller.launch()
 
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.panelModel.isOpen)
         #expect(controller.permissions.accessibility == .granted)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
 
         // Retirée pendant que le panneau est fermé : la prochaine ouverture la voit.
         probe.set(accessibility: .denied)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.permissions.accessibility == .denied)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
 
         probe.set(accessibility: .granted)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.permissions.accessibility == .granted)
     }
 
@@ -230,10 +230,10 @@ import Testing
         controller.launch()
         #expect(controller.panelModel.welcome != nil)
 
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(!controller.panelModel.isOpen)
         #expect(controller.panelModel.welcome == nil)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.panelModel.welcome == nil)
     }
 
