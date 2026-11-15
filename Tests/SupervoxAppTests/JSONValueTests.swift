@@ -64,7 +64,7 @@ import Testing
             #expect(try JSONDecoder().decode([Int64].self, from: written) == [value])
         }
         // Au-delà d'un `Int64`, la valeur reste un nombre (approchée) : elle est lue, jamais refusée.
-        #expect(try decode("12345678901234567890") == .number(12_345_678_901_234_567_890))
+        #expect(try decode("12345678901234567890") == .number(1.2345678901234567e19))
     }
 
     /// Un nombre à partie décimale ou à exposant n'est pas un entier : il reste un `Double`.
