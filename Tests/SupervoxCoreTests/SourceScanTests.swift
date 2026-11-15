@@ -99,6 +99,29 @@ import Testing
         #expect(offending.isEmpty, "\(offending.map(\.place))")
     }
 
+    /// Aucun test ne touche le presse-papiers général : ni `SystemPasteboard()` (qui prend `NSPasteboard.general`), ni
+    /// `NSPasteboard.general`. Les essais d'intégration passent par un presse-papiers nommé (`SystemPasteboard(board:)`).
+    static let forbiddenGeneralPasteboard = #"SystemPasteboard\s*\(\s*\)|NSPasteboard\s*\.\s*general"#
+
+    @Test func noTestTouchesTheGeneralPasteboard() throws {
+        let pattern = try Regex(Self.forbiddenGeneralPasteboard)
+        let offending = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(pattern) }
+        #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    @Test(arguments: ["let p = SystemPasteboard()", "SystemPasteboard ( )", "NSPasteboard.general", "NSPasteboard\n    .general"])
+    func theGeneralPasteboardPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenGeneralPasteboard)))
+    }
+
+    @Test func theGeneralPasteboardPatternLeavesANamedBoardAlone() throws {
+        let pattern = try Regex(Self.forbiddenGeneralPasteboard)
+        for code in ["SystemPasteboard(board: board)", "NSPasteboard(name: .init(\"x\"))", "board.name != .general"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
     @Test(arguments: [
         "inserter: TextInserter = .system()", "inserter: TextInserter = TextInserter.system()",
         "inserter: TextInserter =\n    .system()", "= .system (", "x = TextInserter . system(",
