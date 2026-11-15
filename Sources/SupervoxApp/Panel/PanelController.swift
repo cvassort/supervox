@@ -31,6 +31,14 @@ public protocol ContentSizeObserving: AnyObject {
     var onContentSizeChange: (@MainActor () -> Void)? { get set }
 }
 
+/// Une surface qui sait dire quand son panneau prend ou perd la frappe (devient ou cesse d'être la fenêtre clé).
+@MainActor
+public protocol KeyStateObserving: AnyObject {
+    /// Appelé avec `true` quand le panneau devient clé, `false` quand il cesse de l'être, quelle qu'en soit la cause : un clic
+    /// dans une autre application, dans le panneau, une manœuvre de `setKeyboard`, la fermeture.
+    var onKeyChange: (@MainActor (Bool) -> Void)? { get set }
+}
+
 /// Surveille les clics de souris adressés à d'autres applications, le temps que le panneau est ouvert.
 @MainActor
 public protocol OutsideClickMonitor: AnyObject {
@@ -48,7 +56,9 @@ public protocol OutsideClickMonitor: AnyObject {
 /// l'application de dessous reste au premier plan et son champ de texte garde la frappe, même après un clic dans le panneau.
 /// Pour la relecture, `setKeyboard(.focused)` le rend clé, sans activer l'application, et le champ de relecture prend la
 /// frappe ; `.none` ou `.available` la rendent à l'application de dessous. `hide()` retire aussi la frappe au panneau :
-/// la fermeture est un seul retrait de l'écran.
+/// la fermeture est un seul retrait de l'écran. Que le panneau ait la frappe ou non, la surface le remonte au modèle
+/// (`PanelModel.panelHasKeyboard`, par `KeyStateObserving`) : un clic dans une autre application la lui prend sans que le
+/// contrôleur de dictée le sache, et l'aide de la relecture n'annonce ⌘↩ que si le panneau est clé.
 ///
 /// Échap. Tant que le panneau est ouvert, Échap est tenu comme raccourci global (Carbon, sans
 /// permission) par un enregistreur à part, et rendu dès la fermeture. Un moniteur d'événements
@@ -88,6 +98,8 @@ public final class PanelController: PanelOpening {
         self.clickMonitor = clickMonitor
         self.surface = surface
         (surface as? any ContentSizeObserving)?.onContentSizeChange = { [weak self] in self?.contentChanged() }
+        // La frappe du panneau, telle que la surface la voit : seule source de ce que l'aide de la relecture annonce.
+        (surface as? any KeyStateObserving)?.onKeyChange = { [weak self] isKey in self?.model.panelHasKeyboard = isKey }
     }
 
     /// Le contenu du panneau a changé (l'état de la dictée, un texte, une permission) : si sa hauteur n'est plus celle de la
@@ -205,10 +217,15 @@ public final class PanelController: PanelOpening {
 
 /// La surface réelle : un `FloatingPanel`, placé sur l'écran de la souris.
 @MainActor
-public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving {
+public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving, KeyStateObserving {
     /// La fenêtre (visible des tests d'intégration, qui la placent hors écran).
     let panel: FloatingPanel
     private let log = Logger(subsystem: "dev.supervox.app", category: "panel")
+    private var keyObservers: [NSObjectProtocol] = []
+
+    /// Appelé quand le panneau devient clé (`true`) ou cesse de l'être (`false`) : `didBecomeKey` et `didResignKey` de ce
+    /// panneau seulement.
+    public var onKeyChange: (@MainActor (Bool) -> Void)?
 
     /// Appelé quand le contenu de la vue change de taille (voir `PanelController.contentChanged`).
     public var onContentSizeChange: (@MainActor () -> Void)? {
@@ -218,6 +235,20 @@ public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving {
 
     public init<Content: View>(content: Content) {
         panel = FloatingPanel(content: content)
+        let center = NotificationCenter.default
+        func observe(_ name: Notification.Name, isKey: Bool) -> NSObjectProtocol {
+            center.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onKeyChange?(isKey) }
+            }
+        }
+        keyObservers = [
+            observe(NSWindow.didBecomeKeyNotification, isKey: true),
+            observe(NSWindow.didResignKeyNotification, isKey: false),
+        ]
+    }
+
+    isolated deinit {
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
     }
 
     public func setKeyboard(_ keyboard: PanelKeyboard) {

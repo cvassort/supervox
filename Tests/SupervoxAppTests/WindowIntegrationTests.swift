@@ -363,6 +363,68 @@ struct WindowIntegrationTests {
         #expect(!surface.panel.canBecomeKey)
     }
 
+    /// L'aide de la relecture suit la frappe du vrai panneau, dans les deux sens : la perte de la clé (un clic dans une autre
+    /// application) retire ⌘↩ de l'aide, sa reprise (un clic dans le champ) le remet. Les notifications sont postées à la main
+    /// sur le panneau, hors écran : elles sont internes au processus, et rien n'est envoyé au système. Le contrôleur est celui
+    /// de l'application : c'est lui qui relie la surface au modèle.
+    @Test func theReviewHintFollowsTheRealPanelLosingAndRegainingTheKey() async throws {
+        _ = NSApplication.shared
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        model.dictation = DictationViewState(stage: .review, draft: "Un texte.")
+        let surface = FloatingPanelSurface(
+            content: PanelView(model: model, permissions: PermissionsModel(probe: WindowProbe()), openSettings: {}, quit: {}))
+        let controller = PanelController(
+            model: model, escapeRegistrar: HotKeyTests.FakeRegistrar(), clickMonitor: FakeClickMonitor(), surface: surface)
+        _ = controller
+        let panel = surface.panel
+        panel.setFrame(NSRect(x: -20_000, y: -20_000, width: 520, height: 400), display: false)
+        panel.orderFrontRegardless()
+        defer { panel.orderOut(nil) }
+        let center = NotificationCenter.default
+        func hint() -> String { model.dictationDisplay.review?.hint ?? "(aucune aide)" }
+
+        #expect(hint() == DictationText.reviewNoKeyboardHint, "le panneau n'est pas clé : pas de ⌘↩")
+
+        center.post(name: NSWindow.didBecomeKeyNotification, object: panel)
+        #expect(model.panelHasKeyboard)
+        #expect(hint() == DictationText.reviewHint)
+
+        // Un clic dans une autre application.
+        center.post(name: NSWindow.didResignKeyNotification, object: panel)
+        #expect(!model.panelHasKeyboard)
+        #expect(hint() == DictationText.reviewNoKeyboardHint)
+        #expect(!hint().contains("⌘↩"))
+
+        // Un clic dans le champ.
+        center.post(name: NSWindow.didBecomeKeyNotification, object: panel)
+        #expect(hint() == DictationText.reviewHint)
+
+        // Une autre fenêtre qui prend ou perd la clé ne compte pas.
+        center.post(name: NSWindow.didResignKeyNotification, object: NSWindow())
+        #expect(model.panelHasKeyboard)
+        center.post(name: NSWindow.didResignKeyNotification, object: panel)
+        center.post(name: NSWindow.didBecomeKeyNotification, object: NSWindow())
+        #expect(!model.panelHasKeyboard)
+    }
+
+    /// Sans notification postée, le vrai panneau que l'on rend clé, puis auquel on rend l'application de dessous, le dit tout
+    /// seul : AppKit poste lui-même `didBecomeKey` et `didResignKey`.
+    @Test func theRealPanelReportsItsOwnKeyChanges() async throws {
+        _ = NSApplication.shared
+        let slot = FieldSlot()
+        let surface = offscreenSurface(slot)
+        defer { surface.panel.orderOut(nil) }
+        var changes: [Bool] = []
+        surface.onKeyChange = { changes.append($0) }
+
+        surface.setKeyboard(.focused)
+        try #require(surface.panel.isKeyWindow)
+        #expect(changes == [true])
+        surface.setKeyboard(.available)
+        #expect(!surface.panel.isKeyWindow)
+        #expect(changes == [true, false])
+    }
+
     /// Le contenu d'essai : sa hauteur dépend du nombre de lignes, comme celle de la dictée.
     @MainActor @Observable final class GrowingContent {
         var lines = 2

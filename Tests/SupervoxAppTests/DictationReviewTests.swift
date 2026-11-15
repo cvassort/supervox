@@ -32,7 +32,7 @@ import SupervoxCore
         let session = await h.startRecording(index: index)
         session.emit(.finished(text))
         #expect(await until { h.controller.view.stage == .review })
-        #expect(!h.controller.view.keyboardReleased, "le panneau a la frappe au début de la relecture")
+        #expect(h.panel.keyboards.last == .focused, "le panneau prend la frappe au début de la relecture")
         if clearLog { h.rig.log.entries.removeAll() }
         return session
     }
@@ -243,7 +243,6 @@ import SupervoxCore
         #expect(h.controller.view.stage == .review)
         #expect(h.controller.view.draft == "Première version.")
         #expect(h.panel.keyboards == [.focused, .none, .available])
-        #expect(h.controller.view.keyboardReleased, "la frappe est rendue à l'application : l'aide ne doit pas annoncer ⌘↩")
         #expect(h.panel.isOpen)
         #expect(h.controller.lastTranscript == "Première version.")
         #expect(h.pasted.isEmpty)
@@ -251,7 +250,6 @@ import SupervoxCore
         // Le texte reste modifiable, et « Coller » peut être refait avec la version corrigée.
         h.controller.reviewEdited("Seconde version.")
         #expect(h.controller.view.draft == "Seconde version.")
-        #expect(!h.controller.view.keyboardReleased, "taper suppose que le panneau a repris la frappe")
         h.controller.pasteReview()
         #expect(await until { h.panel.keyboards.count == 5 })
         #expect(h.controller.view.stage == .review)
@@ -271,7 +269,6 @@ import SupervoxCore
         #expect(h.controller.view.stage == .review)
         #expect(h.controller.view.draft == Self.text)
         #expect(h.panel.keyboards == [.focused, .none, .available])
-        #expect(h.controller.view.keyboardReleased)
         #expect(h.panel.isOpen)
         #expect(h.rig.board.contents == FakeInsertion.original)
         #expect(h.pasted.isEmpty)

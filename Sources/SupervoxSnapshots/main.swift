@@ -223,13 +223,14 @@ let exampleLongText =
 let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separator: "\n\n")
 
 /// Le panneau en relecture : le texte à relire, avec l'avis éventuel et ce qu'a donné « Copier ». `copy` : `true` ou `false`
-/// refait un clic sur « Copier » dont le presse-papiers accepte ou refuse le texte.
+/// refait un clic sur « Copier » dont le presse-papiers accepte ou refuse le texte. `keyboard` : le panneau a la frappe (il
+/// est la fenêtre clé) ; l'aide en dépend, et l'image est rendue comme dans une fenêtre clé ou non (voir `render`).
 @MainActor func reviewPanelModel(
-    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, released: Bool = false
+    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true
 ) -> PanelModel {
     let model = dictationPanelModel(
-        state: DictationViewState(
-            stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft, keyboardReleased: released))
+        state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
+    model.panelHasKeyboard = keyboard
     if let copy {
         model.onCopy = { _ in copy }
         model.copyTranscript()
@@ -384,26 +385,28 @@ for dark in [false, true] {
             name: name, dark: dark, background: panelBackground,)
     }
 
-    // La relecture : le texte à corriger, puis coller ou copier. `key` dit si le panneau a la frappe dans cet état (voir
-    // `render`) : il l'a au début de la relecture (`.focused`) et après un clic sur « Copier » ; pas après un collage manqué
-    // (`.available` : la frappe est à l'application de dessous, jusqu'à un clic dans le panneau), ni pendant le collage (`.none`).
+    // La relecture : le texte à corriger, puis coller ou copier. `keyboard` dit si le panneau a la frappe dans cet état : il
+    // l'a au début de la relecture (`.focused`) et après un clic sur « Copier » ; pas après un collage manqué (`.available` : la
+    // frappe est à l'application de dessous, jusqu'à un clic dans le panneau), ni après un clic dans une autre application,
+    // ni pendant le collage (`.none`). L'image est rendue comme dans une fenêtre clé exactement quand le panneau a la frappe.
     let accessDenied = ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)
-    let reviewCases: [(name: String, model: PanelModel, probe: any PermissionsProbe, key: Bool)] = [
-        ("relecture-courte", reviewPanelModel(exampleShortText), granted, true),
-        ("relecture-longue", reviewPanelModel(exampleReviewText), granted, true),
-        ("relecture-vide", reviewPanelModel(""), granted, true),
-        ("relecture-collage", reviewPanelModel(exampleShortText, stage: .pasting), granted, false),
+    let reviewCases: [(name: String, model: PanelModel, probe: any PermissionsProbe)] = [
+        ("relecture-courte", reviewPanelModel(exampleShortText), granted),
+        ("relecture-longue", reviewPanelModel(exampleReviewText), granted),
+        ("relecture-vide", reviewPanelModel(""), granted),
+        ("relecture-collage", reviewPanelModel(exampleShortText, stage: .pasting, keyboard: false), granted),
+        ("relecture-sans-frappe", reviewPanelModel(exampleShortText, keyboard: false), granted),
         ("relecture-copie-sans-accessibilite",
-         reviewPanelModel(exampleShortText, notice: reason, released: true), accessDenied, false),
+         reviewPanelModel(exampleShortText, notice: reason, keyboard: false), accessDenied),
         ("relecture-presse-papiers-refuse",
-         reviewPanelModel(exampleShortText, notice: DictationController.reviewClipboardNotice, released: true), granted, false),
-        ("relecture-copiee", reviewPanelModel(exampleShortText, copy: true), granted, true),
-        ("relecture-copie-impossible", reviewPanelModel(exampleShortText, copy: false), granted, true),
+         reviewPanelModel(exampleShortText, notice: DictationController.reviewClipboardNotice, keyboard: false), granted),
+        ("relecture-copiee", reviewPanelModel(exampleShortText, copy: true), granted),
+        ("relecture-copie-impossible", reviewPanelModel(exampleShortText, copy: false), granted),
     ]
-    for (name, model, probe, key) in reviewCases {
+    for (name, model, probe) in reviewCases {
         try render(
             PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
-            name: name, dark: dark, background: panelBackground, keyWindow: key)
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
     }
 
     // Réglages : vides, puis deux fournisseurs.

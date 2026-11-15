@@ -97,14 +97,10 @@ public struct DictationViewState: Equatable, Sendable {
     /// Le texte en relecture, tel que l'utilisateur le corrige ; `""` hors relecture (étapes `review` et `pasting`). Donnée
     /// privée, en mémoire seulement.
     public var draft: String
-    /// Le panneau a rendu la frappe à l'application de dessous (un collage manqué le remet en relecture sans la reprendre) :
-    /// ⌘↩ ne lui parviendrait pas avant un clic dans le panneau. Faux dès le début de la relecture et dès que l'on y tape.
-    public var keyboardReleased: Bool
 
     public init(
         stage: DictationStage = .idle, liveText: String = "", levels: [Float] = [], elapsed: Double = 0,
-        notice: String? = nil, lastTranscript: String? = nil, draft: String = "",
-        keyboardReleased: Bool = false
+        notice: String? = nil, lastTranscript: String? = nil, draft: String = ""
     ) {
         self.stage = stage
         self.liveText = liveText
@@ -113,7 +109,6 @@ public struct DictationViewState: Equatable, Sendable {
         self.notice = notice
         self.lastTranscript = lastTranscript
         self.draft = draft
-        self.keyboardReleased = keyboardReleased
     }
 
     /// Nombre de niveaux gardés.

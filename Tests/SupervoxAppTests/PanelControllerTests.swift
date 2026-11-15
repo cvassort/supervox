@@ -5,7 +5,7 @@ import Testing
 @testable import SupervoxApp
 
 /// Surface de panneau double : rien n'est affiché à l'écran.
-@MainActor final class FakePanelSurface: PanelSurface, ContentSizeObserving {
+@MainActor final class FakePanelSurface: PanelSurface, ContentSizeObserving, KeyStateObserving {
     private(set) var isShown = false
     private(set) var showCount = 0
     /// Appelé à chaque affichage : le test y lit ce que le panneau contient à ce moment-là (la vraie surface prend
@@ -55,6 +55,10 @@ import Testing
     /// taille ; le test l'appelle par `signalContentSizeChange()`.
     var onContentSizeChange: (@MainActor () -> Void)?
     func signalContentSizeChange() { onContentSizeChange?() }
+
+    /// Comme la vraie surface : le contrôleur y pose sa fermeture, que la surface appelle quand le panneau prend ou perd la clé.
+    var onKeyChange: (@MainActor (Bool) -> Void)?
+    func signalKeyChange(_ isKey: Bool) { onKeyChange?(isKey) }
 }
 
 /// Moniteur de clics double : le test déclenche lui-même un clic hors de l'application.
@@ -333,6 +337,24 @@ import Testing
         escape.refused = []
         controller.open()
         #expect(model.notices[.escape] == nil)
+    }
+
+    // MARK: - La frappe du panneau
+
+    @Test func theModelFollowsTheKeyStateTheSurfaceReports() {
+        let controller = makeController()
+        controller.open()
+        #expect(!model.panelHasKeyboard)
+
+        surface.signalKeyChange(true)
+        #expect(model.panelHasKeyboard)
+        surface.signalKeyChange(false)
+        #expect(!model.panelHasKeyboard)
+        surface.signalKeyChange(true)
+        #expect(model.panelHasKeyboard)
+
+        controller.close()
+        #expect(!model.panelHasKeyboard, "un panneau fermé n'a pas la frappe")
     }
 
     // MARK: - Dictée

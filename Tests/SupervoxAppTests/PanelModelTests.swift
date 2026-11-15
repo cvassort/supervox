@@ -29,6 +29,37 @@ import Testing
         #expect(openings == 2)
     }
 
+    // MARK: - La frappe du panneau
+
+    @Test func thePanelHasNoKeyboardUntilTheSurfaceSaysSo() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(!model.panelHasKeyboard)
+        model.panelHasKeyboard = true
+        #expect(model.panelHasKeyboard)
+    }
+
+    @Test(arguments: ["toggle", "close"])
+    func aClosedPanelHasNoKeyboard(how: String) {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.toggle()
+        model.panelHasKeyboard = true
+        if how == "toggle" { model.toggle() } else { model.close() }
+        #expect(!model.isOpen)
+        #expect(!model.panelHasKeyboard)
+    }
+
+    /// Ce que la vue montre suit la frappe du panneau, dans les deux sens : l'aide de la relecture n'annonce ⌘↩ que si le panneau
+    /// est clé.
+    @Test func theReviewHintFollowsThePanelKeyboardBothWays() throws {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.dictation = DictationViewState(stage: .review, draft: "Un texte.")
+        #expect(try #require(model.dictationDisplay.review).hint == DictationText.reviewNoKeyboardHint)
+        model.panelHasKeyboard = true
+        #expect(try #require(model.dictationDisplay.review).hint == DictationText.reviewHint)
+        model.panelHasKeyboard = false
+        #expect(try #require(model.dictationDisplay.review).hint == DictationText.reviewNoKeyboardHint)
+    }
+
     @Test func closeOnAClosedPanelIsHarmless() {
         let model = PanelModel(lastModeID: "prompt")
         var openings = 0

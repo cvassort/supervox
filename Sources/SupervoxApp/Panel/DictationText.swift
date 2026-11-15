@@ -15,12 +15,13 @@ public enum DictationText {
     /// La ligne d'aide sous le champ de relecture.
     public static let reviewHint = "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée »."
 
-    /// L'aide sous le champ quand le panneau n'a plus la frappe (un collage manqué l'a rendue à l'application de dessous) :
-    /// ⌘↩ n'y arriverait pas avant un clic.
-    public static let reviewRetryHint =
-        "Cliquez dans le texte pour le corriger encore, ou sur « Coller » pour réessayer. Échap ferme sans coller."
+    /// L'aide sous le champ quand le panneau n'a pas la frappe (un collage manqué la lui a fait rendre, ou un clic dans une autre
+    /// application la lui a prise) : ⌘↩ partirait dans l'autre application, et n'est donc pas annoncé. Une seule phrase pour
+    /// les deux cas, et sans « réessayer » : sans Accessibilité, un nouveau « Coller » échouerait de la même façon.
+    public static let reviewNoKeyboardHint =
+        "Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller. Échap ferme sans coller."
     /// L'aide sous un champ vide : « Coller » est inactif, ⌘↩ ne fait rien.
-    public static let reviewEmptyHint = "Tapez un texte, ou Échap pour fermer sans coller."
+    public static let reviewEmptyHint = "Tapez un texte, ou appuyez sur Échap pour fermer sans coller."
     /// Ce que dit un champ vide.
     public static let reviewPlaceholder = "Le texte est vide."
 
@@ -180,7 +181,9 @@ public struct DictationDisplay: Equatable, Sendable {
 
     /// - Parameters:
     ///   - copy: ce qu'a donné le dernier clic sur « Copier » (`PanelModel.copyState`).
-    public init(state: DictationViewState, copy: CopyState = .idle) {
+    ///   - panelHasKeyboard: le panneau est la fenêtre clé (`PanelModel.panelHasKeyboard`) : seul cas où l'aide annonce ⌘↩.
+    ///     Sans information, le choix sûr : ne pas l'annoncer.
+    public init(state: DictationViewState, copy: CopyState = .idle, panelHasKeyboard: Bool = false) {
         let notice = state.notice.map { DictationText.head($0, maxCharacters: DictationText.detailLimit) }
         let stage = state.stage
         headline = DictationText.status(for: stage)
@@ -234,7 +237,7 @@ public struct DictationDisplay: Equatable, Sendable {
                 ? nil
                 : !usable
                     ? DictationText.reviewEmptyHint
-                    : state.keyboardReleased ? DictationText.reviewRetryHint : DictationText.reviewHint
+                    : panelHasKeyboard ? DictationText.reviewHint : DictationText.reviewNoKeyboardHint
             review = Review(
                 text: state.draft, isEditable: stage == .review, canPaste: usable, canCopy: usable,
                 isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: state.draft.isEmpty)

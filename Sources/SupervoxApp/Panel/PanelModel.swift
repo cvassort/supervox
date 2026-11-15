@@ -73,6 +73,10 @@ public final class PanelModel {
     /// de la dictée change et au début d'une nouvelle dictée.
     public private(set) var copyState = CopyState.idle
     public var transcriptCopied: Bool { copyState == .copied }
+    /// Le panneau a la frappe : c'est la fenêtre clé. Seule source de ce fait (la surface le remonte à chaque prise et perte de
+    /// la clé : un clic dans une autre application la lui prend, un clic dans le panneau la lui rend) ; l'aide de la relecture
+    /// n'annonce ⌘↩ que s'il est vrai. Faux panneau fermé.
+    public var panelHasKeyboard = false
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 
@@ -142,13 +146,22 @@ public final class PanelModel {
     func toggle() {
         isOpen.toggle()
         copyState = .idle
-        if isOpen { onOpen?() } else { welcome = nil }
+        if isOpen { onOpen?() } else {
+            welcome = nil
+            panelHasKeyboard = false
+        }
     }
 
     func close() {
         isOpen = false
         welcome = nil
         copyState = .idle
+        panelHasKeyboard = false
+    }
+
+    /// Ce que la vue de dictée montre : l'état de la dictée, ce qu'a donné « Copier », et si le panneau a la frappe.
+    public var dictationDisplay: DictationDisplay {
+        DictationDisplay(state: dictation, copy: copyState, panelHasKeyboard: panelHasKeyboard)
     }
 
     /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement.

@@ -367,8 +367,10 @@ import Testing
 }
 
 @Suite struct DictationReviewDisplayTests {
-    private func display(_ state: DictationViewState, copy: CopyState = .idle) -> DictationDisplay {
-        DictationDisplay(state: state, copy: copy)
+    private func display(
+        _ state: DictationViewState, copy: CopyState = .idle, panelHasKeyboard: Bool = false
+    ) -> DictationDisplay {
+        DictationDisplay(state: state, copy: copy, panelHasKeyboard: panelHasKeyboard)
     }
 
     @Test(arguments: [DictationStage.review, .pasting])
@@ -436,29 +438,39 @@ import Testing
 
     @Test func theHintsAndThePlaceholderHaveTheirExactWords() {
         #expect(
-            DictationText.reviewRetryHint
-                == "Cliquez dans le texte pour le corriger encore, ou sur « Coller » pour réessayer. Échap ferme sans coller.")
-        #expect(DictationText.reviewEmptyHint == "Tapez un texte, ou Échap pour fermer sans coller.")
+            DictationText.reviewNoKeyboardHint
+                == "Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller. Échap ferme sans coller.")
+        #expect(DictationText.reviewEmptyHint == "Tapez un texte, ou appuyez sur Échap pour fermer sans coller.")
         #expect(DictationText.reviewPlaceholder == "Le texte est vide.")
     }
 
     @Test func inReviewWithTheKeyboardTheHintAnnouncesCommandReturn() {
         let state = DictationViewState(stage: .review, notice: "Un avis du vocabulaire.", draft: "Un texte.")
-        #expect(display(state).review?.hint == DictationText.reviewHint)
+        #expect(display(state, panelHasKeyboard: true).review?.hint == DictationText.reviewHint)
     }
 
-    @Test func afterAMissedPasteTheHintNoLongerAnnouncesCommandReturn() throws {
-        let state = DictationViewState(stage: .review, notice: "Une raison.", draft: "Un texte.", keyboardReleased: true)
-        let hint = try #require(display(state).review?.hint)
-        #expect(hint == DictationText.reviewRetryHint)
+    /// Le panneau n'a pas la frappe (un collage manqué, ou un clic dans une autre application la lui a retirée) : ⌘↩ partirait
+    /// ailleurs, l'aide ne l'annonce pas, et dit comment coller quand même.
+    @Test(arguments: [nil, "Une raison."])
+    func inReviewWithoutTheKeyboardTheHintNoLongerAnnouncesCommandReturn(notice: String?) throws {
+        let state = DictationViewState(stage: .review, notice: notice, draft: "Un texte.")
+        let hint = try #require(display(state, panelHasKeyboard: false).review?.hint)
+        #expect(hint == DictationText.reviewNoKeyboardHint)
         #expect(!hint.contains("⌘↩"))
+        #expect(hint.contains("« Coller »"))
+    }
+
+    /// Ne rien dire de la frappe est le choix sûr : sans l'information, l'aide n'annonce pas ⌘↩.
+    @Test func theKeyboardIsNotAssumedWhenNothingIsSaid() {
+        let state = DictationViewState(stage: .review, draft: "Un texte.")
+        #expect(DictationDisplay(state: state).review?.hint == DictationText.reviewNoKeyboardHint)
     }
 
     @Test(arguments: [false, true])
-    func aBlankTextHasTheEmptyHintWhateverTheKeyboard(released: Bool) throws {
+    func aBlankTextHasTheEmptyHintWhateverTheKeyboard(hasKeyboard: Bool) throws {
         for draft in ["", "  \n "] {
-            let state = DictationViewState(stage: .review, draft: draft, keyboardReleased: released)
-            let hint = try #require(display(state).review?.hint)
+            let state = DictationViewState(stage: .review, draft: draft)
+            let hint = try #require(display(state, panelHasKeyboard: hasKeyboard).review?.hint)
             #expect(hint == DictationText.reviewEmptyHint)
             #expect(!hint.contains("⌘↩"))
         }

@@ -443,8 +443,6 @@ public final class DictationController {
         guard review != nil, view.stage == .review else { return }
         var next = view
         next.draft = text
-        // On ne tape que dans un panneau qui a la frappe : si un clic la lui a rendue, l'aide peut annoncer ⌘↩ de nouveau.
-        next.keyboardReleased = false
         setView(next)
     }
 
@@ -507,7 +505,6 @@ public final class DictationController {
         var next = view
         next.stage = .review
         next.notice = notice
-        next.keyboardReleased = true
         setView(next)
         panel.setKeyboard(.available)
     }
