@@ -87,7 +87,7 @@ final class TimeoutLog: Sendable {
         #expect(await until { session.calls.contains("start") })
         session.emit(.preparing)
         session.emit(.recording)
-        #expect(await until { controller.panelModel.dictation.phase == .recording })
+        #expect(await until { controller.panelModel.dictation.stage == .recording })
         return session
     }
 
@@ -208,7 +208,7 @@ final class TimeoutLog: Sendable {
 
         hotKeys.press()
         #expect(controller.panelModel.isOpen)
-        #expect(controller.panelModel.dictation.phase == .preparing)
+        #expect(controller.panelModel.dictation.stage == .preparing)
         _ = await record(controller)
     }
 
@@ -220,7 +220,7 @@ final class TimeoutLog: Sendable {
         hotKeys.press()
         #expect(controller.panelModel.isOpen)
         #expect(surface.isShown)
-        #expect(controller.panelModel.dictation.phase == .preparing)
+        #expect(controller.panelModel.dictation.stage == .preparing)
         let session = await record(controller)
 
         // Le second appui termine.
@@ -278,7 +278,7 @@ final class TimeoutLog: Sendable {
         hotKeys.press()
         let first = await record(controller)
         first.emit(.failed(.noSpeech))
-        #expect(await until { controller.panelModel.dictation.phase == .failed(.noSpeech) })
+        #expect(await until { controller.panelModel.dictation.stage == .failed(.noSpeech) })
 
         let changed = TranscriptionSettings(
             engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["terme"])
@@ -297,7 +297,7 @@ final class TimeoutLog: Sendable {
         let session = await record(controller)
         session.emit(.finished("Bonjour à tous."))
         #expect(await until { !controller.panelModel.isOpen })
-        #expect(controller.panelModel.lastTranscript == "Bonjour à tous.")
+        #expect(controller.panelModel.dictation.lastTranscript == "Bonjour à tous.")
 
         // Le collage a restitué le presse-papiers d'origine ; « Copier » y remet le texte.
         #expect(rig.board.text == "brouillon de l'utilisateur")
@@ -410,7 +410,7 @@ final class TimeoutLog: Sendable {
         #expect(session.count(of: "cancel") == 0)
 
         session.emit(.failed(.noSpeech))
-        #expect(await until { controller.panelModel.dictation.phase == .failed(.noSpeech) })
+        #expect(await until { controller.panelModel.dictation.stage == .failed(.noSpeech) })
         clicks.clickOutside()
         #expect(!controller.panelModel.isOpen)
     }

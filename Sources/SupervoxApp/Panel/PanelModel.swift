@@ -58,10 +58,8 @@ public final class PanelModel {
     public var welcome: String?
     /// La dictée telle que la vue la montre ; mise à jour par le contrôleur de dictée.
     public var dictation = DictationViewState()
-    /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : en mémoire seulement, jamais écrit.
-    public private(set) var lastTranscript: String?
-    /// Ce qu'a donné le dernier clic sur « Copier » ; oublié à la fermeture du panneau, à l'ouverture, au texte suivant et
-    /// au début d'une nouvelle dictée.
+    /// Ce qu'a donné le dernier clic sur « Copier » ; oublié à la fermeture du panneau, à l'ouverture, quand le dernier texte
+    /// de la dictée change et au début d'une nouvelle dictée.
     public private(set) var copyState = CopyState.idle
     public var transcriptCopied: Bool { copyState == .copied }
     /// Avis à montrer à l'utilisateur, un par origine.
@@ -89,24 +87,18 @@ public final class PanelModel {
         selectedModeID = modes.contains { $0.id == lastModeID } ? lastModeID : ModeChip.fallbackID
     }
 
-    /// Un nouveau dernier texte ; vide ou fait d'espaces, il n'y a rien à garder.
-    public func setTranscript(_ text: String?) {
-        let blank = text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        lastTranscript = blank ? nil : text
-        copyState = .idle
-    }
-
-    /// L'état de la dictée tel que la vue le montre. Une dictée qui commence remet « Copier » à neuf ; un échec ou une
-    /// interruption n'y touchent pas (le dernier texte est toujours là).
+    /// L'état de la dictée tel que la vue le montre. Un nouveau dernier texte, ou une dictée qui commence, remet « Copier » à
+    /// neuf ; un échec ou une interruption n'y touchent pas (le dernier texte est toujours là).
     public func setDictation(_ state: DictationViewState) {
+        let textChanged = state.lastTranscript != dictation.lastTranscript
         dictation = state
-        if state.phase.isActive { copyState = .idle }
+        if textChanged || state.stage.isActive { copyState = .idle }
     }
 
     /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre.
     public func copyTranscript() {
-        guard let lastTranscript, let onCopy else { return }
-        copyState = onCopy(lastTranscript) ? .copied : .failed
+        guard let text = dictation.lastTranscript, let onCopy else { return }
+        copyState = onCopy(text) ? .copied : .failed
     }
 
     /// Réservé à `PanelController`, qui montre et cache la fenêtre en même temps.

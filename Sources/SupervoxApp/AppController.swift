@@ -129,10 +129,6 @@ public final class AppController {
             panelModel.setDictation($0)
             panel.contentChanged()
         }
-        dictationController.onTranscriptChange = { [panelModel, panel] in
-            panelModel.setTranscript($0)
-            panel.contentChanged()
-        }
         // Le presse-papiers passe par l'insertion, qui le tient : un seul accès, injecté.
         panelModel.onCopy = { [inserter] in inserter.copy($0) }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }

@@ -39,13 +39,12 @@ public final class DictationController {
     public private(set) var view = DictationViewState()
     /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : `.pasted` ne prouve pas que
     /// l'application cible a reçu le texte, et l'utilisateur doit pouvoir le récupérer (bouton « Copier »). En mémoire
-    /// seulement ; un échec ou une annulation ultérieure ne l'efface pas.
+    /// seulement ; un échec ou une annulation ultérieure ne l'efface pas. C'est la seule copie stockée : `view.lastTranscript`
+    /// en est le reflet, posé par `setView`.
     public private(set) var lastTranscript: String?
 
     /// Appelé à chaque changement de `view` : le modèle du panneau la relaie à la vue.
     @ObservationIgnored public var onViewChange: (@MainActor (DictationViewState) -> Void)?
-    /// Appelé avec le texte de chaque dictée réussie (donc de `lastTranscript`) : le panneau le garde pour « Copier ».
-    @ObservationIgnored public var onTranscriptChange: (@MainActor (String) -> Void)?
 
     @ObservationIgnored private let environment: DictationEnvironment
     @ObservationIgnored private let inserter: TextInserter
@@ -106,7 +105,7 @@ public final class DictationController {
     /// le réglage n'est lu que pour en commencer une nouvelle.
     public func hotKeyPressed() {
         if let run {
-            if view.phase == .recording, !run.startedByHold { requestFinish(run) }
+            if view.stage == .recording, !run.startedByHold { requestFinish(run) }
             return
         }
         begin(hold: behavior() == .hold)
@@ -114,7 +113,7 @@ public final class DictationController {
 
     /// Maintien : le relâchement termine la dictée que ce maintien a commencée. Sans dictée, ou en bascule : ignoré.
     public func hotKeyReleased() {
-        guard let run, run.startedByHold, view.phase == .preparing || view.phase == .recording else { return }
+        guard let run, run.startedByHold, view.stage == .preparing || view.stage == .recording else { return }
         requestFinish(run)
     }
 
@@ -154,7 +153,7 @@ public final class DictationController {
         let run = Run(startedByHold: hold)
         self.run = run
         // Posé tout de suite : un appui qui arrive avant la première session est déjà ignoré.
-        setView(DictationViewState(phase: .preparing))
+        setView(DictationViewState(stage: .preparing))
         if !panel.isOpen { panel.open() }
         // Relus à chaque dictée : un changement de moteur, de modèle, de langue ou de vocabulaire vaut dès la suivante.
         let current = settings()
@@ -172,10 +171,10 @@ public final class DictationController {
         // Sans touche de modification, la sonde ne peut rien dire (« aucune enfoncée » serait toujours vrai) : le relâchement
         // du système, ou la durée maximale de la session, termine la dictée.
         guard !modifiers.isEmpty else { return }
-        while isLive(run), view.phase == .preparing || view.phase == .recording {
+        while isLive(run), view.stage == .preparing || view.stage == .recording {
             await self.hold.wait(self.hold.interval)
             // Une attente annulée rend la main aussitôt : sans cette sortie, la boucle tournerait sans attendre.
-            guard !Task.isCancelled, isLive(run), view.phase == .preparing || view.phase == .recording else { return }
+            guard !Task.isCancelled, isLive(run), view.stage == .preparing || view.stage == .recording else { return }
             // Échap d'abord : annuler l'emporte sur terminer, si les deux se produisent dans le même intervalle.
             if self.hold.escapeHeld() {
                 log.notice("maintien : Échap lu pendant la dictée")
@@ -281,7 +280,7 @@ public final class DictationController {
             return
         case .preparing, .recording, .finalizing:
             var next = view
-            next.phase = snapshot.phase
+            next.stage = Self.stage(of: snapshot.phase)
             next.liveText = snapshot.liveText
             next.elapsed = snapshot.elapsed
             if snapshot.phase == .recording {
@@ -289,7 +288,7 @@ public final class DictationController {
                 run.loadingNotice = nil
                 next.levels = Array((view.levels + [snapshot.level]).suffix(DictationViewState.levelCount))
             }
-            next.notice = notice(for: run, phase: snapshot.phase)
+            next.notice = notice(for: run, stage: next.stage)
             setView(next)
             // La prise est finie : plus rien à surveiller.
             if snapshot.phase == .finalizing { run.watch?.cancel() }
@@ -303,7 +302,7 @@ public final class DictationController {
         case .failed(let failure):
             // Une panne du moteur pendant la préparation : le texte de la raison peut porter une adresse, la phrase est fixe.
             var message = failure.message
-            if case .engine = failure, view.phase == .preparing { message = Self.preparationFailedNotice }
+            if case .engine = failure, view.stage == .preparing { message = Self.preparationFailedNotice }
             log.notice("dictée en échec : \(Self.kind(of: failure), privacy: .public)")
             finishRun(run, with: .failed(failure), notice: message)
         }
@@ -315,7 +314,8 @@ public final class DictationController {
             return
         }
         lastTranscript = text
-        onTranscriptChange?(text)
+        // Le panneau garde « Copier » à jour dès que le texte existe, sans attendre la fin de l'insertion.
+        setView(view)
         log.notice("dictée terminée ; insertion")
         let previous = insertionTail
         insertionsInFlight += 1
@@ -360,7 +360,7 @@ public final class DictationController {
             panel.close()
         case .copied(let reason):
             log.notice("texte copié, non collé")
-            finishRun(run, with: .finished(text), notice: reason)
+            finishRun(run, with: .copied, notice: reason)
         case .clipboardRefused:
             // Rien n'est collé ni copié : le texte reste dans « Dernière dictée » (`lastTranscript`), que l'on peut copier.
             log.notice("presse-papiers : texte refusé")
@@ -372,11 +372,11 @@ public final class DictationController {
     }
 
     /// La dictée est finie : le panneau reste ouvert avec ce qu'il y a à dire.
-    private func finishRun(_ run: Run, with phase: DictationPhase, notice: String) {
+    private func finishRun(_ run: Run, with stage: DictationStage, notice: String) {
         guard isLive(run) else { return }
         retire(run)
         var next = view
-        next.phase = phase
+        next.stage = stage
         next.notice = notice
         setView(next)
     }
@@ -428,24 +428,36 @@ public final class DictationController {
     /// `run` est la dictée courante : une dictée annulée ou finie n'est plus `self.run`.
     private func isLive(_ run: Run) -> Bool { self.run === run }
 
+    /// Toute vue passe ici : elle porte toujours le dernier texte du contrôleur, jamais une autre copie.
     private func setView(_ next: DictationViewState) {
+        var next = next
+        next.lastTranscript = lastTranscript
         view = next
         onViewChange?(next)
     }
 
+    /// L'étape d'écran d'une phase de session active (`preparing`, `recording`, `finalizing`).
+    private static func stage(of phase: DictationPhase) -> DictationStage {
+        switch phase {
+        case .recording: .recording
+        case .finalizing: .finalizing
+        default: .preparing
+        }
+    }
+
     private func refreshNotice(_ run: Run) {
-        guard isLive(run), view.phase.isActive else { return }
+        guard isLive(run), view.stage.isActive else { return }
         var next = view
-        next.notice = notice(for: run, phase: view.phase)
+        next.notice = notice(for: run, stage: view.stage)
         setView(next)
     }
 
     /// L'avis d'une dictée en cours : la mention de téléchargement (pendant le téléchargement), celle de chargement (pendant le
     /// chargement des moteurs), puis celui du vocabulaire.
-    private func notice(for run: Run, phase: DictationPhase) -> String? {
+    private func notice(for run: Run, stage: DictationStage) -> String? {
         var lines: [String] = []
-        if phase == .preparing, let download = run.downloadNotice { lines.append(download) }
-        if phase == .preparing, let loading = run.loadingNotice { lines.append(loading) }
+        if stage == .preparing, let download = run.downloadNotice { lines.append(download) }
+        if stage == .preparing, let loading = run.loadingNotice { lines.append(loading) }
         if let vocabulary = run.vocabularyNotice { lines.append(vocabulary) }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
     }

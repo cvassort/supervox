@@ -69,14 +69,16 @@ public enum DictationText {
     /// Ce que le panneau dit quand le presse-papiers n'a pas accepté le texte.
     public static let copyFailure = "Copie impossible"
 
-    /// Le libellé d'une phase, en mots simples. Il ne porte jamais le texte dicté.
-    public static func status(for phase: DictationPhase) -> String {
-        switch phase {
+    /// Le libellé d'une étape, en mots simples. Il ne porte jamais le texte dicté.
+    public static func status(for stage: DictationStage) -> String {
+        switch stage {
         case .idle: "Prêt"
         case .preparing: "Préparation…"
         case .recording: "Enregistrement"
         case .finalizing: "Transcription…"
-        case .finished: "Texte copié"
+        case .review: "À relire"
+        case .pasting: "Collage…"
+        case .copied: "Texte copié"
         case .cancelled: "Dictée interrompue"
         case .failed(.noSpeech): "Rien à transcrire"
         case .failed(.microphone): "Micro indisponible"
@@ -127,12 +129,11 @@ public struct DictationDisplay: Equatable, Sendable {
     public var transcript: Transcript?
 
     /// - Parameters:
-    ///   - transcript: le texte de la dernière dictée réussie (`DictationController.lastTranscript`).
     ///   - copy: ce qu'a donné le dernier clic sur « Copier » (`PanelModel.copyState`).
-    public init(state: DictationViewState, transcript: String?, copy: CopyState = .idle) {
+    public init(state: DictationViewState, copy: CopyState = .idle) {
         let notice = state.notice.map { DictationText.head($0, maxCharacters: DictationText.detailLimit) }
-        let phase = state.phase
-        headline = DictationText.status(for: phase)
+        let stage = state.stage
+        headline = DictationText.status(for: stage)
         duration = nil
         bars = nil
         liveText = nil
@@ -142,7 +143,7 @@ public struct DictationDisplay: Equatable, Sendable {
             DictationText.tail($0, maxCharacters: DictationText.liveTextLimit)
         }
 
-        switch phase {
+        switch stage {
         case .idle:
             if let notice {
                 mood = .info
@@ -163,7 +164,11 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .working
             duration = DictationText.duration(state.elapsed)
             liveText = live
-        case .finished:
+        case .review:
+            mood = .info
+        case .pasting:
+            mood = .working
+        case .copied:
             mood = .success
         case .cancelled:
             mood = .info
@@ -172,13 +177,9 @@ public struct DictationDisplay: Equatable, Sendable {
         }
 
         // Le texte récupérable : jamais pendant une dictée. Après une copie, c'est le texte de cette dictée, sans étiquette.
-        var phaseText: String?
-        if case .finished(let text) = phase { phaseText = text }
-        if !phase.isActive, let text = Self.nonBlank(transcript) ?? Self.nonBlank(phaseText) {
-            let isThisDictation: Bool
-            if case .finished = phase { isThisDictation = true } else { isThisDictation = false }
+        if !stage.isActive, let text = Self.nonBlank(state.lastTranscript) {
             self.transcript = Transcript(
-                label: isThisDictation ? nil : "Dernière dictée",
+                label: stage == .copied ? nil : "Dernière dictée",
                 text: DictationText.tail(text, maxCharacters: DictationText.transcriptLimit), copy: copy)
         } else {
             self.transcript = nil

@@ -275,7 +275,7 @@ final class FakeEngines: Sendable {
         #expect(await until { session.calls.contains("start") })
         session.emit(.preparing)
         session.emit(.recording)
-        #expect(await until { controller.view.phase == .recording })
+        #expect(await until { controller.view.stage == .recording })
         return session
     }
 }
@@ -297,5 +297,15 @@ func until(_ condition: @MainActor () -> Bool) async -> Bool {
 func settle() async {
     for round in 0..<300 {
         if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
+    }
+}
+
+extension DictationStage {
+    /// L'écran dit comment la dictée a fini : texte copié, interruption ou échec.
+    var isTerminal: Bool {
+        switch self {
+        case .copied, .cancelled, .failed: true
+        case .idle, .preparing, .recording, .finalizing, .review, .pasting: false
+        }
     }
 }

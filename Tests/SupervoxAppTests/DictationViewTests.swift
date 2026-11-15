@@ -85,33 +85,35 @@ import Testing
 
     // MARK: Libellés
 
-    @Test func everyPhaseHasANonEmptyLabelAndTheFixedOnesAreExact() {
-        let phases: [DictationPhase] = [
-            .idle, .preparing, .recording, .finalizing, .finished("x"), .cancelled,
+    @Test func everyStageHasANonEmptyLabelAndTheFixedOnesAreExact() {
+        let stages: [DictationStage] = [
+            .idle, .preparing, .recording, .finalizing, .review, .pasting, .copied, .cancelled,
             .failed(.noSpeech), .failed(.microphone("m")), .failed(.engine("e")), .failed(.clipboard),
         ]
-        for phase in phases { #expect(!DictationText.status(for: phase).isEmpty, "\(phase)") }
+        for stage in stages { #expect(!DictationText.status(for: stage).isEmpty, "\(stage)") }
         #expect(DictationText.status(for: .idle) == "Prêt")
         #expect(DictationText.status(for: .preparing) == "Préparation…")
         #expect(DictationText.status(for: .recording) == "Enregistrement")
         #expect(DictationText.status(for: .finalizing) == "Transcription…")
-        #expect(DictationText.status(for: .finished("x")) == "Texte copié")
+        #expect(DictationText.status(for: .copied) == "Texte copié")
         #expect(DictationText.status(for: .cancelled) == "Dictée interrompue")
         #expect(DictationText.status(for: .failed(.noSpeech)) == "Rien à transcrire")
         #expect(DictationText.status(for: .failed(.clipboard)) == "Texte non copié")
     }
 
-    @Test func theLabelOfAFinishedDictationNeverCarriesTheDictatedText() {
-        #expect(!DictationText.status(for: .finished("un texte privé")).contains("privé"))
+    @Test func theLabelOfACopiedTextNeverCarriesTheDictatedText() {
+        let state = DictationViewState(stage: .copied, lastTranscript: "un texte privé")
+        #expect(!DictationText.status(for: state.stage).contains("privé"))
+        #expect(!DictationDisplay(state: state).headline.contains("privé"))
     }
 
     @Test func theLabelsUseNoJargon() {
-        let phases: [DictationPhase] = [
-            .idle, .preparing, .recording, .finalizing, .finished("x"), .cancelled,
+        let stages: [DictationStage] = [
+            .idle, .preparing, .recording, .finalizing, .review, .pasting, .copied, .cancelled,
             .failed(.noSpeech), .failed(.microphone("m")), .failed(.engine("e")),
         ]
-        for phase in phases {
-            let label = DictationText.status(for: phase).lowercased()
+        for stage in stages {
+            let label = DictationText.status(for: stage).lowercased()
             for word in ["jeton", "tokenizer", "prompt", "token"] { #expect(!label.contains(word), "\(label)") }
         }
     }
@@ -138,10 +140,8 @@ import Testing
 }
 
 @Suite struct DictationDisplayTests {
-    private func display(
-        _ state: DictationViewState, transcript: String? = nil
-    ) -> DictationDisplay {
-        DictationDisplay(state: state, transcript: transcript)
+    private func display(_ state: DictationViewState) -> DictationDisplay {
+        DictationDisplay(state: state)
     }
 
     // MARK: Prêt
@@ -166,7 +166,7 @@ import Testing
     // MARK: Préparation
 
     @Test func preparingShowsTheDownloadNoticeAndNothingElse() {
-        let shown = display(DictationViewState(phase: .preparing, notice: "Téléchargement du modèle…"))
+        let shown = display(DictationViewState(stage: .preparing, notice: "Téléchargement du modèle…"))
         #expect(shown.headline == "Préparation…")
         #expect(shown.mood == .working)
         #expect(shown.detail == "Téléchargement du modèle…")
@@ -179,7 +179,7 @@ import Testing
     @Test func recordingShowsTheDurationTheWaveformAndTheEndOfTheLiveText() throws {
         let long = (1...80).map { "mot\($0)" }.joined(separator: " ")
         let shown = display(
-            DictationViewState(phase: .recording, liveText: long, levels: [0.5, 0.7], elapsed: 65.4))
+            DictationViewState(stage: .recording, liveText: long, levels: [0.5, 0.7], elapsed: 65.4))
         #expect(shown.headline == "Enregistrement")
         #expect(shown.mood == .recording)
         #expect(shown.duration == "1:05")
@@ -192,19 +192,19 @@ import Testing
     }
 
     @Test func recordingWithoutAnyTextShowsNoTextAreaYet() {
-        let shown = display(DictationViewState(phase: .recording, liveText: "", levels: [0.1], elapsed: 0))
+        let shown = display(DictationViewState(stage: .recording, liveText: "", levels: [0.1], elapsed: 0))
         #expect(shown.liveText == nil)
         #expect(shown.bars?.count == 48)
         #expect(shown.duration == "0:00")
     }
 
     @Test func aShortLiveTextIsShownAsIs() {
-        let shown = display(DictationViewState(phase: .recording, liveText: "bonjour à tous", elapsed: 2))
+        let shown = display(DictationViewState(stage: .recording, liveText: "bonjour à tous", elapsed: 2))
         #expect(shown.liveText == "bonjour à tous")
     }
 
     @Test func recordingKeepsTheVocabularyNoticeAsDetail() {
-        let shown = display(DictationViewState(phase: .recording, elapsed: 1, notice: "Vocabulaire trop long."))
+        let shown = display(DictationViewState(stage: .recording, elapsed: 1, notice: "Vocabulaire trop long."))
         #expect(shown.detail == "Vocabulaire trop long.")
     }
 
@@ -212,7 +212,7 @@ import Testing
 
     @Test func finalizingKeepsTheTextAndTheDurationButNoWaveform() {
         let shown = display(
-            DictationViewState(phase: .finalizing, liveText: "bonjour à tous", levels: [0.4], elapsed: 12))
+            DictationViewState(stage: .finalizing, liveText: "bonjour à tous", levels: [0.4], elapsed: 12))
         #expect(shown.headline == "Transcription…")
         #expect(shown.mood == .working)
         #expect(shown.duration == "0:12")
@@ -223,7 +223,7 @@ import Testing
     // MARK: Échecs, copie, interruption
 
     @Test func aFailureShowsItsLabelAndItsMessageAndNoShortcut() {
-        let shown = display(DictationViewState(phase: .failed(.noSpeech), notice: "Aucune parole n'a été entendue."))
+        let shown = display(DictationViewState(stage: .failed(.noSpeech), notice: "Aucune parole n'a été entendue."))
         #expect(shown.headline == "Rien à transcrire")
         #expect(shown.mood == .failure)
         #expect(shown.detail == "Aucune parole n'a été entendue.")
@@ -233,7 +233,7 @@ import Testing
     @Test func aTextCopiedForWantOfAccessibilityShowsItsReasonAndTheTextOnce() {
         let reason = "Le texte dicté est copié dans le presse-papiers : faites ⌘V."
         let shown = display(
-            DictationViewState(phase: .finished("Bonjour à tous."), notice: reason), transcript: "Bonjour à tous.")
+            DictationViewState(stage: .copied, notice: reason, lastTranscript: "Bonjour à tous."))
         #expect(shown.headline == "Texte copié")
         #expect(shown.mood == .success)
         #expect(shown.detail == reason)
@@ -245,14 +245,14 @@ import Testing
     }
 
     @Test func aCancelledDictationSaysSo() {
-        let shown = display(DictationViewState(phase: .cancelled, notice: "La dictée a été interrompue."))
+        let shown = display(DictationViewState(stage: .cancelled, notice: "La dictée a été interrompue."))
         #expect(shown.headline == "Dictée interrompue")
         #expect(shown.detail == "La dictée a été interrompue.")
     }
 
     @Test func aVeryLongMessageIsBoundedSoThatItCannotBreakTheFixedHeight() {
         let long = String(repeating: "une raison très longue ", count: 60)
-        let shown = display(DictationViewState(phase: .failed(.engine("x")), notice: long))
+        let shown = display(DictationViewState(stage: .failed(.engine("x")), notice: long))
         #expect((shown.detail?.count ?? .max) <= DictationText.detailLimit)
         #expect(shown.detail?.hasSuffix("…") == true)
     }
@@ -260,34 +260,38 @@ import Testing
     // MARK: Texte récupérable
 
     @Test func theLastTranscriptIsOfferedWhenNoDictationIsRunning() {
+        let text = "Le texte d'avant."
         for state in [
-            DictationViewState(), DictationViewState(phase: .failed(.noSpeech), notice: "x"),
-            DictationViewState(phase: .cancelled, notice: "y"), DictationViewState(notice: "mode"),
+            DictationViewState(lastTranscript: text),
+            DictationViewState(stage: .failed(.noSpeech), notice: "x", lastTranscript: text),
+            DictationViewState(stage: .cancelled, notice: "y", lastTranscript: text),
+            DictationViewState(notice: "mode", lastTranscript: text),
         ] {
-            let card = display(state, transcript: "Le texte d'avant.").transcript
-            #expect(card?.text == "Le texte d'avant.", "\(state.phase)")
-            #expect(card?.label == "Dernière dictée", "\(state.phase)")
+            let card = display(state).transcript
+            #expect(card?.text == text, "\(state.stage)")
+            #expect(card?.label == "Dernière dictée", "\(state.stage)")
         }
     }
 
     @Test func theLastTranscriptIsHiddenWhileADictationRuns() {
-        for phase in [DictationPhase.preparing, .recording, .finalizing] {
-            #expect(display(DictationViewState(phase: phase), transcript: "Le texte d'avant.").transcript == nil, "\(phase)")
+        for stage in [DictationStage.preparing, .recording, .finalizing] {
+            let state = DictationViewState(stage: stage, lastTranscript: "Le texte d'avant.")
+            #expect(display(state).transcript == nil, "\(stage)")
         }
     }
 
     @Test func noTranscriptNoCardAndABlankOneNeither() {
         #expect(display(DictationViewState()).transcript == nil)
-        #expect(display(DictationViewState(), transcript: "").transcript == nil)
-        #expect(display(DictationViewState(), transcript: "  \n ").transcript == nil)
+        #expect(display(DictationViewState(lastTranscript: "")).transcript == nil)
+        #expect(display(DictationViewState(lastTranscript: "  \n ")).transcript == nil)
     }
 
     @Test func theCardCarriesTheCopyState() {
         for copy in [CopyState.idle, .copied, .failed] {
-            let card = DictationDisplay(state: DictationViewState(), transcript: "Un texte.", copy: copy).transcript
+            let card = DictationDisplay(state: DictationViewState(lastTranscript: "Un texte."), copy: copy).transcript
             #expect(card?.copy == copy)
         }
-        #expect(DictationDisplay(state: DictationViewState(), transcript: "Un texte.").transcript?.copy == .idle)
+        #expect(DictationDisplay(state: DictationViewState(lastTranscript: "Un texte.")).transcript?.copy == .idle)
     }
 
     @Test func theCopyFailureHasItsOwnPlainWords() {
@@ -299,9 +303,37 @@ import Testing
 
     @Test func theCardShowsTheEndOfALongTranscript() {
         let long = (1...200).map { "mot\($0)" }.joined(separator: " ")
-        let card = display(DictationViewState(), transcript: long).transcript
+        let card = display(DictationViewState(lastTranscript: long)).transcript
         #expect(card?.text.hasPrefix("… ") == true)
         #expect(card?.text.hasSuffix("mot200") == true)
         #expect((card?.text.count ?? .max) <= DictationText.transcriptLimit)
+    }
+}
+
+@Suite struct DictationStageTests {
+    private static let stages: [DictationStage] = [
+        .idle, .preparing, .recording, .finalizing, .review, .pasting, .copied, .cancelled,
+        .failed(.noSpeech), .failed(.microphone("m")), .failed(.engine("e")), .failed(.clipboard),
+    ]
+
+    @Test func onlyThePreparationTheRecordingAndTheFinalizationAreActive() {
+        for stage in Self.stages {
+            let expected = [DictationStage.preparing, .recording, .finalizing].contains(stage)
+            #expect(stage.isActive == expected, "\(stage)")
+        }
+    }
+
+    @Test func thePanelIsHeldWhileActiveOrInReviewOrPasting() {
+        for stage in Self.stages {
+            let expected = [DictationStage.preparing, .recording, .finalizing, .review, .pasting].contains(stage)
+            #expect(stage.holdsPanel == expected, "\(stage)")
+        }
+    }
+
+    @Test func everyStageHasANonEmptyLabelAndTheNewOnesAreExact() {
+        for stage in Self.stages { #expect(!DictationText.status(for: stage).isEmpty, "\(stage)") }
+        #expect(DictationText.status(for: .review) == "À relire")
+        #expect(DictationText.status(for: .pasting) == "Collage…")
+        #expect(DictationText.status(for: .copied) == "Texte copié")
     }
 }

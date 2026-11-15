@@ -139,7 +139,7 @@ public final class PanelController: PanelOpening {
     /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée : le clic qui sert à passer à la fenêtre
     /// où le texte doit aller ne doit pas annuler ce qu'on dit.
     private func outsideClick() {
-        guard !model.dictation.phase.isActive else { return }
+        guard !model.dictation.stage.isActive else { return }
         close()
     }
 

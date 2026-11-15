@@ -136,41 +136,26 @@ import Testing
     @Test func theDictationStartsIdle() {
         let model = PanelModel(lastModeID: "dictee-brute")
         #expect(model.dictation == DictationViewState())
-        #expect(model.dictation.phase == .idle)
+        #expect(model.dictation.stage == .idle)
     }
 
     // MARK: - Dernier texte dicté
-
-    @Test func copyingHandsTheWholeTextToTheHandlerAndRemembersIt() {
-        let model = PanelModel(lastModeID: "dictee-brute")
-        var copied: [String] = []
-        model.onCopy = { copied.append($0); return true }
-        let long = (1...300).map { "mot\($0)" }.joined(separator: " ")
-        model.setTranscript(long)
-        #expect(!model.transcriptCopied)
-
-        model.copyTranscript()
-        #expect(copied == [long])
-        #expect(model.transcriptCopied)
-    }
 
     @Test func copyingWithoutATranscriptDoesNothing() {
         let model = PanelModel(lastModeID: "dictee-brute")
         var copied = 0
         model.onCopy = { _ in copied += 1; return true }
         model.copyTranscript()
-        model.setTranscript("  ")
-        model.copyTranscript()
         #expect(copied == 0)
         #expect(!model.transcriptCopied)
-        #expect(model.lastTranscript == nil)
+        #expect(model.dictation.lastTranscript == nil)
     }
 
     @Test func aCopyThatFailsSaysSoAndIsNeverShownAsCopied() {
         let model = PanelModel(lastModeID: "dictee-brute")
         let accepts = Acceptance(false)
         model.onCopy = { _ in accepts.value }
-        model.setTranscript("un texte")
+        model.setDictation(DictationViewState(lastTranscript: "un texte"))
         model.copyTranscript()
         #expect(model.copyState == .failed)
         #expect(!model.transcriptCopied)
@@ -186,28 +171,28 @@ import Testing
         let model = PanelModel(lastModeID: "dictee-brute")
         let accepts = Acceptance(true)
         model.onCopy = { _ in accepts.value }
-        model.setTranscript("premier")
+        model.setDictation(DictationViewState(lastTranscript: "premier"))
 
         model.copyTranscript()
-        model.setTranscript("second")
+        model.setDictation(DictationViewState(lastTranscript: "second"))
         #expect(model.copyState == .idle)
 
         accepts.value = false
         model.copyTranscript()
         #expect(model.copyState == .failed)
-        model.setTranscript("troisième")
+        model.setDictation(DictationViewState(lastTranscript: "troisième"))
         #expect(model.copyState == .idle)
 
         accepts.value = true
         model.copyTranscript()
-        model.setDictation(DictationViewState(phase: .failed(.noSpeech), notice: "x"))
+        model.setDictation(DictationViewState(stage: .failed(.noSpeech), notice: "x", lastTranscript: "troisième"))
         #expect(model.copyState == .copied, "un échec n'est pas une nouvelle dictée")
-        model.setDictation(DictationViewState(phase: .preparing))
+        model.setDictation(DictationViewState(stage: .preparing, lastTranscript: "troisième"))
         #expect(model.copyState == .idle)
-        #expect(model.dictation.phase == .preparing)
+        #expect(model.dictation.stage == .preparing)
 
         model.copyTranscript()
-        model.setDictation(DictationViewState(phase: .recording))
+        model.setDictation(DictationViewState(stage: .recording, lastTranscript: "troisième"))
         #expect(model.copyState == .idle)
 
         accepts.value = false
@@ -220,7 +205,7 @@ import Testing
 
     @Test func withoutAnyWayToCopyNothingIsSaidToBeCopied() {
         let model = PanelModel(lastModeID: "dictee-brute")
-        model.setTranscript("un texte")
+        model.setDictation(DictationViewState(lastTranscript: "un texte"))
         model.copyTranscript()
         #expect(!model.transcriptCopied)
     }
@@ -228,10 +213,10 @@ import Testing
     @Test func aNewTranscriptOrClosingThePanelForgetsThatItWasCopied() {
         let model = PanelModel(lastModeID: "dictee-brute")
         model.onCopy = { _ in true }
-        model.setTranscript("premier")
+        model.setDictation(DictationViewState(lastTranscript: "premier"))
         model.copyTranscript()
         #expect(model.transcriptCopied)
-        model.setTranscript("second")
+        model.setDictation(DictationViewState(lastTranscript: "second"))
         #expect(!model.transcriptCopied)
 
         model.toggle()
@@ -240,11 +225,54 @@ import Testing
         model.close()
         #expect(!model.transcriptCopied)
         // Le texte, lui, reste : il est récupérable à la prochaine ouverture.
-        #expect(model.lastTranscript == "second")
+        #expect(model.dictation.lastTranscript == "second")
 
         model.toggle()
         model.copyTranscript()
         model.toggle()
         #expect(!model.transcriptCopied)
+    }
+
+    // MARK: - Un seul dernier texte
+
+    @Test func copyingHandsTheDictationsLastTranscriptToTheHandler() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var copied: [String] = []
+        model.onCopy = { copied.append($0); return true }
+        let long = (1...300).map { "mot\($0)" }.joined(separator: " ")
+        model.setDictation(DictationViewState(lastTranscript: long))
+        #expect(!model.transcriptCopied)
+
+        model.copyTranscript()
+        #expect(copied == [long])
+        #expect(model.copyState == .copied)
+    }
+
+    @Test func theCopyStateGoesBackToIdleWhenTheDictationsLastTranscriptChanges() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.onCopy = { _ in true }
+        model.setDictation(DictationViewState(lastTranscript: "premier"))
+        model.copyTranscript()
+        #expect(model.copyState == .copied)
+
+        // Le même texte dans un autre état d'écran : « Copié » reste.
+        model.setDictation(DictationViewState(stage: .cancelled, notice: "x", lastTranscript: "premier"))
+        #expect(model.copyState == .copied)
+
+        // Un autre texte, sans dictée en cours : « Copier » revient.
+        model.setDictation(DictationViewState(stage: .copied, notice: "x", lastTranscript: "second"))
+        #expect(model.copyState == .idle)
+    }
+
+    @Test func theCopyStateGoesBackToIdleWhenAnActiveStageBeginsEvenWithTheSameText() {
+        for stage in [DictationStage.preparing, .recording, .finalizing] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.onCopy = { _ in false }
+            model.setDictation(DictationViewState(lastTranscript: "texte"))
+            model.copyTranscript()
+            #expect(model.copyState == .failed)
+            model.setDictation(DictationViewState(stage: stage, lastTranscript: "texte"))
+            #expect(model.copyState == .idle, "\(stage)")
+        }
     }
 }

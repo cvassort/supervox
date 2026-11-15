@@ -80,7 +80,7 @@ public protocol PanelOpening: AnyObject {
 
 /// Ce que la vue du panneau montre d'une dictée.
 public struct DictationViewState: Equatable, Sendable {
-    public var phase: DictationPhase
+    public var stage: DictationStage
     /// Texte provisoire, tel que la session le donne.
     public var liveText: String
     /// Les 48 derniers niveaux du micro, entre 0 et 1, du plus ancien au plus récent.
@@ -89,28 +89,22 @@ public struct DictationViewState: Equatable, Sendable {
     public var elapsed: Double
     /// Une ligne à montrer sous l'état : mention de téléchargement, avis sur le vocabulaire, raison d'un échec ou d'une copie.
     public var notice: String?
+    /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : copie de `DictationController.lastTranscript`,
+    /// posée à chaque changement de la vue. En mémoire seulement.
+    public var lastTranscript: String?
 
     public init(
-        phase: DictationPhase = .idle, liveText: String = "", levels: [Float] = [], elapsed: Double = 0,
-        notice: String? = nil
+        stage: DictationStage = .idle, liveText: String = "", levels: [Float] = [], elapsed: Double = 0,
+        notice: String? = nil, lastTranscript: String? = nil
     ) {
-        self.phase = phase
+        self.stage = stage
         self.liveText = liveText
         self.levels = levels
         self.elapsed = elapsed
         self.notice = notice
+        self.lastTranscript = lastTranscript
     }
 
     /// Nombre de niveaux gardés.
     public static let levelCount = 48
-}
-
-extension DictationPhase {
-    /// Une dictée est en cours : le micro se prépare, écoute ou le texte se finalise.
-    public var isActive: Bool {
-        switch self {
-        case .preparing, .recording, .finalizing: true
-        case .idle, .finished, .cancelled, .failed: false
-        }
-    }
 }

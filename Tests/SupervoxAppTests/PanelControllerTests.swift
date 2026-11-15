@@ -252,11 +252,11 @@ import Testing
 
     // MARK: - Dictée
 
-    @Test(arguments: [DictationPhase.preparing, .recording, .finalizing])
-    func outsideClickIsIgnoredWhileADictationRuns(_ phase: DictationPhase) {
+    @Test(arguments: [DictationStage.preparing, .recording, .finalizing])
+    func outsideClickIsIgnoredWhileADictationRuns(_ stage: DictationStage) {
         let controller = makeController()
         controller.open()
-        model.dictation = DictationViewState(phase: phase)
+        model.dictation = DictationViewState(stage: stage)
 
         clicks.clickOutside()
         #expect(model.isOpen)
@@ -265,12 +265,12 @@ import Testing
     }
 
     @Test(arguments: [
-        DictationPhase.idle, .finished("texte"), .cancelled, .failed(.noSpeech),
+        DictationStage.idle, .copied, .cancelled, .failed(.noSpeech),
     ])
-    func outsideClickStillClosesThePanelWhenNoDictationRuns(_ phase: DictationPhase) {
+    func outsideClickStillClosesThePanelWhenNoDictationRuns(_ stage: DictationStage) {
         let controller = makeController()
         controller.open()
-        model.dictation = DictationViewState(phase: phase)
+        model.dictation = DictationViewState(stage: stage)
 
         clicks.clickOutside()
         #expect(!model.isOpen)

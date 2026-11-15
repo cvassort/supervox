@@ -187,13 +187,10 @@ let secondProvider = Provider(
     return model
 }
 
-/// Le panneau dans un état de dictée : `state`, et le dernier texte récupérable s'il y en a un.
-@MainActor func dictationPanelModel(
-    mode: String = "dictee-brute", state: DictationViewState, transcript: String? = nil
-) -> PanelModel {
+/// Le panneau dans un état de dictée : `state`, qui porte le dernier texte récupérable s'il y en a un.
+@MainActor func dictationPanelModel(mode: String = "dictee-brute", state: DictationViewState) -> PanelModel {
     let model = panelModel(mode: mode)
     model.dictation = state
-    model.setTranscript(transcript)
     return model
 }
 
@@ -289,51 +286,55 @@ for dark in [false, true] {
     let reason = await accessibilityReason()
     let cases: [(String, PanelModel, any PermissionsProbe)] = [
         ("dictee-preparation-telechargement",
-         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.downloadNotice)), granted),
+         dictationPanelModel(state: DictationViewState(stage: .preparing, notice: DictationController.downloadNotice)), granted),
         ("dictee-preparation-chargement",
-         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.loadingNotice)), granted),
+         dictationPanelModel(state: DictationViewState(stage: .preparing, notice: DictationController.loadingNotice)), granted),
         ("dictee-enregistrement",
-         dictationPanelModel(state: DictationViewState(phase: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
+         dictationPanelModel(state: DictationViewState(stage: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
         ("dictee-enregistrement-texte-long",
          dictationPanelModel(
             state: DictationViewState(
-                phase: .recording, liveText: exampleLongText, levels: exampleLevels(48), elapsed: 65.2)), granted),
+                stage: .recording, liveText: exampleLongText, levels: exampleLevels(48), elapsed: 65.2)), granted),
         ("dictee-transcription",
          dictationPanelModel(
             state: DictationViewState(
-                phase: .finalizing, liveText: exampleShortText, levels: exampleLevels(48), elapsed: 12.9)), granted),
+                stage: .finalizing, liveText: exampleShortText, levels: exampleLevels(48), elapsed: 12.9)), granted),
         ("dictee-echec-aucune-voix",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)), granted),
+            state: DictationViewState(stage: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)), granted),
         ("dictee-echec-preparation",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.engine("x")), notice: DictationController.preparationFailedNotice),
-            transcript: exampleShortText), granted),
+            state: DictationViewState(
+                stage: .failed(.engine("x")), notice: DictationController.preparationFailedNotice,
+                lastTranscript: exampleShortText)), granted),
         ("dictee-texte-copie",
          dictationPanelModel(
-            state: DictationViewState(phase: .finished(exampleLongText), notice: reason), transcript: exampleLongText),
+            state: DictationViewState(stage: .copied, notice: reason, lastTranscript: exampleLongText)),
          ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)),
         // Le pire cas de hauteur : un message de quatre lignes et un dernier texte de trois lignes.
         ("dictee-echec-message-long",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.engine("x")), notice: reason + " " + reason), transcript: exampleLongText + " " + exampleLongText),
+            state: DictationViewState(
+                stage: .failed(.engine("x")), notice: reason + " " + reason,
+                lastTranscript: exampleLongText + " " + exampleLongText)),
          granted),
         ("dictee-mode-indisponible",
          dictationPanelModel(
             mode: "entretien", state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
-        ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(), transcript: exampleShortText), granted),
+        ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(lastTranscript: exampleShortText)), granted),
         ("dictee-dernier-texte-copie", {
-            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))
             model.onCopy = { _ in true }
             model.copyTranscript()
             return model
         }(), granted),
         ("dictee-presse-papiers-refuse",
          dictationPanelModel(
-            state: DictationViewState(phase: .failed(.clipboard), notice: DictationFailure.clipboard.message),
-            transcript: exampleShortText), granted),
+            state: DictationViewState(
+                stage: .failed(.clipboard), notice: DictationFailure.clipboard.message,
+                lastTranscript: exampleShortText)), granted),
         ("dictee-copie-impossible", {
-            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))
             model.onCopy = { _ in false }
             model.copyTranscript()
             return model
