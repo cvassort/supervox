@@ -95,7 +95,9 @@ open build/Supervox.app
   écrasé ; un fichier qui ne peut pas être lu (droits, disque) reste en place et rien n'y est écrit jusqu'à la fin de
   la session, même s'il redevient lisible ; un fichier écrit par une version plus récente de Supervox est gardé tel
   quel et n'est pas réécrit.
-- Le texte dicté n'est écrit nulle part : ni dans ce fichier, ni dans un journal ; le panneau n'en garde que le dernier, en mémoire.
+- Le texte dicté n'est écrit dans aucun fichier ni journal ; le panneau n'en garde que le dernier, en mémoire. Le bouton
+  « Copier » le met dans le presse-papiers comme une copie ordinaire : un gestionnaire d'historique du presse-papiers peut
+  alors le garder (le collage automatique, lui, marque sa copie comme provisoire et confidentielle pour qu'ils l'ignorent).
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
   identifiant). Jamais dans un fichier. Elles ne sont lues qu'au moment d'une requête qui en a besoin.
 - Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et
@@ -107,10 +109,13 @@ open build/Supervox.app
 swift run supervox-snapshots /chemin/vers/un/dossier
 ```
 
-`supervox-snapshots` écrit chaque écran du panneau (y compris la dictée dans tous ses états) et des réglages en PNG, en
-clair et en sombre, avec des données d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au
-presse-papiers ni aux réglages réels. Les onglets des réglages
-sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas fidèlement.
+`supervox-snapshots` écrit les écrans du panneau et des réglages en PNG, en clair et en sombre : pour la dictée, la
+préparation, l'enregistrement (sans texte, avec un texte long), la transcription, « rien à transcrire », l'échec de
+préparation, le texte copié faute d'Accessibilité, le dernier texte (avec « Copié » et « Copie impossible »), et un mode
+non disponible. Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
+d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au presse-papiers ni aux réglages
+réels. Les onglets des réglages sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas
+fidèlement.
 
 Le logo est dessiné par le code (`BrandMark`) : aucune image n'est suivie dans le dépôt. `Scripts/make-app.sh`
 fabrique l'icône de l'application avec `supervox-snapshots --iconset <dossier.iconset>` puis `iconutil`.
@@ -124,8 +129,9 @@ premier plan.
 
 - **Bascule ou maintien** (Réglages, onglet Raccourci). En maintien, la dictée s'arrête dès que les touches de
   modification du raccourci sont relâchées, même si le système ne signale pas le relâchement de la touche principale
-  (vérifié quatre fois par seconde).
-- **Le panneau montre la dictée** : préparation (avec « Téléchargement du modèle… » si un modèle manque), enregistrement
+  (vérifié quatre fois par seconde). Un raccourci sans touche de modification n'a rien à vérifier : seul le relâchement
+  signalé par le système termine la dictée, ou la durée maximale.
+- **Le panneau suit la hauteur de son contenu** (sa fenêtre est ancrée par le haut). **Il montre la dictée** : préparation (avec « Téléchargement du modèle… » si un modèle manque), enregistrement
   (point rouge, durée, forme d'onde, texte en direct sur quatre lignes au plus, la fin toujours visible), transcription,
   puis le résultat. Échap annule la dictée : rien n'est collé.
 - **Le collage est un ⌘V simulé** : le texte est mis dans le presse-papiers, collé, puis le contenu d'origine du
@@ -140,7 +146,9 @@ premier plan.
 - **Réglages de transcription** (Réglages, onglet Transcription) : moteur (WhisperKit, plus précis dans les mesures de
   l'étape 1 ; ou Parakeet, bien plus rapide), variante du modèle WhisperKit, langue (WhisperKit seulement), vocabulaire
   (une liste de termes à mieux reconnaître ; une liste trop longue pour WhisperKit est refusée sans effacer la saisie).
-  Ils sont relus à chaque dictée : pas besoin de relancer l'application.
+  Ils sont relus à chaque dictée : pas besoin de relancer l'application. Une dictée ne télécharge que les modèles dont elle
+  a besoin ; si seul le petit modèle du vocabulaire manque et ne se télécharge pas, elle a lieu sans vocabulaire et le
+  panneau le dit. Échap pendant un téléchargement annule la dictée : le modèle en cours finit, les suivants ne sont pas lancés.
 - **Durée maximale** d'une prise : 5 minutes, après quoi la dictée se termine d'elle-même (choix de conception, non
   mesuré).
 

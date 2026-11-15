@@ -124,8 +124,10 @@ import Testing
     }
 
     /// Aucun test ne touche le presse-papiers général : ni `SystemPasteboard()` (qui prend `NSPasteboard.general`), ni
-    /// `NSPasteboard.general`. Les essais d'intégration passent par un presse-papiers nommé (`SystemPasteboard(board:)`).
-    static let forbiddenGeneralPasteboard = #"SystemPasteboard\s*\(\s*\)|NSPasteboard\s*\.\s*general"#
+    /// `NSPasteboard.general`, ni `SystemPasteboard(board: .general)` (l'initialiseur interne, atteignable par `@testable`).
+    /// Les essais d'intégration passent par un presse-papiers nommé (`SystemPasteboard(board:)`).
+    static let forbiddenGeneralPasteboard =
+        #"SystemPasteboard\s*\(\s*\)|NSPasteboard\s*\.\s*general|board\s*:\s*\.\s*general\b"#
 
     @Test func noTestTouchesTheGeneralPasteboard() throws {
         let pattern = try Regex(Self.forbiddenGeneralPasteboard)
@@ -134,14 +136,21 @@ import Testing
         #expect(offending.isEmpty, "\(offending.map(\.place))")
     }
 
-    @Test(arguments: ["let p = SystemPasteboard()", "SystemPasteboard ( )", "NSPasteboard.general", "NSPasteboard\n    .general"])
+    @Test(arguments: [
+        "let p = SystemPasteboard()", "SystemPasteboard ( )", "NSPasteboard.general", "NSPasteboard\n    .general",
+        "SystemPasteboard(board: .general)", "SystemPasteboard(board:.general)", "SystemPasteboard(\n    board : . general)",
+        "let b = SystemPasteboard(board: NSPasteboard.general)",
+    ])
     func theGeneralPasteboardPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenGeneralPasteboard)))
     }
 
     @Test func theGeneralPasteboardPatternLeavesANamedBoardAlone() throws {
         let pattern = try Regex(Self.forbiddenGeneralPasteboard)
-        for code in ["SystemPasteboard(board: board)", "NSPasteboard(name: .init(\"x\"))", "board.name != .general"] {
+        for code in [
+            "SystemPasteboard(board: board)", "NSPasteboard(name: .init(\"x\"))", "board.name != .general",
+            "SystemPasteboard(board: named)", "let generalBoard = 1", "board: .generalised",
+        ] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }
