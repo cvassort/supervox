@@ -722,6 +722,44 @@ import SupervoxCore
         #expect(h.engines.downloadedFor == [h.knobs.settings])
     }
 
+    /// N1 : le petit modèle de vocabulaire ne s'est pas téléchargé alors que le reste est là : la dictée a lieu quand même,
+    /// sans vocabulaire, avec une notice en mots simples.
+    @Test(arguments: ["whisperkit", "parakeet"])
+    func aVocabularyModelThatCouldNotBeDownloadedLeavesTheVocabularyOutAndTheDictationGoesOn(engine: String) async {
+        let h = DictationHarness()
+        h.engines.configure {
+            $0.modelMissing = true
+            $0.downloadOutcome = ModelDownloadOutcome(vocabularyModelUnavailable: true)
+        }
+        h.knobs.settings = TranscriptionSettings(
+            engine: engine, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+        h.controller.hotKeyPressed()
+        let session = await h.session()
+
+        #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])
+        #expect(await until { session.calls.contains("start") })
+        let notice = h.controller.view.notice ?? ""
+        #expect(notice.contains("vocabulaire n'a pas servi"))
+        #expect(notice.contains("petit modèle"))
+        #expect(h.controller.view.phase == .preparing)
+        // Le comptage n'a plus d'objet : la liste ne part pas.
+        #expect(!h.engines.events.contains("count"))
+
+        session.emit(.recording)
+        #expect(await until { h.controller.view.phase == .recording })
+        #expect(h.controller.view.notice?.contains("vocabulaire n'a pas servi") == true)
+    }
+
+    @Test func aCompleteDownloadLeavesTheVocabularyAlone() async {
+        let h = DictationHarness()
+        h.engines.configure { $0.modelMissing = true }
+        h.knobs.settings = TranscriptionSettings(
+            engine: "parakeet", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+        h.controller.hotKeyPressed()
+        _ = await h.session()
+        #expect(h.engines.settingsSeen.map(\.vocabulary) == [["a", "b"]])
+    }
+
     @Test func nothingIsDownloadedWhenNothingIsMissing() async {
         let h = DictationHarness()
         h.controller.hotKeyPressed()

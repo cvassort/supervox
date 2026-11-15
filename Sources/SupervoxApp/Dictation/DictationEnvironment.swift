@@ -1,6 +1,19 @@
 import Foundation
 import SupervoxCore
 
+/// Ce que le téléchargement des modèles d'une dictée a laissé de côté sans empêcher la dictée.
+public struct ModelDownloadOutcome: Equatable, Sendable {
+    /// Le petit modèle de vocabulaire n'a pas pu être téléchargé alors que le modèle de transcription est là : la dictée a
+    /// lieu quand même, sans vocabulaire.
+    public var vocabularyModelUnavailable: Bool
+
+    public init(vocabularyModelUnavailable: Bool = false) {
+        self.vocabularyModelUnavailable = vocabularyModelUnavailable
+    }
+
+    public static let complete = ModelDownloadOutcome()
+}
+
 /// Ce que le contrôleur de dictée demande au monde extérieur : fabriquer une session, savoir si un modèle manque, compter
 /// l'amorce du vocabulaire. La cible `Supervox` le construit avec les moteurs réels ; les tests et l'outil de rendu en
 /// donnent un double. `SupervoxApp` ne dépend pas des moteurs.
@@ -11,8 +24,10 @@ public struct DictationEnvironment: Sendable {
     /// si le vocabulaire n'est pas vide) n'est pas prêt sur le disque : il sera téléchargé avant la préparation.
     public var needsModelDownload: @Sendable (TranscriptionSettings) async -> Bool
     /// Télécharge ces modèles par le catalogue des modèles (même état et même progression que depuis les réglages, et
-    /// jamais un second téléchargement du même modèle) : rend quand ils sont tous là, lève si l'un échoue.
-    public var downloadModels: @Sendable (TranscriptionSettings) async throws -> Void
+    /// jamais un second téléchargement du même modèle) : rend quand ils sont tous là, lève si l'un échoue, sauf le petit
+    /// modèle de vocabulaire (la dictée s'en passe : voir `ModelDownloadOutcome`). Une tâche annulée s'arrête avant le
+    /// modèle suivant de la liste (celui qui est en cours finit, partagé, visible dans les réglages).
+    public var downloadModels: @Sendable (TranscriptionSettings) async throws -> ModelDownloadOutcome
     /// Nombre de jetons de l'amorce du vocabulaire pour ce modèle Whisper ; `nil` si son tokenizer n'est pas sur le disque
     /// (`ModelCatalog.promptTokenCount`).
     public var promptTokenCount: @Sendable (_ vocabulary: [String], _ whisperModel: String) async -> Int?
@@ -22,7 +37,7 @@ public struct DictationEnvironment: Sendable {
     public init(
         makeSession: @escaping @Sendable (TranscriptionSettings) async throws -> any DictationSessioning,
         needsModelDownload: @escaping @Sendable (TranscriptionSettings) async -> Bool,
-        downloadModels: @escaping @Sendable (TranscriptionSettings) async throws -> Void,
+        downloadModels: @escaping @Sendable (TranscriptionSettings) async throws -> ModelDownloadOutcome,
         promptTokenCount: @escaping @Sendable ([String], String) async -> Int?,
         promptTokenLimit: Int
     ) {
@@ -37,7 +52,7 @@ public struct DictationEnvironment: Sendable {
     public static let unavailable = DictationEnvironment(
         makeSession: { _ in throw DictationUnavailable() },
         needsModelDownload: { _ in false },
-        downloadModels: { _ in },
+        downloadModels: { _ in .complete },
         promptTokenCount: { _, _ in nil },
         promptTokenLimit: 0)
 }

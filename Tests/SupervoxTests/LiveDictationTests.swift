@@ -28,6 +28,9 @@ import Testing
             var ensured: [String] = []
             var deleted: [String] = []
             var ensureError: (any Error)?
+            var ensureErrors: [String: any Error] = [:]
+            /// Retient chaque `ensureDownloaded` tant que la porte n'est pas ouverte (aucun appel d'un modèle suivant ne passe avant).
+            var ensureGate: Gate?
             var deleteError: (any Error)?
         }
 
@@ -44,6 +47,8 @@ import Testing
         var deleted: [String] { state.withLock { $0.deleted } }
         func set(_ id: String, _ value: LocalModel.State?) { state.withLock { $0.states[id] = value } }
         func failEnsure(_ error: (any Error)?) { state.withLock { $0.ensureError = error } }
+        func failEnsure(_ id: String, _ error: any Error) { state.withLock { $0.ensureErrors[id] = error } }
+        func holdEnsure(_ gate: Gate) { state.withLock { $0.ensureGate = gate } }
         func failDelete(_ error: (any Error)?) { state.withLock { $0.deleteError = error } }
 
         func models() async -> [LocalModel] {
@@ -55,9 +60,13 @@ import Testing
         }
         func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {}
         func ensureDownloaded(_ id: String) async throws {
-            try state.withLock { state in
+            let gate = state.withLock { state -> Gate? in
                 state.ensured.append(id)
-                if let error = state.ensureError { throw error }
+                return state.ensureGate
+            }
+            await gate?.wait()
+            try state.withLock { state in
+                if let error = state.ensureErrors[id] ?? state.ensureError { throw error }
             }
         }
         func state(of id: String) async -> LocalModel.State? { state.withLock { $0.states[id] } }
@@ -71,6 +80,31 @@ import Testing
     }
 
     struct Refused: Error {}
+
+    /// Porte à ouvrir une fois (les tests l'ouvrent dans un `defer` : rien ne reste pendu).
+    final class Gate: Sendable {
+        private let state = Mutex<(isOpen: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
+
+        func wait() async {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let now = state.withLock { state -> Bool in
+                    if state.isOpen { return true }
+                    state.waiters.append(continuation)
+                    return false
+                }
+                if now { continuation.resume() }
+            }
+        }
+
+        func open() {
+            let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+                state.isOpen = true
+                defer { state.waiters = [] }
+                return state.waiters
+            }
+            for waiter in waiters { waiter.resume() }
+        }
+    }
 
     // MARK: - Modèles nécessaires
 
@@ -165,7 +199,7 @@ import Testing
         let settings = Self.settings(vocabulary: ["terme"])
 
         #expect(await environment.needsModelDownload(settings))
-        try await environment.downloadModels(settings)
+        _ = try await environment.downloadModels(settings)
         #expect(catalog.ensured == [LocalModelID.whisper("small"), LocalModelID.parakeetVocabulary])
     }
 
@@ -173,7 +207,7 @@ import Testing
         let catalog = StubCatalog(StubCatalog.allReady)
         let environment = LiveDictationEngines(base: catalog).environment
         #expect(await !environment.needsModelDownload(Self.settings()))
-        try await environment.downloadModels(Self.settings())
+        _ = try await environment.downloadModels(Self.settings())
         #expect(catalog.ensured.isEmpty)
     }
 
@@ -182,7 +216,7 @@ import Testing
         let catalog = StubCatalog(StubCatalog.allReady)
         catalog.set(LocalModelID.whisper("small"), .downloading(nil))
         let environment = LiveDictationEngines(base: catalog).environment
-        try await environment.downloadModels(Self.settings())
+        _ = try await environment.downloadModels(Self.settings())
         #expect(catalog.ensured == [LocalModelID.whisper("small")])
     }
 
@@ -191,7 +225,84 @@ import Testing
         catalog.set(LocalModelID.voiceDetector, .absent)
         catalog.failEnsure(Refused())
         let environment = LiveDictationEngines(base: catalog).environment
-        await #expect(throws: Refused.self) { try await environment.downloadModels(Self.settings()) }
+        await #expect(throws: Refused.self) { _ = try await environment.downloadModels(Self.settings()) }
+    }
+
+    // MARK: - Une dictée ne télécharge que ce dont elle a besoin (N1)
+
+    /// Parakeet, sans vocabulaire : seule la reconnaissance est demandée, jamais le petit modèle de vocabulaire.
+    @Test(arguments: ["whisperkit", "parakeet"])
+    func withoutAVocabularyTheDownloadLeavesTheVocabularyModelAlone(engine: String) async throws {
+        let catalog = StubCatalog(StubCatalog.allReady)
+        catalog.set(LocalModelID.parakeet, .absent)
+        catalog.set(LocalModelID.parakeetVocabulary, .absent)
+        let environment = LiveDictationEngines(base: catalog).environment
+
+        let outcome = try await environment.downloadModels(Self.settings(engine: engine))
+        #expect(catalog.ensured == [LocalModelID.parakeet])
+        #expect(outcome == .complete)
+    }
+
+    /// Avec un vocabulaire, le petit modèle de vocabulaire suit la reconnaissance.
+    @Test(arguments: ["whisperkit", "parakeet"])
+    func withAVocabularyTheDownloadIncludesTheVocabularyModelAfterTheTranscriptionModel(engine: String) async throws {
+        let catalog = StubCatalog(StubCatalog.allReady)
+        catalog.set(LocalModelID.parakeet, .absent)
+        catalog.set(LocalModelID.parakeetVocabulary, .absent)
+        let environment = LiveDictationEngines(base: catalog).environment
+
+        let outcome = try await environment.downloadModels(Self.settings(engine: engine, vocabulary: ["terme"]))
+        #expect(catalog.ensured == [LocalModelID.parakeet, LocalModelID.parakeetVocabulary])
+        #expect(outcome == .complete)
+    }
+
+    /// Le petit modèle de vocabulaire ne se télécharge pas, la reconnaissance est là : la dictée a lieu quand même.
+    @Test func aVocabularyModelThatFailsToDownloadDoesNotStopTheDictation() async throws {
+        let catalog = StubCatalog(StubCatalog.allReady)
+        catalog.set(LocalModelID.parakeetVocabulary, .absent)
+        catalog.failEnsure(LocalModelID.parakeetVocabulary, Refused())
+        let environment = LiveDictationEngines(base: catalog).environment
+
+        let outcome = try await environment.downloadModels(Self.settings(vocabulary: ["terme"]))
+        #expect(outcome == ModelDownloadOutcome(vocabularyModelUnavailable: true))
+        #expect(catalog.ensured == [LocalModelID.parakeetVocabulary])
+    }
+
+    /// Un autre modèle qui échoue arrête la dictée, vocabulaire ou non.
+    @Test func aFailureOfAnyOtherModelStillStopsTheDictation() async {
+        let catalog = StubCatalog(StubCatalog.allReady)
+        catalog.set(LocalModelID.parakeet, .absent)
+        catalog.set(LocalModelID.parakeetVocabulary, .absent)
+        catalog.failEnsure(LocalModelID.parakeet, Refused())
+        let environment = LiveDictationEngines(base: catalog).environment
+
+        await #expect(throws: Refused.self) {
+            _ = try await environment.downloadModels(Self.settings(vocabulary: ["terme"]))
+        }
+        // La reconnaissance manque : le petit modèle de vocabulaire n'est pas essayé.
+        #expect(catalog.ensured == [LocalModelID.parakeet])
+    }
+
+    /// m1 : Échap pendant un téléchargement lancé par une dictée : celui qui est en cours finit, les suivants de la liste ne
+    /// sont pas lancés.
+    @Test func cancellingDuringADownloadStopsTheNextOnesFromStarting() async throws {
+        let catalog = StubCatalog(StubCatalog.allReady)
+        catalog.set(LocalModelID.voiceDetector, .absent)
+        catalog.set(LocalModelID.parakeet, .absent)
+        catalog.set(LocalModelID.whisper("small"), .absent)
+        let gate = Gate()
+        defer { gate.open() }
+        catalog.holdEnsure(gate)
+        let environment = LiveDictationEngines(base: catalog).environment
+
+        let task = Task { _ = try await environment.downloadModels(Self.settings()) }
+        for _ in 0..<2000 where catalog.ensured.isEmpty { await Task.yield() }
+        #expect(catalog.ensured == [LocalModelID.voiceDetector])
+
+        task.cancel()
+        gate.open()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(catalog.ensured == [LocalModelID.voiceDetector])
     }
 
     // MARK: - Moteurs gardés (makeSession) et leur abandon

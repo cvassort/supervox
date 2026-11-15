@@ -127,11 +127,31 @@ final class LiveDictationEngines: Sendable {
         DictationEnvironment(
             makeSession: { [self] settings in makeSession(settings) },
             needsModelDownload: { [self] settings in !(await missingModels(for: settings)).isEmpty },
-            downloadModels: { [self] settings in
-                for id in await missingModels(for: settings) { try await base.ensureDownloaded(id) }
-            },
+            downloadModels: { [self] settings in try await downloadModels(for: settings) },
             promptTokenCount: { [self] terms, model in await base.promptTokenCount(terms, whisperModel: model) },
             promptTokenLimit: WhisperKitTranscriber.promptTokenLimit)
+    }
+
+    /// Télécharge, par le catalogue, ce qui manque à cette dictée et rien de plus. Une tâche annulée (Échap) ne lance pas le
+    /// modèle suivant de la liste. Le petit modèle de vocabulaire, qui vient après la reconnaissance de Parakeet, n'est pas
+    /// indispensable : s'il ne se télécharge pas, la dictée a lieu sans vocabulaire (`vocabularyModelUnavailable`).
+    func downloadModels(for settings: TranscriptionSettings) async throws -> ModelDownloadOutcome {
+        var outcome = ModelDownloadOutcome.complete
+        for id in await missingModels(for: settings) {
+            try Task.checkCancellation()
+            guard id == LocalModelID.parakeetVocabulary else {
+                try await base.ensureDownloaded(id)
+                continue
+            }
+            do {
+                try await base.ensureDownloaded(id)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                outcome.vocabularyModelUnavailable = true
+            }
+        }
+        return outcome
     }
 
     /// Ce dont une dictée a besoin : le détecteur de voix et Parakeet (l'aperçu) toujours, la variante Whisper choisie si

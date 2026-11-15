@@ -27,6 +27,8 @@ public final class DictationController {
     public static let interruptedNotice = "La dictée a été interrompue."
     public static let uncountableNotice =
         "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
+    public static let vocabularyModelNotice =
+        "Le vocabulaire n'a pas servi à cette dictée : le petit modèle qui le reconnaît n'a pas pu être téléchargé. Il sera retenté à la prochaine dictée."
     public static let preparationFailedNotice =
         "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription, pour vérifier le moteur et le modèle choisis, ou pour télécharger le modèle."
 
@@ -178,13 +180,14 @@ public final class DictationController {
     private func execute(_ run: Run, settings: TranscriptionSettings) async {
         let download = await environment.needsModelDownload(settings)
         guard isLive(run) else { return }
+        var vocabularyModelUnavailable = false
         if download {
             run.downloadNotice = Self.downloadNotice
             refreshNotice(run)
             // Par le catalogue des modèles : un seul téléchargement par modèle, visible dans les réglages. Avant le comptage
             // du vocabulaire, qui a besoin du tokenizer que ce téléchargement apporte.
             do {
-                try await environment.downloadModels(settings)
+                vocabularyModelUnavailable = try await environment.downloadModels(settings).vocabularyModelUnavailable
             } catch {
                 guard isLive(run) else { return }
                 log.error("téléchargement des modèles échoué")
@@ -197,7 +200,13 @@ public final class DictationController {
         }
 
         var effective = settings
-        if settings.engine == "whisperkit", !settings.vocabulary.isEmpty {
+        if vocabularyModelUnavailable {
+            // Le petit modèle de vocabulaire ne s'est pas téléchargé alors que le reste est là : la dictée a lieu sans
+            // vocabulaire, et la notice le dit. Plus rien à compter.
+            effective.vocabulary = []
+            run.vocabularyNotice = Self.vocabularyModelNotice
+            refreshNotice(run)
+        } else if settings.engine == "whisperkit", !settings.vocabulary.isEmpty {
             let model = settings.whisperModel
             let environment = self.environment
             let outcome = await VocabularyFit.fit(settings.vocabulary, limit: environment.promptTokenLimit) {

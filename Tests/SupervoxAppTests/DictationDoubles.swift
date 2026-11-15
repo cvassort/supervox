@@ -93,6 +93,7 @@ final class FakeEngines: Sendable {
         var events: [String] = []
         var downloadGate: TestGate?
         var downloadError: (any Error)?
+        var downloadOutcome = ModelDownloadOutcome.complete
         var downloadedFor: [TranscriptionSettings] = []
         var tokenCount: @Sendable ([String], String) -> Int? = { terms, _ in terms.count }
         var limit = 1000
@@ -130,13 +131,14 @@ final class FakeEngines: Sendable {
             },
             needsModelDownload: { [self] _ in state.withLock { $0.modelMissing } },
             downloadModels: { [self] settings in
-                let (gate, error) = state.withLock { state -> (TestGate?, (any Error)?) in
+                let (gate, error, outcome) = state.withLock { state -> (TestGate?, (any Error)?, ModelDownloadOutcome) in
                     state.events.append("download")
                     state.downloadedFor.append(settings)
-                    return (state.downloadGate, state.downloadError)
+                    return (state.downloadGate, state.downloadError, state.downloadOutcome)
                 }
                 await gate?.wait()
                 if let error { throw error }
+                return outcome
             },
             promptTokenCount: { [self] terms, model in
                 let count = state.withLock { state -> @Sendable ([String], String) -> Int? in
