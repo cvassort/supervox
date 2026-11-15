@@ -147,6 +147,32 @@ struct DictationSessionWatchdogTests {
         #expect(await until { !sleeper.isSleeping })
     }
 
+    /// Le temps que met `feed.start` à rendre la main (le vrai micro construit un moteur audio à traitement de la voix à chaque
+    /// dictée) ne compte pas dans la seconde accordée : la date de départ est prise quand le micro est ouvert, pas avant.
+    @Test func theTimeTheMicrophoneTakesToOpenIsNotChargedAgainstTheTimeout() async {
+        let sleeper = TickSleeper()
+        let clock = TestClock()
+        let feed = SlowStartFeed(duration: 2, clock: clock)
+        let session = DictationSession(
+            feed: feed, detector: ScriptedDetector(), preview: nil, final: ScriptedTranscriber(text: "texte"),
+            config: DictationConfig(language: "fr", padding: 0), now: clock.reader, watchdog: sleeper.watchdog)
+        let log = SnapshotLog(session.snapshots)
+
+        await session.start()
+        await sleeper.waitForSleeps(1)
+        #expect(await session.phase == .recording)
+
+        // Premier sondage : le micro n'a rien livré, mais il vient de s'ouvrir (l'ouverture a duré 2 s).
+        sleeper.tick()
+        await sleeper.waitForSleeps(2)
+        #expect(await session.phase == .recording)
+
+        // Une seconde sans tranche depuis l'ouverture : l'échec.
+        clock.advance(by: 1)
+        sleeper.tick()
+        #expect(await log.waitForEnd().last?.phase == .failed(.microphone(Self.reason)))
+    }
+
     /// Un micro qui ne démarre pas : la session échoue à l'ouverture, aucune surveillance n'est lancée.
     @Test func noWatchdogRunsWhenTheMicrophoneDoesNotStart() async {
         let sleeper = TickSleeper()
@@ -202,4 +228,18 @@ private func until(_ condition: () -> Bool) async -> Bool {
         if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
     }
     return condition()
+}
+
+/// Un micro dont l'ouverture dure `duration` secondes de l'horloge du test, sans livrer de tranche.
+private final class SlowStartFeed: MicrophoneFeed, @unchecked Sendable {
+    private let duration: Double
+    private let clock: TestClock
+
+    init(duration: Double, clock: TestClock) {
+        self.duration = duration
+        self.clock = clock
+    }
+
+    func start(onChunk: @escaping @Sendable (AudioChunk) -> Void) throws { clock.advance(by: duration) }
+    func stop() {}
 }

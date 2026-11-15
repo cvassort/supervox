@@ -187,6 +187,9 @@ public actor DictationSession: DictationSessioning {
         captureRunning = true
         ingesting = true
         startedAt = now()
+        // La seconde du chien de garde court depuis que le micro est ouvert : `feed.start` peut prendre du temps (le vrai micro
+        // construit un moteur audio à traitement de la voix à chaque dictée), qui ne compte pas contre lui.
+        stamp.set(startedAt)
         setPhase(.recording)
         pump = Task { [weak self] in
             for await chunk in chunks {
