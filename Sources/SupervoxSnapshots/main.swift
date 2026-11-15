@@ -136,12 +136,13 @@ func exampleModels(
     return model
 }
 
-/// 40 termes d'infrastructure : un vocabulaire d'administrateur système réaliste (voir `transcription-vocabulaire-refuse`).
-let infrastructureTerms = [
-    "Kubernetes", "PostgreSQL", "Keycloak", "Terraform", "Ansible", "Grafana", "Prometheus", "Redis", "RabbitMQ",
-    "OpenSearch", "Kafka", "Nginx", "GitLab", "Helm", "Traefik", "Elasticsearch", "Logstash", "Kibana", "Jenkins",
-    "SonarQube", "Vault", "Consul", "Nomad", "Istio", "Envoy", "Argo CD", "Harbor", "MinIO", "Ceph", "Zabbix", "Nagios",
-    "Wazuh", "Suricata", "Graylog", "Loki", "Tempo", "Jaeger", "OpenTelemetry", "Podman", "Buildah",
+/// 40 termes d'exemple sans rapport avec un métier (des plantes et des villes) : une liste assez longue pour que le refus du
+/// vocabulaire soit crédible (voir `transcription-vocabulaire-refuse`).
+let exampleTerms = [
+    "Lavande", "Romarin", "Thym", "Basilic", "Menthe", "Sauge", "Fougère", "Bruyère", "Glycine", "Jasmin", "Pivoine",
+    "Tulipe", "Camélia", "Hortensia", "Magnolia", "Érable", "Tilleul", "Bouleau", "Cyprès", "Olivier", "Lyon",
+    "Bordeaux", "Nantes", "Rennes", "Toulouse", "Lille", "Dijon", "Annecy", "Tours", "Angers", "Nice", "Metz", "Albi",
+    "Arles", "Nîmes", "Brest", "Reims", "Rouen", "Troyes", "Vichy",
 ]
 
 let layout = ExampleLayout()
@@ -419,17 +420,17 @@ for dark in [false, true] {
                 settings: TranscriptionSettings(
                     engine: "parakeet", whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
         name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
-    // Vocabulaire refusé : un vrai vocabulaire (40 termes d'infrastructure) trop long pour Whisper. Le compte vient du
-    // tokenizer de large-v3, celui du modèle par défaut (`WhisperKitTranscriber.promptTokenCount`, hors ligne) : 30
-    // premiers termes = 102, 40 termes = 136, pour une limite de 111. Le champ garde la saisie refusée.
+    // Vocabulaire refusé : 40 termes d'exemple, trop longs pour Whisper. Le compte (136 pour une limite de 111) est une
+    // valeur d'exemple fixée par le double du catalogue : elle n'a pas été mesurée avec le tokenizer sur cette liste. Le champ
+    // garde la saisie refusée.
     let refused = await transcriptionModel(
         ExampleCatalog(listed: allReadyModels, tokenCount: 136),
         settings: TranscriptionSettings(
             engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
-            vocabulary: Array(infrastructureTerms.prefix(30))),
-        act: { _ = await $0.setVocabulary(text: infrastructureTerms.joined(separator: "\n")) })
+            vocabulary: Array(exampleTerms.prefix(30))),
+        act: { _ = await $0.setVocabulary(text: exampleTerms.joined(separator: "\n")) })
     try render(
-        TranscriptionPane(model: refused, draft: infrastructureTerms.joined(separator: "\n")),
+        TranscriptionPane(model: refused, draft: exampleTerms.joined(separator: "\n")),
         name: "transcription-vocabulaire-refuse", dark: dark, background: window, size: tallSize)
     // Vocabulaire accepté, mais le modèle n'est pas là pour compter.
     try render(
