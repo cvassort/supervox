@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Une prise de dictée : relie le micro, le détecteur de voix en flux, l'aperçu en direct et la transcription finale.
 ///
@@ -27,6 +28,7 @@ public actor DictationSession: DictationSessioning {
     private let final: any Transcriber
     private let config: DictationConfig
     private let now: @Sendable () -> Double
+    private let watchdog: MicrophoneWatchdog?
     /// Pour les tests : fabrique du rééchantillonneur (fréquence du micro, fréquence cible).
     private let makeResampler: @Sendable (Double, Double) -> StreamingResampler?
 
@@ -63,21 +65,30 @@ public actor DictationSession: DictationSessioning {
     /// Pour les tests : appelée à la fin de chaque passe d'aperçu, résultat pris en compte ou non.
     private var previewPassDidFinish: (@Sendable () -> Void)?
 
+    /// Le chien de garde du micro (voir `MicrophoneWatchdog`) : sa tâche, et l'heure de la dernière tranche *arrivée* du micro
+    /// (pas traitée : la pompe peut rester plus d'une seconde dans le détecteur pendant que des tranches s'accumulent).
+    private var watchdogTask: Task<Void, Never>?
+    private let lastChunkAt = ChunkStamp()
+
     private var chunkSink: AsyncStream<AudioChunk>.Continuation?
     private var pump: Task<Void, Never>?
     /// Vrai de l'ouverture du micro jusqu'à la fin de la vidange : la pompe n'accepte plus de tranche ensuite.
     private var ingesting = false
     private var captureRunning = false
 
+    /// `watchdog` : voir `MicrophoneWatchdog` ; `nil` (le défaut) ne surveille pas le micro.
     public init(feed: any MicrophoneFeed, detector: any StreamingVoiceDetector, preview: (any Transcriber)?,
-                final: any Transcriber, config: DictationConfig, now: @escaping @Sendable () -> Double) {
+                final: any Transcriber, config: DictationConfig, now: @escaping @Sendable () -> Double,
+                watchdog: MicrophoneWatchdog? = nil) {
         self.init(feed: feed, detector: detector, preview: preview, final: final, config: config, now: now,
-                  makeResampler: { StreamingResampler(from: $0, to: $1) })
+                  watchdog: watchdog, makeResampler: { StreamingResampler(from: $0, to: $1) })
     }
 
     init(feed: any MicrophoneFeed, detector: any StreamingVoiceDetector, preview: (any Transcriber)?,
          final: any Transcriber, config: DictationConfig, now: @escaping @Sendable () -> Double,
+         watchdog: MicrophoneWatchdog? = nil,
          makeResampler: @escaping @Sendable (Double, Double) -> StreamingResampler?) {
+        self.watchdog = watchdog
         self.feed = feed
         self.detector = detector
         self.preview = preview
@@ -90,6 +101,9 @@ public actor DictationSession: DictationSessioning {
         (snapshots, snapshotSink) = AsyncStream<DictationSnapshot>.makeStream()
         snapshotSink.yield(snapshot)
     }
+
+    /// Pour les tests : le délai du chien de garde du micro, `nil` s'il n'y en a pas.
+    var watchdogTimeout: Double? { watchdog?.timeout }
 
     /// Pour les tests : la phase courante, y compris après la fin du flux d'instantanés (qui, lui, ne montre plus rien
     /// après une phase terminale).
@@ -109,6 +123,7 @@ public actor DictationSession: DictationSessioning {
         if captureRunning { feed.stop() }
         chunkSink?.finish()
         pump?.cancel()
+        watchdogTask?.cancel()
         previewTask?.cancel()
         finalTask?.cancel()
         snapshotSink.finish()
@@ -154,9 +169,15 @@ public actor DictationSession: DictationSessioning {
         }
 
         let (chunks, sink) = AsyncStream<AudioChunk>.makeStream()
+        let stamp = lastChunkAt
+        let clock = now
+        stamp.set(clock())
         do {
-            // Le rappel ne fait que transmettre : voir la description de la classe.
-            try feed.start { sink.yield($0) }
+            // Le rappel ne fait que transmettre (et dater l'arrivée, sans verrou) : voir la description de la classe.
+            try feed.start {
+                stamp.set(clock())
+                sink.yield($0)
+            }
         } catch {
             sink.finish()
             fail(.microphone(Self.describe(error)))
@@ -173,6 +194,28 @@ public actor DictationSession: DictationSessioning {
                 await self.handle(chunk)
             }
         }
+        startWatchdog()
+    }
+
+    /// Une tâche qui, toutes les `pollInterval` secondes, regarde si une tranche est arrivée depuis moins de `timeout`
+    /// secondes. Elle ne tient pas la session pendant son attente, et s'arrête avec elle (phase terminale, fin de prise,
+    /// libération).
+    private func startWatchdog() {
+        guard let watchdog else { return }
+        watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await watchdog.sleep(watchdog.pollInterval) } catch { return }
+                guard let self, await self.microphoneIsAlive() else { return }
+            }
+        }
+    }
+
+    /// Faux quand la tâche doit s'arrêter : la prise n'est plus en cours, ou le micro s'est tu (la prise échoue alors).
+    private func microphoneIsAlive() -> Bool {
+        guard snapshot.phase == .recording, let watchdog else { return false }
+        guard now() - lastChunkAt.value >= watchdog.timeout else { return true }
+        fail(.microphone("le micro s'est arrêté pendant la prise"))
+        return false
     }
 
     public func finish() async {
@@ -182,6 +225,9 @@ public actor DictationSession: DictationSessioning {
         }
         guard snapshot.phase == .recording else { return }
         setPhase(.finalizing)
+        // Le micro est arrêté exprès : plus rien à surveiller pendant la transcription.
+        watchdogTask?.cancel()
+        watchdogTask = nil
         stopCapture()
         // Le moteur d'aperçu peut être le moteur final : une passe d'aperçu ne le retient pas pendant `finalizing`.
         cancelPreview()
@@ -390,6 +436,8 @@ public actor DictationSession: DictationSessioning {
         if phase.isTerminal {
             ingesting = false
             stopCapture()
+            watchdogTask?.cancel()
+            watchdogTask = nil
             pump?.cancel()
             cancelPreview()
             finalTask?.cancel()
@@ -423,4 +471,13 @@ public actor DictationSession: DictationSessioning {
         if let localized = error as? LocalizedError, let description = localized.errorDescription { return description }
         return "erreur inattendue"
     }
+}
+
+/// L'heure de la dernière tranche arrivée, écrite par le rappel du micro (sur le fil audio) et lue par le chien de garde :
+/// sans verrou, comme le veut le contrat de `onChunk`.
+private final class ChunkStamp: Sendable {
+    private let bits = Atomic<UInt64>(0)
+
+    func set(_ time: Double) { bits.store(time.bitPattern, ordering: .relaxed) }
+    var value: Double { Double(bitPattern: bits.load(ordering: .relaxed)) }
 }

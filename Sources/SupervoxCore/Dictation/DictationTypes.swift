@@ -107,3 +107,32 @@ public protocol DictationSessioning: Sendable {
     /// une propriété d'`AsyncStream`) ; un abonné qui arrive après la fin ne voit rien.
     var snapshots: AsyncStream<DictationSnapshot> { get }
 }
+
+/// Le chien de garde du micro : en `recording`, si aucune tranche n'arrive pendant `timeout` secondes, la prise échoue (un
+/// casque débranché ou une entrée qui change arrête le moteur audio sans rien dire, et sans lui la prise resterait
+/// « Enregistrement » alors que rien n'est plus entendu). Un vrai micro livre des tranches même dans le silence : une prise
+/// silencieuse ne le déclenche pas.
+///
+/// L'horloge est celle de la session (`now`) et l'attente est injectée : aucun test n'attend une durée réelle. Sans chien de
+/// garde (le défaut), la session ne surveille rien : c'est le cas du micro scripté des tests et de `supervox-bench live`, qui
+/// livrent toutes leurs tranches d'un coup puis se taisent.
+public struct MicrophoneWatchdog: Sendable {
+    /// Secondes sans tranche au bout desquelles la prise échoue.
+    public var timeout: Double
+    /// Secondes entre deux vérifications.
+    public var pollInterval: Double
+    /// Attend ce nombre de secondes, et lève si la tâche est annulée.
+    public var sleep: @Sendable (Double) async throws -> Void
+
+    public init(timeout: Double, pollInterval: Double, sleep: @escaping @Sendable (Double) async throws -> Void) {
+        self.timeout = timeout
+        self.pollInterval = pollInterval
+        self.sleep = sleep
+    }
+
+    /// Le réglage de l'application : 1 s sans tranche, vérifié quatre fois par seconde. Choix de conception, non mesuré :
+    /// une tranche du micro dure bien moins d'une seconde (le plan en suppose environ 0,1 s), mais l'écart entre l'ouverture
+    /// du micro et la première tranche n'a pas été mesuré sur un vrai micro, ni sur un casque sans fil.
+    public static let system = MicrophoneWatchdog(
+        timeout: 1, pollInterval: 0.25, sleep: { try await Task.sleep(for: .seconds($0)) })
+}

@@ -6,6 +6,7 @@ import SupervoxEngines
 import Testing
 
 @testable import Supervox
+@testable import SupervoxCore
 
 /// Ce que la cible `Supervox` décide seule : de quels modèles une dictée a besoin et quand elle déclare un téléchargement,
 /// le téléchargement par le catalogue, les moteurs gardés d'une dictée à l'autre et leur abandon quand un modèle est
@@ -374,6 +375,16 @@ import Testing
             base: StubCatalog(StubCatalog.allReady), makeFeed: { ScriptedMicrophoneFeed(chunks: []) })
         let session = try await engines.environment.makeSession(Self.settings())
         #expect(session is DictationSession)
+    }
+
+    /// I3 : la session de l'application surveille son micro (une seconde sans tranche : échec). Sans ce câblage, un casque
+    /// débranché en pleine prise ne serait pas vu ; le micro scripté de `live` et des tests, lui, n'a jamais de chien de garde.
+    @Test func theApplicationsSessionWatchesTheMicrophone() async throws {
+        let engines = LiveDictationEngines(
+            base: StubCatalog(StubCatalog.allReady), makeFeed: { ScriptedMicrophoneFeed(chunks: []) })
+        let session = try await engines.environment.makeSession(Self.settings())
+        let real = try #require(session as? DictationSession)
+        #expect(await real.watchdogTimeout == 1)
     }
 
     /// Ce que la fenêtre de réglages supprime (son catalogue est celui de la dictée) abandonne le moteur gardé.

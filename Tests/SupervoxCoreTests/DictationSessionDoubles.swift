@@ -377,21 +377,103 @@ func makeRig(chunks: [AudioChunk] = [], startError: AudioCaptureError? = nil, ev
              blockSize: Int = 1000, final: ScriptedTranscriber = ScriptedTranscriber(text: "texte"),
              preview: ScriptedTranscriber? = nil, config: DictationConfig = DictationConfig(language: "fr", padding: 0),
              clock: TestClock = TestClock(),
+             watchdog: MicrophoneWatchdog? = nil,
              makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) -> Rig {
     let feed = TestFeed(chunks: chunks, startError: startError)
     let detector = ScriptedDetector(blockSize: blockSize, events: events)
     let session = makeSession(feed: feed, detector: detector, preview: preview, final: final, config: config,
-                              clock: clock, makeResampler: makeResampler)
+                              clock: clock, watchdog: watchdog, makeResampler: makeResampler)
     return Rig(session: session, feed: feed, detector: detector, final: final, preview: preview, clock: clock,
                log: SnapshotLog(session.snapshots))
 }
 
 func makeSession(feed: TestFeed, detector: ScriptedDetector, preview: ScriptedTranscriber?, final: ScriptedTranscriber,
-                 config: DictationConfig, clock: TestClock,
+                 config: DictationConfig, clock: TestClock, watchdog: MicrophoneWatchdog? = nil,
                  makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) -> DictationSession {
     if let makeResampler {
         return DictationSession(feed: feed, detector: detector, preview: preview, final: final, config: config,
-                                now: clock.reader, makeResampler: makeResampler)
+                                now: clock.reader, watchdog: watchdog, makeResampler: makeResampler)
     }
-    return DictationSession(feed: feed, detector: detector, preview: preview, final: final, config: config, now: clock.reader)
+    return DictationSession(feed: feed, detector: detector, preview: preview, final: final, config: config,
+                            now: clock.reader, watchdog: watchdog)
+}
+
+/// Attente injectée du chien de garde : chaque `sleep` dure jusqu'à `tick()`, et lève `CancellationError` si la tâche est
+/// annulée. Aucune durée réelle.
+final class TickSleeper: @unchecked Sendable {
+    private struct State {
+        var sleepers: [UUID: CheckedContinuation<Void, Error>] = [:]
+        var started = 0
+        var cancelled = 0
+        var requested: [Double] = []
+        var waiters: [UUID: (count: Int, continuation: CheckedContinuation<Void, Never>)] = [:]
+    }
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func sleep(_ seconds: Double) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let (cancelledAlready, ready) = state.withLock { s -> (Bool, [CheckedContinuation<Void, Never>]) in
+                    s.started += 1
+                    s.requested.append(seconds)
+                    let due = s.waiters.filter { $0.value.count <= s.started }
+                    for key in due.keys { s.waiters[key] = nil }
+                    let ready = due.values.map(\.continuation)
+                    if Task.isCancelled {
+                        s.cancelled += 1
+                        return (true, ready)
+                    }
+                    s.sleepers[id] = continuation
+                    return (false, ready)
+                }
+                for waiter in ready { waiter.resume() }
+                if cancelledAlready { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let continuation = state.withLock { s -> CheckedContinuation<Void, Error>? in
+                guard let continuation = s.sleepers.removeValue(forKey: id) else { return nil }
+                s.cancelled += 1
+                return continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+    }
+
+    /// Termine tous les `sleep` en cours, normalement.
+    func tick() {
+        let sleepers = state.withLock { s -> [CheckedContinuation<Void, Error>] in
+            defer { s.sleepers = [:] }
+            return Array(s.sleepers.values)
+        }
+        for sleeper in sleepers { sleeper.resume() }
+    }
+
+    /// Nombre de `sleep` commencés, et durées demandées.
+    var started: Int { state.withLock { $0.started } }
+    var cancelled: Int { state.withLock { $0.cancelled } }
+    var requested: [Double] { state.withLock { $0.requested } }
+    var isSleeping: Bool { state.withLock { !$0.sleepers.isEmpty } }
+
+    /// Rend la main quand `count` `sleep` au moins ont commencé (ou quand la tâche est annulée).
+    func waitForSleeps(_ count: Int) async {
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let ready = state.withLock { s -> Bool in
+                    if s.started >= count || Task.isCancelled { return true }
+                    s.waiters[id] = (count, continuation)
+                    return false
+                }
+                if ready { continuation.resume() }
+            }
+        } onCancel: {
+            state.withLock { $0.waiters.removeValue(forKey: id) }?.continuation.resume()
+        }
+    }
+
+    /// Le chien de garde de ce sleeper : 1 s sans tranche, vérifié toutes les 0,25 s (valeurs du réglage de l'application).
+    var watchdog: MicrophoneWatchdog {
+        MicrophoneWatchdog(timeout: 1, pollInterval: 0.25, sleep: { [self] in try await sleep($0) })
+    }
 }

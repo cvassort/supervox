@@ -187,6 +187,9 @@ final class LiveDictationEngines: Sendable {
         return DictationSession(
             feed: makeFeed(), detector: engines.detector, preview: engines.preview, final: engines.final,
             config: DictationConfig(language: settings.language, vocabulary: settings.vocabulary),
-            now: { ProcessInfo.processInfo.systemUptime })
+            now: { ProcessInfo.processInfo.systemUptime },
+            // Un micro qui s'arrête en pleine prise (casque débranché) fait échouer la dictée au lieu de la laisser « en
+            // enregistrement ». Seul le vrai micro est surveillé : `live` et les tests n'en ont pas.
+            watchdog: .system)
     }
 }
