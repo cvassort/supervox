@@ -160,6 +160,9 @@ struct DictationSessionWatchdogTests {
     @Test func withoutAWatchdogNothingIsWatched() async {
         let rig = makeRig(chunks: [rampChunk(0..<1000)])
         await rig.session.start()
+        // La tranche livrée à l'ouverture est traitée par la pompe avant que l'horloge ne saute (sinon la durée maximale, et
+        // non le micro, terminerait la prise).
+        _ = await rig.log.wait { $0.level > 0 }
         rig.clock.advance(by: 3600)
         await settleBriefly()
         #expect(await rig.session.phase == .recording)
