@@ -3,6 +3,12 @@ import Testing
 
 @testable import SupervoxApp
 
+/// Ce que le presse-papiers double répond à une copie, modifiable par le test.
+@MainActor final class Acceptance {
+    var value: Bool
+    init(_ value: Bool) { self.value = value }
+}
+
 @MainActor @Suite struct PanelModelTests {
     @Test func toggleOpensThenCloses() {
         let model = PanelModel(lastModeID: "dictee-brute")
@@ -138,7 +144,7 @@ import Testing
     @Test func copyingHandsTheWholeTextToTheHandlerAndRemembersIt() {
         let model = PanelModel(lastModeID: "dictee-brute")
         var copied: [String] = []
-        model.onCopy = { copied.append($0) }
+        model.onCopy = { copied.append($0); return true }
         let long = (1...300).map { "mot\($0)" }.joined(separator: " ")
         model.setTranscript(long)
         #expect(!model.transcriptCopied)
@@ -151,13 +157,65 @@ import Testing
     @Test func copyingWithoutATranscriptDoesNothing() {
         let model = PanelModel(lastModeID: "dictee-brute")
         var copied = 0
-        model.onCopy = { _ in copied += 1 }
+        model.onCopy = { _ in copied += 1; return true }
         model.copyTranscript()
         model.setTranscript("  ")
         model.copyTranscript()
         #expect(copied == 0)
         #expect(!model.transcriptCopied)
         #expect(model.lastTranscript == nil)
+    }
+
+    @Test func aCopyThatFailsSaysSoAndIsNeverShownAsCopied() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        let accepts = Acceptance(false)
+        model.onCopy = { _ in accepts.value }
+        model.setTranscript("un texte")
+        model.copyTranscript()
+        #expect(model.copyState == .failed)
+        #expect(!model.transcriptCopied)
+
+        // Un nouvel essai qui réussit remplace l'échec.
+        accepts.value = true
+        model.copyTranscript()
+        #expect(model.copyState == .copied)
+        #expect(model.transcriptCopied)
+    }
+
+    @Test func theCopyStateGoesBackToNormalWithANewTextAClosingOrANewDictation() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        let accepts = Acceptance(true)
+        model.onCopy = { _ in accepts.value }
+        model.setTranscript("premier")
+
+        model.copyTranscript()
+        model.setTranscript("second")
+        #expect(model.copyState == .idle)
+
+        accepts.value = false
+        model.copyTranscript()
+        #expect(model.copyState == .failed)
+        model.setTranscript("troisième")
+        #expect(model.copyState == .idle)
+
+        accepts.value = true
+        model.copyTranscript()
+        model.setDictation(DictationViewState(phase: .failed(.noSpeech), notice: "x"))
+        #expect(model.copyState == .copied, "un échec n'est pas une nouvelle dictée")
+        model.setDictation(DictationViewState(phase: .preparing))
+        #expect(model.copyState == .idle)
+        #expect(model.dictation.phase == .preparing)
+
+        model.copyTranscript()
+        model.setDictation(DictationViewState(phase: .recording))
+        #expect(model.copyState == .idle)
+
+        accepts.value = false
+        model.toggle()
+        model.copyTranscript()
+        #expect(model.copyState == .failed)
+        model.close()
+        #expect(model.copyState == .idle)
     }
 
     @Test func withoutAnyWayToCopyNothingIsSaidToBeCopied() {
@@ -169,7 +227,7 @@ import Testing
 
     @Test func aNewTranscriptOrClosingThePanelForgetsThatItWasCopied() {
         let model = PanelModel(lastModeID: "dictee-brute")
-        model.onCopy = { _ in }
+        model.onCopy = { _ in true }
         model.setTranscript("premier")
         model.copyTranscript()
         #expect(model.transcriptCopied)

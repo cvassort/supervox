@@ -15,11 +15,11 @@ public struct PasteboardContents: Equatable, Sendable {
     var changeCount: Int { get }
     /// Tout le contenu, tous types et tous éléments.
     func read() -> PasteboardContents
-    /// Remplace tout le contenu (un contenu sans élément vide le presse-papiers).
-    func write(_ contents: PasteboardContents)
+    /// Remplace tout le contenu (un contenu sans élément vide le presse-papiers). Vrai si le système a accepté l'écriture.
+    @discardableResult func write(_ contents: PasteboardContents) -> Bool
     /// Remplace tout le contenu par ce texte. `transient` y ajoute les marques que les gestionnaires de
-    /// presse-papiers respectent pour ne pas archiver une copie.
-    func writeText(_ text: String, transient: Bool)
+    /// presse-papiers respectent pour ne pas archiver une copie. Vrai si le système a accepté l'écriture.
+    @discardableResult func writeText(_ text: String, transient: Bool) -> Bool
 }
 
 /// L'envoi des touches, vu par l'insertion. La réalisation système est `SystemKeyPoster`.
@@ -128,11 +128,13 @@ public enum InsertionOutcome: Equatable, Sendable {
     }
 
     /// Copie `text` dans le presse-papiers à la demande de l'utilisateur (le bouton « Copier » du panneau) : une copie
-    /// ordinaire, non transitoire, puisque l'utilisateur la veut. Rien d'autre n'est touché ni envoyé ; un texte vide ou
-    /// d'espaces ne change rien.
-    public func copy(_ text: String) {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        pasteboard.writeText(text, transient: false)
+    /// ordinaire, non transitoire, puisque l'utilisateur la veut (un gestionnaire d'historique du presse-papiers peut donc la
+    /// garder, ce que le collage, lui, évite). Rien d'autre n'est touché ni envoyé ; un texte vide ou d'espaces ne change
+    /// rien. Rend vrai seulement si le système a accepté l'écriture.
+    @discardableResult
+    public func copy(_ text: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return pasteboard.writeText(text, transient: false)
     }
 
     /// Le code de la touche dont le caractère est « v » dans la disposition donnée : celui de V en ANSI s'il y

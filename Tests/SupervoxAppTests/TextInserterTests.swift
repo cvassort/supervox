@@ -20,6 +20,8 @@ import Testing
     let log: CallLog
     private(set) var contents: PasteboardContents
     private(set) var changeCount = 0
+    /// Faux : le presse-papiers refuse toute écriture (il garde son contenu) et le dit en rendant faux.
+    var acceptsWrites = true
 
     init(log: CallLog, contents: PasteboardContents = PasteboardContents(items: [])) {
         self.log = log
@@ -31,16 +33,22 @@ import Testing
         return contents
     }
 
-    func write(_ contents: PasteboardContents) {
+    @discardableResult
+    func write(_ contents: PasteboardContents) -> Bool {
         log.entries.append("write")
+        guard acceptsWrites else { return false }
         self.contents = contents
         changeCount += 1
+        return true
     }
 
-    func writeText(_ text: String, transient: Bool) {
+    @discardableResult
+    func writeText(_ text: String, transient: Bool) -> Bool {
         log.entries.append("writeText(transient: \(transient))")
+        guard acceptsWrites else { return false }
         contents = Self.textContents(text)
         changeCount += 1
+        return true
     }
 
     /// Une autre application écrit dans le presse-papiers : rien n'est journalisé, `changeCount` monte.
@@ -236,15 +244,24 @@ enum FakeInsertion {
     @Test("copier : le texte est écrit comme une copie ordinaire (non transitoire), sans lecture, sans touche, sans attente")
     func copyWritesTheTextAsAnOrdinaryCopyAndNothingElse() {
         let rig = InsertionRig()
-        rig.inserter.copy(FakeInsertion.dictated)
+        #expect(rig.inserter.copy(FakeInsertion.dictated))
         #expect(rig.board.text == FakeInsertion.dictated)
+        #expect(rig.log.entries == ["writeText(transient: false)"])
+    }
+
+    @Test("copier dit si le presse-papiers a accepté le texte : refusé, c'est faux et rien n'est présenté comme copié")
+    func copyReportsAPasteboardThatRefusesTheText() {
+        let rig = InsertionRig()
+        rig.board.acceptsWrites = false
+        #expect(!rig.inserter.copy(FakeInsertion.dictated))
+        #expect(rig.board.contents == FakeInsertion.original)
         #expect(rig.log.entries == ["writeText(transient: false)"])
     }
 
     @Test("copier un texte vide ou d'espaces ne touche pas au presse-papiers", arguments: ["", "  \n "])
     func copyingBlankTextLeavesThePasteboardAlone(text: String) {
         let rig = InsertionRig()
-        rig.inserter.copy(text)
+        #expect(!rig.inserter.copy(text))
         #expect(rig.log.entries.isEmpty)
         #expect(rig.board.contents == FakeInsertion.original)
     }

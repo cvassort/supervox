@@ -167,6 +167,31 @@ import SupervoxCore
         #expect(controller.panelModel.transcriptCopied)
     }
 
+    /// Un presse-papiers qui refuse l'écriture : le panneau dit « Copie impossible » et n'affiche jamais « Copié ».
+    @Test func aCopyThePasteboardRefusesIsNeverShownAsCopied() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finished("Bonjour à tous."))
+        #expect(await until { !controller.panelModel.isOpen })
+
+        // Le panneau est ouvert (menu) : seule la dictée suivante, pas l'ouverture, doit remettre l'état à neuf.
+        controller.openPanelOnReopen()
+        rig.board.acceptsWrites = false
+        controller.panelModel.copyTranscript()
+        #expect(controller.panelModel.copyState == .failed)
+        #expect(!controller.panelModel.transcriptCopied)
+        #expect(rig.board.text == "brouillon de l'utilisateur")
+
+        // Une nouvelle dictée remet l'état à neuf.
+        rig.board.acceptsWrites = true
+        hotKeys.press()
+        #expect(controller.panelModel.isOpen)
+        _ = await record(controller, index: 1)
+        #expect(controller.panelModel.copyState == .idle)
+    }
+
     @Test func escapeDuringADictationCancelsItAndClosesThePanel() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()

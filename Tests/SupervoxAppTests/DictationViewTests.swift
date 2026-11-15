@@ -281,6 +281,21 @@ import Testing
         #expect(display(DictationViewState(), transcript: "  \n ").transcript == nil)
     }
 
+    @Test func theCardCarriesTheCopyState() {
+        for copy in [CopyState.idle, .copied, .failed] {
+            let card = DictationDisplay(state: DictationViewState(), transcript: "Un texte.", copy: copy).transcript
+            #expect(card?.copy == copy)
+        }
+        #expect(DictationDisplay(state: DictationViewState(), transcript: "Un texte.").transcript?.copy == .idle)
+    }
+
+    @Test func theCopyFailureHasItsOwnPlainWords() {
+        #expect(DictationText.copyLabel(for: .idle) == "Copier")
+        #expect(DictationText.copyLabel(for: .copied) == "Copié")
+        #expect(DictationText.copyLabel(for: .failed) == "Copier")
+        #expect(DictationText.copyFailure == "Copie impossible")
+    }
+
     @Test func theCardShowsTheEndOfALongTranscript() {
         let long = (1...200).map { "mot\($0)" }.joined(separator: " ")
         let card = display(DictationViewState(), transcript: long).transcript

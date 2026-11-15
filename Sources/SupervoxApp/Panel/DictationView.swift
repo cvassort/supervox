@@ -10,8 +10,6 @@ struct DictationView: View {
     let display: DictationDisplay
     /// Le raccourci, montré sous « Prêt » ; `nil` s'il n'y en a aucun.
     let hotKeyLabel: String?
-    /// Le texte vient d'être copié : le bouton le dit.
-    let copied: Bool
     let copy: @MainActor () -> Void
 
     /// Hauteur de la zone, en points : le plus haut des états (un message de quatre lignes et le dernier texte, ou le
@@ -29,7 +27,7 @@ struct DictationView: View {
                 if let bars = display.bars { Waveform(bars: bars) }
                 if let live = display.liveText { liveText(live) }
                 if let detail = display.detail { detailLine(detail) }
-                if let transcript = display.transcript { TranscriptCard(transcript: transcript, copied: copied, copy: copy) }
+                if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: copy) }
                 Spacer(minLength: 0)
             }
         }
@@ -146,7 +144,6 @@ private struct Waveform: View {
 /// Le dernier texte dicté, sa fin, et le bouton « Copier ».
 private struct TranscriptCard: View {
     let transcript: DictationDisplay.Transcript
-    let copied: Bool
     let copy: @MainActor () -> Void
 
     var body: some View {
@@ -156,10 +153,16 @@ private struct TranscriptCard: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
+                if transcript.copy == .failed {
+                    Label(DictationText.copyFailure, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
                 Button {
                     copy()
                 } label: {
-                    Label(copied ? "Copié" : "Copier", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    let copied = transcript.copy == .copied
+                    Label(DictationText.copyLabel(for: transcript.copy), systemImage: copied ? "checkmark" : "doc.on.doc")
                         .font(.caption)
                 }
                 .controlSize(.small)

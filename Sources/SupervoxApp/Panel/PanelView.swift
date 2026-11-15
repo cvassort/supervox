@@ -47,8 +47,8 @@ public struct PanelView: View {
     /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.
     private var dictation: some View {
         DictationView(
-            display: DictationDisplay(state: model.dictation, transcript: model.lastTranscript),
-            hotKeyLabel: model.hotKeyLabel, copied: model.transcriptCopied,
+            display: DictationDisplay(state: model.dictation, transcript: model.lastTranscript, copy: model.copyState),
+            hotKeyLabel: model.hotKeyLabel,
             copy: { model.copyTranscript() })
     }
 

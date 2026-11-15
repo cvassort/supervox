@@ -55,11 +55,15 @@ struct ExamplePermissions: PermissionsProbe {
     private(set) var changeCount = 0
     private var contents = PasteboardContents(items: [])
     func read() -> PasteboardContents { contents }
-    func write(_ contents: PasteboardContents) {
+    func write(_ contents: PasteboardContents) -> Bool {
         self.contents = contents
         changeCount += 1
+        return true
     }
-    func writeText(_ text: String, transient: Bool) { changeCount += 1 }
+    func writeText(_ text: String, transient: Bool) -> Bool {
+        changeCount += 1
+        return true
+    }
 }
 
 @MainActor final class NoKeyPoster: KeyPoster {
@@ -317,7 +321,13 @@ for dark in [false, true] {
         ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(), transcript: exampleShortText), granted),
         ("dictee-dernier-texte-copie", {
             let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
-            model.onCopy = { _ in }
+            model.onCopy = { _ in true }
+            model.copyTranscript()
+            return model
+        }(), granted),
+        ("dictee-copie-impossible", {
+            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            model.onCopy = { _ in false }
             model.copyTranscript()
             return model
         }(), granted),

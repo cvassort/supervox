@@ -30,17 +30,21 @@ import AppKit
         return PasteboardContents(items: items)
     }
 
-    public func write(_ contents: PasteboardContents) {
+    @discardableResult
+    public func write(_ contents: PasteboardContents) -> Bool {
         board.clearContents()
         let objects = contents.items.filter { !$0.isEmpty }.map { entry in
             let item = NSPasteboardItem()
             for (type, data) in entry { item.setData(data, forType: NSPasteboard.PasteboardType(type)) }
             return item
         }
-        if !objects.isEmpty { board.writeObjects(objects) }
+        // Vider sans rien écrire est réussi ; sinon, le résultat du système (faux : le presse-papiers est vide et le texte
+        // n'y est pas).
+        return objects.isEmpty ? true : board.writeObjects(objects)
     }
 
-    public func writeText(_ text: String, transient: Bool) {
+    @discardableResult
+    public func writeText(_ text: String, transient: Bool) -> Bool {
         write(Self.contents(forText: text, transient: transient))
     }
 

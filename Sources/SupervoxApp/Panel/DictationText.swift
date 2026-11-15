@@ -61,6 +61,14 @@ public enum DictationText {
         return trimmed + " " + ellipsis
     }
 
+    /// Le texte du bouton « Copier » ; un échec laisse « Copier » (on peut réessayer) et s'écrit à côté (`copyFailure`).
+    public static func copyLabel(for state: CopyState) -> String {
+        state == .copied ? "Copié" : "Copier"
+    }
+
+    /// Ce que le panneau dit quand le presse-papiers n'a pas accepté le texte.
+    public static let copyFailure = "Copie impossible"
+
     /// Le libellé d'une phase, en mots simples. Il ne porte jamais le texte dicté.
     public static func status(for phase: DictationPhase) -> String {
         switch phase {
@@ -99,6 +107,8 @@ public struct DictationDisplay: Equatable, Sendable {
         public var label: String?
         /// La fin du texte, coupée pour tenir dans la carte ; le bouton « Copier » copie le texte entier.
         public var text: String
+        /// Ce qu'a donné le dernier clic sur « Copier ».
+        public var copy: CopyState
     }
 
     public var mood: Mood
@@ -115,8 +125,10 @@ public struct DictationDisplay: Equatable, Sendable {
     public var showsHotKey: Bool
     public var transcript: Transcript?
 
-    /// - Parameter transcript: le texte de la dernière dictée réussie (`DictationController.lastTranscript`).
-    public init(state: DictationViewState, transcript: String?) {
+    /// - Parameters:
+    ///   - transcript: le texte de la dernière dictée réussie (`DictationController.lastTranscript`).
+    ///   - copy: ce qu'a donné le dernier clic sur « Copier » (`PanelModel.copyState`).
+    public init(state: DictationViewState, transcript: String?, copy: CopyState = .idle) {
         let notice = state.notice.map { DictationText.head($0, maxCharacters: DictationText.detailLimit) }
         let phase = state.phase
         headline = DictationText.status(for: phase)
@@ -166,7 +178,7 @@ public struct DictationDisplay: Equatable, Sendable {
             if case .finished = phase { isThisDictation = true } else { isThisDictation = false }
             self.transcript = Transcript(
                 label: isThisDictation ? nil : "Dernière dictée",
-                text: DictationText.tail(text, maxCharacters: DictationText.transcriptLimit))
+                text: DictationText.tail(text, maxCharacters: DictationText.transcriptLimit), copy: copy)
         } else {
             self.transcript = nil
         }
