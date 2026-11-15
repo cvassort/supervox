@@ -196,9 +196,10 @@ Réglages, onglet Raccourci, choisissez « Maintenir pour dicter ».
    - Attendu : si vous relâchez bien pendant « Préparation… », le micro ne s'ouvre pas ; le panneau reste ouvert avec
      « Rien à transcrire » et « Aucune parole n'a été entendue. ». Un nouvel appui relance une dictée. Avec des moteurs
      déjà chargés, « Préparation… » est trop brève pour relâcher avant sa fin : le micro s'ouvre alors un instant
-     (indicateur orange) et « Rien à transcrire » vient d'une prise vide, pas du micro resté fermé. Pour des moteurs
-     froids, lancez l'essai juste après le lancement de l'application, ou juste après avoir changé de variante WhisperKit
-     (essai 22.2). **Comportement à confirmer** : la brièveté de « Préparation… » avec des moteurs chargés.
+     (indicateur orange) et « Rien à transcrire » vient d'une prise vide, pas du micro resté fermé. Pour obtenir un moteur
+     froid, changez de variante WhisperKit (essai 22.2) puis dictez : la variante n'est pas préchargée (juste après le
+     lancement, au contraire, la préparation attend la fin du préchargement, ce qui n'est pas la même chose).
+     **Comportement à confirmer** : la brièveté de « Préparation… » avec des moteurs chargés.
 4. En mode maintien, pendant « Préparation… », appuyez de nouveau sur le raccourci.
    - Attendu : cet appui est ignoré, la préparation continue.
 5. Dans l'onglet Raccourci, essayez d'enregistrer un raccourci **sans** touche de modification (une lettre, ou une
@@ -419,9 +420,12 @@ légende (le petit modèle du vocabulaire est prêt ; sinon, téléchargez-le pa
    vocabulaire doit être « Prêt » : la ligne de Parakeet n'a plus de légende).
    - Attendu : même résultat, hors ligne. Rétablissez ensuite WhisperKit et videz le vocabulaire (essai 22.5).
 3. Essai pour qui veut voir une limite : un modèle WhisperKit « Prêt » dont le fichier du tokenizer manque (dossier
-   `Models/models/openai/` de Supervox, voir le README) ne se charge pas hors ligne, alors que l'onglet dit « Prêt ».
+   `Models/models/openai/` de Supervox, voir le README) ne se charge pas hors ligne, alors que l'onglet dit « Prêt » (même
+   chose, sans réseau non plus, si le fichier existe mais est illisible).
    - Attendu : l'échec de préparation, avec une phrase qui renvoie à l'onglet Transcription : « s'il est indiqué « Prêt »,
-     supprimez-le puis téléchargez-le de nouveau ». **Comportement à confirmer** : déduit du code, jamais essayé.
+     vous pouvez le supprimer puis le télécharger de nouveau (cela demande une connexion à Internet) » : hors ligne, ne le
+     supprimez pas. Le préchargement du lancement, lui, n'a pas lieu dans ce cas (le tokenizer ne se charge pas) et ne
+     télécharge rien. **Comportement à confirmer** : déduit du code, jamais essayé.
 4. Rétablissez Internet.
 
 ### 27. Micro coupé pendant la prise
@@ -437,7 +441,8 @@ légende (le petit modèle du vocabulaire est prêt ; sinon, téléchargez-le pa
 3. Micro branché, ne dites rien pendant dix secondes.
    - Attendu : aucun échec de micro ; seulement « Rien à transcrire » à la fin. Un vrai micro livre des tranches même dans
      le silence. **Comportement à confirmer** : l'écart entre l'ouverture du micro et la première tranche n'a pas été
-     mesuré (casque sans fil compris) ; si un micro lent déclenche l'échec à tort, notez le matériel.
+     mesuré (casque sans fil compris) ; l'application lui laisse 3 secondes (1 seconde ensuite entre deux tranches) ; si un
+     micro lent déclenche l'échec à tort, ou si la forme d'onde met plus d'une seconde à bouger, notez le matériel et le délai.
 
 ### 28. Durée de « Chargement du modèle… »
 
@@ -445,13 +450,16 @@ légende (le petit modèle du vocabulaire est prêt ; sinon, téléchargez-le pa
 
 1. Quittez l'application, relancez-la, et tapez ⌃⌥Espace aussitôt (première dictée après le lancement).
    - Attendu : « Préparation… » avec « Chargement du modèle… » (pas « Téléchargement du modèle… »), puis
-     « Enregistrement ». Notez la durée de « Chargement du modèle… » (variante large-v3 turbo, puis, après avoir choisi
-     Parakeet, la même mesure ; rétablissez WhisperKit ensuite, essai 22.5).
+     « Enregistrement ». Une dictée lancée pendant le préchargement attend sa fin : la mention reste affichée pendant cette
+     attente, et c'est la durée du chargement total que vous chronométrez (le préchargement est probablement déjà en cours
+     à votre appui : ce n'est pas un chargement « à froid » séparé du préchargement). Notez la durée (variante large-v3
+     turbo, puis, après avoir choisi Parakeet, la même mesure ; rétablissez WhisperKit ensuite, essai 22.5).
 2. Relancez l'application, attendez quelques dizaines de secondes (le préchargement se fait en tâche de fond, sans
    téléchargement), puis dictez.
    - Attendu : « Préparation… » très brève, sans « Chargement du modèle… » si le préchargement est fini ; sinon la
      mention s'affiche moins longtemps qu'à l'essai 1. Notez les deux durées. **Comportement à confirmer** : la durée du
-     préchargement et le fait qu'il ne ralentit pas l'affichage du panneau au lancement.
+     préchargement, le fait qu'il ne ralentit pas l'affichage du panneau au lancement (conçu ainsi, jamais vu à l'écran), et
+     qu'un téléchargement ou une suppression de modèle demandé pendant ces secondes attend la fin du préchargement.
 3. Faites une seconde dictée tout de suite après la première.
    - Attendu : aucune mention de chargement (les moteurs sont gardés d'une dictée à l'autre).
 4. Changez de variante WhisperKit (essai 22.2, modèle déjà téléchargé), puis dictez.

@@ -148,9 +148,13 @@ premier plan.
   rien n'est collé, et le panneau dit « Texte non copié » (le texte reste dans « Dernière dictée »). Quitter l'application
   pendant un collage attend, trois secondes au plus, que le presse-papiers soit rendu.
 - **Un micro qui s'arrête en pleine prise** (casque débranché, par exemple) fait échouer la dictée après une seconde sans
-  son (« le micro s'est arrêté pendant la prise ») : rien n'est collé. Un vrai micro livre des tranches même dans le silence.
-- **Au lancement**, si tous les modèles des réglages courants sont déjà sur le disque (et, pour WhisperKit, son tokenizer),
-  les moteurs se préparent en tâche de fond, sans téléchargement et sans retarder l'affichage ; un échec y est silencieux.
+  tranche (trois secondes pour la toute première, comptées depuis l'ouverture du micro ; « le micro s'est arrêté pendant la
+  prise ») : rien n'est collé. Un vrai micro livre des tranches même dans le silence. Ces durées sont des choix, non mesurés.
+- **Au lancement**, si tous les modèles des réglages courants sont déjà sur le disque (et, pour WhisperKit, si son tokenizer se
+  charge depuis le disque), les moteurs se préparent en tâche de fond (priorité basse, sans rien attendre : l'affichage n'est
+  pas retardé par construction, mais cela n'a pas été vu à l'écran). Le préchargement ne télécharge ni ne supprime aucun modèle
+  (voir « Ce qui touche le réseau ») ; une dictée, un téléchargement ou une suppression lancés pendant ce temps attendent sa
+  fin, de quelques secondes. Un échec y est silencieux et ne supprime rien : la dictée suivante suit le chemin normal.
 - **« Collé » ne prouve pas que l'application visée a reçu le texte** : l'application ne sait que ce qu'elle a envoyé. Le
   texte de la dernière dictée reste donc dans le panneau (carte « Dernière dictée », avec un bouton « Copier » qui copie
   le texte entier). Il n'est gardé qu'en mémoire : ni fichier, ni journal, et il disparaît quand on quitte l'application.
@@ -179,10 +183,16 @@ Transcription, ou à la première dictée qui en a besoin), puis tournent sur ce
   `tokenizer_config.json`, sous le dossier des modèles de Supervox) manque ou ne se lit pas : WhisperKit va alors le chercher
   en ligne. Un nom de variante saisi à la main dans les réglages, inconnu du catalogue et absent du disque, est téléchargé
   par WhisperKit lui-même à la première dictée.
-- Parakeet et le détecteur de voix ne vont pas sur le réseau quand leurs fichiers sont là (d'après la lecture de la
-  bibliothèque à la revue finale ; non essayé hors ligne ici).
-- Si un modèle indiqué « Prêt » ne se charge pas, la phrase du panneau renvoie à l'onglet Transcription : le supprimer, puis
-  le télécharger de nouveau.
+- Parakeet et le détecteur de voix (FluidAudio) : **hors préchargement**, une dictée peut les télécharger, et la bibliothèque
+  peut supprimer puis retélécharger un modèle qui ne se charge pas (corrompu, ou jugé incomplet par elle seule). **Pendant le
+  préchargement du lancement**, le réseau de FluidAudio est coupé (`ModelHub.offlineMode`, lu dans la bibliothèque : il lève
+  une erreur à la place de tout accès réseau et du rattrapage « supprimer puis retélécharger ») et rétabli à la fin, succès
+  ou échec : un modèle absent, incomplet ou illisible fait alors échouer le préchargement en silence, sans rien télécharger ni
+  supprimer. Le tokenizer de WhisperKit, lui, ne peut pas être coupé du réseau : le préchargement WhisperKit n'a donc lieu
+  que si le tokenizer se charge réellement depuis le disque. Cette garde est lue dans le code et testée avec des doubles ;
+  jamais essayée avec de vrais modèles abîmés.
+- Si un modèle indiqué « Prêt » ne se charge pas, la phrase du panneau renvoie à l'onglet Transcription : le supprimer puis
+  le télécharger de nouveau est possible, mais **demande une connexion à Internet** (hors ligne, il ne faut pas le supprimer).
 
 - WhisperKit : `~/Library/Application Support/Supervox/Models/` (sous-dossier `models/argmaxinc/whisperkit-coreml/`).
 - Parakeet (avec son petit modèle de vocabulaire) et le détecteur de voix : le dossier de la bibliothèque FluidAudio,
