@@ -127,6 +127,14 @@ public enum InsertionOutcome: Equatable, Sendable {
         return .pasted
     }
 
+    /// Copie `text` dans le presse-papiers à la demande de l'utilisateur (le bouton « Copier » du panneau) : une copie
+    /// ordinaire, non transitoire, puisque l'utilisateur la veut. Rien d'autre n'est touché ni envoyé ; un texte vide ou
+    /// d'espaces ne change rien.
+    public func copy(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        pasteboard.writeText(text, transient: false)
+    }
+
     /// Le code de la touche dont le caractère est « v » dans la disposition donnée : celui de V en ANSI s'il y
     /// produit « v », sinon le premier code qui le produit, sinon celui de V.
     public static func pasteKeyCode(layout: any KeyboardLayout) -> UInt16 {

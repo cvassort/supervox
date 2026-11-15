@@ -38,6 +38,8 @@ public final class DictationController {
 
     /// Appelé à chaque changement de `view` : le modèle du panneau la relaie à la vue.
     @ObservationIgnored public var onViewChange: (@MainActor (DictationViewState) -> Void)?
+    /// Appelé avec le texte de chaque dictée réussie (donc de `lastTranscript`) : le panneau le garde pour « Copier ».
+    @ObservationIgnored public var onTranscriptChange: (@MainActor (String) -> Void)?
 
     @ObservationIgnored private let environment: DictationEnvironment
     @ObservationIgnored private let inserter: TextInserter
@@ -276,6 +278,7 @@ public final class DictationController {
             return
         }
         lastTranscript = text
+        onTranscriptChange?(text)
         log.notice("dictée terminée ; insertion")
         let previous = insertionTail
         let task = Task { [weak self] in

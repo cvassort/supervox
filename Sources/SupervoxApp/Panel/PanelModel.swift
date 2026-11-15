@@ -49,6 +49,10 @@ public final class PanelModel {
     public var welcome: String?
     /// La dictée telle que la vue la montre ; mise à jour par le contrôleur de dictée.
     public var dictation = DictationViewState()
+    /// Le texte de la dernière dictée réussie, que le collage ait réussi ou non : en mémoire seulement, jamais écrit.
+    public private(set) var lastTranscript: String?
+    /// Le texte vient d'être copié par le bouton « Copier » ; oublié à la fermeture du panneau et au texte suivant.
+    public private(set) var transcriptCopied = false
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 
@@ -62,6 +66,8 @@ public final class PanelModel {
 
     /// Appelé à chaque ouverture, avant l'affichage : l'état des permissions y est relu.
     @ObservationIgnored public var onOpen: (@MainActor () -> Void)?
+    /// Ce que fait « Copier » : met le texte entier dans le presse-papiers (par l'insertion, qui tient le presse-papiers).
+    @ObservationIgnored public var onCopy: (@MainActor (String) -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
 
@@ -71,15 +77,31 @@ public final class PanelModel {
         selectedModeID = modes.contains { $0.id == lastModeID } ? lastModeID : ModeChip.fallbackID
     }
 
+    /// Un nouveau dernier texte ; vide ou fait d'espaces, il n'y a rien à garder.
+    public func setTranscript(_ text: String?) {
+        let blank = text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        lastTranscript = blank ? nil : text
+        transcriptCopied = false
+    }
+
+    /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre.
+    public func copyTranscript() {
+        guard let lastTranscript, let onCopy else { return }
+        onCopy(lastTranscript)
+        transcriptCopied = true
+    }
+
     /// Réservé à `PanelController`, qui montre et cache la fenêtre en même temps.
     func toggle() {
         isOpen.toggle()
+        transcriptCopied = false
         if isOpen { onOpen?() } else { welcome = nil }
     }
 
     func close() {
         isOpen = false
         welcome = nil
+        transcriptCopied = false
     }
 
     /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement.

@@ -311,6 +311,34 @@ import SupervoxCore
         #expect(h.controller.lastTranscript == "Bonjour à tous.")
     }
 
+    @Test func theTranscriptIsHandedToThePanelWhateverBecomesOfThePaste() async {
+        for trusted in [true, false] {
+            let h = DictationHarness(trusted: trusted)
+            var handed: [String?] = []
+            h.controller.onTranscriptChange = { handed.append($0) }
+            let session = await h.startRecording()
+            session.emit(.finished("Bonjour à tous."))
+            #expect(await until { handed == ["Bonjour à tous."] }, "confiance : \(trusted)")
+        }
+    }
+
+    @Test func aFailureOrACancellationNeverReplacesTheTranscriptHandedToThePanel() async {
+        let h = DictationHarness()
+        var handed: [String?] = []
+        h.controller.onTranscriptChange = { handed.append($0) }
+        let first = await h.startRecording()
+        first.emit(.finished("Premier texte."))
+        #expect(await until { handed == ["Premier texte."] })
+        #expect(await until { !h.panel.isOpen })
+
+        let second = await h.startRecording(index: 1)
+        second.emit(.failed(.noSpeech))
+        #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
+        h.controller.escapePressed()
+        await settle()
+        #expect(handed == ["Premier texte."])
+    }
+
     @Test func copiedKeepsThePanelOpenAndShowsTheReason() async {
         let h = DictationHarness(trusted: false)
         let session = await h.startRecording()

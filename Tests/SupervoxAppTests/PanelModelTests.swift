@@ -132,4 +132,61 @@ import Testing
         #expect(model.dictation == DictationViewState())
         #expect(model.dictation.phase == .idle)
     }
+
+    // MARK: - Dernier texte dicté
+
+    @Test func copyingHandsTheWholeTextToTheHandlerAndRemembersIt() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var copied: [String] = []
+        model.onCopy = { copied.append($0) }
+        let long = (1...300).map { "mot\($0)" }.joined(separator: " ")
+        model.setTranscript(long)
+        #expect(!model.transcriptCopied)
+
+        model.copyTranscript()
+        #expect(copied == [long])
+        #expect(model.transcriptCopied)
+    }
+
+    @Test func copyingWithoutATranscriptDoesNothing() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var copied = 0
+        model.onCopy = { _ in copied += 1 }
+        model.copyTranscript()
+        model.setTranscript("  ")
+        model.copyTranscript()
+        #expect(copied == 0)
+        #expect(!model.transcriptCopied)
+        #expect(model.lastTranscript == nil)
+    }
+
+    @Test func withoutAnyWayToCopyNothingIsSaidToBeCopied() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setTranscript("un texte")
+        model.copyTranscript()
+        #expect(!model.transcriptCopied)
+    }
+
+    @Test func aNewTranscriptOrClosingThePanelForgetsThatItWasCopied() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.onCopy = { _ in }
+        model.setTranscript("premier")
+        model.copyTranscript()
+        #expect(model.transcriptCopied)
+        model.setTranscript("second")
+        #expect(!model.transcriptCopied)
+
+        model.toggle()
+        model.copyTranscript()
+        #expect(model.transcriptCopied)
+        model.close()
+        #expect(!model.transcriptCopied)
+        // Le texte, lui, reste : il est récupérable à la prochaine ouverture.
+        #expect(model.lastTranscript == "second")
+
+        model.toggle()
+        model.copyTranscript()
+        model.toggle()
+        #expect(!model.transcriptCopied)
+    }
 }

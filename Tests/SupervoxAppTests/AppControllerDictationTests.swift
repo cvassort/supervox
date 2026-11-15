@@ -147,6 +147,26 @@ import SupervoxCore
         #expect(engines.settingsSeen == [.defaults, changed])
     }
 
+    /// Le texte de la dernière dictée est dans le panneau (même collé : « collé » ne prouve pas que l'application cible l'a reçu),
+    /// et « Copier » passe par le presse-papiers de l'insertion, jamais par le presse-papiers général.
+    @Test func thePanelKeepsTheLastTranscriptAndCopyingGoesThroughTheInsertionPasteboard() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finished("Bonjour à tous."))
+        #expect(await until { !controller.panelModel.isOpen })
+        #expect(controller.panelModel.lastTranscript == "Bonjour à tous.")
+
+        // Le collage a restitué le presse-papiers d'origine ; « Copier » y remet le texte.
+        #expect(rig.board.text == "brouillon de l'utilisateur")
+        let before = rig.log.entries.count
+        controller.panelModel.copyTranscript()
+        #expect(rig.board.text == "Bonjour à tous.")
+        #expect(Array(rig.log.entries.dropFirst(before)) == ["writeText(transient: false)"])
+        #expect(controller.panelModel.transcriptCopied)
+    }
+
     @Test func escapeDuringADictationCancelsItAndClosesThePanel() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()

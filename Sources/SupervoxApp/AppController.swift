@@ -117,6 +117,9 @@ public final class AppController {
             hold: holdWatch)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel] in panelModel.dictation = $0 }
+        dictationController.onTranscriptChange = { [panelModel] in panelModel.setTranscript($0) }
+        // Le presse-papiers passe par l'insertion, qui le tient : un seul accès, injecté.
+        panelModel.onCopy = { [inserter] in inserter.copy($0) }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }

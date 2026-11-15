@@ -231,6 +231,24 @@ enum FakeInsertion {
         #expect(rig.board.changeCount == 0)
     }
 
+    // MARK: - Copie demandée par l'utilisateur
+
+    @Test("copier : le texte est écrit comme une copie ordinaire (non transitoire), sans lecture, sans touche, sans attente")
+    func copyWritesTheTextAsAnOrdinaryCopyAndNothingElse() {
+        let rig = InsertionRig()
+        rig.inserter.copy(FakeInsertion.dictated)
+        #expect(rig.board.text == FakeInsertion.dictated)
+        #expect(rig.log.entries == ["writeText(transient: false)"])
+    }
+
+    @Test("copier un texte vide ou d'espaces ne touche pas au presse-papiers", arguments: ["", "  \n "])
+    func copyingBlankTextLeavesThePasteboardAlone(text: String) {
+        let rig = InsertionRig()
+        rig.inserter.copy(text)
+        #expect(rig.log.entries.isEmpty)
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
     // MARK: - Sans Accessibilité
 
     @Test("sans Accessibilité, le texte reste dans le presse-papiers, marqué transitoire, et la raison nomme ⌘V et l'Accessibilité")
