@@ -12,6 +12,7 @@ final class DoubleTranscriber: LoadableTranscriber, @unchecked Sendable {
         var prepares = 0
         var prepared = false
         var calls = 0
+        var completions = 0
         var error: (any Error)?
         var gate: Gate?
     }
@@ -27,6 +28,8 @@ final class DoubleTranscriber: LoadableTranscriber, @unchecked Sendable {
 
     var prepares: Int { state.withLock { $0.prepares } }
     var transcriptions: Int { state.withLock { $0.calls } }
+    /// Transcriptions rendues à l'appelant (après l'éventuelle porte).
+    var completions: Int { state.withLock { $0.completions } }
     var isPrepared: Bool { state.withLock { $0.prepared } }
     func failPrepare(with error: (any Error)?) { state.withLock { $0.error = error } }
     /// Retient `transcribe` tant que la porte n'est pas ouverte (un moteur qui répond plus tard).
@@ -48,6 +51,7 @@ final class DoubleTranscriber: LoadableTranscriber, @unchecked Sendable {
             return state.gate
         }
         await gate?.wait()
+        state.withLock { $0.completions += 1 }
         return text
     }
 }
@@ -59,6 +63,7 @@ final class DoubleDetector: LoadableDetector, @unchecked Sendable {
         var prepared = false
         var blocks = 0
         var error: (any Error)?
+        var prepareGate: Gate?
     }
 
     let blockSize = 1000
@@ -68,14 +73,17 @@ final class DoubleDetector: LoadableDetector, @unchecked Sendable {
     var isPrepared: Bool { state.withLock { $0.prepared } }
     var blocks: Int { state.withLock { $0.blocks } }
     func failPrepare(with error: (any Error)?) { state.withLock { $0.error = error } }
+    /// `prepare()` attend l'ouverture de cette porte avant de rendre la main.
+    func holdPrepare(with gate: Gate) { state.withLock { $0.prepareGate = gate } }
 
     func prepare() async throws {
-        let error = state.withLock { state -> (any Error)? in
+        let (error, gate) = state.withLock { state -> ((any Error)?, Gate?) in
             state.prepares += 1
-            if state.error == nil { state.prepared = true }
-            return state.error
+            return (state.error, state.prepareGate)
         }
+        await gate?.wait()
         if let error { throw error }
+        state.withLock { $0.prepared = true }
     }
 
     func reset() async {}
