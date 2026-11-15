@@ -6,6 +6,8 @@ import SupervoxEngines
 // (édition dans les champs, Fermer, Quitter).
 let application = NSApplication.shared
 application.setActivationPolicy(.accessory)
+// Avant tout chargement : la bibliothèque audio n'écrit pas le texte transcrit dans les journaux.
+EngineLogging.keepTranscriptsOutOfLogs()
 // Un seul catalogue de modèles : celui de l'onglet Transcription et celui de la dictée.
 let engines = LiveDictationEngines()
 let controller = AppController(

@@ -39,6 +39,15 @@ import Testing
         }
     }
 
+    /// m6 : le programme de l'application règle le journal de la bibliothèque audio (le texte transcrit n'y est pas écrit)
+    /// avant de construire les moteurs.
+    @Test func theApplicationQuietsTheAudioLibraryLoggerBeforeBuildingTheEngines() throws {
+        let main = try #require(Self.sources(under: "Sources/Supervox").first { $0.place == "main.swift" })
+        let quiet = try #require(main.code.range(of: "EngineLogging.keepTranscriptsOutOfLogs()"))
+        let engines = try #require(main.code.range(of: "LiveDictationEngines()"))
+        #expect(quiet.lowerBound < engines.lowerBound)
+    }
+
     /// Formes interdites hors de `EndpointSession.swift` : la session partagée, quelle que soit la coupure de ligne
     /// (`URLSession.shared`, `session: .shared`, `URLSession = .shared`), et toute session construite à la main
     /// (`URLSession(`), qui pourrait recevoir une configuration avec cache.
