@@ -97,7 +97,7 @@ import Testing
             Issue.record("échec attendu, état reçu \(String(describing: Self.state(model, id)))")
             return
         }
-        #expect(reason.contains("disque plein"))
+        #expect(reason == TranscriptionModel.downloadFailure)
         // Relire le disque ne l'efface pas non plus.
         await model.refresh()
         #expect(Self.state(model, id) == .failed(reason))

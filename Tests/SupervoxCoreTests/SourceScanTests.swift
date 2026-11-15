@@ -213,6 +213,19 @@ import Testing
         #expect(offending.isEmpty, "\(offending)")
     }
 
+    /// m5 : le texte brut d'une erreur (`localizedDescription`) peut porter une adresse, un chemin ou une clé ; il n'est jamais
+    /// montré par le modèle de l'onglet Transcription ni construit par la couche de langage. Un contrôle qui ne lirait rien ne
+    /// vérifierait rien : le fichier est bien là.
+    @Test func noRawErrorTextInTheTranscriptionModelNorTheLanguageLayer() throws {
+        let app = try Self.sources(under: "Sources/SupervoxApp")
+        let model = try #require(app.first { $0.place == "SettingsUI/TranscriptionModel.swift" })
+        #expect(!model.code.contains("localizedDescription"), "SettingsUI/TranscriptionModel.swift")
+        let language = try Self.sources(under: "Sources/SupervoxCore/Language")
+        #expect(!language.isEmpty)
+        let offending = language.filter { $0.code.contains("localizedDescription") }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
     /// Les identifiants de mode fixes (`ModeChip.rawID`, `cleanedID`, `interviewID`) ne sont écrits qu'à un endroit, dans
     /// `Panel/PanelModel.swift` : le reste de l'application les nomme par ces constantes. (`"prompt"`, trop courant, n'est pas
     /// balayé.) Le fichier d'origine doit bien les porter, sans quoi le balayage ne vérifierait rien.

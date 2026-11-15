@@ -172,7 +172,7 @@ public final class TranscriptionModel {
                 Task { @MainActor in self?.progress(fraction, of: id) }
             }
         } catch {
-            failures[id] = "Le téléchargement a échoué : \(Self.describe(error))"
+            failures[id] = Self.downloadFailure
         }
         // La liste est relue avant de lâcher l'état « en cours » : la ligne ne passe jamais par un état périmé. La relecture
         // recompte le vocabulaire si le modèle choisi a changé sur le disque, succès ou échec.
@@ -202,7 +202,7 @@ public final class TranscriptionModel {
         do {
             try await catalog.delete(id)
         } catch {
-            show("La suppression a échoué : \(Self.describe(error))", .error)
+            show(Self.deletionFailure, .error)
             return
         }
         failures[id] = nil
@@ -381,7 +381,7 @@ public final class TranscriptionModel {
         do {
             try save(updated)
         } catch {
-            show("Réglage non enregistré : \(Self.describe(error))", .error, in: area)
+            show(Self.saveMessage(for: error), .error, in: area)
             return false
         }
         settings = updated
@@ -402,8 +402,15 @@ public final class TranscriptionModel {
         messageArea = .general
     }
 
-    private static func describe(_ error: any Error) -> String {
-        let text = error.localizedDescription
-        return text.hasSuffix(".") ? text : text + "."
+    /// Les phrases d'échec : fixes. Le texte d'une erreur d'ailleurs peut porter une adresse, un chemin ou une clé : il n'est
+    /// jamais repris (m5). Seule une `SettingsError`, qui n'écrit que le nom du fichier de réglages, garde sa phrase.
+    public static let downloadFailure =
+        "Le téléchargement a échoué : vérifiez votre connexion et la place disponible sur le disque, puis réessayez."
+    public static let deletionFailure = "La suppression a échoué : le modèle est resté en place."
+    public static let saveFailure = "Réglage non enregistré : l'ancienne valeur est conservée."
+
+    private static func saveMessage(for error: any Error) -> String {
+        guard let settingsError = error as? SettingsError, let text = settingsError.errorDescription else { return saveFailure }
+        return "Réglage non enregistré : \(text)"
     }
 }

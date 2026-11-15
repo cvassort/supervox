@@ -239,7 +239,7 @@ final class ProgressBox: Sendable {
 
         model.setEngine(.parakeet)
         #expect(model.settings.engine == .whisperKit)
-        #expect(model.message?.contains("disque plein") == true)
+        #expect(model.message == TranscriptionModel.saveFailure)
 
         model.setWhisperModel("small")
         #expect(model.settings.whisperModel == TranscriptionSettings.defaults.whisperModel)
@@ -250,7 +250,7 @@ final class ProgressBox: Sendable {
         await model.setVocabulary(text: "Docker")
         #expect(model.settings.vocabulary == [])
         #expect(model.vocabularyText == "")
-        #expect(model.message?.contains("disque plein") == true)
+        #expect(model.message == TranscriptionModel.saveFailure)
         #expect(saver.saved.isEmpty)
     }
 
@@ -382,7 +382,7 @@ final class ProgressBox: Sendable {
             Issue.record("état attendu : failed, reçu \(String(describing: Self.state(model, id)))")
             return
         }
-        #expect(reason.contains("disque plein"))
+        #expect(reason == TranscriptionModel.downloadFailure)
 
         catalog.setDownload { _, _ in }
         await model.download(id)
@@ -491,15 +491,102 @@ final class ProgressBox: Sendable {
         #expect(!(model.message ?? "").contains("dictée est en cours"))
     }
 
-    @Test func aRefusalFromTheCatalogIsShownAsIs() async {
+    /// m5 : même un refus qui porte sa propre phrase (le catalogue réel en a une pour « en cours de téléchargement ») ne
+    /// passe pas : la phrase fixe de la suppression prend sa place.
+    @Test func aRefusalFromTheCatalogShowsTheFixedDeletionSentence() async {
         struct Busy: LocalizedError { var errorDescription: String? { "« Whisper small » est en cours de téléchargement." } }
         let model = makeModel()
         await model.refresh()
         catalog.setDeleteFailure(Busy())
 
         await model.delete(FakeModelCatalog.small.id)
-        #expect(model.message?.contains("est en cours de téléchargement") == true)
+        #expect(model.message == TranscriptionModel.deletionFailure)
         #expect(model.messageKind == .error)
+    }
+
+    // MARK: - m5 : jamais le texte brut d'une erreur
+
+    /// Une erreur d'ailleurs qui porte une adresse, un chemin et une clé dans sa description.
+    struct LeakyFailure: Error, LocalizedError {
+        static let address = "https://exemple.invalid/modele"
+        static let path = "/var/exemple/chemin/modele.bin"
+        static let key = "sk-exemple-123"
+        var errorDescription: String? { "échec de \(Self.address) dans \(Self.path) avec la clé \(Self.key)" }
+    }
+
+    private func leaks(_ text: String?) -> Bool {
+        guard let text else { return false }
+        return [LeakyFailure.address, LeakyFailure.path, LeakyFailure.key, "exemple.invalid", "/var/exemple"]
+            .contains { text.contains($0) }
+    }
+
+    @Test func aFailedSaveDoesNotShowTheTextOfTheError() async {
+        let model = makeModel()
+        saver.failure = LeakyFailure()
+        model.setEngine(.parakeet)
+        #expect(model.message != nil)
+        #expect(!leaks(model.message))
+        model.setLanguage("en")
+        #expect(!leaks(model.message))
+        #expect(await model.setVocabulary(text: "Docker") == .notSaved)
+        #expect(model.message != nil)
+        #expect(!leaks(model.message))
+    }
+
+    @Test func aFailedDownloadDoesNotShowTheTextOfTheError() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDownload { _, _ in throw LeakyFailure() }
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let reason)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(!reason.isEmpty)
+        #expect(!leaks(reason))
+        #expect(!leaks(TranscriptionModel.stateLabel(.failed(reason))))
+        #expect(!leaks(model.message))
+    }
+
+    @Test func aFailedDeletionDoesNotShowTheTextOfTheError() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(LeakyFailure())
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message != nil)
+        #expect(!leaks(model.message))
+        #expect(model.messageKind == .error)
+    }
+
+    /// Les trois phrases se distinguent : on sait de quoi l'échec parle.
+    @Test func eachFailureHasItsOwnFixedSentence() async {
+        let model = makeModel()
+        await model.refresh()
+        saver.failure = LeakyFailure()
+        model.setLanguage("en")
+        let saving = model.message
+        catalog.setDeleteFailure(LeakyFailure())
+        await model.delete(FakeModelCatalog.turbo.id)
+        let deleting = model.message
+        catalog.setDownload { _, _ in throw LeakyFailure() }
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let downloading)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(Set([saving, deleting, downloading].compactMap { $0 }).count == 3)
+        #expect(downloading.contains("téléchargement"))
+        #expect(deleting?.contains("suppression") == true)
+    }
+
+    /// Une `SettingsError` garde sa phrase : elle nomme le fichier de réglages, jamais une adresse.
+    @Test func aSettingsErrorKeepsItsOwnSentence() {
+        let model = makeModel()
+        saver.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        model.setLanguage("en")
+        #expect(model.message?.contains("settings.json") == true)
+        #expect(model.message?.contains(SettingsError.unreadableFileKept(fileName: "settings.json").errorDescription ?? "?") == true)
+        #expect(model.settings.language == "fr")
     }
 
     @Test func aModelNoteIsPassedThroughToTheList() async {
@@ -533,7 +620,7 @@ final class ProgressBox: Sendable {
         await model.refresh()
         catalog.setDeleteFailure(SaveFailure())
         await model.delete(FakeModelCatalog.turbo.id)
-        #expect(model.message?.contains("disque plein") == true)
+        #expect(model.message == TranscriptionModel.deletionFailure)
         #expect(model.messageKind == .error)
         #expect(Self.state(model, FakeModelCatalog.turbo.id) == .ready)
     }
