@@ -529,6 +529,25 @@ import SupervoxCore
         #expect(h.controller.lastTranscript == "Texte dicté.")
     }
 
+    /// m3 : le presse-papiers refuse le texte. Rien n'est collé, le contenu d'origine est rendu, le panneau reste ouvert et ne dit
+    /// pas « Texte copié » : il dit que le presse-papiers a refusé, et le texte reste dans « Dernière dictée ».
+    @Test func aPasteboardThatRefusesTheTextFailsTheDictationWithoutPretendingItWasCopied() async {
+        let h = DictationHarness()
+        h.rig.board.refusesTextWrites = true
+        let session = await h.startRecording()
+        session.emit(.finished("Texte dicté."))
+
+        #expect(await until { h.controller.view.phase == .failed(.clipboard) })
+        #expect(h.panel.isOpen)
+        #expect(h.controller.view.notice == DictationFailure.clipboard.message)
+        #expect(DictationText.status(for: h.controller.view.phase) == "Texte non copié")
+        #expect(h.pasted.isEmpty)
+        #expect(h.rig.board.contents == FakeInsertion.original)
+        // Récupérable par « Dernière dictée ».
+        #expect(h.controller.lastTranscript == "Texte dicté.")
+        #expect(!h.controller.isBusy)
+    }
+
     @Test(arguments: [
         DictationFailure.noSpeech, .microphone("accès refusé"), .engine("moteur indisponible"),
     ])

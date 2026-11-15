@@ -2,6 +2,7 @@ import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
 import Synchronization
+import SupervoxCore
 import Testing
 
 @testable import SupervoxApp
@@ -22,6 +23,9 @@ import Testing
     private(set) var changeCount = 0
     /// Faux : le presse-papiers refuse toute écriture (il garde son contenu) et le dit en rendant faux.
     var acceptsWrites = true
+    /// Vrai : seules les écritures de texte (`writeText`) sont refusées, et le presse-papiers est alors **vidé**, comme le fait
+    /// `SystemPasteboard.write` (`clearContents()` avant `writeObjects`) ; la restauration (`write`) passe.
+    var refusesTextWrites = false
 
     init(log: CallLog, contents: PasteboardContents = PasteboardContents(items: [])) {
         self.log = log
@@ -46,6 +50,11 @@ import Testing
     func writeText(_ text: String, transient: Bool) -> Bool {
         log.entries.append("writeText(transient: \(transient))")
         guard acceptsWrites else { return false }
+        if refusesTextWrites {
+            contents = PasteboardContents(items: [])
+            changeCount += 1
+            return false
+        }
         contents = Self.textContents(text)
         changeCount += 1
         return true
@@ -278,8 +287,61 @@ enum FakeInsertion {
         #expect(reason.contains("Accessibilité"))
         #expect(!reason.contains(FakeInsertion.dictated))
         #expect(rig.board.text == FakeInsertion.dictated)
-        // Ni lecture ni restauration (le texte doit rester), ni touche, ni attente.
-        #expect(rig.log.entries == ["writeText(transient: true)"])
+        // Le contenu d'origine est lu avant l'écriture (pour être rendu si le presse-papiers la refuse), mais pas restauré
+        // (le texte doit rester) ; ni touche, ni attente.
+        #expect(rig.log.entries == ["read", "writeText(transient: true)"])
+    }
+
+    // MARK: - Écriture du texte refusée (m3)
+
+    /// Le presse-papiers refuse le texte après s'être vidé : le contenu d'origine est rendu, aucun ⌘V n'est posté, et le
+    /// résultat dit que le presse-papiers a refusé.
+    @Test("écriture refusée : le contenu d'origine est rendu, aucun ⌘V, résultat « presse-papiers refusé »")
+    func aRefusedTextWriteRestoresTheOriginalAndPastesNothing() async {
+        let rig = InsertionRig()
+        rig.board.refusesTextWrites = true
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated)
+        #expect(outcome == .clipboardRefused)
+        #expect(rig.board.contents == FakeInsertion.original)
+        #expect(rig.log.entries == ["read", "writeText(transient: true)", "write"])
+        #expect(!rig.log.entries.contains { $0.hasPrefix("postPaste") || $0 == "modifiersHeld" })
+        #expect(rig.waiter.durations.isEmpty)
+    }
+
+    @Test("sans Accessibilité aussi : le presse-papiers refuse le texte, le contenu d'origine est rendu")
+    func aRefusedTextWriteWithoutAccessibilityRestoresTheOriginal() async {
+        let rig = InsertionRig(trusted: false)
+        rig.board.refusesTextWrites = true
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated)
+        #expect(outcome == .clipboardRefused)
+        #expect(rig.board.contents == FakeInsertion.original)
+        #expect(rig.log.entries == ["read", "writeText(transient: true)", "write"])
+    }
+
+    @Test("un presse-papiers d'origine vide reste vide quand le texte est refusé")
+    func aRefusedTextWriteLeavesAnEmptyPasteboardEmpty() async {
+        let rig = InsertionRig(original: PasteboardContents(items: []))
+        rig.board.refusesTextWrites = true
+        #expect(await rig.inserter.insert(FakeInsertion.dictated) == .clipboardRefused)
+        #expect(rig.board.contents == PasteboardContents(items: []))
+        #expect(rig.board.text == nil)
+    }
+
+    @Test("un contenu d'origine non textuel est rendu à l'identique quand le texte est refusé")
+    func aRefusedTextWriteRestoresNonTextContentToo() async {
+        let original = PasteboardContents(items: [["public.png": Data([1, 2, 3]), "public.file-url": Data("f".utf8)]])
+        let rig = InsertionRig(original: original)
+        rig.board.refusesTextWrites = true
+        #expect(await rig.inserter.insert(FakeInsertion.dictated) == .clipboardRefused)
+        #expect(rig.board.contents == original)
+    }
+
+    @Test("le texte dicté, donnée privée, ne figure pas dans le message de refus")
+    func theRefusalMessageNeverCarriesTheDictatedText() {
+        let message = DictationFailure.clipboard.message
+        #expect(message.contains("presse-papiers"))
+        #expect(message.contains("Dernière dictée"))
+        #expect(!message.contains(FakeInsertion.dictated))
     }
 
     // MARK: - Cas nominal

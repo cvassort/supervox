@@ -327,6 +327,10 @@ for dark in [false, true] {
             model.copyTranscript()
             return model
         }(), granted),
+        ("dictee-presse-papiers-refuse",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.clipboard), notice: DictationFailure.clipboard.message),
+            transcript: exampleShortText), granted),
         ("dictee-copie-impossible", {
             let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
             model.onCopy = { _ in false }

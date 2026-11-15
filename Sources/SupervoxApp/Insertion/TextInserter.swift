@@ -36,6 +36,8 @@ public enum InsertionOutcome: Equatable, Sendable {
     case pasted
     /// Laissé dans le presse-papiers sans être collé. `reason` est une phrase complète, à montrer à l'utilisateur.
     case copied(reason: String)
+    /// Le presse-papiers du système a refusé le texte : rien n'a été collé ni copié, et le contenu d'origine est rendu.
+    case clipboardRefused
     /// Rien à insérer (texte vide ou d'espaces).
     case nothing
 }
@@ -78,6 +80,9 @@ public enum InsertionOutcome: Equatable, Sendable {
         self.modifierPatience = modifierPatience
     }
 
+    /// Si le presse-papiers refuse le texte : le contenu d'origine est rendu, aucun ⌘V n'est posté, le résultat est
+    /// `.clipboardRefused` (le texte reste récupérable par « Dernière dictée »).
+    ///
     /// Annulation de la tâche appelante : avant le ⌘V, rien n'est collé, le presse-papiers est rendu (sauf si une autre
     /// application y a écrit) et le résultat est `.nothing` ; après le ⌘V, la restauration a lieu quand même au délai
     /// prévu. Dans les deux replis `.copied` (modificateurs tenus, ⌘V non posté), le contenu d'origine n'est pas rendu :
@@ -87,13 +92,16 @@ public enum InsertionOutcome: Equatable, Sendable {
         guard !Task.isCancelled else { return .nothing }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .nothing }
 
-        guard isTrusted() else {
-            pasteboard.writeText(text, transient: true)
-            return .copied(reason: Self.accessibilityReason)
-        }
-
+        // Lu avant toute écriture, même sans Accessibilité : `SystemPasteboard.write` vide le presse-papiers avant d'y écrire, et
+        // si le système refuse le texte il n'y a plus rien à rendre sans cette copie.
         let original = pasteboard.read()
-        pasteboard.writeText(text, transient: true)
+        guard pasteboard.writeText(text, transient: true) else {
+            // Refusé : le presse-papiers est peut-être vide maintenant. Le contenu d'origine est rendu, aucun ⌘V n'est posté (il
+            // collerait un presse-papiers vide ou l'ancien contenu).
+            pasteboard.write(original)
+            return .clipboardRefused
+        }
+        guard isTrusted() else { return .copied(reason: Self.accessibilityReason) }
         let changeCountAfterWrite = pasteboard.changeCount
 
         // Annulée avant le collage : rien n'est collé, et le presse-papiers est rendu (le texte dicté n'y reste pas).

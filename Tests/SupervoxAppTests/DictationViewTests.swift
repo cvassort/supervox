@@ -88,7 +88,7 @@ import Testing
     @Test func everyPhaseHasANonEmptyLabelAndTheFixedOnesAreExact() {
         let phases: [DictationPhase] = [
             .idle, .preparing, .recording, .finalizing, .finished("x"), .cancelled,
-            .failed(.noSpeech), .failed(.microphone("m")), .failed(.engine("e")),
+            .failed(.noSpeech), .failed(.microphone("m")), .failed(.engine("e")), .failed(.clipboard),
         ]
         for phase in phases { #expect(!DictationText.status(for: phase).isEmpty, "\(phase)") }
         #expect(DictationText.status(for: .idle) == "Prêt")
@@ -98,6 +98,7 @@ import Testing
         #expect(DictationText.status(for: .finished("x")) == "Texte copié")
         #expect(DictationText.status(for: .cancelled) == "Dictée interrompue")
         #expect(DictationText.status(for: .failed(.noSpeech)) == "Rien à transcrire")
+        #expect(DictationText.status(for: .failed(.clipboard)) == "Texte non copié")
     }
 
     @Test func theLabelOfAFinishedDictationNeverCarriesTheDictatedText() {

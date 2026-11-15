@@ -81,6 +81,7 @@ public enum DictationText {
         case .failed(.noSpeech): "Rien à transcrire"
         case .failed(.microphone): "Micro indisponible"
         case .failed(.engine): "Transcription impossible"
+        case .failed(.clipboard): "Texte non copié"
         }
     }
 

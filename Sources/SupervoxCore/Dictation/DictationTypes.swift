@@ -8,12 +8,16 @@ public enum DictationFailure: Error, Equatable, Sendable {
     case noSpeech
     /// Un moteur (détection de voix ou transcription) a échoué ; le texte dit pourquoi.
     case engine(String)
+    /// Le texte est transcrit, mais le presse-papiers du système a refusé de le recevoir : il n'a été ni collé ni copié.
+    case clipboard
 
     public var message: String {
         switch self {
         case .microphone(let reason): "Le micro ne fonctionne pas : \(Self.trimmed(reason))."
         case .noSpeech: "Aucune parole n'a été entendue."
         case .engine(let reason): "La transcription a échoué : \(Self.trimmed(reason))."
+        case .clipboard:
+            "Le presse-papiers a refusé le texte : il n'a été ni collé ni copié. Il reste dans « Dernière dictée », ci-dessous : essayez « Copier »."
         }
     }
 

@@ -337,6 +337,10 @@ public final class DictationController {
         case .copied(let reason):
             log.notice("texte copié, non collé")
             finishRun(run, with: .finished(text), notice: reason)
+        case .clipboardRefused:
+            // Rien n'est collé ni copié : le texte reste dans « Dernière dictée » (`lastTranscript`), que l'on peut copier.
+            log.notice("presse-papiers : texte refusé")
+            finishRun(run, with: .failed(.clipboard), notice: DictationFailure.clipboard.message)
         case .nothing:
             // Ne peut pas arriver pour un texte non vide et une tâche non annulée.
             finishRun(run, with: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)
@@ -427,6 +431,7 @@ public final class DictationController {
         switch failure {
         case .noSpeech: "aucune parole"
         case .microphone: "micro"
+        case .clipboard: "presse-papiers"
         case .engine: "moteur"
         }
     }
