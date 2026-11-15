@@ -171,6 +171,130 @@ import SupervoxCore
         #expect(h.controller.view.phase == .recording)
     }
 
+    // MARK: - Maintien : relâchement perdu
+
+    /// Les modificateurs lâchés avant la touche principale : le système peut ne jamais livrer le relâchement. La
+    /// surveillance, interrogée à chaque « tic », y met fin.
+    @Test func aLostReleaseIsCaughtWhenTheModifiersAreNoLongerHeld() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        // Tant que les modificateurs sont tenus, rien ne se passe, tic après tic.
+        h.holdSleeper.release()
+        #expect(await until { h.knobs.probes.count == 1 && h.holdSleeper.isSleeping })
+        h.holdSleeper.release()
+        #expect(await until { h.knobs.probes.count == 2 && h.holdSleeper.isSleeping })
+        #expect(session.count(of: "finish") == 0)
+        #expect(h.knobs.probes.allSatisfy { $0 == [.control, .option] })
+
+        // Relâchés : le tic suivant termine la dictée.
+        h.knobs.modifiersHeld = false
+        h.holdSleeper.release()
+        #expect(await until { session.count(of: "finish") == 1 })
+        #expect(session.finishPhases == [.recording])
+    }
+
+    @Test func modifiersReleasedDuringPreparationEndTheDictationToo() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        h.controller.hotKeyPressed()
+        let session = await h.session()
+        session.emit(.preparing)
+        #expect(await until { session.calls.contains("start") && h.holdSleeper.isSleeping })
+        await settle()
+
+        h.knobs.modifiersHeld = false
+        h.holdSleeper.release()
+        #expect(await until { session.count(of: "finish") == 1 })
+        #expect(session.finishPhases == [.preparing])
+    }
+
+    @Test func aReleaseThatDoesComeAndTheWatchTogetherFinishOnlyOnce() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        h.controller.hotKeyReleased()
+        h.knobs.modifiersHeld = false
+        h.holdSleeper.release()
+        await settle()
+        #expect(session.count(of: "finish") == 1)
+    }
+
+    @Test func inToggleModeTheProbeIsNeverAsked() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .toggle
+        h.knobs.modifiersHeld = false
+        let session = await h.startRecording()
+        await settle()
+        #expect(!h.holdSleeper.isSleeping)
+        h.holdSleeper.release()
+        await settle()
+        #expect(h.knobs.probes.isEmpty)
+        #expect(session.count(of: "finish") == 0)
+
+        h.controller.hotKeyPressed()
+        #expect(await until { session.count(of: "finish") == 1 })
+        session.emit(.finalizing)
+        session.emit(.finished("texte"))
+        #expect(await until { h.pasted == ["texte"] })
+        #expect(h.knobs.probes.isEmpty)
+    }
+
+    @Test func theWatchStopsWhenTheRecordingEnds() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        session.emit(.finalizing)
+        // Plus de sommeil en cours : la tâche de surveillance est annulée et sortie, sans autre sondage.
+        #expect(await until { !h.holdSleeper.isSleeping })
+        h.knobs.modifiersHeld = false
+        await settle()
+        #expect(h.knobs.probes.isEmpty)
+        #expect(session.count(of: "finish") == 0)
+    }
+
+    @Test func theWatchStopsWhenTheDictationFails() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        session.emit(.failed(.noSpeech))
+        #expect(await until { !h.holdSleeper.isSleeping })
+        await settle()
+        #expect(h.knobs.probes.isEmpty)
+    }
+
+    @Test func theWatchStopsOnCancellation() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        _ = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        h.controller.escapePressed()
+        #expect(await until { !h.holdSleeper.isSleeping })
+        h.knobs.modifiersHeld = false
+        await settle()
+        #expect(h.knobs.probes.isEmpty)
+    }
+
+    @Test func theWatchStopsWhenThePanelIsClosedByAnotherPath() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        _ = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        h.panel.close()
+        #expect(await until { !h.holdSleeper.isSleeping })
+        #expect(h.knobs.probes.isEmpty)
+    }
+
     // MARK: - Fin d'une dictée
 
     @Test func successInRawModePastesOnceAndClosesThePanel() async {

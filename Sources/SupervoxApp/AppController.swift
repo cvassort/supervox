@@ -70,7 +70,8 @@ public final class AppController {
         makeSettingsWindow: @escaping SettingsWindowMaker,
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
-        inserter: TextInserter
+        inserter: TextInserter,
+        holdWatch: HoldWatch = .system
     ) {
         self.settingsStore = settingsStore
         self.secrets = secrets
@@ -111,7 +112,9 @@ public final class AppController {
                 permissions.refresh()
                 return permissions.microphone == .granted
             },
-            panel: panel)
+            panel: panel,
+            hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
+            hold: holdWatch)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel] in panelModel.dictation = $0 }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }

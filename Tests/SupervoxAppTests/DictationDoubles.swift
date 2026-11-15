@@ -158,6 +158,11 @@ final class FakeEngines: Sendable {
     var behavior = HotKeyBehavior.toggle
     var modeID = "dictee-brute"
     var microphoneAllowed = true
+    /// Les modificateurs du raccourci que le contrôleur lit au début d'une dictée en maintien.
+    var hotKeyModifiers: Modifiers = [.control, .option]
+    /// Ce que répond la sonde des modificateurs ; `probes` garde chaque question posée (les modificateurs demandés).
+    var modifiersHeld = true
+    var probes: [Modifiers] = []
 }
 
 /// Le contrôleur et tous ses doubles : vrai `TextInserter` sur presse-papiers, touches et attente doubles.
@@ -166,6 +171,8 @@ final class FakeEngines: Sendable {
     let rig: InsertionRig
     let engines = FakeEngines()
     let knobs = DictationKnobs()
+    /// L'attente du sondage des modificateurs : elle dure jusqu'à `holdSleeper.release()` (un « tic »), ou à l'annulation.
+    let holdSleeper = SleepingWait(log: CallLog())
     let controller: DictationController
     /// Le contenu du presse-papiers double à chaque ⌘V posté : les textes réellement collés, dans l'ordre.
     private(set) var pasted: [String] = []
@@ -183,7 +190,14 @@ final class FakeEngines: Sendable {
         controller = DictationController(
             environment: engines.environment, inserter: rig.inserter,
             settings: { knobs.settings }, behavior: { knobs.behavior }, modeID: { knobs.modeID },
-            microphoneAllowed: { knobs.microphoneAllowed }, panel: panel)
+            microphoneAllowed: { knobs.microphoneAllowed }, panel: panel,
+            hotKeyModifiers: { knobs.hotKeyModifiers },
+            hold: HoldWatch(
+                anyHeld: { modifiers in
+                    knobs.probes.append(modifiers)
+                    return knobs.modifiersHeld
+                },
+                wait: { [holdSleeper] in await holdSleeper.wait($0) }))
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
         controller.onViewChange = { [weak self] in self?.views.append($0) }

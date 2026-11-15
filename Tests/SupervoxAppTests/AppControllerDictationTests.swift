@@ -19,6 +19,14 @@ import SupervoxCore
     let presenter = Presenter()
     let engines = FakeEngines()
     let rig = InsertionRig()
+    /// La surveillance du maintien : un sommeil qui dure jusqu'à `holdSleeper.release()`, et les modificateurs tenus.
+    let holdSleeper = SleepingWait(log: CallLog())
+    let held = HeldModifiers()
+
+    @MainActor final class HeldModifiers {
+        var value = true
+        var asked: [Modifiers] = []
+    }
 
     init() throws {
         directory = FileManager.default.temporaryDirectory
@@ -34,7 +42,13 @@ import SupervoxCore
             escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            dictation: engines.environment, inserter: rig.inserter)
+            dictation: engines.environment, inserter: rig.inserter,
+            holdWatch: HoldWatch(
+                anyHeld: { [held] in
+                    held.asked.append($0)
+                    return held.value
+                },
+                wait: { [holdSleeper] in await holdSleeper.wait($0) }))
         controller.launch()
         return controller
     }
@@ -84,6 +98,20 @@ import SupervoxCore
         #expect(session.count(of: "finish") == 0)
         hotKeys.release()
         #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    /// Maintien : la surveillance reçoit les modificateurs du raccourci des réglages, et attrape un relâchement perdu.
+    @Test func aLostReleaseInHoldModeIsCaughtWithTheHotKeysModifiers() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: holdSettings())
+        hotKeys.press()
+        let session = await record(controller)
+        #expect(await until { holdSleeper.isSleeping })
+
+        held.value = false
+        holdSleeper.release()
+        #expect(await until { session.count(of: "finish") == 1 })
+        #expect(held.asked == [HotKey.standard.modifiers])
     }
 
     @Test func aChangedHotKeyKeepsBothCallbacksAfterSuspendAndResume() async {

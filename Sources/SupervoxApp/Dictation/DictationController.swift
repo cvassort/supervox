@@ -45,6 +45,8 @@ public final class DictationController {
     @ObservationIgnored private let modeID: @MainActor () -> String
     @ObservationIgnored private let microphoneAllowed: @MainActor () -> Bool
     @ObservationIgnored private let panel: any PanelOpening
+    @ObservationIgnored private let hotKeyModifiers: @MainActor () -> Modifiers
+    @ObservationIgnored private let hold: HoldWatch
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
     /// La dictée en cours, `nil` hors dictée (y compris pendant que le panneau montre un échec ou une copie).
@@ -57,13 +59,17 @@ public final class DictationController {
     ///   - behavior: bascule ou maintien, relu à chaque appui.
     ///   - modeID: le mode choisi dans le panneau.
     ///   - microphoneAllowed: vrai si le micro est autorisé ; relu (et non supposé) à chaque appui.
+    ///   - hotKeyModifiers: les modificateurs du raccourci en vigueur ; relus au début de chaque dictée en maintien.
+    ///   - hold: la surveillance des modificateurs, qui rattrape un relâchement perdu (jamais interrogée en bascule).
     public init(
         environment: DictationEnvironment, inserter: TextInserter,
         settings: @escaping @MainActor () -> TranscriptionSettings,
         behavior: @escaping @MainActor () -> HotKeyBehavior,
         modeID: @escaping @MainActor () -> String,
         microphoneAllowed: @escaping @MainActor () -> Bool,
-        panel: any PanelOpening
+        panel: any PanelOpening,
+        hotKeyModifiers: @escaping @MainActor () -> Modifiers,
+        hold: HoldWatch
     ) {
         self.environment = environment
         self.inserter = inserter
@@ -72,6 +78,8 @@ public final class DictationController {
         self.modeID = modeID
         self.microphoneAllowed = microphoneAllowed
         self.panel = panel
+        self.hotKeyModifiers = hotKeyModifiers
+        self.hold = hold
     }
 
     // MARK: - Raccourci
@@ -135,6 +143,25 @@ public final class DictationController {
         let current = settings()
         log.notice("dictée commencée ; maintien : \(hold, privacy: .public) ; moteur : \(current.engine, privacy: .public)")
         run.task = Task { await self.execute(run, settings: current) }
+        if hold { run.watch = Task { await self.watchModifiers(run) } }
+    }
+
+    /// Maintien seulement. Tant que la dictée prépare ou écoute, regarde à intervalle court si les modificateurs du
+    /// raccourci sont encore enfoncés ; dès qu'aucun ne l'est plus, c'est un relâchement (celui du système peut ne jamais
+    /// venir quand les modificateurs sont lâchés avant la touche principale). S'arrête avec la dictée et à l'annulation.
+    private func watchModifiers(_ run: Run) async {
+        let modifiers = hotKeyModifiers()
+        while isLive(run), view.phase == .preparing || view.phase == .recording {
+            await self.hold.wait(self.hold.interval)
+            // Une attente annulée rend la main aussitôt : sans cette sortie, la boucle tournerait sans attendre.
+            guard !Task.isCancelled, isLive(run), view.phase == .preparing || view.phase == .recording else { return }
+            if !self.hold.anyHeld(modifiers) {
+                log.notice("maintien : modificateurs relâchés sans relâchement du raccourci")
+                requestFinish(run)
+                return
+            }
+            await Task.yield()
+        }
     }
 
     private func execute(_ run: Run, settings: TranscriptionSettings) async {
@@ -207,13 +234,15 @@ public final class DictationController {
             }
             next.notice = notice(for: run, phase: snapshot.phase)
             setView(next)
+            // La prise est finie : plus rien à surveiller.
+            if snapshot.phase == .finalizing { run.watch?.cancel() }
             replayPendingFinish(run)
         case .finished(let text):
             finished(text, run)
         case .cancelled:
             // Nous n'avons rien demandé : la session s'est arrêtée seule. Plus rien à montrer.
             log.notice("session annulée sans demande")
-            self.run = nil
+            retire(run)
             setView(DictationViewState())
         case .failed(let failure):
             // Une panne du moteur pendant la préparation : le texte de la raison peut porter une adresse, la phrase est fixe.
@@ -248,7 +277,7 @@ public final class DictationController {
         switch outcome {
         case .pasted:
             log.notice("texte collé")
-            self.run = nil
+            retire(run)
             setView(DictationViewState())
             panel.close()
         case .copied(let reason):
@@ -263,7 +292,7 @@ public final class DictationController {
     /// La dictée est finie : le panneau reste ouvert avec ce qu'il y a à dire.
     private func finishRun(_ run: Run, with phase: DictationPhase, notice: String) {
         guard isLive(run) else { return }
-        self.run = nil
+        retire(run)
         var next = view
         next.phase = phase
         next.notice = notice
@@ -296,6 +325,7 @@ public final class DictationController {
     private func cancelCurrentRun() {
         guard let run else { return }
         run.task?.cancel()
+        run.watch?.cancel()
         run.insertion?.cancel()
         if let session = run.session {
             // Sans attendre : un moteur peut ignorer l'annulation et rendre son résultat plus tard.
@@ -308,6 +338,12 @@ public final class DictationController {
     // MARK: - État
 
     /// `run` est la dictée courante : une dictée annulée ou finie n'est plus `self.run`.
+    /// La dictée est finie : elle n'est plus la dictée courante et sa surveillance des modificateurs s'arrête.
+    private func retire(_ run: Run) {
+        run.watch?.cancel()
+        if self.run === run { self.run = nil }
+    }
+
     private func isLive(_ run: Run) -> Bool { self.run === run }
 
     private func setView(_ next: DictationViewState) {
@@ -353,6 +389,8 @@ private final class Run {
     var finishPending = false
     var finishSent = false
     var task: Task<Void, Never>?
+    /// La surveillance des modificateurs (maintien seulement).
+    var watch: Task<Void, Never>?
     var insertion: Task<Void, Never>?
     var downloadNotice: String?
     var vocabularyNotice: String?
