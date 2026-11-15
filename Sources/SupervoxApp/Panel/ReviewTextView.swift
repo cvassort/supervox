@@ -58,6 +58,32 @@ struct ReviewTextView: NSViewRepresentable {
         (textView as? FocusingTextView)?.takesFocus = takesFocus
     }
 
+    /// La hauteur que demande `textView` à cette largeur : le texte mis en page (TextKit 2, sans passer par `layoutManager`, qui
+    /// ramènerait le champ à TextKit 1), plus les marges du haut et du bas. Le conteneur prend la largeur mesurée ; le champ la
+    /// reprend de son défileur dès qu'il en a une.
+    static func contentHeight(of textView: NSTextView, width: CGFloat) -> CGFloat {
+        guard let container = textView.textContainer, let layout = textView.textLayoutManager else { return 0 }
+        let inset = textView.textContainerInset
+        container.size = NSSize(width: max(width - 2 * inset.width, 1), height: .greatestFiniteMagnitude)
+        layout.ensureLayout(for: layout.documentRange)
+        return ceil(layout.usageBoundsForTextContainer.height + 2 * inset.height)
+    }
+
+    /// Le champ prend la hauteur de son texte à la largeur qu'on lui propose, entre les deux bornes de
+    /// `DictationText.editorHeight` ; au-delà, il défile. SwiftUI redemande cette taille chaque fois que le texte change, y
+    /// compris à la frappe : la fenêtre du panneau suit (`FirstClickHostingView.layout`).
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        guard let textView = nsView.documentView as? NSTextView else { return nil }
+        // Le texte que SwiftUI vient de donner, pas celui d'avant `updateNSView` : l'ordre des deux appels n'est pas garanti.
+        if textView.string != text { textView.string = text }
+        let width = proposal.width ?? Self.fallbackWidth
+        let content = Self.contentHeight(of: textView, width: width)
+        return CGSize(width: width, height: DictationText.editorHeight(contentHeight: content))
+    }
+
+    /// La largeur du champ quand on ne lui en propose aucune : celle du panneau moins ses marges.
+    private static let fallbackWidth: CGFloat = 488
+
     func makeCoordinator() -> Coordinator { Coordinator(onEdit: onEdit) }
 
     func makeNSView(context: Context) -> NSScrollView {

@@ -219,6 +219,23 @@ let exampleShortText = "Bonjour à tous, voici le compte rendu de la réunion de
 let exampleLongText =
     "Bonjour à tous, voici le compte rendu de la réunion de ce matin. Nous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée. Pensez aussi à relire le dernier paragraphe, car il manque encore une précision sur le budget."
 
+/// Un texte de relecture plus long que seize lignes (la borne haute du champ) : le champ défile.
+let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separator: "\n\n")
+
+/// Le panneau en relecture : le texte à relire, avec l'avis éventuel et ce qu'a donné « Copier ». `copy` : `true` ou `false`
+/// refait un clic sur « Copier » dont le presse-papiers accepte ou refuse le texte.
+@MainActor func reviewPanelModel(
+    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil
+) -> PanelModel {
+    let model = dictationPanelModel(
+        state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
+    if let copy {
+        model.onCopy = { _ in copy }
+        model.copyTranscript()
+    }
+    return model
+}
+
 /// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
 /// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
 @MainActor func accessibilityReason() async -> String {
@@ -235,10 +252,18 @@ let exampleLongText =
 /// Pour les réglages, c'est le contenu de l'onglet sans la barre d'onglets : copiée par `cacheDisplay` avec la vue
 /// cadre de la fenêtre, la barre d'onglets (matériau du système) sort blanche, sans texte, surtout en sombre. Elle
 /// n'est donc pas rendue, plutôt que rendue fausse.
-@MainActor func render(_ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil) throws {
+///
+/// `keyWindow` : la vue est rendue comme dans une fenêtre clé (le bouton principal prend la couleur d'accent) ; la fenêtre hors
+/// écran ne l'est jamais, et un bouton principal y sort gris, comme dans une fenêtre inactive. Le panneau de relecture, lui,
+/// prend la frappe.
+@MainActor func render(
+    _ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil, keyWindow: Bool = false
+) throws {
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
-        rootView: AnyView(view.background(Color(nsColor: background)).environment(\.colorScheme, dark ? .dark : .light)))
+        rootView: AnyView(
+            view.background(Color(nsColor: background)).environment(\.colorScheme, dark ? .dark : .light)
+                .environment(\.controlActiveState, keyWindow ? .key : .inactive)))
     host.appearance = appearance
     let window = NSWindow(
         contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: size ?? host.fittingSize),
@@ -351,11 +376,22 @@ for dark in [false, true] {
             model.copyTranscript()
             return model
         }(), granted),
+        // La relecture : le texte à corriger, puis coller ou copier.
+        ("relecture-courte", reviewPanelModel(exampleShortText), granted),
+        ("relecture-longue", reviewPanelModel(exampleReviewText), granted),
+        ("relecture-vide", reviewPanelModel(""), granted),
+        ("relecture-collage", reviewPanelModel(exampleShortText, stage: .pasting), granted),
+        ("relecture-copie-sans-accessibilite", reviewPanelModel(exampleShortText, notice: reason),
+         ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)),
+        ("relecture-presse-papiers-refuse",
+         reviewPanelModel(exampleShortText, notice: DictationController.reviewClipboardNotice), granted),
+        ("relecture-copiee", reviewPanelModel(exampleShortText, copy: true), granted),
+        ("relecture-copie-impossible", reviewPanelModel(exampleShortText, copy: false), granted),
     ]
     for (name, model, probe) in cases {
         try render(
             PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
-            name: name, dark: dark, background: panelBackground)
+            name: name, dark: dark, background: panelBackground, keyWindow: name.hasPrefix("relecture"))
     }
 
     // Réglages : vides, puis deux fournisseurs.

@@ -1,4 +1,7 @@
+import AppKit
+import Foundation
 import SupervoxCore
+import SwiftUI
 import Testing
 
 @testable import SupervoxApp
@@ -116,6 +119,29 @@ import Testing
             let label = DictationText.status(for: stage).lowercased()
             for word in ["jeton", "tokenizer", "prompt", "token"] { #expect(!label.contains(word), "\(label)") }
         }
+    }
+
+    // MARK: Champ de relecture
+
+    @Test func theEditorHasItsBoundsAndItsHint() {
+        #expect(DictationText.editorMinHeight == 62)
+        #expect(DictationText.editorMaxHeight == 242)
+        #expect(
+            DictationText.reviewHint
+                == "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée ».")
+    }
+
+    @Test(arguments: [
+        (0.0, 62.0), (100.0, 100.0), (10_000.0, 242.0), (-5.0, 62.0), (61.9, 62.0), (62.0, 62.0), (241.9, 241.9),
+        (242.0, 242.0), (242.1, 242.0), (-Double.infinity, 62.0),
+    ])
+    func theEditorHeightFollowsTheContentBetweenItsBounds(content: Double, expected: Double) {
+        #expect(DictationText.editorHeight(contentHeight: CGFloat(content)) == CGFloat(expected))
+    }
+
+    @Test func anUnusableContentHeightGivesTheLowerBound() {
+        #expect(DictationText.editorHeight(contentHeight: .nan) == 62)
+        #expect(DictationText.editorHeight(contentHeight: .infinity) == 62)
     }
 
     // MARK: Forme d'onde
@@ -290,7 +316,7 @@ import Testing
 
     @Test func theToneAndTheHeadlineOfReviewAndPastingAreFixed() {
         let review = display(DictationViewState(stage: .review, lastTranscript: "t", draft: "t"))
-        #expect(review.mood == .info)
+        #expect(review.mood == .review)
         #expect(review.headline == "À relire")
         #expect(review.showsHotKey == false)
         let pasting = display(DictationViewState(stage: .pasting, lastTranscript: "t", draft: "t"))
@@ -338,6 +364,221 @@ import Testing
         #expect(card?.text.hasSuffix("mot200") == true)
         #expect((card?.text.count ?? .max) <= DictationText.transcriptLimit)
     }
+}
+
+@Suite struct DictationReviewDisplayTests {
+    private func display(_ state: DictationViewState, copy: CopyState = .idle) -> DictationDisplay {
+        DictationDisplay(state: state, copy: copy)
+    }
+
+    @Test(arguments: [DictationStage.review, .pasting])
+    func reviewAndPastingShowTheReviewAndNeitherTheLastTranscriptNorLiveText(_ stage: DictationStage) {
+        let state = DictationViewState(
+            stage: stage, liveText: "texte en direct", notice: "Un avis.", lastTranscript: "Le texte d'avant.",
+            draft: "Le texte relu.")
+        let shown = display(state)
+        #expect(shown.review != nil, "\(stage)")
+        #expect(shown.transcript == nil, "\(stage)")
+        #expect(shown.liveText == nil, "\(stage)")
+        #expect(shown.detail == "Un avis.", "\(stage)")
+        #expect(shown.duration == nil && shown.bars == nil, "\(stage)")
+    }
+
+    @Test func theNoticeOfAReviewIsTheDetailEvenWhenNone() {
+        #expect(display(DictationViewState(stage: .review, draft: "a")).detail == nil)
+        #expect(display(DictationViewState(stage: .pasting, draft: "a")).detail == nil)
+    }
+
+    @Test func outsideTheReviewThereIsNoReviewEvenWithADraft() {
+        let stages: [DictationStage] = [
+            .idle, .preparing, .recording, .finalizing, .copied, .cancelled, .failed(.noSpeech), .failed(.clipboard),
+        ]
+        for stage in stages {
+            #expect(display(DictationViewState(stage: stage, draft: "Un reste.")).review == nil, "\(stage)")
+        }
+    }
+
+    @Test func theReviewCarriesTheWholeDraftUntouched() {
+        // Plus long que toute coupe, avec des espaces et des sauts de ligne aux deux bouts : rien n'est rogné ni coupé.
+        let draft = "  \n" + String(repeating: "mot « guillemets » -- tiret   espaces\n", count: 80) + "  "
+        #expect(draft.count > DictationText.liveTextLimit)
+        #expect(display(DictationViewState(stage: .review, draft: draft)).review?.text == draft)
+        #expect(display(DictationViewState(stage: .pasting, draft: draft)).review?.text == draft)
+    }
+
+    @Test func inReviewTheTextCanBeEditedPastedAndCopied() throws {
+        let review = try #require(display(DictationViewState(stage: .review, draft: "Un texte.")).review)
+        #expect(review.isEditable && review.canPaste && review.canCopy)
+        #expect(!review.isPasting)
+    }
+
+    @Test func whilePastingNothingCanBeEditedPastedOrCopied() throws {
+        let review = try #require(display(DictationViewState(stage: .pasting, draft: "Un texte.")).review)
+        #expect(!review.isEditable && !review.canPaste && !review.canCopy)
+        #expect(review.isPasting)
+    }
+
+    @Test(arguments: ["", " ", "  \n\t ", "\u{00A0}"])
+    func aBlankDraftCanNeitherBePastedNorCopied(_ draft: String) throws {
+        let review = try #require(display(DictationViewState(stage: .review, draft: draft)).review)
+        #expect(!review.canPaste && !review.canCopy)
+        // Mais on peut encore y écrire.
+        #expect(review.isEditable)
+    }
+
+    @Test func theReviewCarriesTheCopyState() throws {
+        for copy in [CopyState.idle, .copied, .failed] {
+            #expect(display(DictationViewState(stage: .review, draft: "a"), copy: copy).review?.copy == copy)
+        }
+    }
+
+    @Test func theReviewToneIsItsOwnAndPastingKeepsTheWaitingTone() {
+        #expect(display(DictationViewState(stage: .review, draft: "a")).mood == .review)
+        #expect(display(DictationViewState(stage: .pasting, draft: "a")).mood == .working)
+    }
+
+    /// Une seule règle, deux endroits : le modèle du panneau et l'affichage ne doivent pas diverger.
+    @MainActor @Test func canPasteAgreesWithThePanelModelForEveryStageAndDraft() {
+        let stages: [DictationStage] = [.idle, .review, .pasting, .copied, .failed(.clipboard)]
+        for stage in stages {
+            for draft in ["", "  \n ", "Un texte.", " a "] {
+                let state = DictationViewState(stage: stage, draft: draft)
+                let model = PanelModel(lastModeID: ModeChip.rawID)
+                model.dictation = state
+                #expect(
+                    (display(state).review?.canPaste ?? false) == model.canPaste, "\(stage) « \(draft) »")
+            }
+        }
+    }
+}
+
+/// La vue de relecture elle-même, sans fenêtre : des vues d'hébergement que l'on met en page et que l'on interroge.
+@MainActor @Suite struct ReviewViewTests {
+    private static let width: CGFloat = 520
+
+    private func lines(_ count: Int) -> String {
+        (1...count).map { "ligne \($0)" }.joined(separator: "\n")
+    }
+
+    private func review(_ text: String, stage: DictationStage = .review) -> DictationDisplay {
+        DictationDisplay(state: DictationViewState(stage: stage, draft: text))
+    }
+
+    private func hosting(
+        _ text: String, stage: DictationStage = .review, edit: @escaping @MainActor (String) -> Void = { _ in }
+    ) -> NSHostingView<some View> {
+        let display = review(text, stage: stage)
+        let view = ReviewView(display: display, review: display.review!, edit: edit, paste: {}, copy: {})
+            .frame(width: Self.width)
+        let host = NSHostingView(rootView: view)
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    private func height(_ text: String, stage: DictationStage = .review) -> CGFloat {
+        hosting(text, stage: stage).fittingSize.height
+    }
+
+    private func field(in view: NSView) -> NSTextView? {
+        if let textView = view as? NSTextView { return textView }
+        for sub in view.subviews { if let found = field(in: sub) { return found } }
+        return nil
+    }
+
+    // MARK: Mesure du texte
+
+    @Test func theMeasuredHeightGrowsWithTheNumberOfLines() {
+        let field = ReviewTextView.makeTextView()
+        var previous: CGFloat = 0
+        for count in [1, 2, 5, 10, 20] {
+            field.string = lines(count)
+            let measured = ReviewTextView.contentHeight(of: field, width: 480)
+            #expect(measured > previous, "\(count) lignes : \(measured) après \(previous)")
+            previous = measured
+        }
+    }
+
+    @Test func aLineThatWrapsIsTallerThanTheSameLineWithRoom() {
+        let field = ReviewTextView.makeTextView()
+        field.string = String(repeating: "des mots qui se suivent ", count: 12)
+        let wide = ReviewTextView.contentHeight(of: field, width: 900)
+        let narrow = ReviewTextView.contentHeight(of: field, width: 200)
+        #expect(narrow > wide * 2, "étroit \(narrow), large \(wide)")
+    }
+
+    @Test func aFinalNewlineAddsALineToTheMeasure() {
+        let field = ReviewTextView.makeTextView()
+        field.string = "bonjour"
+        let without = ReviewTextView.contentHeight(of: field, width: 480)
+        field.string = "bonjour\n"
+        #expect(ReviewTextView.contentHeight(of: field, width: 480) > without)
+    }
+
+    @Test func measuringKeepsTheFieldOnTextKitTwo() {
+        let field = ReviewTextView.makeTextView()
+        field.string = lines(3)
+        _ = ReviewTextView.contentHeight(of: field, width: 480)
+        #expect(field.textLayoutManager != nil)
+    }
+
+    // MARK: Hauteur dans la vue
+
+    @Test func theFieldKeepsItsLowerBoundForAShortOrEmptyText() {
+        // Le champ seul : ni plus bas que la borne, ni plus haut pour une ligne.
+        let short = height("Bonjour.")
+        #expect(short == height(""))
+        #expect(short == height(lines(2)))
+        #expect(short == height(lines(3)))
+    }
+
+    @Test func theViewGrowsWithTheTextThenStopsAtTheUpperBound() {
+        let short = height(lines(3))
+        let ten = height(lines(10))
+        let twelve = height(lines(12))
+        let huge = height(lines(300))
+        let enormous = height(lines(3_000))
+        #expect(ten > short)
+        #expect(twelve > ten)
+        #expect(huge > twelve)
+        // Au-delà de la borne haute, le champ défile : la vue ne grandit plus.
+        #expect(huge == enormous)
+        #expect(huge - short == DictationText.editorMaxHeight - DictationText.editorMinHeight)
+    }
+
+    @Test func theFieldIsReadOnlyWhilePastingAndEditableInReview() throws {
+        let editable = try #require(field(in: hosting("Un texte.")))
+        #expect(editable.isEditable)
+        #expect(editable.string == "Un texte.")
+        let locked = try #require(field(in: hosting("Un texte.", stage: .pasting)))
+        #expect(!locked.isEditable)
+    }
+
+    // MARK: La frappe arrive telle quelle
+
+    /// Ce que le champ donne arrive tel quel, tout de suite, au modèle : ni rognage, ni normalisation, ni report.
+    @Test func whatIsTypedReachesThePanelModelAtOnceAndUntouched() throws {
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        model.dictation = DictationViewState(stage: .review, draft: "")
+        var told: [String] = []
+        model.onDraftChange = { told.append($0) }
+        let panel = NSHostingView(
+            rootView: PanelView(
+                model: model, permissions: PermissionsModel(probe: ReviewProbe()), openSettings: {}, quit: {}))
+        panel.layoutSubtreeIfNeeded()
+        let textView = try #require(field(in: panel))
+        let typed = "  « guillemets » -- tirets   espaces\n"
+        textView.insertText(typed, replacementRange: NSRange(location: 0, length: 0))
+        // Aucun tour de boucle d'événements entre la frappe et ces vérifications.
+        #expect(model.dictation.draft == typed)
+        #expect(told == [typed])
+    }
+}
+
+private struct ReviewProbe: PermissionsProbe {
+    func microphone() -> PermissionState { .granted }
+    func accessibility() -> PermissionState { .granted }
+    func requestMicrophone() async -> Bool { true }
+    func promptAccessibility() {}
 }
 
 @Suite struct DictationStageTests {

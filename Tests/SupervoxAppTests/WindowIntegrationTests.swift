@@ -402,4 +402,49 @@ struct WindowIntegrationTests {
         surface.resize(toHeight: after)
         #expect(abs(panel.frame.height - after) < 1)
     }
+
+    /// Le vrai panneau avec la vraie vue de relecture, hors écran : la frappe dans le champ (insertion de texte, aucun événement
+    /// clavier) fait grandir la hauteur que le panneau demande, et la vue d'hébergement le signale sans qu'on lise la surface.
+    /// Puis le texte s'efface : la hauteur redescend à la borne basse. Ce que ce test ne dit pas : la frappe réelle au clavier.
+    @Test func typingInTheReviewFieldGrowsThePanelAndNotifiesIt() async throws {
+        _ = NSApplication.shared
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        model.dictation = DictationViewState(stage: .review, draft: "Une ligne.")
+        let surface = FloatingPanelSurface(
+            content: PanelView(model: model, permissions: PermissionsModel(probe: WindowProbe()), openSettings: {}, quit: {}))
+        let panel = surface.panel
+        let before = try #require(surface.contentHeight())
+        panel.setFrame(NSRect(x: -20_000, y: -20_000, width: 520, height: before), display: false)
+        panel.orderFrontRegardless()
+        defer { panel.orderOut(nil) }
+        let field = try #require(await waitUntil { reviewField(in: panel) != nil } ? reviewField(in: panel) : nil)
+        var notified = 0
+        surface.onContentSizeChange = { notified += 1 }
+
+        let lines = (1...10).map { "ligne \($0)" }.joined(separator: "\n")
+        field.insertText(lines, replacementRange: NSRange(location: field.string.utf16.count, length: 0))
+        #expect(model.dictation.draft.hasSuffix("ligne 10"))
+        // D'abord sans lire la surface : seule la mise en page faite par la fenêtre elle-même peut signaler la hauteur.
+        #expect(await waitUntil { notified >= 1 }, "la vue d'hébergement n'a pas signalé la hauteur")
+        #expect(await waitUntil { (surface.contentHeight() ?? 0) > before + 80 }, "la hauteur n'a pas grandi à la frappe")
+        let grown = try #require(surface.contentHeight())
+
+        // Beaucoup plus de lignes : la hauteur ne dépasse pas la borne haute du champ.
+        field.insertText(
+            (1...200).map { "autre \($0)" }.joined(separator: "\n"), replacementRange: NSRange(location: 0, length: 0))
+        _ = await waitUntil { (surface.contentHeight() ?? 0) > grown + 20 }
+        let capped = try #require(surface.contentHeight())
+        #expect(capped - before <= DictationText.editorMaxHeight - DictationText.editorMinHeight + 1, "avant \(before), après \(capped)")
+
+        // Le texte effacé : retour à la borne basse.
+        field.insertText("", replacementRange: NSRange(location: 0, length: field.string.utf16.count))
+        #expect(await waitUntil { (surface.contentHeight() ?? .infinity) <= before + 1 }, "la hauteur n'est pas redescendue")
+    }
+}
+
+private struct WindowProbe: PermissionsProbe {
+    func microphone() -> PermissionState { .granted }
+    func accessibility() -> PermissionState { .granted }
+    func requestMicrophone() async -> Bool { true }
+    func promptAccessibility() {}
 }
