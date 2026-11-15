@@ -195,7 +195,9 @@ final class FakeEngines: Sendable {
         openCount += 1
     }
 
+    /// Sans effet panneau fermé, comme `PanelController.setKeyboard` : une demande faite avant `open()` ne se verrait pas.
     func setKeyboard(_ keyboard: PanelKeyboard) {
+        guard isOpen else { return }
         onSetKeyboard?(keyboard)
         keyboards.append(keyboard)
         log?.entries.append("keyboard(\(keyboard))")

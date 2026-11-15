@@ -510,4 +510,28 @@ import SupervoxCore
         #expect(h.controller.lastTranscript == Self.text)
         #expect(h.controller.view == DictationViewState(lastTranscript: Self.text))
     }
+
+    // MARK: - Le double du panneau
+
+    /// Le vrai panneau ne fait rien d'une demande de clavier panneau fermé (`PanelController.setKeyboard`) : le double non plus,
+    /// sinon un `setKeyboard` posé avant `open()` passerait les tests du contrôleur alors que le vrai panneau ne serait jamais
+    /// devenu clé.
+    @Test("le double du panneau ignore une demande de clavier panneau fermé, comme le vrai")
+    func theFakePanelIgnoresAKeyboardRequestWhileClosed() {
+        let panel = FakeDictationPanel()
+        var seen: [PanelKeyboard] = []
+        panel.onSetKeyboard = { seen.append($0) }
+
+        panel.setKeyboard(.focused)
+        #expect(panel.keyboards.isEmpty)
+        #expect(seen.isEmpty)
+
+        panel.open()
+        panel.setKeyboard(.focused)
+        #expect(panel.keyboards == [.focused])
+        panel.close()
+        panel.setKeyboard(.available)
+        #expect(panel.keyboards == [.focused], "une demande après la fermeture ne doit pas se voir")
+        #expect(seen == [.focused])
+    }
 }
