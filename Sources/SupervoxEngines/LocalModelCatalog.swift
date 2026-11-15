@@ -28,9 +28,12 @@ public enum LocalModelCatalogError: Error, Equatable, LocalizedError {
 ///   `ParakeetTranscriber` et `FluidVoiceDetector` lisent (`Application Support/FluidAudio`). Les tests donnent un autre
 ///   `fluidAudioRoot`.
 ///
-/// L'état d'un modèle se lit du disque seul, sans marque ni fichier ajouté : « prêt » si tous les fichiers attendus sont là,
-/// « incomplet » si un dossier existe mais qu'il en manque, « absent » sinon. Pour une variante WhisperKit, les fichiers
-/// attendus sont `requiredWhisperFiles`.
+/// L'état d'un modèle se lit du disque seul, sans marque ni fichier ajouté : « prêt » si les fichiers que le chargeur du
+/// moteur lit sont là, « incomplet » si un dossier existe mais qu'il en manque, « absent » sinon. Pour une variante
+/// WhisperKit, « prêt » veut dire : les trois modèles que `WhisperKit.loadModels` ouvre (`WhisperKit.swift:370-392`),
+/// chacun en `.mlmodelc` ou en `.mlpackage` (`ModelUtilities.detectModelURL`, `ArgmaxCore/ModelUtilities.swift:78-89`) et
+/// non vide, rien de plus : un téléchargement que la bibliothèque déclare réussi ne peut pas lever « incomplet » pour un
+/// fichier que le chargeur ne lit pas.
 public actor LocalModelCatalog: ModelCatalog {
     /// Une variante WhisperKit proposée à l'utilisateur. `name` est celui du dépôt de modèles de WhisperKit.
     public struct WhisperVariant: Sendable, Equatable {
@@ -93,17 +96,10 @@ public actor LocalModelCatalog: ModelCatalog {
         root.appendingPathComponent("models/argmaxinc/whisperkit-coreml", isDirectory: true)
     }
 
-    /// Les fichiers d'une variante WhisperKit que le moteur charge : les trois modèles Core ML compilés (chacun cinq fichiers)
-    /// et les deux fichiers de configuration. Tiré de l'arborescence publique du dépôt de modèles de WhisperKit (variantes
-    /// `large-v3-v20240930_turbo`, `small`, `base` et `tiny` lues : mêmes fichiers). `model.mlmodel` (absent de l'un des
-    /// trois) et `TextDecoderContextPrefill` (présent pour la seule variante turbo) ne sont pas exigés.
-    static let requiredWhisperFiles: [String] =
-        ["config.json", "generation_config.json"]
-        + ["AudioEncoder", "MelSpectrogram", "TextDecoder"].flatMap { bundle in
-            ["analytics/coremldata.bin", "coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin"].map {
-                "\(bundle).mlmodelc/\($0)"
-            }
-        }
+    /// Les trois modèles que le chargeur de WhisperKit ouvre (`WhisperKit.loadModels`, lignes 384 à 392 de
+    /// `WhisperKit.swift`). Les autres fichiers du dossier (configuration, métadonnées, `TextDecoderContextPrefill` de la
+    /// seule variante turbo) ne sont lus par aucun code de WhisperKit 1.1.1 : ils ne sont pas exigés.
+    static let whisperModelNames = ["MelSpectrogram", "AudioEncoder", "TextDecoder"]
 
     /// Le tokenizer d'une variante : `downloadBase/models/openai/whisper-<variante>` (`tokenizerNameForVariant`).
     static func tokenizerFile(for variant: ModelVariant, in root: URL) -> URL {
@@ -142,8 +138,24 @@ public actor LocalModelCatalog: ModelCatalog {
 
     private func whisperState(_ variant: String) -> LocalModel.State {
         guard let folder = Self.whisperFolder(for: variant, in: root) else { return .absent }
-        let complete = Self.requiredWhisperFiles.allSatisfy { Self.isNonEmptyFile(folder.appendingPathComponent($0)) }
-        return complete ? .ready : .incomplete
+        return Self.whisperModelNames.allSatisfy { Self.hasLoadableModel($0, in: folder) } ? .ready : .incomplete
+    }
+
+    /// Comme `ModelUtilities.detectModelURL` : le `.mlmodelc` s'il existe (il doit alors contenir un fichier non vide), sinon
+    /// le `.mlpackage` par son fichier `Data/com.apple.CoreML/model.mlmodel` (non vide).
+    private static func hasLoadableModel(_ name: String, in folder: URL) -> Bool {
+        let compiled = folder.appendingPathComponent("\(name).mlmodelc", isDirectory: true)
+        if FileManager.default.fileExists(atPath: compiled.path) { return containsNonEmptyFile(in: compiled) }
+        return isNonEmptyFile(
+            folder.appendingPathComponent("\(name).mlpackage/Data/com.apple.CoreML/model.mlmodel"))
+    }
+
+    private static func containsNonEmptyFile(in directory: URL) -> Bool {
+        guard let enumerator = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil) else {
+            return false
+        }
+        for case let url as URL in enumerator where isNonEmptyFile(url) { return true }
+        return false
     }
 
     private static func isNonEmptyFile(_ url: URL) -> Bool {

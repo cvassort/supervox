@@ -30,28 +30,55 @@ import WhisperKit
             LocalModelCatalog(root: root, fluidAudioRoot: fluidAudio, whisperVariants: variants)
         }
 
-        /// Les fichiers d'une variante WhisperKit, d'après la liste du dépôt de modèles (arborescence publique des quatre
-        /// variantes lue : trois dossiers Core ML compilés et deux fichiers de configuration). Copie indépendante de celle du
-        /// catalogue : `theRequiredFilesAreThoseOfTheRepositoryListing` les compare.
-        static let whisperFiles: [String] = {
-            var files = ["config.json", "generation_config.json"]
-            for bundle in ["AudioEncoder", "MelSpectrogram", "TextDecoder"] {
-                for file in ["analytics/coremldata.bin", "coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin"] {
-                    files.append("\(bundle).mlmodelc/\(file)")
+        /// Les trois modèles que le chargeur de WhisperKit lit (`WhisperKit.loadModels` : `MelSpectrogram`, `AudioEncoder`,
+        /// `TextDecoder`), chacun en `.mlmodelc` ou en `.mlpackage`.
+        static let whisperModels = ["AudioEncoder", "MelSpectrogram", "TextDecoder"]
+
+        /// Les fichiers que le téléchargement dépose à côté des modèles et que le chargeur ne lit pas (arborescence publique
+        /// du dépôt de WhisperKit : configuration, et dans chaque `.mlmodelc` les poids et les métadonnées).
+        static let unreadFiles =
+            ["config.json", "generation_config.json"]
+            + whisperModels.flatMap { model in
+                ["analytics/coremldata.bin", "metadata.json", "model.mil", "weights/weight.bin"].map {
+                    "\(model).mlmodelc/\($0)"
                 }
             }
-            return files
-        }()
 
-        /// Un dossier de variante WhisperKit tel que le téléchargement le laisse. `omitting` : fichiers absents ;
-        /// `empty` : fichiers présents mais vides.
-        func makeWhisperFolder(_ name: String, omitting: Set<String> = [], empty: Set<String> = []) throws {
+        /// Un dossier de variante WhisperKit. `omitting` : modèles absents ; `empty` : modèles présents mais vides ;
+        /// `packaged` : modèles livrés en `.mlpackage` ; `withUnreadFiles` : ajoute les fichiers que le chargeur ne lit pas.
+        func makeWhisperFolder(
+            _ name: String, omitting: Set<String> = [], empty: Set<String> = [], packaged: Set<String> = [],
+            withUnreadFiles: Bool = true
+        ) throws {
             let folder = LocalModelCatalog.whisperRepository(in: root).appendingPathComponent(name, isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            for file in Self.whisperFiles where !omitting.contains(file) {
-                let url = folder.appendingPathComponent(file)
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try (empty.contains(file) ? Data() : Data("x".utf8)).write(to: url)
+            let fileManager = FileManager.default
+            try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+            func write(_ data: Data, to relative: String) throws {
+                let url = folder.appendingPathComponent(relative)
+                try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: url)
+            }
+            for model in Self.whisperModels where !omitting.contains(model) {
+                if packaged.contains(model) {
+                    let path = "\(model).mlpackage/Data/com.apple.CoreML/model.mlmodel"
+                    try write(empty.contains(model) ? Data() : Data("x".utf8), to: path)
+                } else if empty.contains(model) {
+                    try fileManager.createDirectory(
+                        at: folder.appendingPathComponent("\(model).mlmodelc"), withIntermediateDirectories: true)
+                } else {
+                    try write(Data("x".utf8), to: "\(model).mlmodelc/coremldata.bin")
+                }
+            }
+            if withUnreadFiles {
+                for file in Self.unreadFiles {
+                    // Les fichiers d'un modèle absent, vide ou livré en `.mlpackage` n'existent pas dans un `.mlmodelc`.
+                    if let model = Self.whisperModels.first(where: { file.hasPrefix($0) }),
+                        omitting.contains(model) || empty.contains(model) || packaged.contains(model)
+                    {
+                        continue
+                    }
+                    try write(Data("x".utf8), to: file)
+                }
             }
         }
 
@@ -90,13 +117,9 @@ import WhisperKit
         #expect(LocalModelCatalog.offeredWhisperVariants.map(\.name) == ["large-v3-v20240930_turbo", "small", "base"])
     }
 
-    @Test func theRequiredFilesAreThoseOfTheRepositoryListing() {
-        #expect(Set(LocalModelCatalog.requiredWhisperFiles) == Set(Sandbox.whisperFiles))
-    }
-
     // MARK: - État d'une variante WhisperKit, lu du disque seul
 
-    @Test func aWhisperFolderWithEveryExpectedFileReadsReady() async throws {
+    @Test func aWhisperFolderWithTheThreeModelsReadsReady() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         try sandbox.makeWhisperFolder("openai_whisper-small")
@@ -107,25 +130,57 @@ import WhisperKit
         #expect(try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path) == ["models"])
     }
 
-    @Test func aWhisperFolderMissingAnInnerFileReadsIncomplete() async throws {
+    /// « Prêt » veut dire ce que le chargeur lit, et rien d'autre : ni la configuration, ni les poids ni les métadonnées que
+    /// le chargeur n'ouvre pas.
+    @Test func theThreeModelsAloneAreEnoughTheFilesTheLoaderDoesNotReadAreNotRequired() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: ["AudioEncoder.mlmodelc/weights/weight.bin"])
+        try sandbox.makeWhisperFolder("openai_whisper-small", withUnreadFiles: false)
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .ready)
+    }
+
+    @Test(arguments: ["AudioEncoder", "MelSpectrogram", "TextDecoder"])
+    func aWhisperFolderMissingOneOfTheThreeModelsReadsIncomplete(model: String) async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: [model])
         #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
     }
 
-    @Test func aWhisperFolderMissingAWholeModelReadsIncomplete() async throws {
+    @Test(arguments: ["AudioEncoder", "MelSpectrogram", "TextDecoder"])
+    func anEmptyModelReadsIncomplete(model: String) async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        let missing = Set(Sandbox.whisperFiles.filter { $0.hasPrefix("TextDecoder.mlmodelc/") })
-        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: missing)
+        try sandbox.makeWhisperFolder("openai_whisper-small", empty: [model])
         #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
     }
 
-    @Test func anEmptyExpectedFileReadsIncomplete() async throws {
+    @Test func aModelShippedAsAnMlpackageReadsReady() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        try sandbox.makeWhisperFolder("openai_whisper-small", empty: ["TextDecoder.mlmodelc/weights/weight.bin"])
+        try sandbox.makeWhisperFolder("openai_whisper-small", packaged: ["AudioEncoder", "TextDecoder"])
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .ready)
+        try sandbox.makeWhisperFolder("openai_whisper-base", packaged: ["AudioEncoder", "MelSpectrogram", "TextDecoder"], withUnreadFiles: false)
+        #expect(Self.state(await sandbox.catalog().models(), LocalModelID.whisper("base")) == .ready)
+    }
+
+    @Test func anEmptyMlpackageModelReadsIncomplete() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", empty: ["TextDecoder"], packaged: ["TextDecoder"])
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
+    }
+
+    /// Le chargeur préfère le `.mlmodelc` (`ModelUtilities.detectModelURL`) : un `.mlmodelc` vide n'est pas sauvé par un
+    /// `.mlpackage` à côté.
+    @Test func anEmptyCompiledModelIsNotRescuedByAPackageBesideIt() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", empty: ["TextDecoder"])
+        let package = LocalModelCatalog.whisperRepository(in: sandbox.root)
+            .appendingPathComponent("openai_whisper-small/TextDecoder.mlpackage/Data/com.apple.CoreML", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: package.appendingPathComponent("model.mlmodel"))
         #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
     }
 
@@ -203,7 +258,7 @@ import WhisperKit
     @Test func anIncompleteWhisperModelCanBeDeleted() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: ["config.json"])
+        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: ["TextDecoder"])
         let catalog = sandbox.catalog()
         #expect(Self.state(await catalog.models(), Self.small) == .incomplete)
         try await catalog.delete(Self.small)
@@ -315,9 +370,10 @@ struct LocalModelCatalogIntegrationTests {
         let top = try FileManager.default.contentsOfDirectory(atPath: sandbox.root.path).sorted()
         print("[intégration] sous la racine : \(top)")
         #expect(top == ["models"])
-        let folder = LocalModelCatalogTests.Sandbox.whisperFiles
         let repository = LocalModelCatalog.whisperRepository(in: sandbox.root).appendingPathComponent("openai_whisper-tiny")
-        for file in folder { #expect(FileManager.default.fileExists(atPath: repository.appendingPathComponent(file).path), "\(file)") }
+        for model in LocalModelCatalogTests.Sandbox.whisperModels {
+            #expect(FileManager.default.fileExists(atPath: repository.appendingPathComponent("\(model).mlmodelc").path), "\(model)")
+        }
         let tokenizer = sandbox.root.appendingPathComponent("models/openai/whisper-tiny/tokenizer.json")
         #expect(FileManager.default.fileExists(atPath: tokenizer.path))
 
