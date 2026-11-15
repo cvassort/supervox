@@ -113,11 +113,14 @@ private func pacing(preview: DoubleTranscriber, clock: TestClock? = nil) -> @Sen
             value += 1
             return value
         }
-        if index >= 3 {
+        // La première passe est lancée dès la voix annoncée (bloc 1) ; la seconde, quand la première a été prise en compte par la
+        // session, à l'un des chunks suivants (il y en a au moins deux par bloc) : au bloc 8, deux passes ont rendu leur résultat.
+        let needed = index >= 8 ? 2 : (index >= 3 ? 1 : 0)
+        if needed > 0 {
             // Sortie de secours seulement (une session défaillante n'ouvrirait jamais ce signal et laisserait `finish()`
             // attendre la pompe sans fin) : en temps normal le signal arrive tout de suite et la minuterie est annulée.
             await withTaskGroup(of: Void.self) { group in
-                group.addTask { await preview.waitForCompletions(1) }
+                group.addTask { await preview.waitForCompletions(needed) }
                 group.addTask { try? await Task.sleep(for: .seconds(10)) }
                 await group.next()
                 group.cancelAll()
@@ -169,13 +172,16 @@ private func pacing(preview: DoubleTranscriber, clock: TestClock? = nil) -> @Sen
             clip: clip(seconds: seconds), detector: DoubleDetector(), preview: preview, final: final,
             config: eagerConfig, settle: 0.5, pause: pacing(preview: preview), now: { clock.now() })
 
-        // Ce qui est garanti sans horloge : l'aperçu a tourné au moins une fois pendant le rejeu (la cadence attend sa première
-        // passe), sur des clips qui ne rapetissent jamais ; combien d'autres passes se glissent entre deux blocs dépend de
-        // l'ordonnancement et n'est pas affirmé.
+        // L'aperçu a tourné au moins deux fois pendant le rejeu (la cadence attend deux passes rendues avant le huitième bloc :
+        // aucune horloge), sur des clips qui grandissent avec l'audio. Un aperçu bloqué après sa première passe ferait tomber
+        // `count >= 2` et `last > first`.
         let lengths = preview.seenLengths
         let total = Int((seconds + 0.5) * 16_000)
-        #expect(!lengths.isEmpty, "aucune passe d'aperçu")
+        #expect(lengths.count >= 2, "\(lengths)")
         #expect(lengths == lengths.sorted(), "les clips d'aperçu grandissent : \(lengths)")
+        let first = try #require(lengths.first, "aucune passe d'aperçu")
+        let last = try #require(lengths.last)
+        #expect(last > first, "\(lengths)")
         // `finish()` n'est demandé qu'une fois le dernier bloc passé : le moteur final reçoit une prise qui couvre presque tout
         // l'audio (le silence de fin compris), et une seule fois.
         #expect(final.seenLengths.count == 1, "\(final.seenLengths)")
