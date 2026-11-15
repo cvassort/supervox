@@ -1,5 +1,6 @@
 import AppKit
 import SupervoxApp
+import SupervoxCore
 import SwiftUI
 
 // supervox-snapshots <dossier> : rend chaque écran de l'application en PNG, en clair et en sombre.
@@ -49,6 +50,101 @@ struct ExamplePermissions: PermissionsProbe {
     func stop() {}
 }
 
+/// Presse-papiers en mémoire : le seul que l'outil de rendu touche. `insert` y écrit sans rien envoyer à personne.
+@MainActor final class MemoryPasteboard: PasteboardAccess {
+    private(set) var changeCount = 0
+    private var contents = PasteboardContents(items: [])
+    func read() -> PasteboardContents { contents }
+    func write(_ contents: PasteboardContents) -> Bool {
+        self.contents = contents
+        changeCount += 1
+        return true
+    }
+    func writeText(_ text: String, transient: Bool) -> Bool {
+        changeCount += 1
+        return true
+    }
+}
+
+@MainActor final class NoKeyPoster: KeyPoster {
+    func modifiersHeld() -> Bool { false }
+    func postPaste(keyCode: UInt16) -> Bool { false }
+}
+
+/// Catalogue d'exemple : une liste figée (un modèle par état) et un nombre de jetons d'amorce donné.
+struct ExampleDownloadFailure: LocalizedError {
+    var errorDescription: String? { "la connexion Internet semble interrompue" }
+}
+
+actor ExampleCatalog: ModelCatalog {
+    private var listed: [LocalModel]
+    private let tokenCount: Int?
+    init(listed: [LocalModel], tokenCount: Int? = nil) {
+        self.listed = listed
+        self.tokenCount = tokenCount
+    }
+    func models() async -> [LocalModel] { listed }
+    func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        throw ExampleDownloadFailure()
+    }
+    func delete(_ id: String) async throws {
+        if let index = listed.firstIndex(where: { $0.id == id }) { listed[index].state = .absent }
+    }
+    func promptTokenCount(_ vocabulary: [String], whisperModel: String) async -> Int? { tokenCount }
+}
+
+let turboID = LocalModelID.whisper("large-v3-v20240930_turbo")
+func exampleModels(
+    parakeet: LocalModel.State, turbo: LocalModel.State, small: LocalModel.State, base: LocalModel.State,
+    voice: LocalModel.State
+) -> [LocalModel] {
+    [
+        LocalModel(
+            id: LocalModelID.parakeet, title: "Parakeet",
+            detail:
+                "Aperçu du texte en direct pendant que vous parlez, et moteur de dictée possible, très rapide. Comprend le petit modèle qui sert à reconnaître votre vocabulaire.",
+            state: parakeet),
+        LocalModel(
+            id: turboID, title: "Whisper large-v3 turbo",
+            detail:
+                "Le modèle par défaut, celui des mesures de précision du projet. C'est le plus gros des trois : il demande le plus de temps de téléchargement, d'espace disque et de mémoire.",
+            state: turbo),
+        LocalModel(
+            id: LocalModelID.whisper("small"), title: "Whisper small",
+            detail:
+                "Plus petit et plus rapide à charger que le modèle par défaut. Sa précision n'a pas été mesurée pour ce projet, et elle est en général moins bonne.",
+            state: small),
+        LocalModel(
+            id: LocalModelID.whisper("base"), title: "Whisper base",
+            detail:
+                "Le plus léger des trois, pour un Mac peu puissant ou un essai rapide. Sa précision n'a pas été mesurée pour ce projet, et elle est en général plus faible.",
+            state: base),
+        LocalModel(
+            id: LocalModelID.voiceDetector, title: "Détecteur de voix",
+            detail: "Repère quand vous parlez, pour ne pas transcrire les silences.", state: voice),
+    ]
+}
+
+/// Un modèle d'onglet Transcription préparé : liste lue, puis `act` (une saisie refusée, une suppression…).
+@MainActor func transcriptionModel(
+    _ catalog: any ModelCatalog, settings: TranscriptionSettings = .defaults,
+    act: (TranscriptionModel) async -> Void = { _ in }
+) async -> TranscriptionModel {
+    let model = TranscriptionModel(settings: settings, catalog: catalog, promptTokenLimit: 111, save: { _ in })
+    await model.refresh()
+    await act(model)
+    return model
+}
+
+/// 40 termes d'exemple sans rapport avec un métier (des plantes et des villes) : une liste assez longue pour que le refus du
+/// vocabulaire soit crédible (voir `transcription-vocabulaire-refuse`).
+let exampleTerms = [
+    "Lavande", "Romarin", "Thym", "Basilic", "Menthe", "Sauge", "Fougère", "Bruyère", "Glycine", "Jasmin", "Pivoine",
+    "Tulipe", "Camélia", "Hortensia", "Magnolia", "Érable", "Tilleul", "Bouleau", "Cyprès", "Olivier", "Lyon",
+    "Bordeaux", "Nantes", "Rennes", "Toulouse", "Lille", "Dijon", "Annecy", "Tours", "Angers", "Nice", "Metz", "Albi",
+    "Arles", "Nîmes", "Brest", "Reims", "Rouen", "Troyes", "Vichy",
+]
+
 let layout = ExampleLayout()
 let granted = ExamplePermissions(microphoneState: .granted, accessibilityState: .granted)
 let missing = ExamplePermissions(microphoneState: .notDetermined, accessibilityState: .denied)
@@ -89,6 +185,38 @@ let secondProvider = Provider(
     let model = PanelModel(lastModeID: mode)
     model.hotKeyLabel = standardLabel
     return model
+}
+
+/// Le panneau dans un état de dictée : `state`, et le dernier texte récupérable s'il y en a un.
+@MainActor func dictationPanelModel(
+    mode: String = "dictee-brute", state: DictationViewState, transcript: String? = nil
+) -> PanelModel {
+    let model = panelModel(mode: mode)
+    model.dictation = state
+    model.setTranscript(transcript)
+    return model
+}
+
+/// Une courbe de niveaux plausible, du plus ancien au plus récent : des syllabes et un creux.
+func exampleLevels(_ count: Int) -> [Float] {
+    (0..<count).map { index in
+        let syllable = abs(sin(Double(index) * 0.55)) * 0.7 + abs(sin(Double(index) * 1.7)) * 0.25
+        return Float(index % 17 == 0 ? 0.04 : min(syllable, 1))
+    }
+}
+
+/// Textes d'exemple inventés et neutres.
+let exampleShortText = "Bonjour à tous, voici le compte rendu de la réunion de ce matin."
+let exampleLongText =
+    "Bonjour à tous, voici le compte rendu de la réunion de ce matin. Nous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée. Pensez aussi à relire le dernier paragraphe, car il manque encore une précision sur le budget."
+
+/// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
+/// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
+@MainActor func accessibilityReason() async -> String {
+    let inserter = TextInserter(
+        pasteboard: MemoryPasteboard(), keys: NoKeyPoster(), layout: layout, isTrusted: { false }, wait: { _ in })
+    if case .copied(let reason) = await inserter.insert(exampleShortText) { return reason }
+    return "(raison introuvable)"
 }
 
 // MARK: - Rendu
@@ -157,11 +285,72 @@ for dark in [false, true] {
         PanelView(model: noticed, permissions: PermissionsModel(probe: missing), openSettings: {}, quit: {}),
         name: "panneau-avis", dark: dark, background: panelBackground)
 
+    // La dictée dans le panneau. Chaque état a sa hauteur naturelle : le panneau suit son contenu.
+    let reason = await accessibilityReason()
+    let cases: [(String, PanelModel, any PermissionsProbe)] = [
+        ("dictee-preparation-telechargement",
+         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.downloadNotice)), granted),
+        ("dictee-preparation-chargement",
+         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.loadingNotice)), granted),
+        ("dictee-enregistrement",
+         dictationPanelModel(state: DictationViewState(phase: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
+        ("dictee-enregistrement-texte-long",
+         dictationPanelModel(
+            state: DictationViewState(
+                phase: .recording, liveText: exampleLongText, levels: exampleLevels(48), elapsed: 65.2)), granted),
+        ("dictee-transcription",
+         dictationPanelModel(
+            state: DictationViewState(
+                phase: .finalizing, liveText: exampleShortText, levels: exampleLevels(48), elapsed: 12.9)), granted),
+        ("dictee-echec-aucune-voix",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)), granted),
+        ("dictee-echec-preparation",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.engine("x")), notice: DictationController.preparationFailedNotice),
+            transcript: exampleShortText), granted),
+        ("dictee-texte-copie",
+         dictationPanelModel(
+            state: DictationViewState(phase: .finished(exampleLongText), notice: reason), transcript: exampleLongText),
+         ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)),
+        // Le pire cas de hauteur : un message de quatre lignes et un dernier texte de trois lignes.
+        ("dictee-echec-message-long",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.engine("x")), notice: reason + " " + reason), transcript: exampleLongText + " " + exampleLongText),
+         granted),
+        ("dictee-mode-indisponible",
+         dictationPanelModel(
+            mode: "entretien", state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
+        ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(), transcript: exampleShortText), granted),
+        ("dictee-dernier-texte-copie", {
+            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            model.onCopy = { _ in true }
+            model.copyTranscript()
+            return model
+        }(), granted),
+        ("dictee-presse-papiers-refuse",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.clipboard), notice: DictationFailure.clipboard.message),
+            transcript: exampleShortText), granted),
+        ("dictee-copie-impossible", {
+            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            model.onCopy = { _ in false }
+            model.copyTranscript()
+            return model
+        }(), granted),
+    ]
+    for (name, model, probe) in cases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground)
+    }
+
     // Réglages : vides, puis deux fournisseurs.
     for (name, list) in [("reglages-vide", [Provider]()), ("reglages-fournisseurs", [firstProvider, secondProvider])] {
         try render(
             SettingsView(
                 providers: await providersModel(list), hotKey: hotKeyModel(),
+                transcription: await transcriptionModel(UnavailableModelCatalog()),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -171,6 +360,7 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(refusing: refusing),
+                transcription: await transcriptionModel(UnavailableModelCatalog()),
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .hotKey),
             name: name, dark: dark, background: window, size: settingsSize)
     }
@@ -180,9 +370,97 @@ for dark in [false, true] {
         try render(
             SettingsView(
                 providers: await providersModel([]), hotKey: hotKeyModel(),
+                transcription: await transcriptionModel(UnavailableModelCatalog()),
                 permissions: PermissionsModel(probe: probe), openSystemSettings: { _ in }, initialTab: .permissions),
             name: name, dark: dark, background: window, size: settingsSize)
     }
+
+    // Onglet Transcription. La barre d'onglets n'est pas rendue (voir `render`).
+    func transcriptionTab(_ model: TranscriptionModel) async -> SettingsView {
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(), transcription: model,
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .transcription)
+    }
+    let allAbsentModels = exampleModels(parakeet: .absent, turbo: .absent, small: .absent, base: .absent, voice: .absent)
+    let allReadyModels = exampleModels(parakeet: .ready, turbo: .ready, small: .absent, base: .absent, voice: .ready)
+    let tallSize = NSSize(width: 600, height: 1_260)
+    let whisperChosen = TranscriptionSettings(
+        engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+        vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"])
+
+    // Tous les états d'une ligne : en cours sans fraction (Parakeet : deux téléchargements enchaînés, aucune fraction
+    // honnête), prêt, incomplet, non téléchargé, en cours avec la fraction de la bibliothèque (détecteur de voix). Le
+    // contenu de l'onglet en entier : la vraie fenêtre le fait défiler.
+    try render(
+        TranscriptionPane(
+            model: await transcriptionModel(
+                ExampleCatalog(
+                    listed: exampleModels(
+                        parakeet: .downloading(nil), turbo: .ready, small: .incomplete, base: .absent,
+                        voice: .downloading(0.55))),
+                settings: whisperChosen)),
+        name: "transcription-etats", dark: dark, background: window, size: tallSize)
+    // Un échec de téléchargement, avec « Réessayer » et « Supprimer… ».
+    try render(
+        TranscriptionPane(
+            model: await transcriptionModel(
+                ExampleCatalog(listed: exampleModels(parakeet: .ready, turbo: .absent, small: .absent, base: .absent, voice: .ready)),
+                settings: whisperChosen,
+                act: { model in
+                    // Un échec réel du modèle : le catalogue d'exemple refuse ce téléchargement.
+                    await model.download(turboID)
+                })),
+        name: "transcription-echec", dark: dark, background: window, size: tallSize)
+    // Parakeet choisi alors que le modèle Whisper des réglages est le modèle par défaut, prêt : seul Parakeet porte
+    // « moteur choisi », jamais la ligne Whisper.
+    try render(
+        TranscriptionPane(
+            model: await transcriptionModel(
+                ExampleCatalog(listed: allReadyModels),
+                settings: TranscriptionSettings(
+                    engine: "parakeet", whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
+        name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
+    // Vocabulaire refusé : 40 termes d'exemple, trop longs pour Whisper. Le compte (136 pour une limite de 111) est une
+    // valeur d'exemple fixée par le double du catalogue : elle n'a pas été mesurée avec le tokenizer sur cette liste. Le champ
+    // garde la saisie refusée.
+    let refused = await transcriptionModel(
+        ExampleCatalog(listed: allReadyModels, tokenCount: 136),
+        settings: TranscriptionSettings(
+            engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+            vocabulary: Array(exampleTerms.prefix(30))),
+        act: { _ = await $0.setVocabulary(text: exampleTerms.joined(separator: "\n")) })
+    try render(
+        TranscriptionPane(model: refused, draft: exampleTerms.joined(separator: "\n")),
+        name: "transcription-vocabulaire-refuse", dark: dark, background: window, size: tallSize)
+    // Vocabulaire accepté, mais le modèle n'est pas là pour compter.
+    try render(
+        TranscriptionPane(
+            model: await transcriptionModel(
+                ExampleCatalog(listed: allAbsentModels, tokenCount: nil),
+                act: { _ = await $0.setVocabulary(text: "Kubernetes\nPostgreSQL") })),
+        name: "transcription-vocabulaire-avertissement", dark: dark, background: window, size: tallSize)
+    // Suppression de Parakeet alors que WhisperKit est choisi : le bandeau, au-dessus du formulaire, à la taille de la vraie
+    // fenêtre ; il ne recouvre rien.
+    try render(
+        await transcriptionTab(
+            await transcriptionModel(
+                ExampleCatalog(listed: allReadyModels), settings: whisperChosen,
+                act: { await $0.delete(LocalModelID.parakeet) })),
+        name: "transcription-fenetre-bandeau", dark: dark, background: window, size: settingsSize)
+    // Les deux confirmations de suppression : un dossier partagé (Parakeet), et le modèle du moteur choisi.
+    let confirming = await transcriptionModel(ExampleCatalog(listed: allReadyModels), settings: whisperChosen)
+    for (name, id) in [("partagee", LocalModelID.parakeet), ("modele", turboID)] {
+        let model = confirming.models.first { $0.id == id }!
+        try render(
+            DeletionSheet(
+                title: "Supprimer « \(model.title) » de ce Mac ?", message: confirming.deletionConfirmation(for: model),
+                cancel: {}, confirm: {}),
+            name: "transcription-confirmation-\(name)", dark: dark, background: window)
+    }
+    // Version sans catalogue de modèles.
+    try render(
+        TranscriptionPane(model: await transcriptionModel(UnavailableModelCatalog())),
+        name: "transcription-indisponible", dark: dark, background: window, size: NSSize(width: 600, height: 760))
 
     // Feuille d'édition : ajout vide, puis fournisseur existant avec une erreur.
     try render(

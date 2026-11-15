@@ -17,6 +17,8 @@ import Testing
     let clicks = FakeClickMonitor()
     let presenter = Presenter()
     let monitor = FakeKeyMonitor()
+    let catalog = FakeModelCatalog(models: [FakeModelCatalog.turbo])
+    static let promptTokenLimit = 111
 
     init() throws {
         directory = FileManager.default.temporaryDirectory
@@ -36,7 +38,8 @@ import Testing
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
             systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi, settingsView: settingsView,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
     }
 
     /// Les modèles que la fenêtre de test a reçus, pour agir comme l'utilisateur.
@@ -51,6 +54,8 @@ import Testing
             built.hotKey = hotKey
             return SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
                 permissions: controller.permissions, openSystemSettings: { _ in })
         }
     }
@@ -124,6 +129,69 @@ import Testing
         await controller.settingsPresentation?.value
         #expect(secrets.calls.map(\.name) == ["contains"])
         #expect(secrets.readCount == 0)
+    }
+
+    /// Les réglages de transcription passent par `updateSettings`, comme le reste : une seule copie vivante.
+    @Test func transcriptionChangesAreSavedThroughTheController() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let transcription = SettingsView.makeTranscriptionModel(
+            controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit)
+        #expect(transcription.settings == .defaults)
+
+        transcription.setEngine("parakeet")
+        transcription.setLanguage("en")
+        controller.panelModel.select("prompt")
+        await transcription.setVocabulary(text: "Docker")
+
+        let onDisk = store.load().settings
+        #expect(onDisk.transcription.engine == "parakeet")
+        #expect(onDisk.transcription.language == "en")
+        #expect(onDisk.transcription.vocabulary == ["Docker"])
+        #expect(onDisk.lastModeID == "prompt")
+        #expect(controller.settings == onDisk)
+    }
+
+    @Test func aRefusedSaveRestoresTheDisplayedTranscriptionSetting() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let transcription = SettingsView.makeTranscriptionModel(
+            controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit)
+        try Data("pas du json".utf8).write(to: store.file)
+
+        transcription.setEngine("parakeet")
+
+        #expect(transcription.settings.engine == "whisperkit")
+        #expect(controller.settings.transcription.engine == "whisperkit")
+        #expect(transcription.message?.contains("settings.json") == true)
+    }
+
+    /// L'ouverture de la fenêtre relit les modèles du disque : un téléchargement fait ailleurs ou une suppression à la main se voit.
+    @Test func openingTheSettingsListsTheLocalModels() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let controller = makeController(settingsView: testProvider(Built()))
+        #expect(catalog.listCount == 0)
+
+        controller.openSettings()
+        await controller.settingsPresentation?.value
+        #expect(catalog.listCount == 1)
+    }
+
+    /// Sans catalogue (l'entrée par défaut de la fenêtre), l'onglet ne liste rien et ne casse rien.
+    @Test func withoutACatalogTheModelListIsEmptyButKnown() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let unavailable = UnavailableModelCatalog()
+        #expect(await unavailable.models().isEmpty)
+        #expect(await unavailable.promptTokenCount(["x"], whisperModel: "small") == nil)
+        let controller = makeController()
+        let transcription = SettingsView.makeTranscriptionModel(
+            controller, catalog: unavailable, promptTokenLimit: Self.promptTokenLimit)
+        await transcription.refresh()
+        #expect(transcription.hasListed)
+        #expect(transcription.models.isEmpty)
     }
 
     /// Changement de mode dans le panneau, puis ajout d'un fournisseur dans la fenêtre : les deux restent.
@@ -233,7 +301,7 @@ import Testing
         #expect(registrar.registered == .standard)
         registrar.press()
         #expect(controller.panelModel.isOpen)
-        registrar.press()
+        controller.togglePanelFromMenu()
 
         model.startRecording()
         model.record(HotKeyTests.keyB)

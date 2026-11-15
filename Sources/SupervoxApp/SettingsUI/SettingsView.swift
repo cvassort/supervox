@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import SupervoxCore
 import SwiftUI
 
 /// Panneau des Réglages Système où l'utilisateur accorde une permission refusée.
@@ -17,24 +18,27 @@ public enum SystemSettingsPane: Sendable {
 
 /// Les onglets de la fenêtre de réglages.
 public enum SettingsTab: Hashable, Sendable {
-    case providers, hotKey, permissions
+    case providers, hotKey, permissions, transcription
 }
 
-/// Fenêtre de réglages : fournisseurs, raccourci, permissions.
+/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription.
 public struct SettingsView: View {
     let providers: ProvidersModel
     let hotKey: HotKeySettingsModel
+    let transcription: TranscriptionModel
     let permissions: PermissionsModel
     let openSystemSettings: @MainActor (SystemSettingsPane) -> Void
     @State private var tab: SettingsTab
 
     /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut).
     public init(
-        providers: ProvidersModel, hotKey: HotKeySettingsModel, permissions: PermissionsModel,
+        providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel,
+        permissions: PermissionsModel,
         openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void, initialTab: SettingsTab = .providers
     ) {
         self.providers = providers
         self.hotKey = hotKey
+        self.transcription = transcription
         self.permissions = permissions
         self.openSystemSettings = openSystemSettings
         _tab = State(initialValue: initialTab)
@@ -42,25 +46,54 @@ public struct SettingsView: View {
 
     /// La vraie fenêtre, branchée sur le contrôleur : toutes ses écritures passent par
     /// `AppController.updateSettings`, qui tient la seule copie vivante des réglages.
-    public static let provider: AppController.SettingsViewProvider = { controller in
-        content(
-            providers: makeProvidersModel(controller),
-            hotKey: makeHotKeyModel(controller, keyMonitor: LocalKeyDownMonitor()),
-            permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
+    ///
+    /// Sans catalogue de modèles locaux (`UnavailableModelCatalog`) : l'onglet Transcription règle le moteur, la langue
+    /// et le vocabulaire, mais ne liste aucun modèle. Voir `provider(catalog:promptTokenLimit:)`.
+    public static let provider: AppController.SettingsViewProvider = provider(
+        catalog: UnavailableModelCatalog(), promptTokenLimit: 0)
+
+    /// La vraie fenêtre avec un catalogue de modèles locaux. `promptTokenLimit` : le nombre de jetons d'amorce que le
+    /// moteur Whisper garde (`WhisperKitTranscriber.promptTokenLimit`), au-delà duquel un vocabulaire est refusé.
+    public static func provider(
+        catalog: any ModelCatalog, promptTokenLimit: Int
+    ) -> AppController.SettingsViewProvider {
+        { controller in
+            content(
+                providers: makeProvidersModel(controller),
+                hotKey: makeHotKeyModel(controller, keyMonitor: LocalKeyDownMonitor()),
+                transcription: makeTranscriptionModel(controller, catalog: catalog, promptTokenLimit: promptTokenLimit),
+                permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
+        }
     }
 
-    /// La fenêtre et ses deux moments : à chaque présentation, demander quelles clés existent ; quand l'utilisateur la
-    /// quitte, mettre fin à une capture de raccourci (le raccourci global revient).
+    /// La fenêtre et ses deux moments : à chaque présentation, demander quelles clés existent et relire les modèles du
+    /// disque ; quand l'utilisateur la quitte, mettre fin à une capture de raccourci (le raccourci global revient).
     static func content(
-        providers: ProvidersModel, hotKey: HotKeySettingsModel, permissions: PermissionsModel,
-        openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void
+        providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel,
+        permissions: PermissionsModel, openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void
     ) -> SettingsContent {
         SettingsContent(
             view: AnyView(
                 SettingsView(
-                    providers: providers, hotKey: hotKey, permissions: permissions,
+                    providers: providers, hotKey: hotKey, transcription: transcription, permissions: permissions,
                     openSystemSettings: openSystemSettings)),
-            onPresent: { await providers.checkKeys() }, onLeave: { hotKey.cancelRecording() })
+            onPresent: {
+                await providers.checkKeys()
+                await transcription.refresh()
+            },
+            onLeave: { hotKey.cancelRecording() })
+    }
+
+    /// Les réglages de transcription s'enregistrent par `AppController.updateSettings`, comme tous les autres.
+    static func makeTranscriptionModel(
+        _ controller: AppController, catalog: any ModelCatalog, promptTokenLimit: Int
+    ) -> TranscriptionModel {
+        TranscriptionModel(
+            settings: controller.settings.transcription, catalog: catalog, promptTokenLimit: promptTokenLimit,
+            isDictating: { [weak controller] in controller?.dictation.isBusy ?? false },
+            save: { [weak controller] transcription in
+                try controller?.updateSettings { $0.transcription = transcription }
+            })
     }
 
     /// Construit sans appeler le magasin de secrets.
@@ -97,6 +130,9 @@ public struct SettingsView: View {
             Tab("Raccourci", systemImage: "keyboard", value: .hotKey) { HotKeyPane(model: hotKey) }
             Tab("Permissions", systemImage: "lock.shield", value: .permissions) {
                 PermissionsPane(model: permissions, openSystemSettings: openSystemSettings)
+            }
+            Tab("Transcription", systemImage: "waveform", value: .transcription) {
+                TranscriptionPane(model: transcription)
             }
         }
         // Une capture ne survit pas à un changement d'onglet (en plus de `onDisappear` de l'onglet Raccourci).

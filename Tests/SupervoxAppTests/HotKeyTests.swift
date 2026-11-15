@@ -23,6 +23,15 @@ import Testing
 
     // MARK: - Validation et libellé
 
+    /// Le signe de Contrôle est U+2303 (le symbole du clavier Mac), jamais l'accent circonflexe ASCII « ^ » : les polices
+    /// l'écrivent en chevron proche du « ^ », mais le texte, lui, doit rester le bon caractère (copié, lu à voix haute).
+    @Test func theControlSignIsTheKeyboardSymbolAndNeverTheAsciiCaret() {
+        let label = HotKey.standard.label(layout: Self.ansi)
+        #expect(label.unicodeScalars.first?.value == 0x2303)
+        #expect(!label.unicodeScalars.contains { $0.value == 0x5E })
+        #expect(label.unicodeScalars.map(\.value).contains(0x2325), "le signe d'Option est U+2325")
+    }
+
     @Test func standardHotKeyIsValidAndLabelled() {
         #expect(HotKey.standard.validate(layout: Self.ansi) == .valid)
         #expect(HotKey.standard.label(layout: Self.ansi) == "⌃⌥Espace")
@@ -310,20 +319,25 @@ import Testing
         /// ne laisse rien d'enregistré.
         var registered: HotKey?
         var onPress: (@MainActor () -> Void)?
+        var onRelease: (@MainActor () -> Void)?
         var refused: [HotKey] = []
         /// Imite un système qui refuse une combinaison tant que l'emplacement est occupé.
         var refusesWhileOccupied = false
         var registerCalls = 0
         var unregisterCalls = 0
 
-        func register(_ hotKey: HotKey, onPress: @escaping @MainActor () -> Void) -> Bool {
+        func register(
+            _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void, onRelease: (@MainActor () -> Void)?
+        ) -> Bool {
             registerCalls += 1
             if refusesWhileOccupied, registered != nil { return false }
             registered = nil
             self.onPress = nil
+            self.onRelease = nil
             if refused.contains(hotKey) { return false }
             registered = hotKey
             self.onPress = onPress
+            self.onRelease = onRelease
             return true
         }
 
@@ -331,10 +345,14 @@ import Testing
             unregisterCalls += 1
             registered = nil
             onPress = nil
+            onRelease = nil
         }
 
         /// Appui simulé sur la combinaison enregistrée, s'il y en a une.
         func press() { onPress?() }
+
+        /// Relâchement simulé de la combinaison enregistrée, s'il y en a une.
+        func release() { onRelease?() }
     }
 
     /// `Result<Void, _>` n'est pas `Equatable` : on compare l'erreur, `nil` voulant dire succès.
@@ -519,5 +537,81 @@ import Testing
         #expect(center.active == nil)
         center.resume()
         #expect(registrar.registered == nil)
+    }
+
+    // MARK: - Relâchement
+
+    @MainActor @Test func applyPassesTheReleaseCallbackToTheRegistrar() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        var events: [String] = []
+        _ = center.apply(Self.keyA, onPress: { events.append("appui") }, onRelease: { events.append("relâchement") })
+
+        registrar.press()
+        registrar.release()
+        #expect(events == ["appui", "relâchement"])
+    }
+
+    @MainActor @Test func applyWithoutReleaseRegistersNoReleaseCallback() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        _ = center.apply(Self.keyA, onPress: {}, onRelease: {})
+        _ = center.apply(Self.keyB, onPress: {})
+        #expect(registrar.onRelease == nil)
+    }
+
+    @MainActor @Test func releaseCallbackIsRestoredAfterSuspendAndResume() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        var releases = 0
+        _ = center.apply(Self.keyA, onPress: {}, onRelease: { releases += 1 })
+
+        center.suspend()
+        #expect(registrar.onRelease == nil)
+        center.resume()
+        registrar.release()
+        #expect(releases == 1)
+    }
+
+    @MainActor @Test func refusedHotKeyPutsTheOldOneBackWithItsReleaseCallback() {
+        let registrar = FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.ansi)
+        var oldReleases = 0
+        var newReleases = 0
+        _ = center.apply(Self.keyA, onPress: {}, onRelease: { oldReleases += 1 })
+
+        registrar.refused = [Self.keyB]
+        #expect(Self.failure(center.apply(Self.keyB, onPress: {}, onRelease: { newReleases += 1 })) == .refused)
+        registrar.release()
+        #expect(oldReleases == 1)
+        #expect(newReleases == 0)
+    }
+
+    // MARK: - Relais Carbon
+
+    /// Le relais du raccourci Carbon : un appui et un relâchement arrivent chacun à leur rappel, et plus rien
+    /// n'arrive une fois le raccourci retiré.
+    @MainActor @Test func carbonRelayRoutesPressAndReleaseToTheirOwnCallbacks() {
+        let relay = CarbonHotKeyRelay(id: 1)
+        var events: [String] = []
+        relay.setCallbacks(onPress: { events.append("appui") }, onRelease: { events.append("relâchement") })
+
+        relay.deliver(.pressed)
+        relay.deliver(.released)
+        #expect(events == ["appui", "relâchement"])
+
+        relay.clearCallbacks()
+        relay.deliver(.pressed)
+        relay.deliver(.released)
+        #expect(events == ["appui", "relâchement"])
+    }
+
+    @MainActor @Test func carbonRelayWithoutReleaseIgnoresReleases() {
+        let relay = CarbonHotKeyRelay(id: 1)
+        var presses = 0
+        relay.setCallbacks(onPress: { presses += 1 }, onRelease: nil)
+        relay.deliver(.released)
+        relay.deliver(.pressed)
+        #expect(presses == 1)
     }
 }

@@ -43,10 +43,11 @@ public struct BehaviorOption: Sendable {
 /// ne reste actif : jamais un raccourci absent du fichier de réglages.
 @MainActor @Observable
 public final class HotKeySettingsModel {
-    /// Le maintien est montré, désactivé, avec la mention « à venir ».
+    /// Les deux façons de dicter avec le raccourci : une bascule (un appui commence, le suivant termine) ou le maintien
+    /// (la dictée dure tant que la touche est tenue).
     public static let behaviorOptions: [BehaviorOption] = [
-        BehaviorOption(behavior: .toggle, label: "Appuyer pour ouvrir ou fermer le panneau", isEnabled: true),
-        BehaviorOption(behavior: .hold, label: "Maintenir pour dicter (à venir)", isEnabled: false),
+        BehaviorOption(behavior: .toggle, label: "Appuyer pour commencer et pour terminer la dictée", isEnabled: true),
+        BehaviorOption(behavior: .hold, label: "Maintenir pour dicter", isEnabled: true),
     ]
 
     /// Ce que l'onglet dit toujours : un conflit avec une autre application ne se voit pas.
@@ -177,8 +178,8 @@ public final class HotKeySettingsModel {
         }
     }
 
-    /// Le maintien de la touche n'est pas encore mis en œuvre : seul le basculement est disponible.
-    public static func isAvailable(_ behavior: HotKeyBehavior) -> Bool { behavior == .toggle }
+    /// Les deux comportements sont disponibles.
+    public static func isAvailable(_ behavior: HotKeyBehavior) -> Bool { behaviorOptions.contains { $0.behavior == behavior && $0.isEnabled } }
 
     /// Un comportement indisponible est ignoré.
     public func setBehavior(_ newBehavior: HotKeyBehavior) {

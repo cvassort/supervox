@@ -34,7 +34,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
             escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
     }
 
     func corruptTheSettingsFile() throws {
@@ -46,19 +47,19 @@ import Testing
         let controller = makeController()
         controller.launch()
 
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.panelModel.isOpen)
         #expect(controller.permissions.accessibility == .granted)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
 
         // Retirée pendant que le panneau est fermé : la prochaine ouverture la voit.
         probe.set(accessibility: .denied)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.permissions.accessibility == .denied)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
 
         probe.set(accessibility: .granted)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.permissions.accessibility == .granted)
     }
 
@@ -164,7 +165,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
         next.launch()
         #expect(next.panelModel.welcome == nil)
         #expect(!next.panelModel.isOpen)
@@ -198,7 +200,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(next.panelModel.welcome == nil)
@@ -230,10 +233,10 @@ import Testing
         controller.launch()
         #expect(controller.panelModel.welcome != nil)
 
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(!controller.panelModel.isOpen)
         #expect(controller.panelModel.welcome == nil)
-        hotKeys.press()
+        controller.togglePanelFromMenu()
         #expect(controller.panelModel.welcome == nil)
     }
 
@@ -315,7 +318,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in nextSurface }, clickMonitor: FakeClickMonitor(),
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(nextSurface.showCount == 0)

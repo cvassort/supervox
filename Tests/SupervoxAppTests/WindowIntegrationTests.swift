@@ -36,4 +36,44 @@ struct WindowIntegrationTests {
         #expect(!panel.canBecomeMain)
         #expect(!panel.isVisible)
     }
+
+    /// Le contenu d'essai : sa hauteur dépend du nombre de lignes, comme celle de la dictée.
+    @MainActor @Observable final class GrowingContent {
+        var lines = 2
+    }
+
+    struct GrowingView: View {
+        let model: GrowingContent
+        var body: some View {
+            VStack(alignment: .leading) {
+                ForEach(0..<model.lines, id: \.self) { Text("ligne \($0)").frame(height: 20) }
+            }
+            .frame(width: 300)
+        }
+    }
+
+    /// La vraie surface du panneau : quand le contenu change de hauteur, la vue d'hébergement le dit, la hauteur demandée suit,
+    /// et `resize(toHeight:)` donne cette hauteur à la vraie fenêtre. Fenêtre hors écran, jamais montrée à l'utilisateur.
+    @Test func theRealSurfaceReportsAContentThatChangesHeightAndResizes() async throws {
+        _ = NSApplication.shared
+        let model = GrowingContent()
+        let surface = FloatingPanelSurface(content: GrowingView(model: model))
+        let panel = surface.panel
+        let before = try #require(surface.contentHeight())
+        panel.setFrame(NSRect(x: -20_000, y: -20_000, width: 320, height: before), display: false)
+        panel.orderFrontRegardless()
+        defer { panel.orderOut(nil) }
+        var notified = 0
+        surface.onContentSizeChange = { notified += 1 }
+
+        model.lines = 6
+        // Sans rien lire de la surface : seule la mise en page faite par la fenêtre elle-même peut signaler le changement.
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(notified >= 1, "la vue d'hébergement n'a pas signalé le changement de taille")
+        let after = try #require(surface.contentHeight())
+        #expect(after > before + 50, "avant \(before), après \(after)")
+
+        surface.resize(toHeight: after)
+        #expect(abs(panel.frame.height - after) < 1)
+    }
 }

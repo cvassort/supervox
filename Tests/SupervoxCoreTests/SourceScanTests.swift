@@ -39,6 +39,15 @@ import Testing
         }
     }
 
+    /// m6 : le programme de l'application règle le journal de la bibliothèque audio (le texte transcrit n'y est pas écrit)
+    /// avant de construire les moteurs.
+    @Test func theApplicationQuietsTheAudioLibraryLoggerBeforeBuildingTheEngines() throws {
+        let main = try #require(Self.sources(under: "Sources/Supervox").first { $0.place == "main.swift" })
+        let quiet = try #require(main.code.range(of: "EngineLogging.keepTranscriptsOutOfLogs()"))
+        let engines = try #require(main.code.range(of: "LiveDictationEngines()"))
+        #expect(quiet.lowerBound < engines.lowerBound)
+    }
+
     /// Formes interdites hors de `EndpointSession.swift` : la session partagée, quelle que soit la coupure de ligne
     /// (`URLSession.shared`, `session: .shared`, `URLSession = .shared`), et toute session construite à la main
     /// (`URLSession(`), qui pourrait recevoir une configuration avec cache.
@@ -76,5 +85,111 @@ import Testing
         let offending = try Self.codeLines(under: "Tests")
             .filter { $0.line.contains(needle) && !$0.place.hasPrefix("SupervoxCoreTests/LocalHTTPServer.swift:") }
         #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    /// Un `TextInserter` du système (presse-papiers général, ⌘V réel) n'est construit que par la cible `Supervox`, le programme :
+    /// `AppController` reçoit son `inserter` de l'extérieur, sans valeur par défaut, et aucun test ne le construit. Formes
+    /// interdites ailleurs, quelles que soient les espaces et la coupure de ligne : une valeur par défaut `= .system(` ou
+    /// `= TextInserter.system(`, un argument `inserter: .system(` ou `inserter: TextInserter.system(`, et tout appel
+    /// `TextInserter.system(`.
+    static let forbiddenSystemInserter =
+        #"(=|inserter\s*:)\s*(TextInserter\s*)?\.\s*system\s*\(|TextInserter\s*\.\s*system\s*\("#
+
+    @Test func onlyTheSupervoxTargetBuildsTheSystemInserter() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserter)
+        let offending = try Self.sources(under: "Sources")
+            .filter { !$0.place.hasPrefix("Supervox/") && $0.code.contains(pattern) }
+        #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    /// Les tests ne construisent jamais l'insertion du système : un collage fautif viserait le vrai presse-papiers.
+    @Test func noTestBuildsTheSystemInserter() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserter)
+        let offending = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(pattern) }
+        #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    @Test(arguments: [
+        "inserter: TextInserter = .system()", "inserter: TextInserter = TextInserter.system()",
+        "inserter: TextInserter =\n    .system()", "= .system (", "x = TextInserter . system(",
+        "inserter: .system()", "inserter : .system ()", "inserter:\n    .system()", "inserter: TextInserter.system()",
+        "inserter: TextInserter\n    .system()", "dictation: dictation, inserter: .system())",
+        "let i = TextInserter.system()", "return TextInserter\n.system()",
+    ])
+    func theSystemInserterPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenSystemInserter)))
+    }
+
+    @Test func theSystemInserterPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserter)
+        for code in [
+            "inserter: rig.inserter)", "inserter: TextInserter,", "let system = SystemPermissions()",
+            "public static func system() -> TextInserter {", "inserter: InsertionRig().inserter)",
+            "let inserter: TextInserter",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
+    /// Aucun test ne touche le presse-papiers général : ni `SystemPasteboard()` (qui prend `NSPasteboard.general`), ni
+    /// `NSPasteboard.general`, ni `SystemPasteboard(board: .general)` (l'initialiseur interne, atteignable par `@testable`).
+    /// Les essais d'intégration passent par un presse-papiers nommé (`SystemPasteboard(board:)`).
+    static let forbiddenGeneralPasteboard =
+        #"SystemPasteboard\s*\(\s*\)|NSPasteboard\s*\.\s*general|board\s*:\s*\.\s*general\b"#
+
+    @Test func noTestTouchesTheGeneralPasteboard() throws {
+        let pattern = try Regex(Self.forbiddenGeneralPasteboard)
+        let offending = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(pattern) }
+        #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    @Test(arguments: [
+        "let p = SystemPasteboard()", "SystemPasteboard ( )", "NSPasteboard.general", "NSPasteboard\n    .general",
+        "SystemPasteboard(board: .general)", "SystemPasteboard(board:.general)", "SystemPasteboard(\n    board : . general)",
+        "let b = SystemPasteboard(board: NSPasteboard.general)",
+    ])
+    func theGeneralPasteboardPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenGeneralPasteboard)))
+    }
+
+    @Test func theGeneralPasteboardPatternLeavesANamedBoardAlone() throws {
+        let pattern = try Regex(Self.forbiddenGeneralPasteboard)
+        for code in [
+            "SystemPasteboard(board: board)", "NSPasteboard(name: .init(\"x\"))", "board.name != .general",
+            "SystemPasteboard(board: named)", "let generalBoard = 1", "board: .generalised",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
+    /// Un message montré dans le panneau ne passe jamais par le texte brut d'une erreur quelconque (`String(describing:)`,
+    /// interpolation de l'erreur) : une erreur système y met une adresse de service, un chemin ou une clé. Les chemins qui
+    /// fabriquent ces messages : la capture audio, la session de dictée et le contrôleur de dictée.
+    static let forbiddenErrorText = #"String\s*\(\s*describing\s*:\s*error\s*\)|\\\(\s*error\s*\)|\\\(\s*String\s*\(\s*describing\s*:\s*error"#
+
+    @Test func noPanelMessageCarriesTheRawTextOfAnError() throws {
+        let pattern = try Regex(Self.forbiddenErrorText)
+        let folders = ["Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Dictation", "Sources/SupervoxApp/Dictation"]
+        let offending = try folders.flatMap { folder in
+            try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
+        }
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "AudioCaptureError.engineFailed(String(describing: error))", "\"voice processing : \\(error)\"",
+        "String ( describing : error )", "\"\\( error )\"",
+    ])
+    func theErrorTextPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenErrorText)))
+    }
+
+    @Test func theErrorTextPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenErrorText)
+        for code in ["catch { fail(.engine(Self.describe(error))) }", "\"le moteur audio a échoué (\\(message))\"", "error as? AudioCaptureError"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
     }
 }

@@ -28,6 +28,8 @@ public final class AppController {
     public let hotKeys: HotKeyCenter
     public let panelModel: PanelModel
     public let permissions: PermissionsModel
+    /// La dictée : le raccourci, Échap et la fermeture du panneau y mènent.
+    public let dictation: DictationController
     /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
     public let systemHotKeys: any SystemHotKeys
     /// Nomme les touches des raccourcis (libellés, avis) et reconnaît ⌘Q, ⌘W, ⌘H et ⌘M.
@@ -46,6 +48,12 @@ public final class AppController {
     private let settingsView: SettingsViewProvider
     private let makeSettingsWindow: SettingsWindowMaker
     private let terminate: @MainActor () -> Void
+    private let dictationEnvironment: DictationEnvironment
+    private let terminationWait: @Sendable (Double) async -> Void
+    /// La fin demandée pendant une insertion : l'attente en cours (une seule).
+    private var terminationTask: Task<Void, Never>?
+    /// Le préchargement des moteurs lancé au lancement (les tests l'attendent).
+    private(set) var preloadTask: Task<Void, Never>?
     private var statusItem: NSStatusItem?
     private var statusMenuRefresher: MenuRefresher?
     private var settingsWindow: (any SettingsWindowSurface)?
@@ -66,13 +74,19 @@ public final class AppController {
         makePanelSurface: @MainActor (AnyView) -> any PanelSurface,
         clickMonitor: any OutsideClickMonitor,
         makeSettingsWindow: @escaping SettingsWindowMaker,
-        terminate: @escaping @MainActor () -> Void
+        terminate: @escaping @MainActor () -> Void,
+        dictation: DictationEnvironment = .unavailable,
+        inserter: TextInserter,
+        holdWatch: HoldWatch = .system,
+        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
+        self.terminationWait = terminationWait
         self.settingsStore = settingsStore
         self.secrets = secrets
         self.settingsView = settingsView
         self.makeSettingsWindow = makeSettingsWindow
         self.terminate = terminate
+        dictationEnvironment = dictation
         self.systemHotKeys = systemHotKeys
         self.keyboardLayout = keyboardLayout
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar, layout: keyboardLayout)
@@ -93,9 +107,37 @@ public final class AppController {
         let content = PanelView(
             model: panelModel, permissions: permissions,
             openSettings: { relay.openSettings?() }, quit: { relay.quit?() })
-        panel = PanelController(
+        let panel = PanelController(
             model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
             surface: makePanelSurface(AnyView(content)))
+        self.panel = panel
+        let dictationController = DictationController(
+            environment: dictation, inserter: inserter,
+            settings: { relay.settings?()?.transcription ?? .defaults },
+            behavior: { relay.settings?()?.hotKeyBehavior ?? .toggle },
+            modeID: { [panelModel] in panelModel.selectedModeID },
+            // Relu à chaque appui : une permission accordée entre-temps compte tout de suite.
+            microphoneAllowed: { [permissions] in
+                permissions.refresh()
+                return permissions.microphone == .granted
+            },
+            panel: panel,
+            hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
+            hold: holdWatch)
+        self.dictation = dictationController
+        dictationController.onViewChange = { [panelModel, panel] in
+            panelModel.setDictation($0)
+            panel.contentChanged()
+        }
+        dictationController.onTranscriptChange = { [panelModel, panel] in
+            panelModel.setTranscript($0)
+            panel.contentChanged()
+        }
+        // Le presse-papiers passe par l'insertion, qui le tient : un seul accès, injecté.
+        panelModel.onCopy = { [inserter] in inserter.copy($0) }
+        panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
+        panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
+        relay.settings = { [weak self] in self?.settings }
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
 
@@ -106,8 +148,13 @@ public final class AppController {
     }
 
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
-    /// AVFoundation et Accessibilité.
-    public convenience init(settingsView: @escaping SettingsViewProvider = SettingsView.provider) {
+    /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, que la cible `Supervox` construit
+    /// (`SupervoxApp` ne dépend pas d'eux).
+    public convenience init(
+        settingsView: @escaping SettingsViewProvider = SettingsView.provider,
+        dictation: DictationEnvironment = .unavailable,
+        inserter: TextInserter
+    ) {
         let file = (try? SettingsStore.defaultFile())
             ?? URL.applicationSupportDirectory.appending(path: "Supervox/settings.json")
         self.init(
@@ -122,7 +169,8 @@ public final class AppController {
             makePanelSurface: { FloatingPanelSurface(content: $0) },
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
-            terminate: { NSApp.terminate(nil) })
+            terminate: { NSApp.terminate(nil) },
+            dictation: dictation, inserter: inserter)
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,
@@ -156,12 +204,22 @@ public final class AppController {
             }
         }
         if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
+        preloadEngines()
+    }
+
+    /// Prépare les moteurs des réglages courants en tâche de fond, hors du fil principal et à basse priorité : rien n'est
+    /// attendu, l'affichage n'est pas retardé. L'environnement ne le fait que si tous les modèles sont déjà sur le disque,
+    /// jamais en téléchargeant, et ses échecs sont silencieux.
+    private func preloadEngines() {
+        let environment = dictationEnvironment
+        let transcription = settings.transcription
+        preloadTask = Task.detached(priority: .utility) { await environment.preload(transcription) }
     }
 
     /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.
     public static func welcome(hotKeyLabel: String?) -> String {
         let opening =
-            hotKeyLabel.map { "\($0) ouvre et ferme ce panneau, depuis n'importe quelle application." }
+            hotKeyLabel.map { "\($0) lance la dictée (et ouvre ce panneau), depuis n'importe quelle application." }
             ?? "Ouvrez ce panneau depuis l'icône de Supervox dans la barre de menus."
         return "Bienvenue dans Supervox. \(opening) Les réglages (fournisseurs, raccourci, permissions) s'ouvrent par « Réglages… », dans le menu « … » ci-dessous ou dans celui de l'icône de la barre de menus."
     }
@@ -174,20 +232,20 @@ public final class AppController {
 
     // MARK: - Raccourci
 
-    /// Le comportement `hold` est enregistré dans les réglages mais n'a pas d'effet à cette étape :
-    /// le raccourci bascule toujours.
-    ///
     /// Enregistre le raccourci des réglages et pose l'avis qui le concerne. Rend `true` si le panneau doit s'ouvrir
     /// pour le montrer : raccourci refusé, ou raccourci de macOS activé pas encore signalé. Ce dernier cas n'ouvre le
     /// panneau qu'une fois : la combinaison signalée est gardée dans les réglages (`systemConflictShown`), et l'avis
     /// reste posé aux lancements suivants sans ouvrir le panneau.
     private func applyHotKey() -> Bool {
         let hotKey = settings.hotKey
-        switch hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() }) {
+        switch hotKeys.apply(
+            hotKey, onPress: { [weak self] in self?.hotKeyPressed() },
+            onRelease: { [weak self] in self?.hotKeyReleased() })
+        {
         case .success:
             let label = hotKey.label(layout: keyboardLayout)
             panelModel.hotKeyLabel = label
-            log.notice("raccourci enregistré : \(label, privacy: .public)")
+            log.notice("raccourci enregistré : \(label, privacy: .public) ; rappels d'appui et de relâchement posés")
             guard systemHotKeys.enabled().contains(hotKey) else {
                 panelModel.setNotice(nil, for: .hotKey)
                 return false
@@ -249,7 +307,9 @@ public final class AppController {
     /// Enregistre `hotKey` comme raccourci global, avec le même effet que celui du lancement, et met à
     /// jour le libellé du panneau. N'enregistre pas les réglages. En cas de refus, l'ancien reste actif.
     public func changeHotKey(_ hotKey: HotKey) -> Result<Void, HotKeyError> {
-        let result = hotKeys.apply(hotKey, onPress: { [weak self] in self?.togglePanel() })
+        let result = hotKeys.apply(
+            hotKey, onPress: { [weak self] in self?.hotKeyPressed() },
+            onRelease: { [weak self] in self?.hotKeyReleased() })
         panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
         if case .success = result { panelModel.setNotice(nil, for: .hotKey) }
         return result
@@ -282,9 +342,15 @@ public final class AppController {
 
     // MARK: - Panneau
 
-    private func togglePanel() {
+    /// Le raccourci mène à la dictée : bascule ou maintien, selon les réglages. Le panneau s'ouvre avec elle.
+    private func hotKeyPressed() {
         log.notice("raccourci pressé")
-        panel.toggle()
+        dictation.hotKeyPressed()
+    }
+
+    private func hotKeyReleased() {
+        log.notice("raccourci relâché")
+        dictation.hotKeyReleased()
     }
 
     /// Titre de l'entrée de barre de menus qui ouvre ou ferme le panneau.
@@ -355,6 +421,38 @@ public final class AppController {
         log.notice("quitter")
         terminate()
     }
+
+    // MARK: - Fin de l'application
+
+    /// Ce que l'application fait quand le système demande la fin.
+    public enum TerminationDecision: Equatable, Sendable {
+        /// Rien n'est en cours : se terminer.
+        case now
+        /// Un collage est en cours : attendre sa fin (restauration du presse-papiers comprise), puis `reply(true)`.
+        case afterInsertion
+    }
+
+    /// Durée maximale d'attente d'un collage en cours avant de se terminer quand même, en secondes. Un collage dure au plus la
+    /// patience des modificateurs (1 s) et le délai de restauration (0,4 s) ; 3 s laissent de la marge sans retenir
+    /// l'utilisateur. Choix de conception, non mesuré.
+    static let terminationTimeout = 3.0
+
+    /// Appelé par le délégué à la demande de fin. Pendant un collage, quitter laisserait le texte dicté dans le presse-papiers et
+    /// perdrait celui de l'utilisateur : la fin attend la restauration (bornée), puis appelle `reply(true)`. Une seconde demande
+    /// pendant l'attente ne lance pas une seconde attente.
+    public func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> TerminationDecision {
+        guard dictation.isInserting else { return .now }
+        if terminationTask == nil {
+            let dictation = dictation
+            let wait = terminationWait
+            log.notice("fin différée : collage en cours")
+            terminationTask = Task {
+                await dictation.finishInsertion(timeout: Self.terminationTimeout, wait: wait)
+                reply(true)
+            }
+        }
+        return .afterInsertion
+    }
 }
 
 /// Relais d'actions, posé avant que le contrôleur soit entièrement construit.
@@ -362,6 +460,7 @@ public final class AppController {
 private final class ActionRelay {
     var openSettings: (@MainActor () -> Void)?
     var quit: (@MainActor () -> Void)?
+    var settings: (@MainActor () -> AppSettings?)?
 }
 
 /// Délégué de menu qui rafraîchit les titres juste avant l'affichage.

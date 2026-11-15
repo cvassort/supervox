@@ -167,13 +167,13 @@ import Testing
         #expect(model.message == nil)
     }
 
-    @Test func holdBehaviorIsNotYetAvailable() {
+    @Test func holdBehaviorIsAvailableAndSaved() {
         let model = makeModel()
-        #expect(!HotKeySettingsModel.isAvailable(.hold))
+        #expect(HotKeySettingsModel.isAvailable(.hold))
         #expect(HotKeySettingsModel.isAvailable(.toggle))
         model.setBehavior(.hold)
-        #expect(model.behavior == .toggle)
-        #expect(saved.isEmpty)
+        #expect(model.behavior == .hold)
+        #expect(saved.map(\.1) == [.hold])
     }
 
     @Test func switchingBackToToggleIsSaved() {
@@ -304,13 +304,16 @@ import Testing
 
     // MARK: - Options du comportement
 
-    @Test func holdIsListedDisabledAndAnnouncedAsComing() throws {
+    @Test func holdIsListedEnabledWithoutTheComingSoonMention() throws {
         let options = HotKeySettingsModel.behaviorOptions
         #expect(options.map(\.behavior) == [.toggle, .hold])
         let hold = try #require(options.first { $0.behavior == .hold })
-        #expect(!hold.isEnabled)
-        #expect(hold.label.contains("à venir"))
-        #expect(options.first { $0.behavior == .toggle }?.isEnabled == true)
+        #expect(hold.isEnabled)
+        #expect(hold.label == "Maintenir pour dicter")
+        #expect(!hold.label.contains("à venir"))
+        let toggle = try #require(options.first { $0.behavior == .toggle })
+        #expect(toggle.isEnabled)
+        #expect(toggle.label == "Appuyer pour commencer et pour terminer la dictée")
     }
 }
 

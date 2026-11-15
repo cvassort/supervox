@@ -18,7 +18,11 @@ public enum AudioCaptureError: Error, Equatable {
 ///   intégrés et 3 sur un casque Bluetooth (mesuré), tous identiques.
 /// - Les échantillons sont rendus à la fréquence native du périphérique ; le rééchantillonnage est l'affaire de l'appelant.
 /// - Une instance sert à plusieurs `start()`/`stop()` successifs : le montage du moteur n'est fait qu'une fois.
-public final class AudioCapture {
+/// - Deux usages : le banc d'essai lit le clip rendu par `stop()` ; la dictée reçoit les tranches au fil de l'eau par
+///   `start(onChunk:accumulate:)`, avec `accumulate: false` pour ne rien garder en mémoire.
+/// - `start` et `stop` sont sérialisés par un verrou interne (appelables de plusieurs fils, un à la fois) ; le reste de
+///   l'état est derrière des verrous : `@unchecked Sendable`.
+public final class AudioCapture: @unchecked Sendable {
     /// Échantillons et fréquence, partagés entre le fil audio temps réel (qui ajoute) et l'appelant (qui lit).
     /// Seul état capturé par le tap : jamais `self`.
     private struct Buffer {
@@ -42,56 +46,61 @@ public final class AudioCapture {
     private let anchorPlayer = AVAudioPlayerNode()
     private let voiceProcessing: Bool
     private let buffer = OSAllocatedUnfairLock(initialState: Buffer())
+    /// Porte de livraison de la prise en cours (une neuve par prise, voir `DeliveryGate`) ; `nil` hors prise.
+    private let currentGate = OSAllocatedUnfairLock<DeliveryGate?>(initialState: nil)
+    private let promptsForAccess: Bool
+    /// Sérialise `start` et `stop` : protège `wired` et `running`.
+    private let lifecycle = NSLock()
     private var wired = false
     private var running = false
-    private var description = "entrée audio non initialisée"
+    private let inputText = OSAllocatedUnfairLock(initialState: "entrée audio non initialisée")
 
-    public init(voiceProcessing: Bool = true) {
+    /// - Parameter promptsForAccess: `false` pour une application qui a déjà son propre parcours d'autorisation :
+    ///   un statut « non déterminé » lève alors `microphoneAccessDenied` au lieu d'afficher l'invite système et d'attendre
+    ///   la réponse (ce qui bloquerait l'appelant).
+    public init(voiceProcessing: Bool = true, promptsForAccess: Bool = true) {
         self.voiceProcessing = voiceProcessing
+        self.promptsForAccess = promptsForAccess
+    }
+
+    /// La raison d'une panne du moteur audio, telle qu'elle peut être montrée dans le panneau : le code d'erreur du système, et
+    /// rien du texte de l'erreur (une erreur système peut y mettre une adresse, un chemin ou un nom de fichier).
+    static func reason(for error: any Error) -> String {
+        "code d'erreur du système : \((error as NSError).code)"
     }
 
     /// Nom du micro (si connu), nombre de canaux et fréquence vus au dernier `start()`.
-    public var inputDescription: String { description }
+    public var inputDescription: String { inputText.withLock { $0 } }
 
+    /// Démarre sans livraison de tranches : seul `stop()` rend l'enregistrement (usage du banc d'essai).
     public func start() throws {
+        try start(onChunk: nil, accumulate: true)
+    }
+
+    /// Démarre la capture. Si `onChunk` est fourni, il reçoit chaque fenêtre du tap (premier canal, fréquence native),
+    /// dans l'ordre, **sur le fil du tap** : il doit rester bref, ne prendre aucun verrou que l'appelant de `stop()`
+    /// peut tenir, et ne jamais appeler `stop()` (précondition). Après le retour de `stop()`, plus aucun appel n'arrive.
+    ///
+    /// - Parameter accumulate: `true` (défaut) : le tampon interne garde tout, `stop()` rend le clip. `false` : rien
+    ///   n'est gardé (mémoire constante), `stop()` rend un clip vide ; exige `onChunk`.
+    public func start(onChunk: (@Sendable (AudioChunk) -> Void)? = nil, accumulate: Bool = true) throws {
+        precondition(onChunk != nil || accumulate, "accumulate: false sans onChunk n'enregistrerait rien")
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
         guard !running else { throw AudioCaptureError.alreadyRunning }
-        try Self.ensureMicrophoneAccess()
+        try ensureMicrophoneAccess()
         try wireIfNeeded()
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else { throw AudioCaptureError.noInputDevice }
         let device = AVCaptureDevice.default(for: .audio)?.localizedName
-        description = "\(device.map { $0 + ", " } ?? "")\(format.channelCount) canaux, \(Int(format.sampleRate)) Hz, canal 1 lu"
+        inputText.withLock {
+            $0 = "\(device.map { $0 + ", " } ?? "")\(format.channelCount) canaux, \(Int(format.sampleRate)) Hz, canal 1 lu"
+        }
 
+        let tap = makeTap(sampleRate: format.sampleRate, accumulate: accumulate, onChunk: onChunk)
         let store = buffer
-        store.withLock {
-            $0.samples.removeAll(keepingCapacity: true)
-            $0.samples.reserveCapacity(Int(format.sampleRate) * 30)
-            $0.sampleRate = format.sampleRate
-            $0.accepting = true
-            $0.firstBufferAt = nil
-            $0.firstSampleHostTime = nil
-        }
-        // Fil audio temps réel : un verrou et un ajout, rien d'autre.
-        let tap: AVAudioNodeTapBlock = { pcm, when in
-            guard let channels = pcm.floatChannelData else { return }
-            let n = Int(pcm.frameLength)
-            guard n > 0 else { return }
-            let first = UnsafeBufferPointer(start: channels[0], count: n)
-            let rate = pcm.format.sampleRate
-            // `withLockUnchecked` : le pointeur ne sort pas de la section critique, il n'a pas à être Sendable.
-            store.withLockUnchecked {
-                guard $0.accepting else { return }
-                $0.samples.append(contentsOf: first)
-                $0.sampleRate = rate
-                if $0.firstBufferAt == nil {
-                    $0.firstBufferAt = DispatchTime.now().uptimeNanoseconds
-                    $0.firstSampleHostTime = when.isHostTimeValid ? when.hostTime : nil
-                }
-            }
-        }
-
         do {
             let frames = AVAudioFrameCount((format.sampleRate * Self.tapBufferSeconds).rounded(.up))
             try installTap(on: input, bufferSize: frames, format: format, block: tap)
@@ -101,9 +110,56 @@ public final class AudioCapture {
         } catch {
             input.removeTap(onBus: 0)
             store.withLock { $0.accepting = false }
-            throw error as? AudioCaptureError ?? AudioCaptureError.engineFailed(String(describing: error))
+            currentGate.withLock { $0 }?.close()
+            throw error as? AudioCaptureError ?? AudioCaptureError.engineFailed(Self.reason(for: error))
         }
         running = true
+    }
+
+    /// Prépare une prise (remet le tampon à zéro, ouvre une porte de livraison neuve) et rend le bloc du tap. Séparé
+    /// de `start` pour être exercé sans micro par des tampons synthétiques.
+    ///
+    /// Fil du tap : un verrou pour le tampon, une copie `[Float]` et l'appel de `onChunk` sous la porte de livraison ;
+    /// aucun autre travail.
+    func makeTap(sampleRate: Double, accumulate: Bool,
+                 onChunk: (@Sendable (AudioChunk) -> Void)?) -> AVAudioNodeTapBlock {
+        let store = buffer
+        store.withLock {
+            $0.samples.removeAll(keepingCapacity: true)
+            if accumulate { $0.samples.reserveCapacity(Int(sampleRate) * 30) }
+            $0.sampleRate = sampleRate
+            $0.accepting = true
+            $0.firstBufferAt = nil
+            $0.firstSampleHostTime = nil
+        }
+        let gate = DeliveryGate()
+        // Une prise encore ouverte (cas anormal) est fermée avant d'être remplacée.
+        currentGate.withLock { old in
+            let previous = old
+            old = gate
+            return previous
+        }?.close()
+        return { pcm, when in
+            guard let channels = pcm.floatChannelData else { return }
+            let n = Int(pcm.frameLength)
+            guard n > 0 else { return }
+            let first = UnsafeBufferPointer(start: channels[0], count: n)
+            let rate = pcm.format.sampleRate
+            // `withLockUnchecked` : le pointeur ne sort pas de la section critique, il n'a pas à être Sendable.
+            store.withLockUnchecked {
+                guard $0.accepting else { return }
+                if accumulate { $0.samples.append(contentsOf: first) }
+                $0.sampleRate = rate
+                if $0.firstBufferAt == nil {
+                    $0.firstBufferAt = DispatchTime.now().uptimeNanoseconds
+                    $0.firstSampleHostTime = when.isHostTimeValid ? when.hostTime : nil
+                }
+            }
+            if let onChunk {
+                let chunk = AudioChunk(samples: Array(first), sampleRate: rate)
+                gate.deliver { onChunk(chunk) }
+            }
+        }
     }
 
     /// Délai (secondes) entre l'appel de `engine.start()` et la livraison du premier buffer du tap, au dernier
@@ -126,7 +182,16 @@ public final class AudioCapture {
     /// 400 ms au pire** si le système élargit. Un appelant qui ne peut pas perdre la fin d'une phrase doit laisser
     /// tourner la capture au moins 400 ms après le dernier son voulu avant d'appeler `stop()` (c'est ce que fait
     /// `RecordSession`).
+    ///
+    /// Si `onChunk` a été fourni : `stop()` attend la fin d'un appel en cours et plus aucun n'arrive après son retour.
+    /// Ne pas l'appeler depuis `onChunk` (précondition).
     public func stop() -> AudioClip {
+        // Avant de prendre `lifecycle` : un `stop()` venu de `onChunk` doit échouer net, non attendre un autre `stop()`.
+        currentGate.withLock { $0 }?.assertNotDelivering()
+        lifecycle.lock()
+        defer { lifecycle.unlock() }
+        // D'abord : une livraison en cours se termine, aucune autre ne commence.
+        currentGate.withLock { $0 }?.close()
         if running {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
@@ -146,7 +211,7 @@ public final class AudioCapture {
             engine.attach(anchorPlayer)
             try connectAnchorPlayer()
             do { try engine.inputNode.setVoiceProcessingEnabled(true) }
-            catch { throw AudioCaptureError.engineFailed("voice processing : \(error)") }
+            catch { throw AudioCaptureError.engineFailed("traitement de la voix : \(Self.reason(for: error))") }
             // Ducking au minimum : on ne veut pas baisser le volume des autres applications pendant la dictée.
             engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
                 AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
@@ -160,7 +225,7 @@ public final class AudioCapture {
     private func connectAnchorPlayer() throws {
         if #available(macOS 27, *) {
             do { try engine.connectNode(anchorPlayer, to: engine.mainMixerNode, format: nil) }
-            catch { throw AudioCaptureError.engineFailed("connexion du nœud de lecture : \(error)") }
+            catch { throw AudioCaptureError.engineFailed("connexion du nœud de lecture : \(Self.reason(for: error))") }
         } else {
             engine.connect(anchorPlayer, to: engine.mainMixerNode, format: nil)
         }
@@ -179,13 +244,43 @@ public final class AudioCapture {
 
     // MARK: - Autorisation micro
 
-    /// Sans autorisation, le moteur démarre quand même et livre du silence : on vérifie donc explicitement.
-    /// Statut « non déterminé » : on déclenche la demande système et on attend la réponse (une personne doit répondre).
-    private static func ensureMicrophoneAccess() throws {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    /// Ce qu'il faut faire d'un statut d'autorisation. Séparé de l'appel système pour être testé sans toucher aux
+    /// vraies permissions.
+    enum AccessDecision: Equatable {
+        case granted
+        /// Statut « non déterminé » et invite permise : il faut demander à la personne.
+        case askUser
+        case refused(AudioCaptureError)
+    }
+
+    private static let settingsPath = "Réglages Système > Confidentialité et sécurité > Micro"
+
+    static func accessDecision(for status: AVAuthorizationStatus, promptsForAccess: Bool) -> AccessDecision {
+        switch status {
         case .authorized:
-            return
+            return .granted
         case .notDetermined:
+            if promptsForAccess { return .askUser }
+            return .refused(.microphoneAccessDenied("accès au micro pas encore accordé : l'autoriser dans \(settingsPath)"))
+        case .denied:
+            return .refused(.microphoneAccessDenied("accès refusé : l'autoriser dans \(settingsPath)"))
+        case .restricted:
+            return .refused(.microphoneAccessDenied("accès au micro restreint par une politique du système"))
+        @unknown default:
+            return .refused(.microphoneAccessDenied("statut d'autorisation inconnu"))
+        }
+    }
+
+    /// Sans autorisation, le moteur démarre quand même et livre du silence : on vérifie donc explicitement.
+    /// Statut « non déterminé » : avec `promptsForAccess`, on déclenche la demande système et on attend la réponse
+    /// (une personne doit répondre) ; sans, on refuse tout de suite.
+    private func ensureMicrophoneAccess() throws {
+        switch Self.accessDecision(for: AVCaptureDevice.authorizationStatus(for: .audio), promptsForAccess: promptsForAccess) {
+        case .granted:
+            return
+        case .refused(let error):
+            throw error
+        case .askUser:
             let answer = OSAllocatedUnfairLock(initialState: false)
             let done = DispatchSemaphore(value: 0)
             AVCaptureDevice.requestAccess(for: .audio) { granted in
@@ -195,12 +290,6 @@ public final class AudioCapture {
             done.wait()
             if answer.withLock({ $0 }) { return }
             throw AudioCaptureError.microphoneAccessDenied("demande d'accès au micro refusée")
-        case .denied:
-            throw AudioCaptureError.microphoneAccessDenied("accès refusé : l'autoriser pour ce terminal dans Réglages Système > Confidentialité et sécurité > Micro")
-        case .restricted:
-            throw AudioCaptureError.microphoneAccessDenied("accès au micro restreint par une politique du système")
-        @unknown default:
-            throw AudioCaptureError.microphoneAccessDenied("statut d'autorisation inconnu")
         }
     }
 }
