@@ -79,6 +79,10 @@ import Testing
         #expect(textView.allowsUndo)
     }
 
+    /// Vérifié sur un `NSTextView` nu (sonde) : `isAutomaticLinkDetectionEnabled`, `isAutomaticDataDetectionEnabled` et
+    /// `importsGraphics` valent déjà `false` par défaut ; ces trois assertions ne tomberaient donc pas sans `makeTextView`,
+    /// elles gardent seulement contre un changement de défaut. Les autres valent `true` par défaut (`isRichText`, citations,
+    /// tirets, remplacement, correction orthographique, insertion intelligente, complétion).
     @Test func nothingRewritesWhatTheUserTypes() {
         let textView = ReviewTextView.makeTextView()
         #expect(!textView.isAutomaticQuoteSubstitutionEnabled)
@@ -87,6 +91,20 @@ import Testing
         #expect(!textView.isAutomaticSpellingCorrectionEnabled)
         #expect(!textView.isAutomaticLinkDetectionEnabled)
         #expect(!textView.isAutomaticDataDetectionEnabled)
+    }
+
+    /// Réglages voisins qui modifient aussi un texte à l'insu de l'utilisateur ; tous `true` ou par défaut sur un champ nu.
+    @Test func smartInsertionCompletionPredictionAndWritingToolsAreOff() {
+        let textView = ReviewTextView.makeTextView()
+        #expect(!textView.smartInsertDeleteEnabled)
+        #expect(!textView.isAutomaticTextCompletionEnabled)
+        #expect(textView.inlinePredictionType == .no)
+        #expect(textView.writingToolsBehavior == .none)
+    }
+
+    @Test func theFieldHasAnAccessibilityLabel() {
+        let textView = ReviewTextView.makeTextView()
+        #expect(textView.accessibilityLabel() == "Texte à relire")
     }
 
     @Test func theFieldUsesTheSystemCalloutFont() {

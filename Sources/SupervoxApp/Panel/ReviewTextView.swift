@@ -31,6 +31,13 @@ struct ReviewTextView: NSViewRepresentable {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticLinkDetectionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false
+        // Rien non plus ne s'insère, ne se complète ni ne se prédit : ni espaces « intelligents », ni complétion, ni
+        // prédiction en ligne, ni Outils d'écriture (qui réécrivent le texte).
+        textView.smartInsertDeleteEnabled = false
+        textView.isAutomaticTextCompletionEnabled = false
+        textView.inlinePredictionType = .no
+        textView.writingToolsBehavior = .none
+        textView.setAccessibilityLabel("Texte à relire")
         textView.font = .preferredFont(forTextStyle: .callout)
         textView.drawsBackground = false
         textView.textContainerInset = NSSize(width: 0, height: 2)
@@ -89,7 +96,9 @@ struct ReviewTextView: NSViewRepresentable {
 /// avant que SwiftUI ait posé le champ ; ou l'inverse.
 final class FocusingTextView: NSTextView {
     var takesFocus = false {
-        didSet { if takesFocus { focusIfPossible() } }
+        // Seulement au passage de faux à vrai : SwiftUI répète la valeur à chaque mise à jour, et l'utilisateur qui est allé
+        // sur un bouton ne doit pas être ramené au champ.
+        didSet { if takesFocus && !oldValue { focusIfPossible() } }
     }
 
     override func viewDidMoveToWindow() {

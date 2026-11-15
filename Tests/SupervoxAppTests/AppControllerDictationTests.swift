@@ -521,7 +521,7 @@ final class TimeoutLog: Sendable {
             "keyboard(focused)",
             "keyboard(none)", "wait(0.15)",
             "read", "writeText(transient: true)", "modifiersHeld", "postPaste(9)", "writeText(transient: false)",
-            "keyboard(none)",
+            // Plus de « keyboard(none) » à la fermeture : `hide()` retire lui-même la frappe, en un seul retrait.
         ])
         #expect(rig.board.text == "Texte dicté, corrigé.")
         #expect(handover.durations == [DictationController.focusHandoverDelay])

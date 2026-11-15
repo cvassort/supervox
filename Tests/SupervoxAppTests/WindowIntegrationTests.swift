@@ -46,18 +46,15 @@ struct WindowIntegrationTests {
         #expect(!panel.isVisible)
     }
 
-    /// L'activation, telle que le système la voit : l'application au premier plan et si Supervox l'est. `NSApp.isActive` ne
-    /// convient pas : il passe à vrai dès qu'un panneau non activant devient clé (constaté), sans que le système change
-    /// d'application active.
-    private struct Activation: Equatable {
-        var frontmostProcess: pid_t?
-        var supervoxIsActive: Bool
-
-        static func snapshot() -> Activation {
-            Activation(
-                frontmostProcess: NSWorkspace.shared.frontmostApplication?.processIdentifier,
-                supervoxIsActive: NSRunningApplication.current.isActive)
-        }
+    /// « L'application n'est pas activée » ne se prouve pas hors d'un vrai écran : `NSApp.isActive` passe à vrai dès qu'un
+    /// panneau non activant devient clé (constaté), et la sonde du système (`NSRunningApplication.current.isActive`, application
+    /// au premier plan) ne peut pas échouer dans le processus de test (exécutable sans bundle ni bureau ; en provoquer
+    /// l'échec exigerait d'activer vraiment l'application). La règle est donc à l'essai manuel ; ce test garde la
+    /// configuration qui la porte.
+    @Test func thePanelIsANonActivatingPanel() {
+        let panel = FloatingPanel(content: Color.clear.frame(width: 10, height: 10))
+        #expect(panel.styleMask.contains(.nonactivatingPanel))
+        #expect(panel.isFloatingPanel)
     }
 
     /// Un champ de relecture que le test pose ou non dans la vue, pour essayer les deux ordres.
@@ -111,7 +108,6 @@ struct WindowIntegrationTests {
         let surface = offscreenSurface(slot)
         let panel = surface.panel
         defer { panel.orderOut(nil) }
-        let front = Activation.snapshot()
 
         surface.setKeyboard(.focused)
         try #require(panel.isKeyWindow, "le panneau n'est pas devenu clé")
@@ -121,7 +117,6 @@ struct WindowIntegrationTests {
         #expect(await waitUntil { reviewField(in: panel) != nil }, "SwiftUI n'a pas posé le champ")
         let field = try #require(reviewField(in: panel))
         #expect(await waitUntil { panel.firstResponder === field }, "le champ n'est pas le premier répondeur")
-        #expect(Activation.snapshot() == front, "l'application ne doit pas être activée")
     }
 
     /// Champ ajouté, puis fenêtre rendue clé : le champ prend la frappe dès que la fenêtre devient clé.
@@ -132,7 +127,6 @@ struct WindowIntegrationTests {
         let surface = offscreenSurface(slot)
         let panel = surface.panel
         defer { panel.orderOut(nil) }
-        let front = Activation.snapshot()
 
         #expect(await waitUntil { reviewField(in: panel) != nil }, "SwiftUI n'a pas posé le champ")
         let field = try #require(reviewField(in: panel))
@@ -144,7 +138,6 @@ struct WindowIntegrationTests {
         surface.setKeyboard(.focused)
         try #require(panel.isKeyWindow, "le panneau n'est pas devenu clé")
         #expect(panel.firstResponder === field)
-        #expect(Activation.snapshot() == front, "l'application ne doit pas être activée")
     }
 
     /// Le champ est prêt à recevoir une frappe : `insertText` l'écrit, `undoManager.undo()` le défait.
@@ -225,6 +218,138 @@ struct WindowIntegrationTests {
                 isARepeat: false, keyCode: 6))
         #expect(!panel.performKeyEquivalent(with: event))
         #expect(field.string == "bonjour")
+    }
+
+    private func keyEvent(
+        _ characters: String, _ flags: NSEvent.ModifierFlags, type: NSEvent.EventType = .keyDown, in window: NSWindow,
+        keyCode: UInt16 = 0
+    ) throws -> NSEvent {
+        try #require(
+            NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false,
+                keyCode: keyCode))
+    }
+
+    /// ⌘Z rend le texte d'avant, ⇧⌘Z rend le texte tapé : `redo:` trouve bien un répondeur.
+    @Test func commandZThenShiftCommandZUndoesThenRedoesTheTyping() async throws {
+        let slot = FieldSlot()
+        let (surface, field) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        field.insertText("bonjour", replacementRange: NSRange(location: 0, length: 0))
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(field.string == "")
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        #expect(field.string == "bonjour")
+    }
+
+    /// Panneau sans clavier : aucune commande n'est traduite, même si un champ est encore premier répondeur.
+    @Test func withoutAKeyboardThePanelTranslatesNothing() async throws {
+        let slot = FieldSlot()
+        let (surface, field) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+        field.insertText("bonjour", replacementRange: NSRange(location: 0, length: 0))
+        field.setSelectedRange(NSRange(location: 2, length: 0))
+        surface.setKeyboard(.none)
+        try #require(panel.firstResponder === field)
+
+        #expect(try !panel.performKeyEquivalent(with: keyEvent("a", .command, in: panel)))
+        #expect(field.selectedRange() == NSRange(location: 2, length: 0))
+    }
+
+    /// Un événement qui n'est pas un appui de touche n'est pas lu (`charactersIgnoringModifiers` lèverait sur un autre type).
+    @Test func anEventThatIsNotAKeyDownIsNotTranslated() async throws {
+        let slot = FieldSlot()
+        let (surface, field) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+        field.insertText("bonjour", replacementRange: NSRange(location: 0, length: 0))
+        field.setSelectedRange(NSRange(location: 2, length: 0))
+
+        #expect(try !panel.performKeyEquivalent(with: keyEvent("a", .command, type: .keyUp, in: panel)))
+        #expect(field.selectedRange() == NSRange(location: 2, length: 0))
+    }
+
+    /// Un délégué d'application qui répond à `selectAll:` : `NSApp.sendAction(to: nil)` l'atteindrait en dernier recours.
+    @MainActor final class SelectAllDelegate: NSObject, NSApplicationDelegate {
+        private(set) var received = 0
+        @objc func selectAll(_ sender: Any?) { received += 1 }
+    }
+
+    /// La commande reste dans la chaîne des répondeurs du panneau : elle ne déborde pas sur la fenêtre principale ni sur le
+    /// délégué de l'application. (Une seconde fenêtre principale ne peut pas être montée hors écran : une fenêtre ordinaire ne
+    /// devient clé ni principale dans une application inactive ; le délégué est l'autre fin de la même chaîne élargie.)
+    @Test func aCommandStaysInThePanelsResponderChain() async throws {
+        _ = NSApplication.shared
+        let delegate = SelectAllDelegate()
+        let previous = NSApp.delegate
+        NSApp.delegate = delegate
+        defer { NSApp.delegate = previous }
+
+        // Le panneau, clé, a pour premier répondeur la fenêtre elle-même : personne dans sa chaîne ne répond à `selectAll:`.
+        let slot = FieldSlot()
+        let surface = offscreenSurface(slot)
+        defer { surface.panel.orderOut(nil) }
+        surface.setKeyboard(.focused)
+        try #require(surface.panel.isKeyWindow)
+
+        let handled = try surface.panel.performKeyEquivalent(with: keyEvent("a", .command, in: surface.panel))
+        #expect(!handled)
+        #expect(delegate.received == 0, "la commande a atteint le délégué de l'application")
+    }
+
+    /// `takesFocus` ne reprend le focus qu'au passage de faux à vrai : une mise à jour SwiftUI qui répète `true` ne ramène
+    /// pas l'utilisateur au champ.
+    @Test func takesFocusOnlyGrabsTheFocusWhenItChanges() async throws {
+        let slot = FieldSlot()
+        let (surface, field) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        panel.makeFirstResponder(nil)
+        try #require(panel.firstResponder !== field)
+        ReviewTextView.update(field, text: field.string, isEditable: true, takesFocus: true)
+        #expect(panel.firstResponder !== field, "une mise à jour sans changement a repris le focus")
+
+        ReviewTextView.update(field, text: field.string, isEditable: true, takesFocus: false)
+        ReviewTextView.update(field, text: field.string, isEditable: true, takesFocus: true)
+        #expect(panel.firstResponder === field)
+    }
+
+    /// Fermer un panneau clé : un seul retrait de l'écran, sans remise devant ; le panneau n'a plus la frappe.
+    @Test func hidingAKeyPanelIsASingleOrderOutAndTakesItsKeyboardAway() async throws {
+        let slot = FieldSlot()
+        let (surface, _) = try await focusedField(slot)
+        let panel = surface.panel
+        let before = panel.orderings.count
+
+        surface.hide()
+        #expect(panel.orderings.count - before == 1)
+        #expect(panel.orderings.last?.kind == .out)
+        #expect(panel.keyboard == .none)
+        #expect(!panel.isKeyWindow)
+        #expect(!panel.isVisible)
+    }
+
+    /// Rendre la frappe panneau ouvert : retirer puis remettre, sans animation autour, animation rétablie ensuite.
+    @Test func handingTheKeyboardBackOfAnOpenPanelRemovesAndRestoresItWithoutAnimation() async throws {
+        let slot = FieldSlot()
+        let (surface, _) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+        let normal = panel.animationBehavior
+        try #require(normal != .none)
+        let before = panel.orderings.count
+
+        surface.setKeyboard(.available)
+        let made = Array(panel.orderings.dropFirst(before))
+        #expect(made == [.init(kind: .out, animation: .none), .init(kind: .front, animation: .none)])
+        #expect(panel.animationBehavior == normal)
+        #expect(panel.isVisible)
+        #expect(!panel.isKeyWindow)
     }
 
     /// Rendre le clavier : un panneau clé passe à `none`, il cesse d'être clé et ne peut plus le redevenir.

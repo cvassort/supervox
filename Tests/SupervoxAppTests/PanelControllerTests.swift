@@ -12,7 +12,7 @@ import Testing
     /// sa taille à l'affichage).
     var onShow: (@MainActor () -> Void)?
 
-    /// Ce que la surface a reçu, dans l'ordre : le contrôleur doit poser `.none` avant `hide`.
+    /// Ce que la surface a reçu, dans l'ordre : la fermeture est un seul `hide`, sans `setKeyboard` ni `show`.
     enum Call: Equatable {
         case show
         case hide
@@ -202,31 +202,35 @@ import Testing
         #expect(surface.calls == [.show, .keyboard(keyboard)])
     }
 
-    @Test func closingPutsNoKeyboardBeforeHiding() {
+    /// La fermeture ne passe plus par `setKeyboard(.none)` : `hide()` retire lui-même la frappe au panneau, en un seul retrait
+    /// de l'écran (la manœuvre « retirer puis remettre » de `setKeyboard` n'a de sens que panneau ouvert).
+    @Test func closingHidesOnceWithoutAKeyboardRequestOrAReshow() {
         let controller = makeController()
         controller.open()
         controller.setKeyboard(.focused)
         controller.close()
-        #expect(surface.calls == [.show, .keyboard(.focused), .keyboard(.none), .hide])
+        #expect(surface.calls == [.show, .keyboard(.focused), .hide])
     }
 
-    @Test func everyWayOfClosingPutsNoKeyboardBeforeHiding() {
+    @Test func everyWayOfClosingHidesOnceWithoutAKeyboardRequestOrAReshow() {
         let controller = makeController()
         // La bascule du menu.
         controller.open()
         controller.setKeyboard(.focused)
         controller.toggle()
-        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.none), .hide])
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.focused), .hide])
         // Échap sans gestionnaire.
         controller.open()
         controller.setKeyboard(.available)
         escape.press()
-        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.none), .hide])
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.available), .hide])
         // Le clic en dehors.
         controller.open()
         controller.setKeyboard(.focused)
         clicks.clickOutside()
-        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.none), .hide])
+        #expect(Array(surface.calls.suffix(2)) == [.keyboard(.focused), .hide])
+        #expect(surface.calls.filter { $0 == .hide }.count == 3)
+        #expect(surface.calls.filter { $0 == .show }.count == 3)
     }
 
     @Test func reopeningCarriesNoKeyboardOverFromTheLastTime() {
@@ -237,9 +241,9 @@ import Testing
         controller.open()
         #expect(Array(surface.calls.suffix(1)) == [.show])
         // Rien n'a été remis sur la surface depuis la fermeture.
-        #expect(surface.keyboards == [.focused, .none])
+        #expect(surface.keyboards == [.focused])
         controller.setKeyboard(.available)
-        #expect(surface.keyboards == [.focused, .none, .available])
+        #expect(surface.keyboards == [.focused, .available])
     }
 
     // MARK: - Cadre redimensionné
