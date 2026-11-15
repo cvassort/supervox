@@ -82,16 +82,20 @@ public final class TranscriptionModel {
     @ObservationIgnored private let catalog: any ModelCatalog
     @ObservationIgnored private let promptTokenLimit: Int
     @ObservationIgnored private let save: Save
+    @ObservationIgnored private let isDictating: @MainActor () -> Bool
 
     /// `promptTokenLimit` : taille maximale de la liste de vocabulaire que Whisper accepte, dans l'unité de son tokenizer
     /// (`WhisperKitTranscriber.promptTokenLimit`) ; l'interface dit « morceaux de mots ».
     /// `save` enregistre les réglages de transcription complets ; s'il lève, rien ne change en mémoire.
+    /// `isDictating` : vrai pendant une dictée ; la suppression d'un modèle est alors refusée (la dictée en tient peut-être un).
     public init(
-        settings: TranscriptionSettings, catalog: any ModelCatalog, promptTokenLimit: Int, save: @escaping Save
+        settings: TranscriptionSettings, catalog: any ModelCatalog, promptTokenLimit: Int,
+        isDictating: @escaping @MainActor () -> Bool = { false }, save: @escaping Save
     ) {
         self.settings = settings
         self.catalog = catalog
         self.promptTokenLimit = promptTokenLimit
+        self.isDictating = isDictating
         self.save = save
     }
 
@@ -189,6 +193,10 @@ public final class TranscriptionModel {
     public func delete(_ id: String) async {
         if case .downloading? = overrides[id] { return }
         clearMessage()
+        guard !isDictating() else {
+            show("Une dictée est en cours : attendez qu'elle se termine pour supprimer un modèle.", .error)
+            return
+        }
         let wasReady = models.first { $0.id == id }?.state == .ready
         do {
             try await catalog.delete(id)

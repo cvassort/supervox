@@ -49,6 +49,10 @@ public final class DictationController {
     @ObservationIgnored private let hold: HoldWatch
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
+    /// Vrai de l'appui jusqu'à la fin du collage (ou de l'échec, de l'annulation) : une dictée est en cours. Les réglages s'en
+    /// servent pour refuser de supprimer un modèle que la dictée utilise.
+    public var isBusy: Bool { run != nil }
+
     /// La dictée en cours, `nil` hors dictée (y compris pendant que le panneau montre un échec ou une copie).
     @ObservationIgnored private var run: Run?
     /// La dernière insertion lancée : la suivante l'attend.
@@ -170,6 +174,19 @@ public final class DictationController {
         if download {
             run.downloadNotice = Self.downloadNotice
             refreshNotice(run)
+            // Par le catalogue des modèles : un seul téléchargement par modèle, visible dans les réglages. Avant le comptage
+            // du vocabulaire, qui a besoin du tokenizer que ce téléchargement apporte.
+            do {
+                try await environment.downloadModels(settings)
+            } catch {
+                guard isLive(run) else { return }
+                log.error("téléchargement des modèles échoué")
+                finishRun(
+                    run, with: .failed(.engine("le téléchargement du modèle a échoué")),
+                    notice: Self.preparationFailedNotice)
+                return
+            }
+            guard isLive(run) else { return }
         }
 
         var effective = settings

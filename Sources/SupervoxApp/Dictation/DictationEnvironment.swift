@@ -7,9 +7,12 @@ import SupervoxCore
 public struct DictationEnvironment: Sendable {
     /// Une session neuve pour ces réglages. Une erreur levée ici n'ouvre aucun micro : le contrôleur la dit.
     public var makeSession: @Sendable (TranscriptionSettings) async throws -> any DictationSessioning
-    /// Vrai si un modèle dont la dictée a besoin (moteur choisi, aperçu, détecteur de voix) n'est pas prêt sur le disque :
-    /// la préparation le téléchargera.
+    /// Vrai si un modèle dont la dictée a besoin (moteur choisi, aperçu, détecteur de voix, et le petit modèle de vocabulaire
+    /// si le vocabulaire n'est pas vide) n'est pas prêt sur le disque : il sera téléchargé avant la préparation.
     public var needsModelDownload: @Sendable (TranscriptionSettings) async -> Bool
+    /// Télécharge ces modèles par le catalogue des modèles (même état et même progression que depuis les réglages, et
+    /// jamais un second téléchargement du même modèle) : rend quand ils sont tous là, lève si l'un échoue.
+    public var downloadModels: @Sendable (TranscriptionSettings) async throws -> Void
     /// Nombre de jetons de l'amorce du vocabulaire pour ce modèle Whisper ; `nil` si son tokenizer n'est pas sur le disque
     /// (`ModelCatalog.promptTokenCount`).
     public var promptTokenCount: @Sendable (_ vocabulary: [String], _ whisperModel: String) async -> Int?
@@ -19,11 +22,13 @@ public struct DictationEnvironment: Sendable {
     public init(
         makeSession: @escaping @Sendable (TranscriptionSettings) async throws -> any DictationSessioning,
         needsModelDownload: @escaping @Sendable (TranscriptionSettings) async -> Bool,
+        downloadModels: @escaping @Sendable (TranscriptionSettings) async throws -> Void,
         promptTokenCount: @escaping @Sendable ([String], String) async -> Int?,
         promptTokenLimit: Int
     ) {
         self.makeSession = makeSession
         self.needsModelDownload = needsModelDownload
+        self.downloadModels = downloadModels
         self.promptTokenCount = promptTokenCount
         self.promptTokenLimit = promptTokenLimit
     }
@@ -32,6 +37,7 @@ public struct DictationEnvironment: Sendable {
     public static let unavailable = DictationEnvironment(
         makeSession: { _ in throw DictationUnavailable() },
         needsModelDownload: { _ in false },
+        downloadModels: { _ in },
         promptTokenCount: { _, _ in nil },
         promptTokenLimit: 0)
 }

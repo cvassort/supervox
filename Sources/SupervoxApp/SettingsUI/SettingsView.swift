@@ -90,6 +90,7 @@ public struct SettingsView: View {
     ) -> TranscriptionModel {
         TranscriptionModel(
             settings: controller.settings.transcription, catalog: catalog, promptTokenLimit: promptTokenLimit,
+            isDictating: { [weak controller] in controller?.dictation.isBusy ?? false },
             save: { [weak controller] transcription in
                 try controller?.updateSettings { $0.transcription = transcription }
             })

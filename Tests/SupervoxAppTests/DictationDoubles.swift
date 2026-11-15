@@ -5,8 +5,9 @@ import Testing
 
 @testable import SupervoxApp
 
-/// Barrière : `wait()` attend jusqu'à `open()`, sans durée réelle. Ne regarde pas l'annulation de la tâche qui attend (un
-/// moteur qui ignore l'annulation se comporte ainsi).
+/// Barrière : `wait()` attend jusqu'à `open()`, sans durée réelle. Ne regarde pas l'annulation de la tâche qui attend
+/// (un moteur qui ignore l'annulation se comporte ainsi) ; seul `open()` la libère, et les tests l'ouvrent dans un `defer`
+/// pour qu'un échec ne laisse jamais rien pendu.
 final class TestGate: Sendable {
     private let state = Mutex<(isOpen: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
 
@@ -88,6 +89,11 @@ final class FakeEngines: Sendable {
         var countCalls = 0
         /// La tâche qui fabriquait la session était annulée quand la fabrication a repris.
         var cancelledDuringMake = false
+        /// L'ordre des appels à l'environnement : « download », « count », « make ».
+        var events: [String] = []
+        var downloadGate: TestGate?
+        var downloadError: (any Error)?
+        var downloadedFor: [TranscriptionSettings] = []
         var tokenCount: @Sendable ([String], String) -> Int? = { terms, _ in terms.count }
         var limit = 1000
     }
@@ -98,6 +104,8 @@ final class FakeEngines: Sendable {
     var settingsSeen: [TranscriptionSettings] { state.withLock { $0.settingsSeen } }
     var countCalls: Int { state.withLock { $0.countCalls } }
     var cancelledDuringMake: Bool { state.withLock { $0.cancelledDuringMake } }
+    var events: [String] { state.withLock { $0.events } }
+    var downloadedFor: [TranscriptionSettings] { state.withLock { $0.downloadedFor } }
 
     func configure(_ change: (inout State) -> Void) { state.withLock { change(&$0) } }
 
@@ -105,6 +113,7 @@ final class FakeEngines: Sendable {
         DictationEnvironment(
             makeSession: { [self] settings in
                 let gate = state.withLock { state -> TestGate? in
+                    state.events.append("make")
                     state.settingsSeen.append(settings)
                     return state.makeGate
                 }
@@ -120,9 +129,19 @@ final class FakeEngines: Sendable {
                 return session
             },
             needsModelDownload: { [self] _ in state.withLock { $0.modelMissing } },
+            downloadModels: { [self] settings in
+                let (gate, error) = state.withLock { state -> (TestGate?, (any Error)?) in
+                    state.events.append("download")
+                    state.downloadedFor.append(settings)
+                    return (state.downloadGate, state.downloadError)
+                }
+                await gate?.wait()
+                if let error { throw error }
+            },
             promptTokenCount: { [self] terms, model in
                 let count = state.withLock { state -> @Sendable ([String], String) -> Int? in
                     state.countCalls += 1
+                    state.events.append("count")
                     return state.tokenCount
                 }
                 return count(terms, model)

@@ -123,6 +123,7 @@ import SupervoxCore
         let h = DictationHarness()
         h.knobs.behavior = .hold
         let gate = TestGate()
+        defer { gate.open() }
         h.engines.configure { $0.makeGate = gate }
         h.controller.hotKeyPressed()
         h.controller.hotKeyReleased()
@@ -432,6 +433,7 @@ import SupervoxCore
     @Test func escapeBeforeTheSessionExistsNeverStartsIt() async {
         let h = DictationHarness()
         let gate = TestGate()
+        defer { gate.open() }
         h.engines.configure { $0.makeGate = gate }
         h.controller.hotKeyPressed()
         #expect(h.panel.isOpen)
@@ -502,6 +504,7 @@ import SupervoxCore
     @Test func aResultArrivingAfterACancelIsNeverPastedNorShown() async {
         let h = DictationHarness()
         let stuck = TestGate()
+        defer { stuck.open() }
         h.engines.configure { $0.queue = [FakeSession(finishGate: stuck)] }
         let session = await h.startRecording()
         h.controller.hotKeyPressed()
@@ -639,6 +642,99 @@ import SupervoxCore
         session.emit(.recording)
         #expect(await until { h.controller.view.phase == .recording })
         #expect(h.controller.view.notice == nil)
+    }
+
+    /// I5 : un modèle qui manque se télécharge par le catalogue, avant que la session soit fabriquée.
+    @Test func aMissingModelIsDownloadedThroughTheCatalogueBeforeTheSessionIsBuilt() async {
+        let h = DictationHarness()
+        h.engines.configure { $0.modelMissing = true }
+        h.knobs.settings = TranscriptionSettings(
+            engine: "parakeet", whisperModel: "base", language: "fr", vocabulary: ["terme"])
+        h.controller.hotKeyPressed()
+        _ = await h.session()
+
+        #expect(h.engines.events == ["download", "make"])
+        #expect(h.engines.downloadedFor == [h.knobs.settings])
+    }
+
+    @Test func nothingIsDownloadedWhenNothingIsMissing() async {
+        let h = DictationHarness()
+        h.controller.hotKeyPressed()
+        _ = await h.session()
+        #expect(h.engines.events == ["make"])
+    }
+
+    @Test func theVocabularyIsCountedAfterTheDownloadBecauseItBringsTheTokenizer() async {
+        let h = DictationHarness()
+        h.engines.configure { $0.modelMissing = true }
+        h.knobs.settings = TranscriptionSettings(
+            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+        h.controller.hotKeyPressed()
+        _ = await h.session()
+        #expect(h.engines.events == ["download", "count", "make"])
+    }
+
+    @Test func aDownloadThatFailsFailsThePreparationWithTheFixedPhraseAndBuildsNoSession() async {
+        let h = DictationHarness()
+        h.engines.configure {
+            $0.modelMissing = true
+            $0.downloadError = LeakyError()
+        }
+        h.controller.hotKeyPressed()
+
+        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(h.panel.isOpen)
+        let notice = h.controller.view.notice ?? ""
+        #expect(notice == DictationController.preparationFailedNotice)
+        #expect(notice.contains("Transcription"))
+        #expect(!notice.contains("exemple.invalid"))
+        #expect(!notice.contains("sk-123"))
+        await settle()
+        #expect(h.engines.sessions.isEmpty)
+        #expect(!h.engines.events.contains("make"))
+        // Un nouvel appui retente.
+        h.engines.configure { $0.downloadError = nil }
+        h.controller.hotKeyPressed()
+        _ = await h.session()
+    }
+
+    @Test func escapeDuringTheDownloadNeverBuildsTheSession() async {
+        let h = DictationHarness()
+        let gate = TestGate()
+        defer { gate.open() }
+        h.engines.configure {
+            $0.modelMissing = true
+            $0.downloadGate = gate
+        }
+        h.controller.hotKeyPressed()
+        #expect(await until { h.engines.events == ["download"] })
+
+        h.controller.escapePressed()
+        gate.open()
+        await settle()
+        #expect(h.engines.events == ["download"])
+        #expect(h.engines.sessions.isEmpty)
+        #expect(h.controller.view == DictationViewState())
+    }
+
+    @Test func theControllerSaysWhenADictationIsInProgress() async {
+        let h = DictationHarness()
+        #expect(!h.controller.isBusy)
+        let session = await h.startRecording()
+        #expect(h.controller.isBusy)
+        session.emit(.finalizing)
+        #expect(h.controller.isBusy)
+        session.emit(.finished("texte"))
+        #expect(await until { !h.controller.isBusy })
+
+        h.controller.hotKeyPressed()
+        #expect(h.controller.isBusy)
+        h.controller.escapePressed()
+        #expect(!h.controller.isBusy)
+
+        let failing = await h.startRecording(index: 1)
+        failing.emit(.failed(.noSpeech))
+        #expect(await until { !h.controller.isBusy })
     }
 
     @Test func aReadyModelShowsNoDownloadMention() async {

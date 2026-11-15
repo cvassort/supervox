@@ -121,10 +121,17 @@ final class ProgressBox: Sendable {
     /// Valeur de `WhisperKitTranscriber.promptTokenLimit`, fixée par `EngineIntegrationTests.whisperKitPromptBudget`.
     static let limit = 111
 
+    /// Vrai pendant qu'une dictée est en cours (le contrôleur de dictée, ici un drapeau).
+    let dictating = DictatingFlag()
+
+    @MainActor final class DictatingFlag { var value = false }
+
     func makeModel(_ settings: TranscriptionSettings = .defaults) -> TranscriptionModel {
         let saver = saver
+        let dictating = dictating
         return TranscriptionModel(
-            settings: settings, catalog: catalog, promptTokenLimit: Self.limit, save: { try saver.save($0) })
+            settings: settings, catalog: catalog, promptTokenLimit: Self.limit,
+            isDictating: { dictating.value }, save: { try saver.save($0) })
     }
 
     static func state(_ model: TranscriptionModel, _ id: String) -> LocalModel.State? {
@@ -446,6 +453,50 @@ final class ProgressBox: Sendable {
         #expect(Self.state(model, FakeModelCatalog.turbo.id) == .absent)
         #expect(model.message?.contains("prochaine dictée") == true)
         #expect(model.message?.contains("télécharg") == true)
+    }
+
+    /// I5 : une dictée en cours tient peut-être ce modèle : la suppression est refusée, avec un message clair.
+    @Test func deletingAModelIsRefusedWhileADictationRuns() async {
+        let model = makeModel()
+        await model.refresh()
+        dictating.value = true
+
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(catalog.deletions.isEmpty)
+        #expect(Self.state(model, FakeModelCatalog.turbo.id) == .ready)
+        let message = model.message ?? ""
+        #expect(message.contains("dictée est en cours"))
+        #expect(message.contains("supprimer"))
+        #expect(model.messageKind == .error)
+
+        // La dictée finie, la suppression passe, et le refus ne reste pas affiché.
+        dictating.value = false
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(catalog.deletions == [FakeModelCatalog.turbo.id])
+        #expect(Self.state(model, FakeModelCatalog.turbo.id) == .absent)
+        #expect(!(model.message ?? "").contains("dictée est en cours"))
+    }
+
+    @Test func aRefusalFromTheCatalogIsShownAsIs() async {
+        struct Busy: LocalizedError { var errorDescription: String? { "« Whisper small » est en cours de téléchargement." } }
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(Busy())
+
+        await model.delete(FakeModelCatalog.small.id)
+        #expect(model.message?.contains("est en cours de téléchargement") == true)
+        #expect(model.messageKind == .error)
+    }
+
+    @Test func aModelNoteIsPassedThroughToTheList() async {
+        let note = "Le petit modèle qui reconnaît votre vocabulaire sera téléchargé à la première dictée qui en a besoin."
+        let withNote = FakeModelCatalog(models: [
+            LocalModel(id: LocalModelID.parakeet, title: "Parakeet", detail: "", state: .ready, note: note)
+        ])
+        let model = TranscriptionModel(
+            settings: .defaults, catalog: withNote, promptTokenLimit: Self.limit, save: { _ in })
+        await model.refresh()
+        #expect(model.models.first?.note == note)
     }
 
     @Test func deletingAnAbsentModelOfTheChosenEngineDoesNotWarn() async {
