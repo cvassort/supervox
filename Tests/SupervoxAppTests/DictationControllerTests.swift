@@ -245,6 +245,26 @@ import SupervoxCore
         #expect(h.knobs.probes.isEmpty)
     }
 
+    /// Un raccourci sans touche de modification (réglages illisibles, fichier écrit à la main) : la sonde ne peut rien dire,
+    /// elle est inactive. Pas de coupure à 0,25 s : la dictée s'arrête au relâchement que le système livre.
+    @Test func aHotKeyWithoutModifiersGetsNoWatchAndEndsOnTheSystemsRelease() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        h.knobs.hotKeyModifiers = []
+        h.knobs.modifiersHeld = false
+        let session = await h.startRecording()
+        await settle()
+        #expect(!h.holdSleeper.isSleeping)
+        h.holdSleeper.release()
+        await settle()
+        #expect(h.knobs.probes.isEmpty)
+        #expect(session.count(of: "finish") == 0)
+        #expect(h.controller.view.phase == .recording)
+
+        h.controller.hotKeyReleased()
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
     @Test func theWatchStopsWhenTheRecordingEnds() async {
         let h = DictationHarness()
         h.knobs.behavior = .hold

@@ -159,6 +159,9 @@ public final class DictationController {
     /// venir quand les modificateurs sont lâchés avant la touche principale). S'arrête avec la dictée et à l'annulation.
     private func watchModifiers(_ run: Run) async {
         let modifiers = hotKeyModifiers()
+        // Sans touche de modification, la sonde ne peut rien dire (« aucune enfoncée » serait toujours vrai) : le relâchement
+        // du système, ou la durée maximale de la session, termine la dictée.
+        guard !modifiers.isEmpty else { return }
         while isLive(run), view.phase == .preparing || view.phase == .recording {
             await self.hold.wait(self.hold.interval)
             // Une attente annulée rend la main aussitôt : sans cette sortie, la boucle tournerait sans attendre.
