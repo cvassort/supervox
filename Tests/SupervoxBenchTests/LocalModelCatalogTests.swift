@@ -335,6 +335,66 @@ import WhisperKit
         #expect(config.load == true)
         #expect(WhisperKitTranscriber.configuration(model: "small", downloadBase: nil).downloadBase == nil)
     }
+
+    /// I1 : un dossier de variante « prêt » pour le catalogue se charge depuis ce dossier, sans réseau : dossier du modèle
+    /// donné, téléchargement désactivé, dossier du tokenizer donné.
+    @Test func aReadyFolderIsLoadedFromDiskWithoutDownloading() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small")
+
+        let config = WhisperKitTranscriber.configuration(model: "small", downloadBase: sandbox.root)
+        let folder = try #require(LocalModelCatalog.whisperFolder(for: "small", in: sandbox.root))
+        #expect(config.modelFolder == folder.path)
+        #expect(config.download == false)
+        #expect(config.tokenizerFolder == sandbox.root)
+        #expect(config.load == true)
+        // Le catalogue dit « Prêt » pour ce même dossier : les deux lectures ne divergent pas.
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .ready)
+    }
+
+    @Test(arguments: [
+        Set<String>(["TextDecoder"]), Set<String>(["AudioEncoder", "MelSpectrogram", "TextDecoder"]),
+    ])
+    func anIncompleteFolderIsNotLoadedFromDiskAndMayDownload(omitting: Set<String>) async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", omitting: omitting)
+
+        let config = WhisperKitTranscriber.configuration(model: "small", downloadBase: sandbox.root)
+        #expect(config.modelFolder == nil)
+        #expect(config.download == true)
+        #expect(Self.state(await sandbox.catalog().models(), Self.small) == .incomplete)
+    }
+
+    @Test func anEmptyFolderIsNotLoadedFromDiskAndMayDownload() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small", empty: ["AudioEncoder"])
+
+        let config = WhisperKitTranscriber.configuration(model: "small", downloadBase: sandbox.root)
+        #expect(config.modelFolder == nil)
+        #expect(config.download == true)
+    }
+
+    /// Une variante absente du disque (nom saisi à la main, absent du catalogue) : le moteur peut la télécharger.
+    @Test func aMissingFolderMayDownload() throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        let config = WhisperKitTranscriber.configuration(model: "variante-inconnue", downloadBase: sandbox.root)
+        #expect(config.modelFolder == nil)
+        #expect(config.download == true)
+        #expect(config.downloadBase == sandbox.root)
+        // Construire la configuration ne crée rien.
+        #expect(!FileManager.default.fileExists(atPath: sandbox.root.path))
+    }
+
+    /// Sans dossier de base, rien n'est cherché sur le disque (le dossier par défaut de la bibliothèque est Documents).
+    @Test func withoutADownloadBaseNothingIsLookedUpOnDisk() {
+        let config = WhisperKitTranscriber.configuration(model: "small", downloadBase: nil)
+        #expect(config.modelFolder == nil)
+        #expect(config.download == true)
+    }
 }
 
 /// Téléchargement réel d'une petite variante WhisperKit dans un dossier temporaire : `SUPERVOX_INTEGRATION=1`.

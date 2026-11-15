@@ -151,7 +151,19 @@ public actor LocalModelCatalog: ModelCatalog {
 
     private func whisperState(_ variant: String) -> LocalModel.State {
         guard let folder = Self.whisperFolder(for: variant, in: root) else { return .absent }
-        return Self.whisperModelNames.allSatisfy { Self.hasLoadableModel($0, in: folder) } ? .ready : .incomplete
+        return Self.isLoadable(folder) ? .ready : .incomplete
+    }
+
+    /// Les trois modèles que le chargeur lit sont là et non vides : ce que veut dire « Prêt » pour une variante WhisperKit.
+    private static func isLoadable(_ folder: URL) -> Bool {
+        whisperModelNames.allSatisfy { hasLoadableModel($0, in: folder) }
+    }
+
+    /// Le dossier de la variante s'il est « Prêt » (la même lecture que l'état affiché dans les réglages), sinon `nil`. Le
+    /// moteur s'en sert pour charger depuis le disque sans réseau : « Prêt » à l'écran et chargement local ne divergent pas.
+    static func readyWhisperFolder(for variant: String, in root: URL) -> URL? {
+        guard let folder = whisperFolder(for: variant, in: root), isLoadable(folder) else { return nil }
+        return folder
     }
 
     /// Comme `ModelUtilities.detectModelURL` : le `.mlmodelc` s'il existe (il doit alors contenir un fichier non vide), sinon

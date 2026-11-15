@@ -777,6 +777,16 @@ import SupervoxCore
         #expect(h.engines.events == ["download", "count", "make"])
     }
 
+    /// I1 : quand le moteur ne se charge pas alors que le modèle est indiqué « Prêt », la phrase renvoie à l'onglet
+    /// Transcription pour supprimer puis télécharger de nouveau le modèle (plus rien ne le répare en silence).
+    @Test func thePreparationFailureSendsTheUserToDeleteThenDownloadTheModelAgain() {
+        let notice = DictationController.preparationFailedNotice
+        #expect(notice.contains("onglet Transcription"))
+        #expect(notice.contains("supprimez-le"))
+        #expect(notice.contains("téléchargez-le de nouveau"))
+        #expect(notice.contains("« Prêt »"))
+    }
+
     @Test func aDownloadThatFailsFailsThePreparationWithTheFixedPhraseAndBuildsNoSession() async {
         let h = DictationHarness()
         h.engines.configure {

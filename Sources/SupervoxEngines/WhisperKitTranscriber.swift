@@ -2,7 +2,9 @@ import Foundation
 import SupervoxCore
 import WhisperKit
 
-/// Whisper par WhisperKit (Core ML), entièrement local.
+/// Whisper par WhisperKit (Core ML). La transcription est locale. Le chargement l'est aussi quand le dossier de la variante
+/// est présent et « Prêt » (voir `configuration`) ; sinon WhisperKit télécharge le modèle, et son tokenizer si le fichier
+/// manque sur le disque.
 ///
 /// Vocabulaire : les termes, joints par des virgules, deviennent l'amorce du décodeur (`promptTokens`, encodés comme
 /// le fait la ligne de commande de WhisperKit). La langue est imposée (`fr`), sans détection.
@@ -54,8 +56,23 @@ public actor WhisperKitTranscriber: Transcriber {
 
     /// Ce que `prepare` passe à WhisperKit. `load: true` : sans lui, WhisperKit charge le modèle au premier `transcribe`,
     /// donc dans la mesure.
+    ///
+    /// - Dossier de la variante présent et « Prêt » pour le catalogue (`LocalModelCatalog.readyWhisperFolder`) : le modèle
+    ///   est chargé depuis ce dossier (`modelFolder`), `download: false` (WhisperKit n'interroge pas le dépôt de modèles) et
+    ///   le dossier du tokenizer est donné (`tokenizerFolder`). Sans `modelFolder`, WhisperKit interroge toujours le dépôt
+    ///   avant de charger, même modèle présent, et échoue hors ligne.
+    /// - Dossier absent ou incomplet (par exemple une variante saisie à la main, inconnue du catalogue) ou pas de dossier de
+    ///   base : WhisperKit peut télécharger.
+    ///
+    /// Le tokenizer ne passe par le réseau que si son fichier manque dans `tokenizerFolder` ou ne se lit pas : WhisperKit
+    /// le cherche d'abord sur le disque et ne se rabat sur le dépôt qu'ensuite (`ModelUtilities.loadTokenizer`).
     static func configuration(model: String, downloadBase: URL?) -> WhisperKitConfig {
-        WhisperKitConfig(model: model, downloadBase: downloadBase, load: true)
+        guard let downloadBase, let folder = LocalModelCatalog.readyWhisperFolder(for: model, in: downloadBase) else {
+            return WhisperKitConfig(model: model, downloadBase: downloadBase, load: true)
+        }
+        return WhisperKitConfig(
+            model: model, downloadBase: downloadBase, modelFolder: folder.path, tokenizerFolder: downloadBase,
+            load: true, download: false)
     }
 
     /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier
