@@ -38,8 +38,9 @@ public enum VocabularyOutcome: Equatable, Sendable {
 ///
 /// `settings` reflète toujours ce qui est enregistré : il ne change qu'après un `save` réussi ; si `save` lève, la
 /// valeur affichée revient à l'ancienne et `message` dit pourquoi. Les téléchargements en cours et les échecs de cette
-/// session vivent ici, par-dessus la liste du catalogue (qui reflète le disque) : un `refresh` ne les efface pas, mais un
-/// modèle que le disque dit prêt n'est jamais montré en échec.
+/// session vivent ici, par-dessus la liste du catalogue (qui reflète le disque) : un `refresh` ne les efface pas. Un échec
+/// reste donc montré jusqu'à une nouvelle action (Réessayer, Supprimer, ou un téléchargement réussi), même si le disque dit
+/// « prêt » juste après (`refresh()`).
 @MainActor @Observable
 public final class TranscriptionModel {
     public typealias Save = @MainActor (TranscriptionSettings) throws -> Void
