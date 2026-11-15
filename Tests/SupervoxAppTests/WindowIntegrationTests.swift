@@ -205,6 +205,31 @@ struct WindowIntegrationTests {
         #expect(second.string == "Un autre texte.")
     }
 
+    /// Une mise à jour de SwiftUI qui tombe pendant une saisie en attente (touche morte, méthode de saisie) ne réécrit pas le
+    /// champ : le texte marqué ne doit pas disparaître. Le texte marqué est posé par l'API du champ (`setMarkedText`), sans
+    /// aucun événement système ; il ne remonte pas par `textDidChange`, donc le modèle (`text`) a un caractère de retard.
+    @Test func aSwiftUIUpdateDuringMarkedTextDoesNotRewriteTheField() async throws {
+        let slot = FieldSlot()
+        let (surface, field) = try await focusedField(slot)
+        defer { surface.panel.orderOut(nil) }
+
+        field.insertText("ab", replacementRange: NSRange(location: 0, length: 0))
+        #expect(slot.text == "ab")
+        field.setMarkedText(
+            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try #require(field.hasMarkedText(), "le champ n'a pas de texte marqué : le test ne prouve rien")
+        try #require(field.string == "ab^")
+
+        ReviewTextView.update(field, text: slot.text, isEditable: true, takesFocus: true)
+        #expect(field.hasMarkedText(), "la mise à jour a effacé le texte marqué")
+        #expect(field.string == "ab^")
+
+        // La saisie finie, une mise à jour qui diffère réécrit le champ comme avant.
+        field.unmarkText()
+        ReviewTextView.update(field, text: "autre", isEditable: true, takesFocus: true)
+        #expect(field.string == "autre")
+    }
+
     /// Un ⌘Z fabriqué, passé directement à la fenêtre (rien n'est posté au système) : annule comme `undoManager.undo()`.
     @Test func aCommandZEventPassedToThePanelUndoesTheTyping() async throws {
         let slot = FieldSlot()
