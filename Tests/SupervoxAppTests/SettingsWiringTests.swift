@@ -13,6 +13,7 @@ import Testing
     let secrets = RecordingSecretStore()
     let registrar = HotKeyTests.FakeRegistrar()
     let escape = HotKeyTests.FakeRegistrar()
+    let modeRegistrars = ModeRegistrars()
     let surface = FakePanelSurface()
     let clicks = FakeClickMonitor()
     let presenter = Presenter()
@@ -34,7 +35,7 @@ import Testing
         if !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
         return AppController(
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
-            escapeRegistrar: escape,
+            escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
             systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi, settingsView: settingsView,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
@@ -59,6 +60,30 @@ import Testing
                 modes: SettingsView.makeModesModel(controller),
                 permissions: controller.permissions, openSystemSettings: { _ in })
         }
+    }
+
+    /// Une combinaison tenue par un mode est refusée au raccourci global, avec le nom du mode, sans solliciter le système ; et la
+    /// capture rend aussi les raccourcis des modes.
+    @Test func theGlobalCaptureRefusesAModesCombinationAndSuspendsTheModesHotKeys() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes[1].hotKey = HotKeyTests.keyB
+        settings.modes[1].name = "Compte rendu"
+        try store.save(settings)
+        let controller = makeController()
+        controller.launch()
+        let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
+        #expect(modeRegistrars.registered == [HotKeyTests.keyB])
+
+        hotKey.startRecording()
+        #expect(modeRegistrars.registered.isEmpty, "la capture rend les raccourcis des modes au système")
+        let calls = registrar.registerCalls
+        hotKey.record(HotKeyTests.keyB)
+        #expect(hotKey.message?.contains("Compte rendu") == true)
+        #expect(registrar.registerCalls == calls + 1, "seul le rétablissement de la capture : ⌃⌥B n'est pas proposé au système")
+        #expect(controller.settings.hotKey == .standard)
+        #expect(registrar.registered == .standard)
+        #expect(modeRegistrars.registered == [HotKeyTests.keyB], "la capture finie, le raccourci du mode est rétabli")
     }
 
     /// N1 : fenêtre fermée, quittée ou application passée en arrière-plan pendant une capture : la capture prend fin,

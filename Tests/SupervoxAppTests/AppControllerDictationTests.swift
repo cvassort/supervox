@@ -21,6 +21,7 @@ final class TimeoutLog: Sendable {
     let store: SettingsStore
     let hotKeys = HotKeyTests.FakeRegistrar()
     let escape = HotKeyTests.FakeRegistrar()
+    let modeRegistrars = ModeRegistrars()
     let probe = FakePermissionsProbe(microphone: .granted, accessibility: .granted)
     let surface = FakePanelSurface()
     let clicks = FakeClickMonitor()
@@ -63,7 +64,8 @@ final class TimeoutLog: Sendable {
         try? store.save(settings)
         let controller = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
-            escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
+            escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
+            permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
             dictation: engines.environment, inserter: rig.inserter,
@@ -95,6 +97,100 @@ final class TimeoutLog: Sendable {
         session.emit(.recording)
         #expect(await until { controller.panelModel.dictation.stage == .recording })
         return session
+    }
+
+    // MARK: - Les modes et leurs raccourcis
+
+    static let keyB = HotKeyTests.keyB
+    /// Des modificateurs qui ne sont pas ceux du raccourci global (⌃⌥) : la surveillance du maintien les distingue.
+    static let holdKey = HotKey(keyCode: 0x08, modifiers: [.command, .shift])
+
+    /// Dictée brute avec son propre raccourci, Entretien avec le sien, et un mode personnel.
+    func modesSettings(rawKey: HotKey? = keyB, lastModeID: String = ModeChip.interviewID, hold: Bool = false) -> AppSettings {
+        var settings = AppSettings.defaults
+        settings.modes = [
+            Mode(id: ModeChip.rawID, name: "Dictée brute", hotKey: rawKey),
+            Mode(id: "perso-un", name: "Compte rendu", instruction: "Résume.", hotKey: HotKey(keyCode: 0x08, modifiers: [.control, .option])),
+            Mode(id: ModeChip.interviewID, name: "Entretien", hotKey: HotKey(keyCode: 0x02, modifiers: [.control, .option])),
+        ]
+        settings.lastModeID = lastModeID
+        if hold { settings.hotKeyBehavior = .hold }
+        return settings
+    }
+
+    @Test func aModesHotKeySelectsItSavesItAndStartsTheDictation() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings())
+        #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
+
+        modeRegistrars.press(Self.keyB)
+        #expect(controller.panelModel.selectedModeID == ModeChip.rawID)
+        #expect(controller.settings.lastModeID == ModeChip.rawID)
+        #expect(store.load().settings.lastModeID == ModeChip.rawID, "le choix est enregistré sur disque")
+        _ = await record(controller)
+        #expect(controller.panelModel.isOpen)
+    }
+
+    @Test func theInterviewHotKeyOpensThePanelOnInterviewWithTheLaterModeSentence() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings(lastModeID: ModeChip.rawID))
+        modeRegistrars.press(HotKey(keyCode: 0x02, modifiers: [.control, .option]))
+
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
+        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(store.load().settings.lastModeID == ModeChip.interviewID)
+        await settle()
+        #expect(engines.sessions.isEmpty)
+    }
+
+    @Test func aModesHotKeyEndsTheDictationItStartedAndTheGlobalOneDoesNot() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings())
+        modeRegistrars.press(Self.keyB)
+        let session = await record(controller)
+
+        hotKeys.press()
+        await settle()
+        #expect(session.count(of: "finish") == 0, "le global ne termine pas la dictée d'un mode")
+        modeRegistrars.press(HotKey(keyCode: 0x08, modifiers: [.control, .option]))
+        await settle()
+        #expect(session.count(of: "finish") == 0, "ni le raccourci d'un autre mode")
+        #expect(controller.panelModel.selectedModeID == ModeChip.rawID, "le mode ne change pas")
+
+        modeRegistrars.press(Self.keyB)
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func inHoldAModesHotKeyWatchesItsOwnModifiersAndItsReleaseEndsTheDictation() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings(rawKey: Self.holdKey, hold: true))
+        modeRegistrars.press(Self.holdKey)
+        let session = await record(controller)
+        #expect(await until { holdSleeper.isSleeping })
+        holdSleeper.release()
+        #expect(await until { !held.asked.isEmpty })
+        #expect(held.asked.allSatisfy { $0 == [.command, .shift] }, "les modificateurs du mode, pas ceux du global (⌃⌥)")
+
+        hotKeys.release()
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        modeRegistrars.release(Self.holdKey)
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func removingTheChosenModeMakesTheNextDictationFollowRawDictation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = modesSettings(lastModeID: "perso-un")
+        settings.modes[1].hotKey = nil
+        let controller = makeController(settings: settings)
+        #expect(controller.panelModel.selectedModeID == "perso-un")
+
+        try controller.updateSettings { $0.modes.removeAll { $0.id == "perso-un" } }
+        #expect(controller.panelModel.selectedModeID == ModeChip.rawID)
+        hotKeys.press()
+        _ = await record(controller)
+        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
     }
 
     // MARK: - Quitter pendant un collage (m2)

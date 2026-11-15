@@ -6,9 +6,12 @@ import Testing
 /// suite par défaut n'enregistre un vrai raccourci Carbon.
 @MainActor final class ModeRegistrars {
     var made: [HotKeyTests.FakeRegistrar] = []
+    /// Les combinaisons que chaque registraire fabriqué refuse (le système les a données à une autre application).
+    var refusing: [HotKey] = []
 
     func make() -> any HotKeyRegistrar {
         let registrar = HotKeyTests.FakeRegistrar()
+        registrar.refused = refusing
         made.append(registrar)
         return registrar
     }
