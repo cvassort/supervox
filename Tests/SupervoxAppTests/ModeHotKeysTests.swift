@@ -5,22 +5,66 @@ import Testing
 /// Fabrique de registraires doubles pour les raccourcis de mode : garde chacun de ceux qu'elle a fabriqués. Aucun test de la
 /// suite par défaut n'enregistre un vrai raccourci Carbon.
 @MainActor final class ModeRegistrars {
+    /// Ceux qui ont été fabriqués et sont gardés (`retains`). Un test qui veut voir un registraire libéré met `retains` à faux
+    /// avant de fabriquer : la fabrique ne garde alors qu'une référence faible, et `releasedCount` compte ceux qui ont disparu.
     var made: [HotKeyTests.FakeRegistrar] = []
+    var retains = true
     /// Les combinaisons que chaque registraire fabriqué refuse (le système les a données à une autre application).
     var refusing: [HotKey] = []
+    private var boxes: [WeakRegistrar] = []
+
+    private final class WeakRegistrar {
+        weak var value: HotKeyTests.FakeRegistrar?
+        init(_ value: HotKeyTests.FakeRegistrar) { self.value = value }
+    }
 
     func make() -> any HotKeyRegistrar {
         let registrar = HotKeyTests.FakeRegistrar()
         registrar.refused = refusing
-        made.append(registrar)
+        boxes.append(WeakRegistrar(registrar))
+        if retains { made.append(registrar) }
         return registrar
     }
 
+    /// Les registraires encore vivants : tous ceux qui sont gardés, ou ceux que le code testé tient encore.
+    var live: [HotKeyTests.FakeRegistrar] { boxes.compactMap(\.value) }
+    var createdCount: Int { boxes.count }
+    /// Ceux que le code testé a lâchés (désalloués) : la preuve d'une libération, pas seulement d'un retrait du système.
+    var releasedCount: Int { boxes.filter { $0.value == nil }.count }
+
     /// Le registraire qui tient cette combinaison en ce moment.
-    func holding(_ hotKey: HotKey) -> HotKeyTests.FakeRegistrar? { made.first { $0.registered == hotKey } }
+    func holding(_ hotKey: HotKey) -> HotKeyTests.FakeRegistrar? { live.first { $0.registered == hotKey } }
     func press(_ hotKey: HotKey) { holding(hotKey)?.press() }
     func release(_ hotKey: HotKey) { holding(hotKey)?.release() }
-    var registered: [HotKey] { made.compactMap(\.registered) }
+    var registered: [HotKey] { live.compactMap(\.registered) }
+}
+
+/// Un « système » partagé par plusieurs registraires : une combinaison déjà tenue par l'un est refusée à l'autre (ce que fait
+/// le vrai système pour une combinaison déjà prise).
+@MainActor final class SystemTable {
+    var held: [HotKey] = []
+}
+
+@MainActor final class OccupyingRegistrar: HotKeyRegistrar {
+    private let table: SystemTable
+    private var mine: HotKey?
+    init(_ table: SystemTable) { self.table = table }
+
+    func register(
+        _ hotKey: HotKey, onPress: @escaping @MainActor () -> Void, onRelease: (@MainActor () -> Void)?
+    ) -> Bool {
+        unregister()
+        guard !table.held.contains(hotKey) else { return false }
+        table.held.append(hotKey)
+        mine = hotKey
+        return true
+    }
+
+    func unregister() {
+        guard let mine else { return }
+        table.held.removeAll { $0 == mine }
+        self.mine = nil
+    }
 }
 
 /// Ce que `ModeHotKeys` fait des raccourcis de mode : un registraire par mode, réutilisé tant que le mode existe.
@@ -220,6 +264,95 @@ import Testing
         #expect(registrars.registered.isEmpty, "la capture est en cours : rien ne revient au système avant la fin")
         #expect(hotKeys.resume().isEmpty)
         #expect(registrars.registered.count == 2)
+    }
+
+    // MARK: - Libération
+
+    @Test func aModeThatLosesItsHotKeyOrDisappearsReallyReleasesItsRegistrar() {
+        registrars.retains = false
+        apply(["un": Self.keyA, "deux": Self.keyB, "trois": Self.keyC])
+        #expect(registrars.createdCount == 3)
+        #expect(registrars.releasedCount == 0)
+
+        apply(["un": Self.keyA])
+        #expect(registrars.releasedCount == 2, "les registraires des deux modes retirés sont lâchés, pas seulement vidés")
+        #expect(registrars.registered == [Self.keyA])
+
+        #expect(Self.failure(hotKeys.set(nil, for: "un")) == nil)
+        #expect(registrars.releasedCount == 3)
+        #expect(registrars.live.isEmpty)
+    }
+
+    @Test func aRefusedFirstHotKeyReleasesTheRegistrarItCreated() {
+        registrars.retains = false
+        registrars.refusing = [Self.keyB]
+        #expect(Self.failure(hotKeys.set(Self.keyB, for: "un")) == .refused)
+        #expect(registrars.createdCount == 1)
+        #expect(registrars.releasedCount == 1)
+    }
+
+    // MARK: - Ordre stable
+
+    @Test func theCombinationsAreTakenInTheOrderOfTheModeIdentifiers() {
+        let keys = (0..<8).map { HotKey(keyCode: UInt32($0), modifiers: [.control, .option]) }
+        let ids = ["h", "c", "f", "a", "g", "b", "e", "d"]
+        let bindings = Dictionary(uniqueKeysWithValues: zip(ids, keys))
+        apply(bindings)
+        let expected = ids.sorted().map { bindings[$0]! }
+        #expect(registrars.made.map { $0.registered } == expected.map { Optional($0) })
+    }
+
+    // MARK: - Échange
+
+    @Test func swappingTwoCombinationsInOneApplyWorksWhenTheSystemRefusesTakenOnes() {
+        let table = SystemTable()
+        let swapping = ModeHotKeys(makeRegistrar: { OccupyingRegistrar(table) }, layout: HotKeyTests.ansi)
+        #expect(swapping.apply(["a": Self.keyA, "b": Self.keyB], onPress: { _ in }, onRelease: { _ in }).isEmpty)
+
+        let errors = swapping.apply(["a": Self.keyB, "b": Self.keyA], onPress: { _ in }, onRelease: { _ in })
+        #expect(errors.isEmpty)
+        #expect(swapping.active == ["a": Self.keyB, "b": Self.keyA])
+        #expect(table.held.count == 2)
+    }
+
+    // MARK: - Réglages changés pendant une capture
+
+    @Test func applyingDuringACaptureRegistersNothingAndResumeTakesTheNewCombinations() {
+        apply(["un": Self.keyA, "deux": Self.keyB])
+        hotKeys.suspend()
+        let registerCalls = registrars.made.map(\.registerCalls)
+
+        let errors = apply(["un": Self.keyC, "trois": Self.keyD])
+        #expect(errors.isEmpty)
+        #expect(registrars.registered.isEmpty, "la capture est en cours : rien n'est pris")
+        #expect(registrars.made.prefix(2).map(\.registerCalls) == Array(registerCalls.prefix(2)))
+        #expect(hotKeys.active == ["un": Self.keyC, "trois": Self.keyD], "celles qui seront prises à la reprise")
+
+        #expect(hotKeys.resume().isEmpty)
+        #expect(Set(registrars.registered.map(\.keyCode)) == [Self.keyC.keyCode, Self.keyD.keyCode])
+        #expect(hotKeys.active == ["un": Self.keyC, "trois": Self.keyD])
+    }
+
+    @Test func aCombinationRefusedAtTheEndOfTheCaptureIsNamedAndTheOldOneComesBack() {
+        apply(["un": Self.keyA, "deux": Self.keyB])
+        hotKeys.suspend()
+        apply(["un": Self.keyC, "deux": Self.keyB, "trois": Self.keyD])
+        for registrar in registrars.made { registrar.refused = [Self.keyC, Self.keyD] }
+        registrars.refusing = [Self.keyC, Self.keyD]
+
+        #expect(hotKeys.resume() == ["trois", "un"])
+        // « un » retrouve son ancienne combinaison, « trois » n'en a pas, « deux » est rétabli.
+        #expect(hotKeys.active == ["un": Self.keyA, "deux": Self.keyB])
+        #expect(Set(registrars.registered.map(\.keyCode)) == [Self.keyA.keyCode, Self.keyB.keyCode])
+    }
+
+    @Test func aModeRemovedDuringACaptureIsGoneAtTheEnd() {
+        apply(["un": Self.keyA, "deux": Self.keyB])
+        hotKeys.suspend()
+        apply(["un": Self.keyA])
+        #expect(hotKeys.resume().isEmpty)
+        #expect(registrars.registered == [Self.keyA])
+        #expect(hotKeys.active == ["un": Self.keyA])
     }
 
     static func failure(_ result: Result<Void, HotKeyError>) -> HotKeyError? {
