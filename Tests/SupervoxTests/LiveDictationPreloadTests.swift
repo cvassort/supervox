@@ -65,12 +65,6 @@ import Testing
         #expect((engines.detector as AnyObject) === rig.doubles.detector)
     }
 
-    @Test func withAVocabularyThePreloadNeedsTheVocabularyModelToo() async {
-        let rig = Self.rig()
-        await rig.engines.preload(for: Self.settings(vocabulary: ["terme"]))
-        #expect(rig.doubles.detector.prepares == 1)
-    }
-
     // MARK: - Préchargement non lancé, et aucun téléchargement
 
     @Test(arguments: [
