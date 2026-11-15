@@ -83,13 +83,16 @@ public struct Mode: Codable, Equatable, Identifiable, Sendable {
     // MARK: - Lecture et écriture
 
     /// Les modes d'un fichier : un identifiant déjà vu est écarté (le premier reste), et Dictée brute et Entretien, que
-    /// l'application ne sait pas se passer, retrouvent leur place de `Mode.base` s'ils manquent. Dictée nettoyée et Prompt, eux,
-    /// peuvent avoir été supprimés.
+    /// l'application ne sait pas se passer, reviennent s'ils manquent : Dictée brute en tête, Entretien en fin de liste (jamais
+    /// au milieu des modes personnels). Dictée nettoyée et Prompt, eux, peuvent avoir été supprimés.
     static func normalized(_ modes: [Mode]) -> [Mode] {
         var seen = Set<String>()
         var result = modes.filter { seen.insert($0.id).inserted }
-        for (index, base) in Mode.base.enumerated() where !base.canDelete && !seen.contains(base.id) {
-            result.insert(base, at: min(index, result.count))
+        if !seen.contains(ModeChip.rawID), let raw = Mode.base.first(where: { $0.id == ModeChip.rawID }) {
+            result.insert(raw, at: 0)
+        }
+        if !seen.contains(ModeChip.interviewID), let interview = Mode.base.first(where: { $0.id == ModeChip.interviewID }) {
+            result.append(interview)
         }
         return result
     }

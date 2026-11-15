@@ -141,12 +141,13 @@ public struct AppSettings: Codable, Equatable, Sendable {
         if let modes = try container.decodeIfPresent([Mode].self, forKey: key(.modes)) {
             self.modes = Mode.normalized(modes)
         } else if version < 2 {
-            // Un fichier de la version 1, ou avant : les choix de relecture de `modeOptions`. Une valeur d'une autre forme ne
-            // fait pas perdre le fichier pour un champ qui ne sert plus : elle est gardée, et rien n'est repris.
-            let options = (try? container.decode([String: ModeOptions].self, forKey: JSONKey(Self.legacyOptionsKey))) ?? [:]
+            // Un fichier de la version 1, ou avant : les choix de relecture de `modeOptions`, lus entrée par entrée. Une entrée
+            // (ou tout le champ) d'une autre forme ne fait pas perdre le fichier pour un champ qui ne sert plus, ni les autres
+            // entrées : elle est gardée dans le fichier, et rien n'en est repris.
+            let legacy = try? container.nestedContainer(keyedBy: JSONKey.self, forKey: JSONKey(Self.legacyOptionsKey))
             modes = Mode.base.map { mode in
                 var mode = mode
-                mode.reviewBeforePaste = options[mode.id]?.reviewBeforePaste
+                mode.reviewBeforePaste = (try? legacy?.decode(ModeOptions.self, forKey: JSONKey(mode.id)))?.reviewBeforePaste
                 return mode
             }
         } else {

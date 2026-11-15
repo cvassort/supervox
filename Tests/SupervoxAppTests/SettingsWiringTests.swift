@@ -194,19 +194,31 @@ import Testing
         let controller = makeController()
         let modes = SettingsView.makeModesModel(controller)
 
+        // Min-6 : un changement fait ailleurs (un autre onglet de la même fenêtre) entre la création du modèle et la bascule
+        // n'est pas défait par elle : le pont écrit sur les réglages en vigueur, pas sur ceux d'à la création.
+        let provider = Provider(
+            id: UUID(), name: "Ajouté après", baseURL: "https://api.example.com/v1", kind: .openAICompatible, models: [])
+        try controller.updateSettings {
+            $0.lastModeID = ModeChip.promptID
+            $0.providers = [provider]
+        }
+
         modes.setReview(true, for: ModeChip.rawID)
         modes.setReview(true, for: ModeChip.cleanedID)
 
         let onDisk = store.load().settings
         #expect(controller.settings == onDisk)
+        #expect(onDisk.providers == [provider])
         var expected = before
+        expected.lastModeID = ModeChip.promptID
+        expected.providers = [provider]
         expected.modes[0].reviewBeforePaste = true
         expected.modes[1].reviewBeforePaste = true
         #expect(onDisk == expected)
         #expect(onDisk.mode(ModeChip.cleanedID)?.instruction == "Ma consigne.")
         #expect(onDisk.mode(ModeChip.cleanedID)?.engine == .parakeet)
         #expect(onDisk.mode("perso-1")?.reviewBeforePaste == false)
-        #expect(onDisk.lastModeID == "perso-1")
+        #expect(onDisk.lastModeID == ModeChip.promptID)
         let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
         #expect((written["futur"] as? NSDictionary)?.isEqual(to: ["a": 1]) == true)
         let writtenModes = try #require(written["modes"] as? [[String: Any]])
