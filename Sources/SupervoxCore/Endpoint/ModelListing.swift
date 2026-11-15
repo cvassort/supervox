@@ -19,6 +19,7 @@ public struct ModelLister: Sendable {
     public let requestTimeout: TimeInterval
 
     /// Version d'API envoyée à la route de type `anthropic` : l'exemple de la documentation officielle des modèles.
+    /// `AnthropicClient` envoie la même (référence locale de l'API, exemples de requêtes) : une seule constante.
     static let anthropicVersion = "2026-10-21"
     /// Taille de page demandée à la route de type `anthropic` : le maximum documenté (1 à 1000, 20 par défaut).
     static let anthropicPageSize = 1000

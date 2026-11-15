@@ -5,8 +5,6 @@ import Foundation
 struct EndpointRequest: Sendable {
     let config: EndpointConfig
     let session: URLSession
-    /// Délai d'inactivité de chaque requête, en secondes (voir `OpenAICompatibleClient.requestTimeout`).
-    let timeout: TimeInterval
 
     /// Un corps d'erreur HTTP n'est lu que jusqu'à cette taille : on n'en garde de toute façon que 500 caractères.
     static let errorBodyReadLimit = 64 * 1024
@@ -33,12 +31,16 @@ struct EndpointRequest: Sendable {
 
     /// Erreur de `URLSession` (ou levée en cours de lecture) rendue au format des clients : l'annulation reste une
     /// `CancellationError`, une `EndpointError` passe telle quelle, tout le reste est une panne de transport.
-    func mapped(_ error: any Error) -> any Error {
+    /// `timeoutAs` : ce que devient un silence (`URLError.timedOut`) ; sans lui, c'est une panne de transport comme une
+    /// autre. Le texte d'une panne de transport est masqué comme un corps d'erreur : la clé n'en sort jamais.
+    func mapped(_ error: any Error, timeoutAs: (any Error)? = nil) -> any Error {
         switch error {
         case is CancellationError: return CancellationError()
         case let error as URLError where error.code == .cancelled: return CancellationError()
         case let error as EndpointError: return error
-        default: return EndpointError.transport(error.localizedDescription)
+        case let error as CompletionError: return error
+        case let error as URLError where error.code == .timedOut && timeoutAs != nil: return timeoutAs!
+        default: return EndpointError.transport(errorBody(error.localizedDescription))
         }
     }
 
@@ -50,6 +52,85 @@ struct EndpointRequest: Sendable {
 
     func errorBody(_ text: String) -> String {
         String(text.replacingOccurrences(of: config.apiKey, with: "***").prefix(500))
+    }
+}
+
+/// Lit les lignes d'un flux SSE et en tire des événements. Une ligne = un événement : les serveurs ne répartissent
+/// jamais un objet JSON sur plusieurs lignes `data:`.
+protocol SSEReader: SendableMetatype {
+    associatedtype Event: Sendable
+
+    /// Le marqueur de fin du flux est passé : plus rien n'est lu.
+    var isDone: Bool { get }
+    mutating func consume(line: String) throws -> [Event]
+    /// Appelé une fois, après le marqueur de fin : les derniers événements, ou l'erreur d'une fin sans contenu.
+    mutating func finishAfterDone() throws -> [Event]
+    /// L'erreur d'un flux qui s'arrête sans marqueur de fin.
+    func endWithoutDone() -> any Error
+}
+
+extension EndpointRequest {
+    /// Réponse en flux d'une requête POST : un `AsyncThrowingStream` des événements que `makeReader` tire des lignes SSE.
+    ///
+    /// Le flux se termine normalement seulement après le marqueur de fin du lecteur ; toute autre fin est une erreur :
+    /// statut hors 2xx (`.http`), redirection vers une autre origine, panne réseau (`.transport`, ou `timeoutAs` pour
+    /// un silence), coupure avant le marqueur (`endWithoutDone`). L'arrêt de la lecture (boucle quittée, tâche annulée)
+    /// annule la requête. La requête part dès l'appel, pas à la première itération.
+    func events<Reader: SSEReader>(
+        request makeRequest: @escaping @Sendable () throws -> URLRequest,
+        reader makeReader: @escaping @Sendable (_ status: Int, _ redact: @escaping (String) -> String) -> Reader,
+        timeoutAs: (any Error)? = nil
+    ) -> AsyncThrowingStream<Reader.Event, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    try await self.read(try makeRequest(), makeReader: makeReader, into: continuation)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: mapped(error, timeoutAs: timeoutAs))
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func read<Reader: SSEReader>(
+        _ request: URLRequest,
+        makeReader: @Sendable (Int, @escaping (String) -> String) -> Reader,
+        into continuation: AsyncThrowingStream<Reader.Event, Error>.Continuation
+    ) async throws {
+        let delegate = EndpointTaskDelegate()
+        let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
+        if delegate.refusedRedirect { throw EndpointError.crossOriginRedirect }
+        guard let http = response as? HTTPURLResponse else { throw EndpointError.malformedResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            var body = Data()
+            for try await byte in bytes {
+                body.append(byte)
+                if body.count >= Self.errorBodyReadLimit { break }
+            }
+            throw EndpointError.http(status: http.statusCode, body: errorBody(body))
+        }
+
+        var lines = SSELineSplitter()
+        var reader = makeReader(http.statusCode, { self.errorBody($0) })
+        for try await byte in bytes {
+            for line in try lines.push(byte) {
+                for event in try reader.consume(line: line) { continuation.yield(event) }
+                if reader.isDone { return try finish(&reader, into: continuation) }
+            }
+        }
+        if let last = lines.finish() {
+            for event in try reader.consume(line: last) { continuation.yield(event) }
+            if reader.isDone { return try finish(&reader, into: continuation) }
+        }
+        try Task.checkCancellation()
+        throw reader.endWithoutDone()
+    }
+
+    private func finish<Reader: SSEReader>(_ reader: inout Reader,
+                                           into continuation: AsyncThrowingStream<Reader.Event, Error>.Continuation) throws {
+        for event in try reader.finishAfterDone() { continuation.yield(event) }
     }
 }
 

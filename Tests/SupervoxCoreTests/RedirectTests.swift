@@ -109,6 +109,40 @@ struct RedirectTests {
         #expect(servers.origin.requests.count == 3)
     }
 
+    /// Les routes de modèle de langage : `chat/completions` (compatible OpenAI) et `messages` (Anthropic, la clé voyage
+    /// dans `x-api-key`, que CFNetwork ne retire pas d'une requête redirigée).
+    @Test(arguments: Target.allCases, [false, true])
+    func languageModelsRefuseARedirectToAnotherOriginOnTheirRoute(target: Target, anthropic: Bool) async throws {
+        let servers = try await redirectingServers(target, status: 307, body: fixtureData("messages-anthropic-text.sse"))
+        defer { servers.origin.stop(); servers.elsewhere.stop() }
+        let config = EndpointConfig(baseURL: URL(string: servers.origin.base)!, apiKey: "cle-test")
+        let model: any LanguageModel = anthropic
+            ? AnthropicClient(config: config, requestTimeout: 5) : OpenAICompatibleClient(config: config, requestTimeout: 5)
+
+        let r = await collectEvents(model.complete(CompletionRequest(model: "m", instruction: "i", input: "t", maxTokens: 5)))
+        #expect(r.events.isEmpty)
+        #expect(r.error as? EndpointError == .crossOriginRedirect)
+        #expect(requestsElsewhere(servers) == 0)
+        #expect(servers.origin.requests.map(\.path) == [anthropic ? "/v1/messages" : "/v1/chat/completions"])
+    }
+
+    /// Redirection de même origine : suivie, avec la clé du type de client.
+    @Test func anthropicFollowsARedirectOnTheSameOriginWithItsKey() async throws {
+        let stream = LocalHTTPServer.Stream(chunks: [fixtureData("messages-anthropic-text.sse")], end: .close)
+        let server = try LocalHTTPServer { request in
+            request.path.hasPrefix("/nouveau") ? .init(status: 200, stream: stream) : .init(status: 307, headers: ["Location": "/nouveau\(request.path)"])
+        }
+        try await server.start()
+        defer { server.stop() }
+        let client = AnthropicClient(config: EndpointConfig(baseURL: URL(string: server.base)!, apiKey: "cle-test"), requestTimeout: 5)
+
+        let r = await collectEvents(client.complete(CompletionRequest(model: "m", instruction: "i", input: "t", maxTokens: 5)))
+        #expect(r.error == nil)
+        #expect(r.events.last == .stop(.complete))
+        #expect(server.requests.map(\.path) == ["/v1/messages", "/nouveau/v1/messages"])
+        #expect(server.requests.last?.headers["x-api-key"] == "cle-test")
+    }
+
     @Test func clientFollowsARedirectOnTheSameOrigin() async throws {
         let server = try LocalHTTPServer { request in
             request.path.hasPrefix("/nouveau")
