@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import SupervoxApp
 import SupervoxCore
 import Testing
@@ -145,6 +146,125 @@ import Testing
         rig.doubles.detector.failPrepare(with: nil)
         await rig.engines.preload(for: Self.settings())
         #expect(await rig.engines.enginesLoaded(for: Self.settings()) == true)
+    }
+
+    // MARK: - Le préchargement ne touche jamais le réseau ni un modèle (I-1)
+
+    /// Tout prêt : trois préparations, aucun appel de téléchargement ni de suppression au catalogue, et le réseau de FluidAudio coupé
+    /// pendant les trois préparations (c'est lui qui interdit à la bibliothèque de télécharger, ou de supprimer puis retélécharger
+    /// un modèle qui ne se charge pas), rétabli ensuite.
+    @Test func thePreloadCutsTheNetworkDuringThePreparesAndLiftsItAfter() async {
+        let rig = Self.rig()
+        await rig.engines.preload(for: Self.settings())
+        #expect(rig.doubles.network.changes == [true, false])
+        #expect(!rig.doubles.network.isOffline)
+        #expect(rig.doubles.detector.offlineAtPrepare == [true])
+        #expect(rig.doubles.whisper("small").offlineAtPrepare == [true])
+        #expect(rig.doubles.parakeet.offlineAtPrepare == [true])
+        #expect(rig.catalog.ensured.isEmpty)
+        #expect(rig.catalog.deleted.isEmpty)
+    }
+
+    @Test func aParakeetPreloadCutsTheNetworkToo() async {
+        let rig = Self.rig()
+        await rig.engines.preload(for: Self.settings(engine: "parakeet"))
+        #expect(rig.doubles.network.changes == [true, false])
+        #expect(rig.doubles.parakeet.offlineAtPrepare == [true, true])
+    }
+
+    /// Rien n'est préchargé : le réseau n'est pas touché.
+    @Test func aPreloadThatDoesNotRunNeverTouchesTheNetwork() async {
+        var states = Stub.allReady
+        states[LocalModelID.parakeet] = .absent
+        let rig = Self.rig(states: states)
+        await rig.engines.preload(for: Self.settings())
+        #expect(rig.doubles.network.changes.isEmpty)
+
+        let offline = Self.rig()
+        offline.doubles.setWhisperLoadsOffline(false)
+        await offline.engines.preload(for: Self.settings())
+        #expect(offline.doubles.network.changes.isEmpty)
+    }
+
+    /// Un préchargement qui échoue ne montre rien, ne supprime rien, et rétablit le réseau : la dictée suivante suit le chemin normal.
+    @Test func theNetworkIsLiftedAfterAFailedPreload() async {
+        struct Boom: Error {}
+        let rig = Self.rig()
+        rig.doubles.detector.failPrepare(with: Boom())
+        await rig.engines.preload(for: Self.settings())
+        #expect(rig.doubles.network.changes == [true, false])
+        #expect(!rig.doubles.network.isOffline)
+        #expect(rig.catalog.deleted.isEmpty)
+        #expect(rig.catalog.ensured.isEmpty)
+    }
+
+    private func settle() async {
+        for round in 0..<300 {
+            if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
+        }
+    }
+
+    private func until(_ condition: () -> Bool) async -> Bool {
+        for round in 0..<20000 {
+            if condition() { return true }
+            if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
+        }
+        return condition()
+    }
+
+    /// Une dictée lancée pendant le préchargement attend sa fin (la préparation, le téléchargement d'un modèle et la suppression
+    /// passent par le même point de passage), puis réussit ; le réseau est rétabli quand elle reprend.
+    @Test func aDictationStartedDuringThePreloadWaitsForItThenSucceeds() async throws {
+        let rig = Self.rig()
+        let gate = Gate()
+        defer { gate.open() }
+        rig.doubles.detector.holdPrepare(with: gate)
+        let settings = Self.settings()
+        let preload = Task { await rig.engines.preload(for: settings) }
+        #expect(await until { rig.doubles.detector.prepares == 1 })
+        #expect(rig.doubles.network.isOffline)
+
+        let environment = rig.engines.environment
+        let reachedSession = Mutex(false)
+        let reachedDownload = Mutex(false)
+        let session = Task { () throws -> Bool in
+            _ = try await environment.makeSession(settings)
+            reachedSession.withLock { $0 = true }
+            return rig.doubles.network.isOffline
+        }
+        let download = Task {
+            _ = try await environment.downloadModels(settings)
+            reachedDownload.withLock { $0 = true }
+        }
+        let deletion = Task { try await rig.engines.catalog.delete(LocalModelID.whisper("small")) }
+        let settingsDownload = Task { try await rig.engines.catalog.ensureDownloaded("x") }
+        await settle()
+        // Rien n'est passé : ni la session, ni le téléchargement, ni la suppression, ni le téléchargement des réglages.
+        #expect(!reachedSession.withLock { $0 })
+        #expect(!reachedDownload.withLock { $0 })
+        #expect(rig.catalog.deleted.isEmpty)
+        #expect(rig.catalog.ensured.isEmpty)
+        #expect(rig.doubles.network.isOffline)
+
+        gate.open()
+        await preload.value
+        let offlineWhenSessionResumed = try await session.value
+        try await download.value
+        try await deletion.value
+        try await settingsDownload.value
+        #expect(!offlineWhenSessionResumed)
+        #expect(!rig.doubles.network.isOffline)
+        #expect(rig.doubles.network.changes == [true, false])
+        #expect(rig.catalog.deleted == [LocalModelID.whisper("small")])
+        #expect(rig.catalog.ensured == ["x"])
+    }
+
+    /// Sans préchargement en cours, rien n'attend.
+    @Test func withoutAPreloadNothingWaits() async throws {
+        let rig = Self.rig()
+        _ = try await rig.engines.environment.makeSession(Self.settings())
+        try await rig.engines.catalog.delete(LocalModelID.whisper("small"))
+        #expect(rig.doubles.network.changes.isEmpty)
     }
 
     // MARK: - enginesLoaded

@@ -13,6 +13,7 @@ final class DoubleTranscriber: LoadableTranscriber, @unchecked Sendable {
         var prepared = false
         var calls = 0
         var completions = 0
+        var offlineAtPrepare: [Bool] = []
         var error: (any Error)?
         var gate: Gate?
     }
@@ -20,11 +21,16 @@ final class DoubleTranscriber: LoadableTranscriber, @unchecked Sendable {
     let name: String
     private let text: String
     private let state = Mutex(State())
+    private let offlineProbe: @Sendable () -> Bool
 
-    init(name: String = "double", text: String = "texte") {
+    init(name: String = "double", text: String = "texte", offlineProbe: @escaping @Sendable () -> Bool = { false }) {
         self.name = name
         self.text = text
+        self.offlineProbe = offlineProbe
     }
+
+    /// L'état du réseau de FluidAudio (double) vu à chaque `prepare()`.
+    var offlineAtPrepare: [Bool] { state.withLock { $0.offlineAtPrepare } }
 
     var prepares: Int { state.withLock { $0.prepares } }
     var transcriptions: Int { state.withLock { $0.calls } }
@@ -37,8 +43,10 @@ final class DoubleTranscriber: LoadableTranscriber, @unchecked Sendable {
     func markPrepared() { state.withLock { $0.prepared = true } }
 
     func prepare() async throws {
+        let offline = offlineProbe()
         let error = state.withLock { state -> (any Error)? in
             state.prepares += 1
+            state.offlineAtPrepare.append(offline)
             if state.error == nil { state.prepared = true }
             return state.error
         }
@@ -64,10 +72,16 @@ final class DoubleDetector: LoadableDetector, @unchecked Sendable {
         var blocks = 0
         var error: (any Error)?
         var prepareGate: Gate?
+        var offlineAtPrepare: [Bool] = []
     }
 
     let blockSize = 1000
     private let state = Mutex(State())
+    private let offlineProbe: @Sendable () -> Bool
+
+    init(offlineProbe: @escaping @Sendable () -> Bool = { false }) { self.offlineProbe = offlineProbe }
+
+    var offlineAtPrepare: [Bool] { state.withLock { $0.offlineAtPrepare } }
 
     var prepares: Int { state.withLock { $0.prepares } }
     var isPrepared: Bool { state.withLock { $0.prepared } }
@@ -77,8 +91,10 @@ final class DoubleDetector: LoadableDetector, @unchecked Sendable {
     func holdPrepare(with gate: Gate) { state.withLock { $0.prepareGate = gate } }
 
     func prepare() async throws {
+        let offline = offlineProbe()
         let (error, gate) = state.withLock { state -> ((any Error)?, Gate?) in
             state.prepares += 1
+            state.offlineAtPrepare.append(offline)
             return (state.error, state.prepareGate)
         }
         await gate?.wait()
@@ -97,32 +113,58 @@ final class DoubleDetector: LoadableDetector, @unchecked Sendable {
     }
 }
 
+/// Le réseau de FluidAudio double : un drapeau (coupé ou non) que les moteurs doubles lisent à chaque préparation, et l'historique
+/// de ses changements.
+final class DoubleNetwork: Sendable {
+    private let state = Mutex<(offline: Bool, changes: [Bool])>((false, []))
+    var isOffline: Bool { state.withLock { $0.offline } }
+    /// Chaque changement, dans l'ordre (`true` : coupé, `false` : rétabli).
+    var changes: [Bool] { state.withLock { $0.changes } }
+    func set(_ offline: Bool) {
+        state.withLock {
+            $0.offline = offline
+            $0.changes.append(offline)
+        }
+    }
+}
+
 /// Les moteurs doubles que `EngineFactory` fabrique, gardés pour que le test les lise.
 final class DoubleEngines: Sendable {
-    let parakeet = DoubleTranscriber(name: "parakeet", text: "texte parakeet")
-    let detector = DoubleDetector()
+    let network: DoubleNetwork
+    let parakeet: DoubleTranscriber
+    let detector: DoubleDetector
     private let whispers = Mutex<[String: DoubleTranscriber]>([:])
-    private let offline = Mutex<Bool>(true)
+    private let loadsOffline = Mutex<Bool>(true)
+
+    init() {
+        let network = DoubleNetwork()
+        self.network = network
+        parakeet = DoubleTranscriber(
+            name: "parakeet", text: "texte parakeet", offlineProbe: { network.isOffline })
+        detector = DoubleDetector(offlineProbe: { network.isOffline })
+    }
 
     /// Le moteur Whisper de ce modèle (le même à chaque appel).
     func whisper(_ model: String) -> DoubleTranscriber {
-        whispers.withLock { whispers in
+        let network = network
+        return whispers.withLock { whispers in
             if let existing = whispers[model] { return existing }
-            let made = DoubleTranscriber(name: "whisperkit", text: "texte whisper")
+            let made = DoubleTranscriber(name: "whisperkit", text: "texte whisper", offlineProbe: { network.isOffline })
             whispers[model] = made
             return made
         }
     }
 
     /// Ce que répond la fabrique à « ce modèle se charge-t-il sans réseau ? ».
-    func setWhisperLoadsOffline(_ value: Bool) { offline.withLock { $0 = value } }
+    func setWhisperLoadsOffline(_ value: Bool) { loadsOffline.withLock { $0 = value } }
 
     var factory: EngineFactory {
         EngineFactory(
             parakeet: { [self] in parakeet },
             detector: { [self] in detector },
             whisper: { [self] model, _ in whisper(model) },
-            whisperLoadsOffline: { [self] _, _ in offline.withLock { $0 } })
+            whisperLoadsOffline: { [self] _, _ in loadsOffline.withLock { $0 } },
+            setOffline: { [network] in network.set($0) })
     }
 }
 

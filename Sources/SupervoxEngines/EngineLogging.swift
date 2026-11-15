@@ -23,3 +23,16 @@ public enum EngineLogging {
         AppLogger.mirrorsToConsole = mirrorsToConsole
     }
 }
+
+/// Le réseau de FluidAudio (Parakeet, détecteur de voix), coupé le temps du préchargement du lancement.
+///
+/// `ModelHub.offlineMode` (FluidAudio 0.18.3, `Shared/Download/ModelHub.swift:31-33`, public, global au processus) fait lever
+/// `modelMissing`/`networkDisabled` à la place de tout accès au réseau : `loadModelsOnce` (`:364-369`, fichiers requis absents ou
+/// incomplets), le rattrapage de `loadModels` qui supprimerait puis retéléchargerait un bundle qui ne se charge pas (`:103-108`,
+/// relancé avant `purgeCorruptedFiles`, `:137`), `fetchWithAuth` (`:36-40`), le listage (`HFTreeLister.swift:43`) et les fichiers
+/// (`FileDownloader.swift:149`).
+public enum EngineNetwork {
+    public static func setOffline(_ offline: Bool) {
+        ModelHub.offlineMode = offline
+    }
+}

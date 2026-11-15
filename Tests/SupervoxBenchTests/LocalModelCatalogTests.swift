@@ -389,40 +389,73 @@ import WhisperKit
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path))
     }
 
-    /// I4 : le préchargement du lancement ne doit jamais télécharger : il faut le dossier « Prêt » ET le tokenizer sur le disque
-    /// (WhisperKit se rabat sur le dépôt en ligne quand le tokenizer manque).
-    @Test func aWhisperModelLoadsWithoutTheNetworkOnlyWithItsFolderAndItsTokenizer() throws {
+    /// I4 / I-1 (c) : le préchargement du lancement ne doit jamais télécharger : il faut le dossier « Prêt », les deux fichiers du
+    /// tokenizer sur le disque ET que le tokenizer se charge réellement (WhisperKit se rabat sur le dépôt en ligne quand un
+    /// fichier existe mais ne se lit pas).
+    @Test func aWhisperModelLoadsWithoutTheNetworkOnlyWithItsFolderItsTokenizerFilesAndAWorkingTokenizer() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
-        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+        let works: @Sendable (URL) async -> Bool = { _ in true }
+        let model = "small"
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(model: model, downloadBase: sandbox.root, tokenizerLoads: works))
 
         try sandbox.makeWhisperFolder("openai_whisper-small")
-        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(model: model, downloadBase: sandbox.root, tokenizerLoads: works))
 
         let tokenizer = LocalModelCatalog.tokenizerFile(for: .small, in: sandbox.root)
         try FileManager.default.createDirectory(
             at: tokenizer.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: tokenizer)
         // Le fichier du tokenizer seul ne suffit pas : sa configuration est lue aussi (sinon WhisperKit va sur le réseau).
-        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(model: model, downloadBase: sandbox.root, tokenizerLoads: works))
         try Data("{}".utf8).write(to: tokenizer.deletingLastPathComponent().appendingPathComponent("tokenizer_config.json"))
-        #expect(WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+        #expect(await WhisperKitTranscriber.canLoadWithoutNetwork(model: model, downloadBase: sandbox.root, tokenizerLoads: works))
+
+        // Les fichiers sont là mais le tokenizer ne se charge pas : pas de préchargement.
+        let broken: @Sendable (URL) async -> Bool = { _ in false }
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(model: model, downloadBase: sandbox.root, tokenizerLoads: broken))
+        // Le chargement est essayé dans le dossier du tokenizer de la variante.
+        let asked = Mutex<[String]>([])
+        let spy: @Sendable (URL) async -> Bool = { folder in
+            asked.withLock { $0.append(folder.path) }
+            return true
+        }
+        _ = await WhisperKitTranscriber.canLoadWithoutNetwork(model: model, downloadBase: sandbox.root, tokenizerLoads: spy)
+        #expect(asked.withLock { $0 } == [tokenizer.deletingLastPathComponent().path])
 
         // Le tokenizer d'une autre variante ne compte pas, ni un dossier incomplet.
-        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "base", downloadBase: sandbox.root))
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(model: "base", downloadBase: sandbox.root, tokenizerLoads: works))
         try sandbox.makeWhisperFolder("openai_whisper-base", omitting: ["TextDecoder"])
         let baseTokenizer = LocalModelCatalog.tokenizerFile(for: .base, in: sandbox.root)
         try FileManager.default.createDirectory(
             at: baseTokenizer.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: baseTokenizer)
-        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "base", downloadBase: sandbox.root))
+        try Data("{}".utf8).write(to: baseTokenizer.deletingLastPathComponent().appendingPathComponent("tokenizer_config.json"))
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(model: "base", downloadBase: sandbox.root, tokenizerLoads: works))
     }
 
-    @Test func aVariantWhoseTokenizerCannotBeDeducedCannotLoadOffline() throws {
+    /// Le vrai chargement local : des fichiers illisibles (ici `{}`) ne donnent pas un tokenizer, sans aucun accès au réseau (le
+    /// chargement d'un dossier est local seulement, `AutoTokenizerWrapper.from(modelFolder:)`).
+    @Test func theRealLocalTokenizerLoadRefusesUnreadableFiles() async throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try FileManager.default.createDirectory(at: sandbox.root, withIntermediateDirectories: true)
+        try Data("pas du json".utf8).write(to: sandbox.root.appendingPathComponent("tokenizer.json"))
+        try Data("{}".utf8).write(to: sandbox.root.appendingPathComponent("tokenizer_config.json"))
+        #expect(await WhisperKitTranscriber.tokenizerLoadsFromDisk(sandbox.root) == false)
+        // Un dossier vide aussi.
+        let empty = sandbox.directory.appendingPathComponent("vide", isDirectory: true)
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(await WhisperKitTranscriber.tokenizerLoadsFromDisk(empty) == false)
+    }
+
+    @Test func aVariantWhoseTokenizerCannotBeDeducedCannotLoadOffline() async throws {
         let sandbox = try Sandbox()
         defer { sandbox.cleanUp() }
         try sandbox.makeWhisperFolder("openai_whisper-variante-inconnue")
-        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "variante-inconnue", downloadBase: sandbox.root))
+        let works: @Sendable (URL) async -> Bool = { _ in true }
+        #expect(await !WhisperKitTranscriber.canLoadWithoutNetwork(
+            model: "variante-inconnue", downloadBase: sandbox.root, tokenizerLoads: works))
     }
 
     /// Sans dossier de base, rien n'est cherché sur le disque (le dossier par défaut de la bibliothèque est Documents).

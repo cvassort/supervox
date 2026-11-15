@@ -78,18 +78,34 @@ public actor WhisperKitTranscriber: Transcriber {
     /// Vrai quand le modèle est chargé en mémoire (un `prepare()` a réussi).
     public var isPrepared: Bool { kit != nil }
 
-    /// Vrai si ce modèle se charge sans aucun accès au réseau : son dossier est « Prêt » et le fichier de son tokenizer est
-    /// sur le disque (sans lui, WhisperKit se rabat sur le dépôt en ligne). Le préchargement du lancement ne tourne que dans
-    /// ce cas : il ne télécharge jamais. Ne lit que le disque.
-    public static func canLoadWithoutNetwork(model: String, downloadBase: URL) -> Bool {
+    /// Vrai si ce modèle se charge sans aucun accès au réseau : son dossier est « Prêt » et son tokenizer **se charge réellement**
+    /// depuis le disque. Un fichier de tokenizer qui existe mais ne se lit pas (JSON invalide, fichier tronqué) ne suffit pas :
+    /// WhisperKit se rabattrait alors sur le dépôt en ligne, quel que soit `download` (`ModelUtilities.loadTokenizer`,
+    /// `WhisperKit/Utilities/ModelUtilities.swift:56-77`). Le préchargement du lancement ne tourne que dans ce cas : il ne
+    /// télécharge jamais. Ne lit que le disque.
+    ///
+    /// `tokenizerLoads` : essaie de charger le tokenizer d'un dossier (le même chargement local que WhisperKit, `AutoTokenizer…
+    /// from(modelFolder:)`) ; injectable pour les tests.
+    public static func canLoadWithoutNetwork(
+        model: String, downloadBase: URL,
+        tokenizerLoads: @Sendable (URL) async -> Bool = WhisperKitTranscriber.tokenizerLoadsFromDisk
+    ) async -> Bool {
         guard LocalModelCatalog.readyWhisperFolder(for: model, in: downloadBase) != nil,
             let variant = tokenizerVariant(of: model)
         else { return false }
-        // `tokenizer.json` et `tokenizer_config.json` : la lecture locale de WhisperKit exige les deux (sans la configuration,
-        // elle échoue et se rabat sur le dépôt en ligne).
         let tokenizer = LocalModelCatalog.tokenizerFile(for: variant, in: downloadBase)
-        return [tokenizer, tokenizer.deletingLastPathComponent().appendingPathComponent("tokenizer_config.json")]
-            .allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+        let folder = tokenizer.deletingLastPathComponent()
+        // `tokenizer.json` et `tokenizer_config.json` : la lecture locale de WhisperKit exige les deux.
+        guard [tokenizer, folder.appendingPathComponent("tokenizer_config.json")]
+            .allSatisfy({ FileManager.default.fileExists(atPath: $0.path) })
+        else { return false }
+        return await tokenizerLoads(folder)
+    }
+
+    /// Le chargement local du tokenizer, tel que WhisperKit le fait avant tout repli sur le réseau (`ModelUtilities.swift:60`) :
+    /// lecture des fichiers du dossier, aucun accès au réseau.
+    @Sendable public static func tokenizerLoadsFromDisk(_ folder: URL) async -> Bool {
+        (try? await AutoTokenizerWrapper.from(modelFolder: folder)) != nil
     }
 
     /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier

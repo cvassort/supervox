@@ -22,14 +22,18 @@ struct EngineFactory: Sendable {
     var parakeet: @Sendable () -> any LoadableTranscriber
     var detector: @Sendable () -> any LoadableDetector
     var whisper: @Sendable (_ model: String, _ modelsRoot: URL) -> any LoadableTranscriber
-    /// Vrai si ce modèle se charge sans réseau (dossier prêt et tokenizer sur le disque) : condition du préchargement.
-    var whisperLoadsOffline: @Sendable (_ model: String, _ modelsRoot: URL) -> Bool
+    /// Vrai si ce modèle se charge sans réseau (dossier prêt et tokenizer qui se charge depuis le disque) : condition du
+    /// préchargement.
+    var whisperLoadsOffline: @Sendable (_ model: String, _ modelsRoot: URL) async -> Bool
+    /// Coupe ou rétablit le réseau de FluidAudio (global au processus) : coupé pendant le préchargement, rétabli à sa fin.
+    var setOffline: @Sendable (_ offline: Bool) -> Void
 
     static let real = EngineFactory(
         parakeet: { ParakeetTranscriber() },
         detector: { FluidStreamingVoiceDetector() },
         whisper: { WhisperKitTranscriber(model: $0, downloadBase: $1) },
-        whisperLoadsOffline: { WhisperKitTranscriber.canLoadWithoutNetwork(model: $0, downloadBase: $1) })
+        whisperLoadsOffline: { await WhisperKitTranscriber.canLoadWithoutNetwork(model: $0, downloadBase: $1) },
+        setOffline: { EngineNetwork.setOffline($0) })
 }
 
 /// Les moteurs réels de la dictée, gardés d'une dictée à l'autre : sans cela, le modèle se rechargerait à chaque appui.
@@ -81,7 +85,9 @@ final class EngineCache: Sendable {
     }
 
     /// Ce modèle Whisper se charge-t-il sans réseau ?
-    func whisperLoadsOffline(_ model: String) -> Bool { factory.whisperLoadsOffline(model, modelsRoot) }
+    func whisperLoadsOffline(_ model: String) async -> Bool { await factory.whisperLoadsOffline(model, modelsRoot) }
+
+    func setOffline(_ offline: Bool) { factory.setOffline(offline) }
 
     /// Un modèle vient d'être supprimé du disque : le moteur qui le tient en mémoire est abandonné, la dictée suivante en
     /// recharge un neuf (et retélécharge le modèle). Le petit modèle de vocabulaire vit dans Parakeet.
@@ -102,23 +108,63 @@ final class EngineCache: Sendable {
     }
 }
 
+/// Le point de passage du préchargement du lancement. Pendant le préchargement le réseau de FluidAudio est coupé (voir
+/// `LiveDictationEngines.preload`) : tout ce qui pourrait avoir besoin du réseau ou toucher un modèle (la préparation d'une
+/// dictée, un téléchargement, une suppression) attend ici la fin du préchargement, succès ou échec, et reprend avec le réseau
+/// rétabli. Sans préchargement en cours, rien n'attend.
+final class PreloadGate: Sendable {
+    private let state = Mutex<(active: Int, waiters: [CheckedContinuation<Void, Never>])>((0, []))
+
+    /// Un préchargement commence (appel synchrone : aucune attente ne passe entre la décision et ce marquage).
+    func begin() { state.withLock { $0.active += 1 } }
+
+    /// Un préchargement finit : ceux qui attendaient reprennent.
+    func finish() {
+        let ready = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.active = max(0, state.active - 1)
+            guard state.active == 0 else { return [] }
+            defer { state.waiters = [] }
+            return state.waiters
+        }
+        for waiter in ready { waiter.resume() }
+    }
+
+    func waitUntilFinished() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let passes = state.withLock { state -> Bool in
+                if state.active == 0 { return true }
+                state.waiters.append(continuation)
+                return false
+            }
+            if passes { continuation.resume() }
+        }
+    }
+}
+
 /// Le catalogue des modèles que voit la fenêtre de réglages : celui de la dictée, qui abandonne le moteur gardé en mémoire
 /// quand son modèle est supprimé. Une suppression refusée (modèle en cours de téléchargement) n'abandonne rien.
 struct EvictingModelCatalog: ModelCatalog {
     let base: any ModelCatalog
     let cache: EngineCache
+    /// Un téléchargement ou une suppression attend la fin d'un préchargement en cours (voir `PreloadGate`).
+    var gate = PreloadGate()
 
     func models() async -> [LocalModel] { await base.models() }
 
     func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        await gate.waitUntilFinished()
         try await base.download(id, progress: progress)
     }
 
-    func ensureDownloaded(_ id: String) async throws { try await base.ensureDownloaded(id) }
+    func ensureDownloaded(_ id: String) async throws {
+        await gate.waitUntilFinished()
+        try await base.ensureDownloaded(id)
+    }
 
     func state(of id: String) async -> LocalModel.State? { await base.state(of: id) }
 
     func delete(_ id: String) async throws {
+        await gate.waitUntilFinished()
         try await base.delete(id)
         cache.evict(modelID: id)
     }
@@ -137,6 +183,7 @@ final class LiveDictationEngines: Sendable {
     let cache: EngineCache
     private let makeFeed: @Sendable () -> any MicrophoneFeed
     private let watchdog: MicrophoneWatchdog?
+    private let gate = PreloadGate()
 
     /// - Parameters:
     ///   - base: le catalogue sous-jacent (les tests en donnent un double ; en production, `LocalModelCatalog`).
@@ -155,7 +202,7 @@ final class LiveDictationEngines: Sendable {
         self.base = base
         self.makeFeed = makeFeed
         self.watchdog = watchdog
-        catalog = EvictingModelCatalog(base: base, cache: cache)
+        catalog = EvictingModelCatalog(base: base, cache: cache, gate: gate)
     }
 
     /// `Application Support/Supervox/Models`, créé au premier téléchargement et non au lancement.
@@ -168,7 +215,10 @@ final class LiveDictationEngines: Sendable {
 
     var environment: DictationEnvironment {
         DictationEnvironment(
-            makeSession: { [self] settings in makeSession(settings) },
+            makeSession: { [self] settings in
+                await gate.waitUntilFinished()
+                return makeSession(settings)
+            },
             needsModelDownload: { [self] settings in !(await missingModels(for: settings)).isEmpty },
             downloadModels: { [self] settings in try await downloadModels(for: settings) },
             promptTokenCount: { [self] terms, model in await base.promptTokenCount(terms, whisperModel: model) },
@@ -186,14 +236,26 @@ final class LiveDictationEngines: Sendable {
 
     /// Prépare, au lancement et en tâche de fond, les moteurs des réglages courants, dans l'ordre de la session (détecteur,
     /// moteur final, aperçu), **seulement** si tout ce dont une dictée a besoin est déjà « Prêt » sur le disque : détecteur,
-    /// Parakeet, la variante WhisperKit (dossier et tokenizer) si c'est le moteur, le petit modèle de vocabulaire s'il y a un
-    /// vocabulaire. Sinon, rien : le préchargement ne télécharge jamais (un modèle inconnu du catalogue, en cours de
-    /// téléchargement ou incomplet empêche aussi le préchargement). Un échec est silencieux : la dictée refera la
-    /// préparation et dira l'erreur.
+    /// Parakeet, la variante WhisperKit (dossier, et tokenizer qui se charge depuis le disque) si c'est le moteur, le petit modèle
+    /// de vocabulaire s'il y a un vocabulaire. Sinon, rien.
+    ///
+    /// Le préchargement ne touche jamais le réseau ni un modèle :
+    /// - WhisperKit : `download: false` et le dossier du modèle donné (`WhisperKitTranscriber.configuration`), et le préchargement
+    ///   n'a lieu que si le tokenizer se charge réellement depuis le disque (sinon WhisperKit irait le chercher en ligne) ;
+    /// - FluidAudio (Parakeet, détecteur) : le réseau est coupé (`ModelHub.offlineMode`) pendant les préparations, ce qui interdit
+    ///   le téléchargement d'un modèle « Prêt » pour le catalogue mais incomplet pour la bibliothèque, et le rattrapage qui
+    ///   supprimerait puis retéléchargerait un modèle qui ne se charge pas. Il est rétabli à la fin, succès ou échec.
+    /// Pendant ce temps, la préparation d'une dictée, un téléchargement et une suppression attendent la fin (`PreloadGate`).
+    ///
+    /// Un échec est silencieux et ne supprime rien : la dictée refera la préparation et dira l'erreur.
     func preload(for settings: TranscriptionSettings) async {
+        gate.begin()
+        defer { gate.finish() }
         guard await allNeededModelsReady(for: settings) else { return }
-        if settings.engine == "whisperkit", !cache.whisperLoadsOffline(settings.whisperModel) { return }
+        if settings.engine == "whisperkit", await !cache.whisperLoadsOffline(settings.whisperModel) { return }
         let engines = cache.engines(for: settings)
+        cache.setOffline(true)
+        defer { cache.setOffline(false) }
         try? await engines.detector.prepare()
         try? await engines.final.prepare()
         try? await engines.preview.prepare()
@@ -211,6 +273,7 @@ final class LiveDictationEngines: Sendable {
     /// modèle suivant de la liste. Le petit modèle de vocabulaire, qui vient après la reconnaissance de Parakeet, n'est pas
     /// indispensable : s'il ne se télécharge pas, la dictée a lieu sans vocabulaire (`vocabularyModelUnavailable`).
     func downloadModels(for settings: TranscriptionSettings) async throws -> ModelDownloadOutcome {
+        await gate.waitUntilFinished()
         var outcome = ModelDownloadOutcome.complete
         for id in await missingModels(for: settings) {
             try Task.checkCancellation()
