@@ -172,6 +172,58 @@ import SupervoxCore
         #expect(h.controller.view.phase == .recording)
     }
 
+    // MARK: - Le comportement d'une dictée ne change pas en cours de route (m4)
+
+    /// Commencée en bascule, la dictée se termine par un appui même si les réglages passent au maintien entre-temps.
+    @Test func aToggleDictationStillEndsOnAPressAfterTheSettingChangesToHold() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .toggle
+        let session = await h.startRecording()
+
+        h.knobs.behavior = .hold
+        h.controller.hotKeyPressed()
+        #expect(await until { session.count(of: "finish") == 1 })
+        // Le relâchement qui suit n'est pas celui d'un maintien : ignoré.
+        h.controller.hotKeyReleased()
+        await settle()
+        #expect(session.count(of: "finish") == 1)
+    }
+
+    /// Commencée en maintien, la dictée se termine au relâchement même si les réglages passent à la bascule entre-temps, et un
+    /// appui n'y met pas fin.
+    @Test func aHoldDictationStillEndsOnTheReleaseAfterTheSettingChangesToToggle() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+
+        h.knobs.behavior = .toggle
+        h.controller.hotKeyPressed()
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        #expect(h.controller.view.phase == .recording)
+
+        h.controller.hotKeyReleased()
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    /// Le comportement lu pour une NOUVELLE dictée est bien celui des réglages du moment.
+    @Test func aNewDictationReadsTheCurrentBehavior() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .toggle
+        let first = await h.startRecording()
+        h.controller.hotKeyPressed()
+        #expect(await until { first.count(of: "finish") == 1 })
+        first.emit(.finalizing)
+        first.emit(.failed(.noSpeech))
+        #expect(await until { !h.controller.isBusy })
+
+        h.knobs.behavior = .hold
+        h.controller.hotKeyPressed()
+        let second = await h.driveToRecording(index: 1)
+        h.controller.hotKeyReleased()
+        #expect(await until { second.count(of: "finish") == 1 })
+    }
+
     // MARK: - Maintien : relâchement perdu
 
     /// Les modificateurs lâchés avant la touche principale : le système peut ne jamais livrer le relâchement. La

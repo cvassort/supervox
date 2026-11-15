@@ -98,13 +98,15 @@ public final class DictationController {
 
     /// Bascule : un appui commence (le panneau s'ouvre), le suivant termine ; ignoré pendant la préparation et la
     /// finalisation. Maintien : un appui commence ; un appui pendant la dictée est ignoré.
+    ///
+    /// Une dictée garde le comportement avec lequel elle a commencé (`Run.startedByHold`), même si le réglage change pendant :
+    /// le réglage n'est lu que pour en commencer une nouvelle.
     public func hotKeyPressed() {
-        let hold = behavior() == .hold
         if let run {
-            if view.phase == .recording, !hold { requestFinish(run) }
+            if view.phase == .recording, !run.startedByHold { requestFinish(run) }
             return
         }
-        begin(hold: hold)
+        begin(hold: behavior() == .hold)
     }
 
     /// Maintien : le relâchement termine la dictée que ce maintien a commencée. Sans dictée, ou en bascule : ignoré.
