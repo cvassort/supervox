@@ -118,7 +118,7 @@ swift run supervox-snapshots /chemin/vers/un/dossier
 `supervox-snapshots` écrit les écrans du panneau et des réglages en PNG, en clair et en sombre : pour la dictée, la
 préparation (avec « Téléchargement du modèle… », puis avec « Chargement du modèle… »), l'enregistrement (sans texte, avec
 un texte long), la transcription, « rien à transcrire », l'échec de préparation, le texte copié faute d'Accessibilité, le
-texte refusé par le presse-papiers, un message long sous un dernier texte long, le dernier texte (avec « Copié » et « Copie impossible »), un mode non disponible, et la relecture (texte court, texte plus long que le champ, texte vide, collage en cours, texte copié faute d'Accessibilité, texte refusé par le presse-papiers, « Copié », « Copie impossible ») ; pour
+texte refusé par le presse-papiers, un message long sous un dernier texte long, le dernier texte (avec « Copié » et « Copie impossible »), un mode non disponible, et la relecture (texte court, texte plus long que le champ, texte vide, collage en cours, panneau sans la frappe, texte copié faute d'Accessibilité, texte refusé par le presse-papiers, « Copié », « Copie impossible ») ; pour
 les réglages, l'onglet Modes (par défaut, puis avec un enregistrement refusé). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
 d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au presse-papiers ni aux réglages
 réels. Les onglets des réglages sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas
@@ -207,8 +207,10 @@ de `docs/essai-final.md`).
 - **Si le collage est impossible** (Accessibilité refusée, touches de modification restées enfoncées, ⌘V non envoyé,
   presse-papiers qui refuse le texte), le panneau revient à la relecture avec le texte intact et la raison sous le champ :
   les mêmes phrases qu'à une dictée directe, sauf pour le presse-papiers refusé, dont la phrase est adaptée. Il n'a plus la
-  frappe : l'aide dit de cliquer dans le texte pour le corriger encore, ou sur « Coller » pour réessayer, et ⌘↩ n'y serait
-  pas reçu.
+  frappe : l'aide dit de cliquer dans le texte pour le corriger, ou sur « Coller » pour le coller, et ⌘↩ n'y serait pas
+  reçu. C'est la même aide chaque fois que le panneau n'est pas la fenêtre clé (le panneau le remonte lui-même, à chaque
+  prise et perte de la clé) : après un clic dans une autre application, ⌘↩ n'est plus annoncé, et il l'est de nouveau
+  dès que le panneau reprend la frappe.
 - **Copier** met le texte entier du champ dans le presse-papiers (copie ordinaire), indique « Copié », et laisse le panneau
   ouvert ; une modification du texte remet « Copier ».
 - **Échap** ferme sans coller ni copier, comme toute autre fermeture du panneau (menu de l'icône, « Réglages… », « Quitter

@@ -518,16 +518,25 @@ Les essais ci-dessous sont faits pour les regarder.
   l'application de dessous. Cette règle a été retirée des tests automatiques : dans le processus de test, le système
   a déclaré l'application active dès que le panneau est devenu clé, et ce que cela donne sur un vrai écran n'est pas
   établi (essai 34).
-- ⌘↩ avec un vrai clavier dans un panneau qui n'active pas l'application : le test lui passe un événement fabriqué.
+- ⌘↩ avec un vrai clavier dans un panneau qui n'active pas l'application : le test lui passe un événement fabriqué. Et
+  le repli « touches de modification tenues » quand ⌘ reste enfoncé plus d'une seconde (essai 44).
+- Que le panneau perde vraiment la frappe quand on clique dans une autre application, et la reprenne au clic dans le
+  champ : les tests postent eux-mêmes les notifications de perte et de reprise de la clé, hors écran. C'est de là que
+  l'aide tire l'annonce de ⌘↩ (essai 38) ; si le système ne les envoie pas, l'aide mentirait.
+- Que le bouton « Coller » soit bleu (couleur d'accent) dans le vrai panneau : cela suppose que SwiftUI y voie la fenêtre
+  comme clé. Et qu'un « Coller » actif mais grisé (panneau sans la frappe) ne se confonde pas avec un bouton inactif.
 - L'effet réel de ⌘X, ⌘C et ⌘V dans le champ (aucun test n'écrit dans le vrai presse-papiers), et celui de ⌘A, ⌘Z et
   ⇧⌘Z au clavier (les tests leur passent des événements fabriqués).
-- Le clavier AZERTY, les touches mortes (^ puis e) et le menu d'accents de l'appui long.
+- Le clavier AZERTY, les touches mortes (^ puis e), le menu d'accents de l'appui long, et une méthode de saisie à
+  composition longue (japonais, chinois) : le champ ne doit pas être réécrit pendant un texte marqué (essai 37). Échap
+  pendant le menu d'accents ou une touche morte en attente (Échap est réservé par Supervox).
 - Le rendu du champ à l'écran : les images rendues hors écran ne montrent ni le curseur, ni la sélection, ni le
   défileur, ni le défilement ; « Coller » y est dessiné en couleur d'accent parce que le panneau y est supposé clé.
 - Le délai de 0,15 s entre le retrait de la frappe et le collage : il n'est pas mesuré. S'il est trop court, le texte
   part dans le vide ou dans le panneau (essai 35).
 - La hauteur du panneau avec un texte long, surtout sur un petit écran : le champ s'arrête à seize lignes, un choix
-  non mesuré (essai 43).
+  non mesuré (essai 43). Avec « Afficher les barres de défilement : toujours » (Réglages Système, Apparence), la
+  dernière ligne peut être coupée : la mesure de hauteur ne retire pas la largeur d'une barre fixe (non vu).
 - Qu'il n'y ait aucun clignotement à la fermeture du panneau ni au moment de « Coller » : la fermeture est un seul
   retrait de l'écran (vérifié sur la suite des appels, pas à l'œil).
 - Dans l'onglet Modes, l'interrupteur qui revient à sa position enregistrée après un enregistrement refusé : le
@@ -535,7 +544,22 @@ Les essais ci-dessous sont faits pour les regarder.
 - Que les cinq onglets des Réglages tiennent dans la fenêtre : les images rendues sont faites sans la barre des
   onglets (essai 32).
 - Que le texte reste copié après « Coller » : si le système refuse cette copie, le contenu d'origine du presse-papiers
-  est rendu, sans avis (essai 35).
+  est rendu, sans avis (essai 35). Si une copie universelle entre appareils Apple est active, on ne sait pas si le texte
+  copié par « Coller » part sur un autre appareil (même question pour « Copier » à l'étape 3).
+- ⌘Q pendant la relecture, avant et après une ouverture des Réglages : voir « À savoir » ; le comportement est supposé,
+  jamais vu.
+- Un raccourci tenu au moment où la relecture s'ouvre (bascule avec une transcription très courte, ou maintien) : aucun
+  caractère parasite ne doit entrer dans le champ. Possible, non vu.
+- Un champ sécurisé en cible (champ de mot de passe, « Secure Keyboard Entry » du terminal) : le ⌘V posté peut être
+  bloqué alors que le résultat dit « collé » ; le panneau se ferme et le texte n'est plus que dans « Dernière dictée ».
+  Déjà vrai à l'étape 3, plus gênant ici.
+- VoiceOver : le nom du champ (« Texte à relire »), l'annonce de « Collage… » et celle de la raison d'un échec.
+- Échap non réservé (l'avis de refus apparaît) : pendant la relecture, Échap arriverait au champ, qui pourrait ouvrir la
+  liste de complétion ; seuls le menu de l'icône, « Coller » ou les Réglages ferment alors le panneau.
+- Réglages ouverts, puis une relecture : une capture de raccourci en cours ne doit pas être interrompue par le panneau
+  qui devient clé (il peut poster `didBecomeActive` et `didResignActive`).
+- Plusieurs écrans, un autre bureau, une application en plein écran : le panneau devient clé et rend la frappe comme
+  ailleurs.
 
 ### À savoir avant d'essayer
 
@@ -551,6 +575,10 @@ Les essais ci-dessous sont faits pour les regarder.
 - **« Coller » colle le texte et le laisse copié** dans le presse-papiers (un second ⌘V ailleurs le recolle). Une dictée
   sans relecture, elle, rend toujours le presse-papiers d'origine (essai 10).
 - Ouvrir « Réglages… » pendant une relecture ferme le panneau : le texte part dans « Dernière dictée ».
+- **⌘Q dans le panneau peut quitter Supervox, et le texte en cours est alors perdu** (même règle que « Quitter » ci-dessus,
+  sans confirmation). Le panneau ne retient pas ⌘Q : si les Réglages ont été ouverts au moins une fois depuis le
+  lancement, l'application a un menu principal, avec « Quitter » sur ⌘Q, qui répondrait ; sinon ⌘Q ne ferait rien. C'est
+  déduit du code, pas vu. Même risque en croyant taper dans l'application de dessous, dont la barre de menus reste affichée.
 - Il n'y a pas de bouton « Corriger à la voix » à cette étape.
 
 ### 32. Réglage « Relire avant de coller »
@@ -668,7 +696,11 @@ peut garder la copie laissée par « Coller ».
      la touche marquée A, qui n'est pas au même endroit en AZERTY et en QWERTY). **Comportement à confirmer.** Si une
      disposition où ⌘ suit le QWERTY (« Dvorak – QWERTY ⌘ ») est installée, essayez-la aussi : le code peut y lire la
      mauvaise lettre. Rétablissez ensuite votre disposition habituelle.
-5. Tapez Échap pour terminer.
+5. Faites deux relectures de suite, sans quitter Supervox : dans la première, tapez et corrigez quelques mots ; fermez
+   (Échap) ; faites une seconde dictée avec relecture et tapez ⌘Z **avant d'avoir rien tapé**.
+   - Attendu : rien ne se passe : le texte de la seconde relecture reste tel quel, et rien de la première ne revient.
+     Après avoir tapé un mot, ⌘Z ne retire que ce mot. (Avant la correction, ce ⌘Z visait la frappe d'un champ disparu.)
+6. Tapez Échap pour terminer.
 
 ### 37. Accents
 
@@ -684,15 +716,25 @@ Dans le champ de relecture, avec le clavier AZERTY :
      (le texte reste dans « Dernière dictée »), au lieu de ne fermer que le menu des accents. **Comportement à
      confirmer** : notez ce qui arrive vraiment (le menu seul, le panneau seul, les deux). Refaites avec une touche
      morte en attente (tapez ^, puis Échap).
+4. Tapez ^ et patientez une dizaine de secondes (le panneau relit alors, de lui-même, l'état des permissions et d'autres
+   états), puis tapez e. Si vous avez une méthode de saisie à composition (japonais, chinois), composez un mot long et
+   attendez avant de valider.
+   - Attendu : « ê » ; la composition en cours n'est pas effacée par ce qui change dans le panneau. **Comportement à
+     confirmer** : qu'une mise à jour tombe pendant une composition n'est pas établi ; le code ne réécrit le champ ni
+     pendant un texte marqué ni pendant qu'une touche morte attend.
 
 ### 38. Cliquer dans une autre application pendant la relecture
 
-1. Pendant une relecture, cliquez dans le champ d'une autre application (l'application de notes, par exemple).
+1. Pendant une relecture (l'aide dit « ⌘↩ colle le texte… »), cliquez dans le champ d'une autre application (l'application
+   de notes, par exemple).
    - Attendu : le panneau reste ouvert, le texte intact ; la frappe va à l'application cliquée, pas au panneau. L'aide
-     du panneau dit pourtant toujours « ⌘↩ colle le texte » : **n'utilisez pas ⌘↩ tant que la frappe n'est pas
-     revenue dans le champ**, il irait à l'application cliquée.
-2. Recliquez dans le champ du panneau, et tapez un mot.
-   - Attendu : la frappe revient au panneau. **Comportement à confirmer.**
+     du panneau change aussitôt : « Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller. Échap
+     ferme sans coller. » Elle n'annonce plus ⌘↩. **Comportement à confirmer** : que le panneau perde la frappe à ce clic,
+     et que l'aide le suive. Si elle dit encore « ⌘↩ colle le texte », notez-le et **n'utilisez pas ⌘↩** : il irait à
+     l'application cliquée, qui pourrait y lire « envoyer ».
+2. Recliquez dans le champ du panneau (sans taper).
+   - Attendu : la frappe revient au panneau, et l'aide redit « ⌘↩ colle le texte… » dès le clic. Tapez un mot : il entre
+     dans le champ. **Comportement à confirmer.**
 3. Cliquez de nouveau dans l'autre application (curseur à l'endroit voulu), puis sur « Coller » dans le panneau.
    - Attendu : le texte est collé dans l'application cliquée en dernier, pas dans la première. **Comportement à
      confirmer.**
@@ -738,7 +780,7 @@ Copiez d'abord un texte reconnaissable (⌘C).
 
 1. Pendant une relecture, faites ⌘A puis effacez.
    - Attendu : le champ dit « Le texte est vide. » en gris ; « Copier » et « Coller » sont grisés ; l'aide dit « Tapez
-     un texte, ou Échap pour fermer sans coller. » ; ⌘↩ ne fait rien.
+     un texte, ou appuyez sur Échap pour fermer sans coller. » ; ⌘↩ ne fait rien.
 2. Tapez seulement des espaces ou un retour à la ligne.
    - Attendu : les boutons restent grisés et l'aide est la même, mais « Le texte est vide. » disparaît (le champ n'est
      plus vide).
@@ -763,20 +805,23 @@ Copiez d'abord un texte reconnaissable (⌘C).
 1. Retirez l'autorisation d'Accessibilité à Supervox (Réglages Système), faites une dictée avec relecture, corrigez un mot,
    puis cliquez sur « Coller ».
    - Attendu : rien n'est collé. Le panneau revient à la relecture : le titre reste « À relire » (et non « Texte copié »),
-     le texte est intact avec votre correction, et sous le champ la phrase de l'étape 3 : « Le texte dicté est copié dans le
-     presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V… ». La ligne des
-     permissions dit que l'Accessibilité manque. L'aide devient « Cliquez dans le texte pour le corriger encore, ou sur
-     « Coller » pour réessayer. Échap ferme sans coller. » et le reste jusqu'à votre première frappe. **Dans cet état,
-     n'utilisez pas ⌘↩** : le panneau n'a plus la frappe, ⌘↩ irait à l'application de dessous.
+     le texte est intact avec votre correction, et sous le champ la phrase de l'étape 3 : « Le texte est copié dans le
+     presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V… » (« Le texte dicté »
+     avant la relecture : « dicté » est retiré, le texte peut avoir été corrigé). La ligne des permissions dit que
+     l'Accessibilité manque. L'aide devient « Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller.
+     Échap ferme sans coller. » tant que le panneau n'a pas repris la frappe (la même phrase qu'après un clic dans une
+     autre application, essai 38 ; sans « réessayer », qui échouerait de la même façon). **Dans cet état, n'utilisez pas
+     ⌘↩** : le panneau n'a plus la frappe, ⌘↩ irait à l'application de dessous.
 2. Cliquez à l'endroit voulu dans l'application de dessous (le panneau reste ouvert), puis faites ⌘V.
    - Attendu : le texte est collé.
 3. Cliquez dans le champ du panneau et tapez un mot.
-   - Attendu : l'aide redevient « ⌘↩ colle le texte… ». Le presse-papiers ne suit pas vos retouches : « Coller » le
-     réécrit. **Comportement à confirmer** : la frappe revient au panneau après un clic.
+   - Attendu : l'aide redevient « ⌘↩ colle le texte… » dès que le panneau reprend la frappe (au clic, avant même de
+     taper). Le presse-papiers ne suit pas vos retouches : « Coller » le réécrit. **Comportement à confirmer** : la frappe
+     revient au panneau après un clic.
 4. Rendez l'Accessibilité à Supervox. Faites une dictée avec relecture, tapez ⌘↩ et **gardez ⌘ enfoncé plus de deux
    secondes**.
    - Attendu : après environ une seconde d'attente, le texte n'est pas collé : le panneau revient à la relecture avec
-     « Le texte dicté est copié dans le presse-papiers, mais des touches de modification (⌃, ⌥, ⇧ ou ⌘) sont restées
+     « Le texte est copié dans le presse-papiers, mais des touches de modification (⌃, ⌥, ⇧ ou ⌘) sont restées
      enfoncées et auraient faussé le collage : relâchez-les, puis faites ⌘V pour coller le texte. » Relâchez ⌘, cliquez à
      l'endroit voulu de l'application de dessous, ⌘V : le texte est collé. Fermez par Échap.
 
