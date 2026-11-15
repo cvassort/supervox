@@ -589,6 +589,69 @@ final class ProgressBox: Sendable {
         #expect(model.settings.language == "fr")
     }
 
+    /// Min-9 : un refus typé du catalogue (modèle occupé par un téléchargement) garde une phrase qui dit quoi faire ; ce n'est
+    /// pas le texte de l'erreur qui paraît, c'est une phrase fixe du modèle de l'onglet.
+    @Test func aBusyRefusalOnDeletionSaysToWaitForTheDownload() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(ModelCatalogRefusal.busyDownloading)
+
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message == "Ce modèle est en cours de téléchargement : attendez la fin du téléchargement pour le supprimer.")
+        #expect(model.message == TranscriptionModel.deletionBusy)
+        #expect(model.messageKind == .error)
+        // Le modèle reste en place.
+        #expect(Self.state(model, FakeModelCatalog.turbo.id) == .ready)
+    }
+
+    @Test func aBusyRefusalOnDownloadSaysTheDownloadIsAlreadyRunning() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDownload { _, _ in throw ModelCatalogRefusal.busyDownloading }
+
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let reason)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(reason == "Ce modèle est déjà en cours de téléchargement.")
+        #expect(reason == TranscriptionModel.downloadBusy)
+        #expect(!reason.contains("connexion"))
+    }
+
+    /// Toute autre erreur garde la phrase fixe générale, jamais son texte ; les deux phrases du refus ne sont pas celles-là.
+    @Test func anyOtherErrorKeepsTheGeneralSentenceAndNoRawText() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(LeakyFailure())
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message == TranscriptionModel.deletionFailure)
+        #expect(!leaks(model.message))
+
+        catalog.setDownload { _, _ in throw LeakyFailure() }
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let reason)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(reason == TranscriptionModel.downloadFailure)
+        #expect(!leaks(reason))
+        #expect(Set([
+            TranscriptionModel.deletionBusy, TranscriptionModel.downloadBusy, TranscriptionModel.deletionFailure,
+            TranscriptionModel.downloadFailure,
+        ]).count == 4)
+    }
+
+    /// Une `SettingsError` garde sa phrase seule, sans préfixe ni majuscule après un deux-points (min-10).
+    @Test func aSettingsErrorIsShownAloneWithItsOwnSentence() {
+        let model = makeModel()
+        let error = SettingsError.unreadableFileKept(fileName: "settings.json")
+        saver.failure = error
+        model.setLanguage("en")
+        #expect(model.message == error.errorDescription)
+        #expect(model.message?.contains(": Le ") == false)
+    }
+
     @Test func aModelNoteIsPassedThroughToTheList() async {
         let note = "Le petit modèle qui reconnaît votre vocabulaire sera téléchargé à la première dictée qui en a besoin."
         let withNote = FakeModelCatalog(models: [

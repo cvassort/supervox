@@ -99,7 +99,7 @@ import Testing
         await settle()
         #expect(downloads.started == [Self.small])
         downloads.release.open()
-        await #expect(throws: LocalModelCatalogError.alreadyDownloading(Self.small)) { try await button.value }
+        await #expect(throws: ModelCatalogRefusal.busyDownloading) { try await button.value }
         try await fromDictation.value
     }
 
@@ -154,10 +154,7 @@ import Testing
             try await catalog.delete(Self.small)
             Issue.record("la suppression aurait dû être refusée")
         } catch {
-            #expect(error as? LocalModelCatalogError == .busyDownloading("Whisper small"))
-            let message = error.localizedDescription
-            #expect(message.contains("en cours de téléchargement"))
-            #expect(message.contains("Whisper small"))
+            #expect(error as? ModelCatalogRefusal == .busyDownloading)
         }
         let folder = LocalModelCatalog.whisperRepository(in: sandbox.root).appendingPathComponent("openai_whisper-small")
         #expect(FileManager.default.fileExists(atPath: folder.path))
@@ -179,7 +176,7 @@ import Testing
         let download = Task { try await catalog.ensureDownloaded(LocalModelID.parakeetVocabulary) }
         await downloads.entered.wait()
         #expect(await catalog.state(of: LocalModelID.parakeetVocabulary) == .downloading(nil))
-        await #expect(throws: LocalModelCatalogError.busyDownloading("Parakeet")) {
+        await #expect(throws: ModelCatalogRefusal.busyDownloading) {
             try await catalog.delete(LocalModelID.parakeet)
         }
         downloads.release.open()

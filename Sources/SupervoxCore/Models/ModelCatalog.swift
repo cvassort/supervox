@@ -49,6 +49,15 @@ public enum LocalModelID {
     }
 }
 
+/// Ce qu'un catalogue refuse sans que ce soit une panne : l'écran de réglages en fait une phrase fixe qui dit quoi faire (le
+/// texte d'une erreur quelconque, lui, n'est jamais montré). `SupervoxApp` ne voit pas les erreurs de `SupervoxEngines` : le
+/// refus typé vit ici, avec le contrat que les deux partagent.
+public enum ModelCatalogRefusal: Error, Equatable, Sendable {
+    /// Le modèle (ou un modèle dont il dépend) est en cours de téléchargement, par la fenêtre de réglages ou par une dictée :
+    /// un second téléchargement, ou la suppression, est refusé.
+    case busyDownloading
+}
+
 /// Les modèles locaux tels que l'écran de réglages les voit. La réalisation vit dans `SupervoxEngines`
 /// (`LocalModelCatalog`) ; le protocole est ici pour que `SupervoxApp` et `SupervoxEngines` le partagent sans dépendre
 /// l'un de l'autre.

@@ -172,7 +172,7 @@ public final class TranscriptionModel {
                 Task { @MainActor in self?.progress(fraction, of: id) }
             }
         } catch {
-            failures[id] = Self.downloadFailure
+            failures[id] = Self.downloadMessage(for: error)
         }
         // La liste est relue avant de lâcher l'état « en cours » : la ligne ne passe jamais par un état périmé. La relecture
         // recompte le vocabulaire si le modèle choisi a changé sur le disque, succès ou échec.
@@ -202,7 +202,7 @@ public final class TranscriptionModel {
         do {
             try await catalog.delete(id)
         } catch {
-            show(Self.deletionFailure, .error)
+            show(Self.deletionMessage(for: error), .error)
             return
         }
         failures[id] = nil
@@ -407,10 +407,23 @@ public final class TranscriptionModel {
     public static let downloadFailure =
         "Le téléchargement a échoué : vérifiez votre connexion et la place disponible sur le disque, puis réessayez."
     public static let deletionFailure = "La suppression a échoué : le modèle est resté en place."
+    /// Un refus typé du catalogue (`ModelCatalogRefusal`) : le modèle est occupé par un téléchargement, par la fenêtre ou par
+    /// une dictée. Les phrases disent quoi faire.
+    public static let downloadBusy = "Ce modèle est déjà en cours de téléchargement."
+    public static let deletionBusy =
+        "Ce modèle est en cours de téléchargement : attendez la fin du téléchargement pour le supprimer."
+
+    private static func downloadMessage(for error: any Error) -> String {
+        (error as? ModelCatalogRefusal) == .busyDownloading ? downloadBusy : downloadFailure
+    }
+
+    private static func deletionMessage(for error: any Error) -> String {
+        (error as? ModelCatalogRefusal) == .busyDownloading ? deletionBusy : deletionFailure
+    }
     public static let saveFailure = "Réglage non enregistré : l'ancienne valeur est conservée."
 
     private static func saveMessage(for error: any Error) -> String {
         guard let settingsError = error as? SettingsError, let text = settingsError.errorDescription else { return saveFailure }
-        return "Réglage non enregistré : \(text)"
+        return text
     }
 }

@@ -5,18 +5,12 @@ import WhisperKit
 
 public enum LocalModelCatalogError: Error, Equatable, LocalizedError {
     case unknownModel(String)
-    case alreadyDownloading(String)
-    /// Suppression refusée : le modèle (son titre) est en cours de téléchargement, par la fenêtre de réglages ou par une dictée.
-    case busyDownloading(String)
     /// Un téléchargement qui s'est terminé sans laisser les fichiers attendus.
     case incomplete(String)
 
     public var errorDescription: String? {
         switch self {
         case .unknownModel(let id): "Modèle inconnu : « \(id) »."
-        case .alreadyDownloading: "Ce modèle est déjà en cours de téléchargement."
-        case .busyDownloading(let title):
-            "« \(title) » est en cours de téléchargement : attendez la fin du téléchargement pour le supprimer."
         case .incomplete(let title): "Le téléchargement de « \(title) » s'est terminé sans tous les fichiers attendus."
         }
     }
@@ -278,10 +272,10 @@ public actor LocalModelCatalog: ModelCatalog {
     /// enchaînés, FluidAudio repartant de zéro à chaque fichier), aucune fraction n'est donnée : un partage entre le modèle
     /// et son tokenizer, ou entre deux modèles, serait une invention.
     ///
-    /// Refuse un téléchargement déjà en cours (`alreadyDownloading`) : c'est le bouton de la fenêtre, qui n'en lance qu'un.
+    /// Refuse un téléchargement déjà en cours (`ModelCatalogRefusal.busyDownloading`) : c'est le bouton de la fenêtre, qui n'en lance qu'un.
     public func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         _ = try title(of: id)
-        guard downloads[id] == nil else { throw LocalModelCatalogError.alreadyDownloading(id) }
+        guard downloads[id] == nil else { throw ModelCatalogRefusal.busyDownloading }
         try await start(id, steps: Self.steps(for: id), progress: progress).value
     }
 
@@ -396,11 +390,11 @@ public actor LocalModelCatalog: ModelCatalog {
     }
 
     public func delete(_ id: String) async throws {
-        let title = try title(of: id)
+        _ = try title(of: id)  // un identifiant inconnu lève `unknownModel`
         // Refusée pendant un téléchargement du modèle (Parakeet : de l'un de ses deux modèles) : le dossier serait retiré
         // sous le téléchargement.
         let related = id == LocalModelID.parakeet ? [id, LocalModelID.parakeetVocabulary] : [id]
-        guard !related.contains(where: { downloads[$0] != nil }) else { throw LocalModelCatalogError.busyDownloading(title) }
+        guard !related.contains(where: { downloads[$0] != nil }) else { throw ModelCatalogRefusal.busyDownloading }
         if let variant = LocalModelID.whisperVariant(of: id) {
             if let folder = Self.whisperFolder(for: variant, in: root) {
                 try removeIfPresent(folder)
