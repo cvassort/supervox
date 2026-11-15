@@ -336,6 +336,11 @@ public final class AppController {
         return restored
     }
 
+    /// Le nom du mode qui tient déjà cette combinaison comme raccourci dans les réglages, `nil` si aucun ne la tient.
+    func modeHolding(_ hotKey: HotKey) -> String? {
+        settings.modes.first { $0.hotKey == hotKey }?.name
+    }
+
     /// Plus aucun raccourci global.
     func clearHotKey() {
         hotKeys.clear()

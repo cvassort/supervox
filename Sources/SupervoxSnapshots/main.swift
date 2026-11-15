@@ -175,7 +175,7 @@ let secondProvider = Provider(
         hotKey: .standard, active: .standard, behavior: .toggle, layout: layout, systemHotKeys: NoSystemHotKeys(),
         keyMonitor: NoKeyMonitor(),
         control: GlobalHotKeyControl(
-            apply: { _ in refusing ? .failure(.refused) : .success(()) }, suspend: {}, resume: { true }, clear: {}),
+            apply: { _ in refusing ? .failure(.refused) : .success(()) }, suspend: {}, resume: { true }, clear: {}, taken: { _ in nil }),
         save: { _, _ in })
     if refusing { model.record(keyB) }
     return model

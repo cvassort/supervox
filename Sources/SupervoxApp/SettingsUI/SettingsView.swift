@@ -139,7 +139,8 @@ public struct SettingsView: View {
                 apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.refused) },
                 suspend: { [weak controller] in controller?.suspendHotKeysForCapture() },
                 resume: { [weak controller] in controller?.resumeHotKeys() ?? false },
-                clear: { [weak controller] in controller?.clearHotKey() }),
+                clear: { [weak controller] in controller?.clearHotKey() },
+                taken: { [weak controller] in controller?.modeHolding($0) }),
             save: { [weak controller] hotKey, behavior in
                 try controller?.updateSettings {
                     $0.hotKey = hotKey

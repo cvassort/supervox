@@ -14,16 +14,19 @@ public struct GlobalHotKeyControl {
     public var resume: @MainActor () -> Bool
     /// Ne laisse aucun raccourci actif.
     public var clear: @MainActor () -> Void
+    /// Le nom du mode qui tient déjà cette combinaison comme raccourci, `nil` si aucun ne la tient.
+    public var taken: @MainActor (HotKey) -> String?
 
     public init(
         apply: @escaping @MainActor (HotKey) -> Result<Void, HotKeyError>,
         suspend: @escaping @MainActor () -> Void, resume: @escaping @MainActor () -> Bool,
-        clear: @escaping @MainActor () -> Void
+        clear: @escaping @MainActor () -> Void, taken: @escaping @MainActor (HotKey) -> String?
     ) {
         self.apply = apply
         self.suspend = suspend
         self.resume = resume
         self.clear = clear
+        self.taken = taken
     }
 }
 
@@ -146,7 +149,12 @@ public final class HotKeySettingsModel {
         let candidateLabel = candidate.label(layout: layout)
         let validation = candidate.validate(layout: layout)
         guard validation == .valid else {
-            message = Self.refusal(validation, label: candidateLabel)
+            message = HotKeyConflicts.refusal(validation, label: candidateLabel)
+            return
+        }
+        // Un mode la tient déjà : le système n'a pas à être sollicité.
+        if let mode = control.taken(candidate) {
+            message = HotKeyConflicts.heldByMode(label: candidateLabel, name: mode)
             return
         }
         // macOS accepterait la combinaison sans dire lequel des deux raccourcis l'emporte.
@@ -159,7 +167,7 @@ public final class HotKeySettingsModel {
         case .failure(.refused):
             message = "\(candidateLabel) a été refusé par macOS : il est sans doute déjà pris par une autre application. Choisissez-en un autre."
         case .failure(.invalid(let validation)):
-            message = Self.refusal(validation, label: candidateLabel)
+            message = HotKeyConflicts.refusal(validation, label: candidateLabel)
         case .success:
             do {
                 try save(candidate, behavior)
@@ -204,22 +212,11 @@ public final class HotKeySettingsModel {
     }
 
     /// Refus d'une combinaison captée.
-    static func systemShortcutRefusal(label: String) -> String {
-        "\(label) est un raccourci de macOS activé sur ce Mac (Réglages Système, Clavier, Raccourcis clavier) : choisissez-en un autre."
-    }
+    static func systemShortcutRefusal(label: String) -> String { HotKeyConflicts.systemShortcutRefusal(label: label) }
 
     /// Le raccourci enregistré est aussi un raccourci de macOS activé : il est enregistré, mais rien ne dit lequel des
     /// deux l'emporte.
     static func systemConflict(label: String) -> String {
         "\(label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
-    }
-
-    private static func refusal(_ validation: HotKeyValidation, label: String) -> String {
-        switch validation {
-        case .valid: ""
-        case .needsModifier: "Ajoutez ⌃ ou ⌘ : \(label) taperait du texte."
-        case .modifierOnly: "Ajoutez une touche aux modificateurs."
-        case .reserved(let reserved): "\(reserved) est réservé par le système."
-        }
     }
 }
