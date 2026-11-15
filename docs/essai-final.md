@@ -546,8 +546,8 @@ Les essais ci-dessous sont faits pour les regarder.
 - Que le texte reste copié après « Coller » : si le système refuse cette copie, le contenu d'origine du presse-papiers
   est rendu, sans avis (essai 35). Si une copie universelle entre appareils Apple est active, on ne sait pas si le texte
   copié par « Coller » part sur un autre appareil (même question pour « Copier » à l'étape 3).
-- ⌘Q pendant la relecture, avant et après une ouverture des Réglages : voir « À savoir » ; le comportement est supposé,
-  jamais vu.
+- ⌘Q pendant la relecture, avant et après une ouverture des Réglages : voir « À savoir » et l'essai 40 ; le comportement
+  est supposé, jamais vu.
 - Un raccourci tenu au moment où la relecture s'ouvre (bascule avec une transcription très courte, ou maintien) : aucun
   caractère parasite ne doit entrer dans le champ. Possible, non vu.
 - Un champ sécurisé en cible (champ de mot de passe, « Secure Keyboard Entry » du terminal) : le ⌘V posté peut être
@@ -716,12 +716,12 @@ Dans le champ de relecture, avec le clavier AZERTY :
      (le texte reste dans « Dernière dictée »), au lieu de ne fermer que le menu des accents. **Comportement à
      confirmer** : notez ce qui arrive vraiment (le menu seul, le panneau seul, les deux). Refaites avec une touche
      morte en attente (tapez ^, puis Échap).
-4. Tapez ^ et patientez une dizaine de secondes (le panneau relit alors, de lui-même, l'état des permissions et d'autres
-   états), puis tapez e. Si vous avez une méthode de saisie à composition (japonais, chinois), composez un mot long et
-   attendez avant de valider.
-   - Attendu : « ê » ; la composition en cours n'est pas effacée par ce qui change dans le panneau. **Comportement à
-     confirmer** : qu'une mise à jour tombe pendant une composition n'est pas établi ; le code ne réécrit le champ ni
-     pendant un texte marqué ni pendant qu'une touche morte attend.
+4. Tapez ^ et patientez une dizaine de secondes, puis tapez e. Si vous avez une méthode de saisie à composition
+   (japonais, chinois), composez un mot long et attendez avant de valider.
+   - Attendu : « ê » ; la composition en cours n'est pas effacée. **Comportement à confirmer** : on ne connaît aucun
+     événement qui change le panneau pendant une saisie en attente (pas de relecture périodique des états : les permissions
+     ne sont relues qu'à l'ouverture du panneau et au début d'une dictée), donc cet essai n'est qu'un témoin ; le code ne
+     réécrit de toute façon le champ ni pendant un texte marqué ni pendant qu'une touche morte attend.
 
 ### 38. Cliquer dans une autre application pendant la relecture
 
@@ -764,6 +764,11 @@ Copiez d'abord un texte reconnaissable (⌘C).
    l'application et ouvrez le panneau.
    - Attendu : aucune confirmation n'est demandée à la sortie, et la carte « Dernière dictée » n'y est plus : le texte
      en cours est perdu.
+5. **⌘Q.** Relancez Supervox **sans ouvrir les Réglages**, faites une dictée avec relecture, puis tapez ⌘Q dans le champ.
+   - Attendu (déduit du code, jamais vu) : rien ne se passe, le panneau reste. Fermez par Échap.
+   Ouvrez maintenant « Réglages… » puis refermez la fenêtre, refaites une dictée avec relecture et tapez de nouveau ⌘Q.
+   - Attendu (déduit du code) : Supervox peut quitter, sans confirmation, et le texte en cours est perdu (voir « À savoir »).
+     **Comportement à confirmer** : notez ce qui arrive dans chacun des deux cas.
 
 ### 41. Le raccourci pendant la relecture
 
