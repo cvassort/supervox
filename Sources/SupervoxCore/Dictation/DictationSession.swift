@@ -29,6 +29,8 @@ public actor DictationSession: DictationSessioning {
     private let config: DictationConfig
     private let now: @Sendable () -> Double
     private let watchdog: MicrophoneWatchdog?
+    /// L'attente de la limite de la transcription finale (`DictationConfig.finalTimeout`), injectée pour que les tests la pilotent.
+    private let sleep: @Sendable (Double) async throws -> Void
     /// Pour les tests : fabrique du rééchantillonneur (fréquence du micro, fréquence cible).
     private let makeResampler: @Sendable (Double, Double) -> StreamingResampler?
 
@@ -76,18 +78,22 @@ public actor DictationSession: DictationSessioning {
     private var ingesting = false
     private var captureRunning = false
 
-    /// `watchdog` : voir `MicrophoneWatchdog` ; `nil` (le défaut) ne surveille pas le micro.
+    /// `watchdog` : voir `MicrophoneWatchdog` ; `nil` (le défaut) ne surveille pas le micro. `sleep` : l'attente de la limite
+    /// de la transcription finale.
     public init(feed: any MicrophoneFeed, detector: any StreamingVoiceDetector, preview: (any Transcriber)?,
                 final: any Transcriber, config: DictationConfig, now: @escaping @Sendable () -> Double,
-                watchdog: MicrophoneWatchdog? = nil) {
+                watchdog: MicrophoneWatchdog? = nil,
+                sleep: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.init(feed: feed, detector: detector, preview: preview, final: final, config: config, now: now,
-                  watchdog: watchdog, makeResampler: { StreamingResampler(from: $0, to: $1) })
+                  watchdog: watchdog, sleep: sleep, makeResampler: { StreamingResampler(from: $0, to: $1) })
     }
 
     init(feed: any MicrophoneFeed, detector: any StreamingVoiceDetector, preview: (any Transcriber)?,
          final: any Transcriber, config: DictationConfig, now: @escaping @Sendable () -> Double,
          watchdog: MicrophoneWatchdog? = nil,
+         sleep: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
          makeResampler: @escaping @Sendable (Double, Double) -> StreamingResampler?) {
+        self.sleep = sleep
         self.watchdog = watchdog
         self.feed = feed
         self.detector = detector
@@ -265,7 +271,15 @@ public actor DictationSession: DictationSessioning {
         let engine = final
         let language = config.language
         let vocabulary = config.vocabulary
-        let transcription = Task { try await engine.transcribe(clip, language: language, vocabulary: vocabulary) }
+        let timeout = config.finalTimeout
+        let sleep = sleep
+        // La tâche porte le moteur ET sa limite de temps : `cancel()` (ou un état terminal) l'annule d'un coup, et `finish()`
+        // ne reste pas pendu à un moteur qui n'écoute pas l'annulation (`Deadline` n'attend pas l'opération qu'il abandonne).
+        let transcription = Task {
+            try await Deadline.run(seconds: timeout, sleep: sleep) {
+                try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
+            }
+        }
         finalTask = transcription
         let text: String
         do {
@@ -274,6 +288,11 @@ public actor DictationSession: DictationSessioning {
         } catch is CancellationError {
             // Annulation (de la session ou de l'appelant) : ce n'est pas une panne du moteur.
             setPhase(.cancelled)
+            return
+        } catch is DeadlineExceeded {
+            // Le moteur n'a rien rendu à temps : `Deadline` l'a annulé. Annulée entre-temps, la session reste annulée.
+            guard snapshot.phase == .finalizing else { return }
+            fail(.engine("le moteur n'a pas rendu de texte en \(Int(timeout.rounded())) secondes"))
             return
         } catch {
             guard snapshot.phase == .finalizing else { return }
