@@ -270,18 +270,32 @@ public actor LocalModelCatalog: ModelCatalog {
     public func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         _ = try title(of: id)
         guard downloads[id] == nil else { throw LocalModelCatalogError.alreadyDownloading(id) }
-        try await start(id, progress: progress).value
+        try await start(id, steps: Self.steps(for: id), progress: progress).value
     }
 
     /// Le téléchargement du modèle, ou celui qui est déjà en cours (le sien ou celui d'un autre appelant) : jamais deux dans
     /// le même dossier. Une dictée qui manque d'un modèle passe par ici, pour que la fenêtre de réglages le voie « en cours ».
+    ///
+    /// Ne télécharge que le modèle demandé, et rien s'il est déjà sur le disque : demander Parakeet ne télécharge pas son petit
+    /// modèle de vocabulaire (que seule une dictée avec vocabulaire demande, à part) ; seul le bouton de la fenêtre, `download`,
+    /// télécharge les deux.
     public func ensureDownloaded(_ id: String) async throws {
         _ = try title(of: id)
         if let running = downloads[id] {
             try await running.value
             return
         }
-        try await start(id, progress: { _ in }).value
+        guard diskState(of: id) != .ready else { return }
+        try await start(id, steps: [id], progress: { _ in }).value
+    }
+
+    private func diskState(of id: String) -> LocalModel.State {
+        if let variant = LocalModelID.whisperVariant(of: id) { return whisperState(variant) }
+        switch id {
+        case LocalModelID.parakeet: return parakeetState()
+        case LocalModelID.parakeetVocabulary: return vocabularyModelState()
+        default: return voiceDetectorState()
+        }
     }
 
     public func state(of id: String) async -> LocalModel.State? {
@@ -291,10 +305,12 @@ public actor LocalModelCatalog: ModelCatalog {
 
     /// Lance le téléchargement dans une tâche à part (l'annulation de l'appelant ne l'interrompt pas : un autre appelant peut
     /// l'attendre) et la garde jusqu'à sa fin, réussie ou non.
-    private func start(_ id: String, progress: @escaping @Sendable (Double) -> Void) -> Task<Void, any Error> {
+    private func start(
+        _ id: String, steps: [String], progress: @escaping @Sendable (Double) -> Void
+    ) -> Task<Void, any Error> {
         let task = Task { () async throws -> Void in
             defer { self.finished(id) }
-            try await self.perform(id, progress: progress)
+            for step in steps { try await self.download(step: step, progress: progress) }
         }
         downloads[id] = task
         return task
@@ -309,10 +325,6 @@ public actor LocalModelCatalog: ModelCatalog {
     /// puis le petit modèle de vocabulaire ; les autres modèles n'en demandent qu'un.
     static func steps(for id: String) -> [String] {
         id == LocalModelID.parakeet ? [LocalModelID.parakeet, LocalModelID.parakeetVocabulary] : [id]
-    }
-
-    private func perform(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
-        for step in Self.steps(for: id) { try await download(step: step, progress: progress) }
     }
 
     /// Un téléchargement réel (ou celui du double des tests).

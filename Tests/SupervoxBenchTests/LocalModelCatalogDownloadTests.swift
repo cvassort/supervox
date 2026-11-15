@@ -146,7 +146,8 @@ import Testing
         defer { downloads.release.open() }
         let catalog = catalog(sandbox, downloads)
 
-        let download = Task { try await catalog.ensureDownloaded(Self.small) }
+        // Le bouton « Télécharger » (Réessayer) d'un modèle incomplet : `ensureDownloaded` ne retélécharge pas un modèle prêt.
+        let download = Task { try await catalog.download(Self.small, progress: { _ in }) }
         await downloads.entered.wait()
 
         do {
@@ -197,6 +198,32 @@ import Testing
         let catalog = catalog(sandbox, downloads)
         try await catalog.download(LocalModelID.parakeet, progress: { _ in })
         #expect(downloads.started == [LocalModelID.parakeet, LocalModelID.parakeetVocabulary])
+    }
+
+    /// N1 : une dictée ne télécharge que ce dont elle a besoin. Demander Parakeet à une dictée (aperçu, moteur final) ne
+    /// télécharge que sa reconnaissance : le petit modèle de vocabulaire est demandé à part, et seulement avec un vocabulaire.
+    @Test func ensuringParakeetDownloadsOnlyTheTranscriptionModel() async throws {
+        let sandbox = try LocalModelCatalogTests.Sandbox()
+        defer { sandbox.cleanUp() }
+        let downloads = Downloads()
+        downloads.release.open()
+        let catalog = catalog(sandbox, downloads)
+        try await catalog.ensureDownloaded(LocalModelID.parakeet)
+        #expect(downloads.started == [LocalModelID.parakeet])
+        try await catalog.ensureDownloaded(LocalModelID.parakeetVocabulary)
+        #expect(downloads.started == [LocalModelID.parakeet, LocalModelID.parakeetVocabulary])
+    }
+
+    @Test func ensuringAModelThatIsAlreadyOnDiskDownloadsNothing() async throws {
+        let sandbox = try LocalModelCatalogTests.Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-small")
+        let downloads = Downloads()
+        downloads.release.open()
+        let catalog = catalog(sandbox, downloads)
+        #expect(await catalog.state(of: Self.small) == .ready)
+        try await catalog.ensureDownloaded(Self.small)
+        #expect(downloads.started.isEmpty)
     }
 
     @Test func everyOtherModelIsOneStep() {
