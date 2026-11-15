@@ -304,6 +304,18 @@ for dark in [false, true] {
                   openSettings: {}, quit: {}),
         name: "panneau-pret", dark: dark, background: panelBackground)
 
+    // Douze modes aux noms longs, inventés : les pastilles passent à la ligne, rien n'est coupé, le panneau grandit.
+    let manyChips = [
+        "Dictée brute", "Compte rendu de réunion", "Message court et poli", "Résumé en trois points",
+        "Note de suivi pour l'équipe", "Réponse détaillée à un courriel", "Liste de tâches du jour",
+        "Texte corrigé sans changer le ton", "Idée à creuser plus tard", "Prompt", "Traduction en anglais soigné", "Entretien",
+    ].enumerated().map { ModeChip(id: "exemple-\($0.offset)", title: $0.element) }
+    let crowded = PanelModel(lastModeID: "exemple-5", modes: manyChips)
+    crowded.hotKeyLabel = standardLabel
+    try render(
+        PanelView(model: crowded, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {}),
+        name: "panneau-pastilles-nombreuses", dark: dark, background: panelBackground)
+
     // Panneau du premier lancement : accueil et permissions manquantes.
     let first = panelModel(mode: ModeChip.rawID)
     first.welcome = AppController.welcome(hotKeyLabel: standardLabel)
