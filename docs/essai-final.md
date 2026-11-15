@@ -211,8 +211,10 @@ Réglages, onglet Raccourci, choisissez « Maintenir pour dicter ».
    - Attendu : la dictée est annulée, le panneau se ferme, rien n'est collé, l'indicateur du micro s'éteint. Avec ⌃⌥
      tenus, Échap n'est pas l'Échap seul que l'application réserve : en maintien, elle lit donc elle-même l'état de la
      touche vingt fois par seconde ; un effleurement plus bref qu'un vingtième de seconde peut passer entre deux lectures.
-     Refaites l'essai pendant « Préparation… » (juste après le lancement de l'application). **Comportement à confirmer** :
-     jamais essayé avec un vrai clavier ; notez si une pression normale suffit toujours.
+     Refaites l'essai pendant « Préparation… » (juste après le lancement de l'application). Après Échap, gardez ⌃⌥Espace
+     enfoncé une seconde de plus : rien ne doit redémarrer (le raccourci est encore tenu et plus aucune dictée n'existe ;
+     si le système répète l'appui d'une touche tenue, une dictée pourrait repartir : notez-le). **Comportement à
+     confirmer** : jamais essayé avec un vrai clavier ; notez si une pression normale suffit toujours.
 
 ### 14. Bascule : appui pendant la préparation
 
@@ -406,7 +408,8 @@ Le panneau a la hauteur de son contenu : sa fenêtre est ancrée par le haut et 
 ### 26. Dictée hors ligne, modèles présents
 
 Les modèles nécessaires aux réglages courants sont « Prêt » dans l'onglet Transcription (détecteur de voix, Parakeet, la
-variante WhisperKit choisie).
+variante WhisperKit choisie). Pour l'étape 2, avant de couper Internet : la ligne de Parakeet ne doit plus avoir de
+légende (le petit modèle du vocabulaire est prêt ; sinon, téléchargez-le par le bouton de la ligne).
 
 1. Coupez Internet (Wi-Fi et câble), quittez l'application puis relancez-la, et dictez.
    - Attendu : la dictée a lieu normalement : ni « Téléchargement du modèle… », ni « La transcription n'a pas pu être
@@ -414,7 +417,7 @@ variante WhisperKit choisie).
      de WhisperKit depuis son dossier, sans réseau, est lu dans le code mais n'a jamais été essayé hors ligne.
 2. Refaites l'essai avec le moteur Parakeet (essai 22.1), puis avec un vocabulaire non vide (le petit modèle du
    vocabulaire doit être « Prêt » : la ligne de Parakeet n'a plus de légende).
-   - Attendu : même résultat, hors ligne.
+   - Attendu : même résultat, hors ligne. Rétablissez ensuite WhisperKit et videz le vocabulaire (essai 22.5).
 3. Essai pour qui veut voir une limite : un modèle WhisperKit « Prêt » dont le fichier du tokenizer manque (dossier
    `Models/models/openai/` de Supervox, voir le README) ne se charge pas hors ligne, alors que l'onglet dit « Prêt ».
    - Attendu : l'échec de préparation, avec une phrase qui renvoie à l'onglet Transcription : « s'il est indiqué « Prêt »,
@@ -429,7 +432,8 @@ variante WhisperKit choisie).
      fonctionne pas : le micro s'est arrêté pendant la prise. » ; rien n'est collé, l'indicateur du micro s'éteint.
      **Comportement à confirmer** : l'arrêt du flux audio à un débranchement n'a jamais été observé sur un vrai appareil ;
      si macOS bascule seul sur un autre micro et que le son continue, la dictée continue aussi (notez ce que vous voyez).
-2. Même chose en mode maintien (essai 13).
+     Rétablissez ensuite votre entrée audio habituelle.
+2. Même chose en mode maintien (essai 13). Revenez ensuite à la bascule (essai 14).
 3. Micro branché, ne dites rien pendant dix secondes.
    - Attendu : aucun échec de micro ; seulement « Rien à transcrire » à la fin. Un vrai micro livre des tranches même dans
      le silence. **Comportement à confirmer** : l'écart entre l'ouverture du micro et la première tranche n'a pas été
@@ -441,7 +445,8 @@ variante WhisperKit choisie).
 
 1. Quittez l'application, relancez-la, et tapez ⌃⌥Espace aussitôt (première dictée après le lancement).
    - Attendu : « Préparation… » avec « Chargement du modèle… » (pas « Téléchargement du modèle… »), puis
-     « Enregistrement ». Notez la durée de « Chargement du modèle… » (variante large-v3 turbo, puis Parakeet).
+     « Enregistrement ». Notez la durée de « Chargement du modèle… » (variante large-v3 turbo, puis, après avoir choisi
+     Parakeet, la même mesure ; rétablissez WhisperKit ensuite, essai 22.5).
 2. Relancez l'application, attendez quelques dizaines de secondes (le préchargement se fait en tâche de fond, sans
    téléchargement), puis dictez.
    - Attendu : « Préparation… » très brève, sans « Chargement du modèle… » si le préchargement est fini ; sinon la
@@ -460,7 +465,7 @@ dans le menu de l'icône **juste après** que le texte est collé (la fenêtre e
 1. Après la fermeture de l'application, collez (⌘V) dans une application de notes.
    - Attendu : c'est votre texte reconnaissable qui est collé, pas la dictée : l'application attend, trois secondes au
      plus, que le presse-papiers soit rendu avant de se terminer. **Comportement à confirmer** : jamais essayé ; cette
-     fenêtre est très courte et difficile à viser.
+     fenêtre est très courte et difficile à viser. Relancez l'application pour la suite.
 
 ### 30. Touches de modification restées enfoncées au collage
 
