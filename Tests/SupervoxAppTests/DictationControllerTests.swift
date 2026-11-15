@@ -265,6 +265,108 @@ import SupervoxCore
         #expect(await until { session.count(of: "finish") == 1 })
     }
 
+    // MARK: - Maintien : Échap (I2)
+
+    /// En maintien, Échap tapé avec ⌃⌥ encore tenus part à l'application de dessous (le raccourci réservé est Échap seul) :
+    /// la sonde du maintien lit donc aussi la touche, et l'annulation a le même effet que `escapePressed()`.
+    @Test func escapeHeldDuringTheRecordingOfAHoldDictationCancelsAndPastesNothing() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        h.knobs.escapeHeld = true
+        h.holdSleeper.release()
+        #expect(await until { session.count(of: "cancel") == 1 })
+        #expect(!h.panel.isOpen)
+        #expect(h.controller.view == DictationViewState())
+        #expect(session.count(of: "finish") == 0)
+        // Un texte qui arrive encore de la session n'est ni inséré ni montré.
+        session.emit(.finished("texte"))
+        await settle()
+        #expect(h.pasted.isEmpty)
+        #expect(h.writtenTexts == 0)
+    }
+
+    @Test func escapeHeldDuringThePreparationOfAHoldDictationCancelsToo() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        h.controller.hotKeyPressed()
+        let session = await h.session()
+        session.emit(.preparing)
+        #expect(await until { session.calls.contains("start") && h.holdSleeper.isSleeping })
+
+        h.knobs.escapeHeld = true
+        h.holdSleeper.release()
+        #expect(await until { session.count(of: "cancel") == 1 })
+        #expect(!h.panel.isOpen)
+        session.emit(.finished("texte"))
+        await settle()
+        #expect(h.pasted.isEmpty)
+        #expect(h.writtenTexts == 0)
+    }
+
+    /// Échap et modificateurs relâchés au même tic : Échap gagne (annuler, pas terminer et coller).
+    @Test func escapeWinsOverReleasedModifiersInTheSameTick() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+
+        h.knobs.escapeHeld = true
+        h.knobs.modifiersHeld = false
+        h.holdSleeper.release()
+        #expect(await until { session.count(of: "cancel") == 1 })
+        #expect(session.count(of: "finish") == 0)
+    }
+
+    @Test func escapeIsAskedAtEveryTickAndNothingHappensWhileItIsNotHeld() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+        h.holdSleeper.release()
+        #expect(await until { h.knobs.escapeProbes == 1 && h.holdSleeper.isSleeping })
+        h.holdSleeper.release()
+        #expect(await until { h.knobs.escapeProbes == 2 && h.holdSleeper.isSleeping })
+        #expect(session.count(of: "cancel") == 0)
+        #expect(h.panel.isOpen)
+    }
+
+    /// En bascule, Échap garde son chemin (le raccourci réservé) : la sonde n'est jamais interrogée.
+    @Test func inToggleModeEscapeIsNeverProbed() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .toggle
+        h.knobs.escapeHeld = true
+        let session = await h.startRecording()
+        await settle()
+        h.holdSleeper.release()
+        await settle()
+        #expect(h.knobs.escapeProbes == 0)
+        #expect(session.count(of: "cancel") == 0)
+        #expect(h.controller.view.phase == .recording)
+    }
+
+    /// Une fois la prise finie, la surveillance s'arrête : Échap tenu pendant la transcription ou le collage n'est plus lu ici
+    /// (Échap seul, lui, est le raccourci réservé du panneau).
+    @Test func escapeIsNotProbedOnceTheRecordingHasEnded() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+        session.emit(.finalizing)
+        #expect(await until { !h.holdSleeper.isSleeping })
+        h.knobs.escapeHeld = true
+        await settle()
+        #expect(h.knobs.escapeProbes == 0)
+        #expect(session.count(of: "cancel") == 0)
+    }
+
+    /// Un Échap franc dure quelques dixièmes de seconde au plus : l'état de la touche est lu plus d'une fois toutes les 0,1 s.
+    @Test func theWatchSamplesTheKeyboardOftenEnoughToSeeAnEscapeTap() {
+        #expect(HoldWatch.system.interval <= 0.1)
+    }
+
     @Test func theWatchStopsWhenTheRecordingEnds() async {
         let h = DictationHarness()
         h.knobs.behavior = .hold

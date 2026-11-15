@@ -184,6 +184,9 @@ final class FakeEngines: Sendable {
     /// Ce que répond la sonde des modificateurs ; `probes` garde chaque question posée (les modificateurs demandés).
     var modifiersHeld = true
     var probes: [Modifiers] = []
+    /// Ce que répond la sonde d'Échap ; `escapeProbes` compte les questions posées.
+    var escapeHeld = false
+    var escapeProbes = 0
 }
 
 /// Le contrôleur et tous ses doubles : vrai `TextInserter` sur presse-papiers, touches et attente doubles.
@@ -217,6 +220,10 @@ final class FakeEngines: Sendable {
                 anyHeld: { modifiers in
                     knobs.probes.append(modifiers)
                     return knobs.modifiersHeld
+                },
+                escapeHeld: {
+                    knobs.escapeProbes += 1
+                    return knobs.escapeHeld
                 },
                 wait: { [holdSleeper] in await holdSleeper.wait($0) }))
         panel.onClosed = { [controller] in controller.panelClosedByUser() }

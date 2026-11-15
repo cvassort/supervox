@@ -156,7 +156,8 @@ public final class DictationController {
         if hold { run.watch = Task { await self.watchModifiers(run) } }
     }
 
-    /// Maintien seulement. Tant que la dictée prépare ou écoute, regarde à intervalle court si les modificateurs du
+    /// Maintien seulement. Tant que la dictée prépare ou écoute, regarde à intervalle court si Échap est enfoncée (annulation,
+    /// comme `escapePressed()` : le raccourci réservé d'Échap ne voit pas ⌃⌥Échap), puis si les modificateurs du
     /// raccourci sont encore enfoncés ; dès qu'aucun ne l'est plus, c'est un relâchement (celui du système peut ne jamais
     /// venir quand les modificateurs sont lâchés avant la touche principale). S'arrête avec la dictée et à l'annulation.
     private func watchModifiers(_ run: Run) async {
@@ -168,6 +169,12 @@ public final class DictationController {
             await self.hold.wait(self.hold.interval)
             // Une attente annulée rend la main aussitôt : sans cette sortie, la boucle tournerait sans attendre.
             guard !Task.isCancelled, isLive(run), view.phase == .preparing || view.phase == .recording else { return }
+            // Échap d'abord : annuler l'emporte sur terminer, si les deux se produisent dans le même intervalle.
+            if self.hold.escapeHeld() {
+                log.notice("maintien : Échap lu pendant la dictée")
+                escapePressed()
+                return
+            }
             if !self.hold.anyHeld(modifiers) {
                 log.notice("maintien : modificateurs relâchés sans relâchement du raccourci")
                 requestFinish(run)
