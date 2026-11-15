@@ -219,6 +219,12 @@ final class FakeEngines: Sendable {
     var microphoneAllowed = true
     /// Les modificateurs du raccourci que le contrôleur lit au début d'une dictée en maintien.
     var hotKeyModifiers: Modifiers = [.control, .option]
+    /// Les modificateurs du raccourci de chaque mode, lus au début d'une dictée en maintien commencée par ce raccourci ; un mode
+    /// absent n'en a aucun. `modeModifierReads` garde chaque lecture.
+    var modeModifiers: [String: Modifiers] = [:]
+    var modeModifierReads: [String] = []
+    /// Les modes que le raccourci d'un mode a fait choisir, dans l'ordre ; le mode choisi (`modeID`) les suit.
+    var selectedModes: [String] = []
     /// Ce que répond la sonde des modificateurs ; `probes` garde chaque question posée (les modificateurs demandés).
     var modifiersHeld = true
     var probes: [Modifiers] = []
@@ -291,6 +297,14 @@ final class FakeEngines: Sendable {
             settings: { knobs.settings }, behavior: { knobs.behavior }, modeID: { knobs.modeID },
             microphoneAllowed: { knobs.microphoneAllowed }, panel: panel,
             hotKeyModifiers: { knobs.hotKeyModifiers },
+            modeHotKeyModifiers: { mode in
+                knobs.modeModifierReads.append(mode)
+                return knobs.modeModifiers[mode] ?? []
+            },
+            selectMode: { mode in
+                knobs.selectedModes.append(mode)
+                knobs.modeID = mode
+            },
             hold: HoldWatch(
                 anyHeld: { modifiers in
                     knobs.probes.append(modifiers)
@@ -325,6 +339,13 @@ final class FakeEngines: Sendable {
     @discardableResult
     func startRecording(index: Int = 0) async -> FakeSession {
         controller.hotKeyPressed()
+        return await driveToRecording(index: index)
+    }
+
+    /// Appui sur le raccourci de ce mode, puis la session est menée jusqu'à `recording`.
+    @discardableResult
+    func startModeRecording(_ modeID: String, index: Int = 0) async -> FakeSession {
+        controller.modeHotKeyPressed(modeID)
         return await driveToRecording(index: index)
     }
 

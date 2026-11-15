@@ -66,6 +66,8 @@ public final class DictationController {
     @ObservationIgnored private let microphoneAllowed: @MainActor () -> Bool
     @ObservationIgnored private let panel: any PanelOpening
     @ObservationIgnored private let hotKeyModifiers: @MainActor () -> Modifiers
+    @ObservationIgnored private let modeHotKeyModifiers: @MainActor (String) -> Modifiers
+    @ObservationIgnored private let selectMode: @MainActor (String) -> Void
     @ObservationIgnored private let hold: HoldWatch
     @ObservationIgnored private let reviewBeforePaste: @MainActor (String) -> Bool
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
@@ -93,6 +95,9 @@ public final class DictationController {
     ///   - modeID: le mode choisi dans le panneau.
     ///   - microphoneAllowed: vrai si le micro est autorisé ; relu (et non supposé) à chaque appui.
     ///   - hotKeyModifiers: les modificateurs du raccourci en vigueur ; relus au début de chaque dictée en maintien.
+    ///   - modeHotKeyModifiers: les modificateurs du raccourci de ce mode ; lus au début de chaque dictée en maintien que ce
+    ///     raccourci commence.
+    ///   - selectMode: choisit ce mode dans le panneau (et l'enregistre) quand son raccourci commence une dictée.
     ///   - hold: la surveillance des modificateurs, qui rattrape un relâchement perdu (jamais interrogée en bascule).
     ///   - reviewBeforePaste: vrai si le texte de ce mode passe par la relecture ; lu une fois, à l'appui qui commence la dictée.
     ///   - wait: attend ce nombre de secondes (`focusHandoverDelay`) ; injectée pour qu'aucun test n'attende une durée réelle.
@@ -104,6 +109,8 @@ public final class DictationController {
         microphoneAllowed: @escaping @MainActor () -> Bool,
         panel: any PanelOpening,
         hotKeyModifiers: @escaping @MainActor () -> Modifiers,
+        modeHotKeyModifiers: @escaping @MainActor (String) -> Modifiers = { _ in [] },
+        selectMode: @escaping @MainActor (String) -> Void = { _ in },
         hold: HoldWatch,
         reviewBeforePaste: @escaping @MainActor (String) -> Bool = { _ in false },
         wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
@@ -116,6 +123,8 @@ public final class DictationController {
         self.microphoneAllowed = microphoneAllowed
         self.panel = panel
         self.hotKeyModifiers = hotKeyModifiers
+        self.modeHotKeyModifiers = modeHotKeyModifiers
+        self.selectMode = selectMode
         self.hold = hold
         self.reviewBeforePaste = reviewBeforePaste
         self.wait = wait
@@ -127,20 +136,50 @@ public final class DictationController {
     /// finalisation. Maintien : un appui commence ; un appui pendant la dictée est ignoré.
     ///
     /// Une dictée garde le comportement avec lequel elle a commencé (`Run.startedByHold`), même si le réglage change pendant :
-    /// le réglage n'est lu que pour en commencer une nouvelle.
+    /// le réglage n'est lu que pour en commencer une nouvelle. Une dictée commencée par le raccourci d'un mode n'écoute que
+    /// celui-là : le raccourci global l'ignore.
     public func hotKeyPressed() {
-        if let run {
-            if view.stage == .recording, !run.startedByHold { requestFinish(run) }
-            return
-        }
-        // Le texte attend d'être relu ou se colle : l'appui est ignoré, quel que soit le mode choisi entre-temps.
-        guard review == nil else { return }
-        begin(hold: behavior() == .hold)
+        press(by: .global)
     }
 
     /// Maintien : le relâchement termine la dictée que ce maintien a commencée. Sans dictée, ou en bascule : ignoré.
     public func hotKeyReleased() {
-        guard let run, run.startedByHold, view.stage == .preparing || view.stage == .recording else { return }
+        release(by: .global)
+    }
+
+    /// Le raccourci propre à un mode. Au repos (aucune dictée, aucune relecture), il choisit ce mode puis agit comme le
+    /// raccourci global : la dictée commence, ou, pour un mode qui ne dicte pas encore, le panneau montre la phrase qui le dit.
+    /// Pendant une dictée, seul le raccourci du mode qui l'a commencée compte (bascule : il la termine) ; celui d'un autre mode
+    /// est ignoré, et le mode ne change pas. Pendant la relecture et le collage, il est ignoré.
+    public func modeHotKeyPressed(_ modeID: String) {
+        press(by: .mode(modeID))
+    }
+
+    /// Maintien : le relâchement du raccourci du mode qui a commencé la dictée la termine ; tout autre est ignoré.
+    public func modeHotKeyReleased(_ modeID: String) {
+        release(by: .mode(modeID))
+    }
+
+    private func press(by owner: HotKeyOwner) {
+        if let run {
+            if run.owner == owner, view.stage == .recording, !run.startedByHold { requestFinish(run) }
+            return
+        }
+        // Le texte attend d'être relu ou se colle : l'appui est ignoré, quel que soit le mode choisi entre-temps. Avant tout
+        // choix de mode : un raccourci ignoré ne change rien.
+        guard review == nil else { return }
+        var modeChanged = false
+        if case .mode(let id) = owner, modeID() != id {
+            selectMode(id)
+            modeChanged = true
+        }
+        begin(hold: behavior() == .hold, owner: owner, modeChanged: modeChanged)
+    }
+
+    private func release(by owner: HotKeyOwner) {
+        guard let run, run.owner == owner, run.startedByHold, view.stage == .preparing || view.stage == .recording else {
+            return
+        }
         requestFinish(run)
     }
 
@@ -163,15 +202,16 @@ public final class DictationController {
 
     // MARK: - Démarrage
 
-    private func begin(hold: Bool) {
+    private func begin(hold: Bool, owner: HotKeyOwner, modeChanged: Bool) {
         let mode = modeID()
         guard mode == Self.rawModeID else {
-            // Rien à dicter dans ce mode : l'appui ouvre le panneau, ou le ferme s'il est déjà ouvert.
-            if panel.isOpen {
+            // Rien à dicter dans ce mode : l'appui ouvre le panneau, ou le ferme s'il est déjà ouvert. Le raccourci d'un mode
+            // qui vient de le choisir ne ferme pas : le panneau, déjà ouvert sur un autre mode, montre la phrase.
+            if panel.isOpen, !modeChanged {
                 panel.close()
             } else {
                 setView(DictationViewState(notice: Self.laterModeNotice))
-                panel.open()
+                if !panel.isOpen { panel.open() }
             }
             return
         }
@@ -183,7 +223,18 @@ public final class DictationController {
             return
         }
         // Lu ici, une seule fois : le changer pendant l'enregistrement ne change pas cette dictée.
-        let run = Run(startedByHold: hold, reviewsBeforePaste: reviewBeforePaste(mode))
+        // Les modificateurs à surveiller sont ceux du raccourci qui commence la dictée, lus ici une seule fois.
+        let watched: Modifiers
+        if hold {
+            switch owner {
+            case .global: watched = hotKeyModifiers()
+            case .mode(let id): watched = modeHotKeyModifiers(id)
+            }
+        } else {
+            watched = []
+        }
+        let run = Run(
+            startedByHold: hold, owner: owner, modifiers: watched, reviewsBeforePaste: reviewBeforePaste(mode))
         self.run = run
         // Posé tout de suite : un appui qui arrive avant la première session est déjà ignoré.
         setView(DictationViewState(stage: .preparing))
@@ -200,7 +251,7 @@ public final class DictationController {
     /// raccourci sont encore enfoncés ; dès qu'aucun ne l'est plus, c'est un relâchement (celui du système peut ne jamais
     /// venir quand les modificateurs sont lâchés avant la touche principale). S'arrête avec la dictée et à l'annulation.
     private func watchModifiers(_ run: Run) async {
-        let modifiers = hotKeyModifiers()
+        let modifiers = run.modifiers
         // Sans touche de modification, la sonde ne peut rien dire (« aucune enfoncée » serait toujours vrai) : le relâchement
         // du système, ou la durée maximale de la session, termine la dictée.
         guard !modifiers.isEmpty else { return }
@@ -635,6 +686,10 @@ private final class FirstToFinish: Sendable {
 private final class Run {
     /// Commencée par un appui en maintien : seul le relâchement qui suit la termine.
     let startedByHold: Bool
+    /// Le raccourci qui l'a commencée : lui seul la termine, en bascule comme en maintien.
+    let owner: HotKeyOwner
+    /// Les modificateurs de ce raccourci, que la surveillance du maintien lit ; vides hors maintien.
+    let modifiers: Modifiers
     /// Le réglage « relire avant de coller » du mode, tel qu'il était à l'appui.
     let reviewsBeforePaste: Bool
     var session: (any DictationSessioning)?
@@ -651,8 +706,10 @@ private final class Run {
     var loadingNotice: String?
     var vocabularyNotice: String?
 
-    init(startedByHold: Bool, reviewsBeforePaste: Bool) {
+    init(startedByHold: Bool, owner: HotKeyOwner, modifiers: Modifiers, reviewsBeforePaste: Bool) {
         self.startedByHold = startedByHold
+        self.owner = owner
+        self.modifiers = modifiers
         self.reviewsBeforePaste = reviewsBeforePaste
     }
 }

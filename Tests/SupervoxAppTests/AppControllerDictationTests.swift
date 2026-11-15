@@ -436,7 +436,7 @@ final class TimeoutLog: Sendable {
     @Test func aModeOtherThanRawDictationOpensThePanelWithoutADictation() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        controller.panelModel.select("prompt")
+        controller.panelModel.select(ModeChip.interviewID)
 
         hotKeys.press()
         #expect(controller.panelModel.isOpen)
@@ -625,10 +625,10 @@ final class TimeoutLog: Sendable {
         controller.panelModel.editDraft("Texte à garder.")
         let before = controller.panelModel.dictation
 
-        controller.panelModel.select(ModeChip.promptID)
+        controller.panelModel.select(ModeChip.interviewID)
         #expect(controller.panelModel.dictation == before)
         #expect(controller.panelModel.dictation.stage == .review)
-        #expect(controller.settings.lastModeID == ModeChip.promptID, "le mode choisi est enregistré")
+        #expect(controller.settings.lastModeID == ModeChip.interviewID, "le mode choisi est enregistré")
 
         // Le raccourci est ignoré : le panneau reste ouvert, la relecture intacte.
         hotKeys.press()

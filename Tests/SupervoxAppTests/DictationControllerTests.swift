@@ -809,7 +809,7 @@ import SupervoxCore
 
     @Test func anotherModeOpensThePanelWithoutADictationAndSaysSo() async {
         let h = DictationHarness()
-        h.knobs.modeID = "prompt"
+        h.knobs.modeID = ModeChip.interviewID
         h.controller.hotKeyPressed()
 
         #expect(h.panel.isOpen)
@@ -1364,5 +1364,215 @@ import SupervoxCore
         session.emit(.finished("Annoncé."))
         #expect(await until { !h.panel.isOpen })
         #expect(h.views.contains { $0.stage == .finalizing && $0.lastTranscript == "Annoncé." })
+    }
+
+    // MARK: - Raccourci propre à un mode
+
+    static let raw = ModeChip.rawID
+    static let interview = ModeChip.interviewID
+
+    /// Une dictée menée jusqu'à la relecture, commencée par le raccourci du mode `raw`.
+    private func reviewing(_ h: DictationHarness) async {
+        h.knobs.reviewing = [Self.raw]
+        h.controller.modeHotKeyPressed(Self.raw)
+        let session = await h.driveToRecording()
+        session.emit(.finished("Texte."))
+        #expect(await until { h.controller.view.stage == .review })
+        h.knobs.selectedModes.removeAll()
+    }
+
+    @Test func aModesHotKeyWithTheClosedPanelSelectsTheModeAndStartsTheDictation() async {
+        let h = DictationHarness()
+        h.knobs.modeID = Self.interview
+        #expect(!h.panel.isOpen)
+
+        h.controller.modeHotKeyPressed(Self.raw)
+        #expect(h.knobs.selectedModes == [Self.raw])
+        #expect(h.panel.isOpen)
+        #expect(h.controller.view.stage == .preparing)
+        _ = await h.session()
+    }
+
+    @Test func aModesHotKeyWithThePanelOpenOnAnotherModeAtRestSelectsAndStartsToo() async {
+        let h = DictationHarness()
+        h.knobs.modeID = Self.interview
+        h.panel.open()
+
+        h.controller.modeHotKeyPressed(Self.raw)
+        #expect(h.knobs.selectedModes == [Self.raw])
+        #expect(h.panel.isOpen)
+        #expect(h.panel.closeCount == 0)
+        _ = await h.session()
+        #expect(h.controller.view.stage == .preparing)
+    }
+
+    @Test func aModesHotKeyOnTheModeAlreadyChosenSelectsNothingAgain() async {
+        let h = DictationHarness()
+        h.controller.modeHotKeyPressed(Self.raw)
+        #expect(h.knobs.selectedModes.isEmpty)
+        _ = await h.session()
+    }
+
+    @Test func theInterviewHotKeyOpensThePanelOnInterviewWithTheLaterModeSentence() async {
+        let h = DictationHarness()
+        h.controller.modeHotKeyPressed(Self.interview)
+
+        #expect(h.knobs.selectedModes == [Self.interview])
+        #expect(h.panel.isOpen)
+        #expect(h.controller.view == DictationViewState(notice: DictationController.laterModeNotice))
+        await settle()
+        #expect(h.engines.sessions.isEmpty)
+    }
+
+    @Test func theInterviewHotKeyWithThePanelOpenOnAnotherModeShowsTheSentenceInsteadOfClosing() async {
+        let h = DictationHarness()
+        h.panel.open()
+        h.controller.modeHotKeyPressed(Self.interview)
+
+        #expect(h.panel.isOpen)
+        #expect(h.panel.closeCount == 0)
+        #expect(h.controller.view == DictationViewState(notice: DictationController.laterModeNotice))
+        // Déjà sur ce mode : le même raccourci referme le panneau, comme le raccourci global.
+        h.controller.modeHotKeyPressed(Self.interview)
+        #expect(!h.panel.isOpen)
+        #expect(h.knobs.selectedModes == [Self.interview])
+    }
+
+    @Test func aModesHotKeyWithoutMicrophonePermissionSelectsTheModeAndOpensThePanelWithoutASession() async {
+        let h = DictationHarness()
+        h.knobs.modeID = Self.interview
+        h.knobs.microphoneAllowed = false
+        h.controller.modeHotKeyPressed(Self.raw)
+        #expect(h.knobs.selectedModes == [Self.raw])
+        #expect(h.panel.isOpen)
+        await settle()
+        #expect(h.engines.sessions.isEmpty)
+    }
+
+    // MARK: - Pendant une dictée
+
+    @Test func theHotKeyOfTheModeThatStartedTheDictationFinishesItInToggle() async {
+        let h = DictationHarness()
+        let session = await h.startModeRecording(Self.raw)
+        h.controller.modeHotKeyPressed(Self.raw)
+        #expect(await until { session.count(of: "finish") == 1 })
+        #expect(h.engines.sessions.count == 1)
+    }
+
+    @Test func theHotKeyOfAnotherModeDuringADictationIsIgnoredAndTheModeStays() async {
+        let h = DictationHarness()
+        let session = await h.startModeRecording(Self.raw)
+        h.knobs.selectedModes.removeAll()
+
+        h.controller.modeHotKeyPressed("perso-un")
+        h.controller.modeHotKeyPressed(Self.interview)
+        h.controller.modeHotKeyReleased("perso-un")
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        #expect(h.engines.sessions.count == 1)
+        #expect(h.knobs.selectedModes.isEmpty, "le mode n'a pas changé")
+        #expect(h.knobs.modeID == Self.raw)
+        #expect(h.controller.view.stage == .recording)
+    }
+
+    @Test func theGlobalHotKeyDuringADictationStartedByAModeIsIgnored() async {
+        let h = DictationHarness()
+        let session = await h.startModeRecording(Self.raw)
+        h.controller.hotKeyPressed()
+        h.controller.hotKeyReleased()
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        #expect(h.controller.view.stage == .recording)
+    }
+
+    @Test func aModesHotKeyDuringADictationStartedByTheGlobalHotKeyIsIgnored() async {
+        let h = DictationHarness()
+        let session = await h.startRecording()
+        h.controller.modeHotKeyPressed(Self.raw)
+        h.controller.modeHotKeyReleased(Self.raw)
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        #expect(h.engines.sessions.count == 1)
+        // Le global, lui, la termine toujours.
+        h.controller.hotKeyPressed()
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func inHoldTheReleaseOfTheModeThatStartedTheDictationFinishesIt() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startModeRecording(Self.raw)
+
+        // Ni un autre mode ni le global ne la terminent.
+        h.controller.modeHotKeyReleased("perso-un")
+        h.controller.hotKeyReleased()
+        h.controller.modeHotKeyPressed(Self.raw)
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+
+        h.controller.modeHotKeyReleased(Self.raw)
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func inHoldTheGlobalReleaseDoesNotFinishADictationStartedByTheGlobalWhenAModeReleases() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startRecording()
+        h.controller.modeHotKeyReleased(Self.raw)
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        h.controller.hotKeyReleased()
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
+    @Test func theHoldWatchReadsTheModifiersOfTheHotKeyThatStartedTheDictation() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        h.knobs.hotKeyModifiers = [.control, .option]
+        h.knobs.modeModifiers = [Self.raw: [.command, .shift]]
+        _ = await h.startModeRecording(Self.raw)
+        #expect(await until { h.holdSleeper.isSleeping })
+        h.holdSleeper.release()
+        #expect(await until { !h.knobs.probes.isEmpty })
+        #expect(h.knobs.probes.allSatisfy { $0 == [.command, .shift] })
+        #expect(h.knobs.modeModifierReads == [Self.raw])
+    }
+
+    @Test func theHoldWatchOfAGlobalDictationStillReadsTheGlobalModifiers() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        h.knobs.hotKeyModifiers = [.control, .option]
+        h.knobs.modeModifiers = [Self.raw: [.command, .shift]]
+        _ = await h.startRecording()
+        #expect(await until { h.holdSleeper.isSleeping })
+        h.holdSleeper.release()
+        #expect(await until { !h.knobs.probes.isEmpty })
+        #expect(h.knobs.probes.allSatisfy { $0 == [.control, .option] })
+        #expect(h.knobs.modeModifierReads.isEmpty)
+    }
+
+    // MARK: - Pendant la relecture
+
+    @Test(arguments: [DictationStage.review, .pasting])
+    func aModesHotKeyIsIgnoredDuringTheReview(stage: DictationStage) async {
+        let h = DictationHarness()
+        h.handover.holds = stage == .pasting
+        await reviewing(h)
+        if stage == .pasting {
+            h.controller.pasteReview()
+            #expect(await until { h.handover.sleeper.isSleeping })
+        }
+        let before = h.controller.view
+
+        h.controller.modeHotKeyPressed(Self.raw)
+        h.controller.modeHotKeyPressed(Self.interview)
+        h.controller.modeHotKeyReleased(Self.raw)
+        await settle()
+        #expect(h.knobs.selectedModes.isEmpty, "le mode n'a pas changé")
+        #expect(h.controller.view == before)
+        #expect(h.engines.sessions.count == 1)
+        #expect(h.panel.isOpen)
+        #expect(h.panel.closeCount == 0)
+        h.handover.sleeper.release()
     }
 }
