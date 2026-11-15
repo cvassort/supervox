@@ -473,6 +473,24 @@ enum LiveReport {
 
 // MARK: - La commande
 
+/// Les moteurs d'un passage : le détecteur de voix, l'aperçu, le moteur final (le même exemplaire que l'aperçu avec Parakeet),
+/// et les modèles que le rapport nomme.
+struct LiveEngines: Sendable {
+    let detector: any StreamingVoiceDetector
+    let preview: (any Transcriber)?
+    let final: any Transcriber
+    let models: [String]
+
+    /// Les vrais moteurs. Rien n'est chargé ni téléchargé avant que la session les prépare.
+    static func real(engine: String, whisperModel: String) -> LiveEngines {
+        let parakeet = ParakeetTranscriber()
+        let final: any Transcriber = engine == "parakeet" ? parakeet : WhisperKitTranscriber(model: whisperModel)
+        var models = ["Parakeet (aperçu)"]
+        if engine == "whisperkit" { models.append("WhisperKit `\(whisperModel)`") }
+        return LiveEngines(detector: FluidStreamingVoiceDetector(), preview: parakeet, final: final, models: models)
+    }
+}
+
 struct LiveCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "live",
@@ -506,12 +524,27 @@ struct LiveCommand: AsyncParsableCommand {
     var settle = 1.0
 
     static let reportFiles = ["live.md", "live.json"]
+    /// Un silence de fin plus long qu'une heure n'a pas de sens (et un nombre énorme ferait déborder le calcul des échantillons).
+    static let maxSettle = 3_600.0
     static let language = "fr"
 
     func run() async throws {
+        try await run(
+            makeEngines: LiveEngines.real, pause: { try? await Task.sleep(for: .seconds($0)) },
+            now: { ProcessInfo.processInfo.systemUptime })
+    }
+
+    /// `makeEngines` reçoit le moteur et la variante WhisperKit demandés, une fois les contrôles et la lecture du corpus et de
+    /// l'audio faits ; `pause` et `now` sont la cadence et l'horloge du rejeu. Les tests y mettent des doubles.
+    func run(
+        makeEngines: (_ engine: String, _ whisperModel: String) -> LiveEngines,
+        pause: @escaping @Sendable (Double) async -> Void, now: @escaping @Sendable () -> Double
+    ) async throws {
         // Tout ce qui peut être refusé l'est avant de lire quoi que ce soit et de charger le moindre modèle.
         guard ["whisperkit", "parakeet"].contains(engine) else { throw TranscribeError.unknownEngine(engine) }
-        guard settle >= 0, settle.isFinite else { throw ValidationError("--settle doit être positif ou nul") }
+        guard settle >= 0, settle <= Self.maxSettle else {
+            throw ValidationError("--settle doit être compris entre 0 et \(Int(Self.maxSettle)) secondes")
+        }
         let directory = URL(fileURLWithPath: out, isDirectory: true)
         try OutputGuard.checkIgnoredByGit(
             directory, content: "ces rapports contiennent ce que tu as dit (transcriptions) et ton vocabulaire")
@@ -523,12 +556,9 @@ struct LiveCommand: AsyncParsableCommand {
             vocabulary, whisperKitModel: engine == "whisperkit" ? whisperkitModel : nil, say: { print($0) })
         let clips = try CorpusAudio.load(items, from: URL(fileURLWithPath: audio, isDirectory: true))
 
-        let parakeet = ParakeetTranscriber()
-        let final: any Transcriber = engine == "parakeet" ? parakeet : WhisperKitTranscriber(model: whisperkitModel)
-        var models = ["Parakeet (aperçu)"]
-        if engine == "whisperkit" { models.append("WhisperKit `\(whisperkitModel)`") }
+        let engines = makeEngines(engine, whisperkitModel)
         let launch = LaunchInfo(
-            date: launchedAt, models: models,
+            date: launchedAt, models: engines.models,
             capture: CaptureLog.summary(of: URL(fileURLWithPath: audio, isDirectory: true), ids: items.map(\.id)))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
@@ -536,10 +566,9 @@ struct LiveCommand: AsyncParsableCommand {
             corpus: items, audio: { id in
                 guard let clip = clips[id] else { throw TranscribeError.missingAudio([id]) }
                 return clip
-            }, detector: FluidStreamingVoiceDetector(), preview: parakeet, final: final, settle: settle,
+            }, detector: engines.detector, preview: engines.preview, final: engines.final, settle: settle,
             sessionConfig: DictationConfig(language: Self.language, vocabulary: terms),
-            pause: { try? await Task.sleep(for: .seconds($0)) },
-            now: { ProcessInfo.processInfo.systemUptime }, progress: { print($0) },
+            pause: pause, now: now, progress: { print($0) },
             afterItem: { done in
                 // Rapport réécrit après chaque phrase : un arrêt en cours de route garde ce qui est fait.
                 do {

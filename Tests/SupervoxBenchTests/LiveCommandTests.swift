@@ -85,12 +85,22 @@ private let shortPause: @Sendable (Double) async -> Void = { _ in try? await Tas
 
         let outcome = await LiveReplay.run(
             clip: clip(seconds: seconds), detector: DoubleDetector(), preview: preview, final: final,
-            config: eagerConfig, settle: 0.5, pause: shortPause, now: { clock.now() })
+            config: eagerConfig, settle: 0.5,
+            // L'horloge avance aussi pendant le rejeu (chaque bloc attend sa durée) : le délai ne doit compter ni ce temps ni
+            // le silence de fin, seulement ce qui suit l'appel de `finish()`.
+            pause: { seconds in
+                clock.advance(seconds)
+                await shortPause(seconds)
+            }, now: { clock.now() })
 
         #expect(outcome.finalText == "texte de la session")
         #expect(outcome.failure == nil && !outcome.noSpeech)
         // Le délai : de l'appel de `finish()` au texte final, selon l'horloge donnée (le moteur final l'a fait avancer de 0,75 s).
-        #expect(outcome.finishDelay == 0.75)
+        let delay = outcome.finishDelay ?? -1
+        #expect(abs(delay - 0.75) < 1e-9, "délai : \(delay)")
+        // 56 000 échantillons au total (3 s + 0,5 s) : le rejeu a fait avancer l'horloge de 13 × 0,256 s, bien plus que le
+        // délai : un délai qui le compterait dépasserait 3 s.
+        #expect(delay < 1)
         // Le dernier aperçu est le texte en direct tel que l'écran le montrait à la fin de la prise : celui d'une passe réelle.
         #expect(outcome.lastPreview.hasPrefix("aperçu "))
         #expect(preview.seenLengths.map { "aperçu \($0)" }.contains(outcome.lastPreview))
@@ -410,12 +420,155 @@ private func temporaryFolder() throws -> URL {
         await #expect(throws: TranscribeError.unknownEngine("apple")) { try await command.run() }
     }
 
-    @Test func aNegativeSettleIsRefused() async throws {
+    @Test(arguments: ["-1", "1e15", "nan", "inf", "3601"])
+    func anUnreasonableSettleIsRefused(value: String) async throws {
         let folder = try temporaryFolder(); defer { try? FileManager.default.removeItem(at: folder) }
         let command = try LiveCommand.parse([
-            "--corpus", "/absent.tsv", "--audio", "/absent", "--out", folder.path, "--settle=-1",
+            "--corpus", "/absent.tsv", "--audio", "/absent", "--out", folder.path, "--settle=\(value)",
         ])
         await #expect(throws: ValidationError.self) { try await command.run() }
+    }
+
+    // MARK: - `run` avec des moteurs doubles
+
+    /// Un corpus de trois phrases et leurs enregistrements, dans un dossier temporaire.
+    private func fixture() throws -> (root: URL, corpus: URL, audio: URL, out: URL) {
+        let root = try temporaryFolder()
+        let audio = root.appendingPathComponent("audio", isDirectory: true)
+        try FileManager.default.createDirectory(at: audio, withIntermediateDirectories: true)
+        let corpus = root.appendingPathComponent("corpus.tsv")
+        try "a\tun deux trois quatre\ttrois\nb\tcinq six sept huit\nc\tneuf dix\n"
+            .write(to: corpus, atomically: true, encoding: .utf8)
+        for id in ["a", "b", "c"] { try WavFile.write(clip(seconds: 1), to: audio.appendingPathComponent(id + ".wav")) }
+        return (root, corpus, audio, root.appendingPathComponent("sortie"))
+    }
+
+    /// Ce que la commande a demandé à la fabrique, et les moteurs doubles qu'elle a reçus.
+    private final class Factory: @unchecked Sendable {
+        private let asked = Mutex<[(engine: String, model: String)]>([])
+        let final: DoubleTranscriber
+        let preview: DoubleTranscriber
+        init(final: DoubleTranscriber, preview: DoubleTranscriber) {
+            self.final = final
+            self.preview = preview
+        }
+        var calls: [(engine: String, model: String)] { asked.withLock { $0 } }
+        func make(_ engine: String, _ model: String) -> LiveEngines {
+            asked.withLock { $0.append((engine, model)) }
+            return LiveEngines(
+                detector: DoubleDetector(), preview: preview, final: engine == "parakeet" ? preview : final,
+                models: engine == "parakeet" ? ["Parakeet (aperçu)"] : ["Parakeet (aperçu)", "WhisperKit `\(model)`"])
+        }
+    }
+
+    private func command(_ f: (root: URL, corpus: URL, audio: URL, out: URL), _ extra: [String] = []) throws -> LiveCommand {
+        try LiveCommand.parse(["--corpus", f.corpus.path, "--audio", f.audio.path, "--out", f.out.path, "--settle", "0.25"] + extra)
+    }
+
+    @Test func runWritesTheTwoReportsWithTheResultsOfEverySentence() async throws {
+        let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        let clock = TestClock()
+        let factory = Factory(
+            final: DoubleTranscriber(name: "final", reply: { $0.samples.count > 16_000 ? "un deux trois quatre" : "un deux" }),
+            preview: DoubleTranscriber(name: "apercu", reply: { _ in "un" }))
+
+        try await command(f).run(makeEngines: factory.make, pause: { _ in }, now: { clock.now() })
+
+        let markdown = try String(contentsOf: f.out.appendingPathComponent("live.md"), encoding: .utf8)
+        #expect(markdown.hasPrefix("# Dictée en direct"))
+        #expect(!markdown.contains("Rapport partiel"))
+        let data = try Data(contentsOf: f.out.appendingPathComponent("live.json"))
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["complete"] as? Bool == true)
+        let items = try #require(object["items"] as? [[String: Any]])
+        #expect(items.map { $0["id"] as? String } == ["a", "b", "c"])
+        #expect(items.allSatisfy { $0["finalText"] as? String == "un deux trois quatre" })
+        #expect((object["summary"] as? [String: Any])?["compared"] as? Int == 3)
+    }
+
+    @Test func theEngineOptionChoosesWhichEnginesAreBuilt() async throws {
+        let clock = TestClock()
+        for (extra, expected, models) in [
+            (["--engine", "parakeet"], ("parakeet", "large-v3-v20240930_turbo"), "Parakeet (aperçu)"),
+            (["--whisperkit-model", "autre-variante"], ("whisperkit", "autre-variante"), "WhisperKit `autre-variante`"),
+            ([String](), ("whisperkit", "large-v3-v20240930_turbo"), "WhisperKit `large-v3-v20240930_turbo`"),
+        ] {
+            let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+            let factory = Factory(
+                final: DoubleTranscriber(name: "final", reply: { _ in "texte" }),
+                preview: DoubleTranscriber(name: "apercu", reply: { _ in "texte" }))
+            try await command(f, extra).run(makeEngines: factory.make, pause: { _ in }, now: { clock.now() })
+            #expect(factory.calls.count == 1)
+            #expect(factory.calls.first?.engine == expected.0 && factory.calls.first?.model == expected.1, "\(extra)")
+            let markdown = try String(contentsOf: f.out.appendingPathComponent("live.md"), encoding: .utf8)
+            #expect(markdown.contains(models), "\(extra)")
+            // Avec Parakeet, le moteur final est l'exemplaire d'aperçu : c'est lui qui a travaillé, pas l'autre.
+            if expected.0 == "parakeet" { #expect(factory.final.seenLengths.isEmpty) } else { #expect(!factory.final.seenLengths.isEmpty) }
+        }
+    }
+
+    @Test func thePartialReportIsRewrittenAfterEverySentenceThenCompleted() async throws {
+        let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        let clock = TestClock()
+        let json = f.out.appendingPathComponent("live.json")
+        /// Ce que le fichier du disque dit chaque fois que le moteur final travaille : (phrases écrites, complet) ou rien.
+        let seen = Mutex<[String]>([])
+        let factory = Factory(
+            final: DoubleTranscriber(
+                name: "final",
+                work: {
+                    guard let data = try? Data(contentsOf: json),
+                          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                    else { seen.withLock { $0.append("aucun fichier") }; return }
+                    let count = (object["items"] as? [Any])?.count ?? -1
+                    seen.withLock { $0.append("\(count) phrase(s), complet : \(object["complete"] as? Bool ?? false)") }
+                },
+                reply: { _ in "texte" }),
+            preview: DoubleTranscriber(name: "apercu", reply: { _ in "texte" }))
+
+        try await command(f).run(makeEngines: factory.make, pause: { _ in }, now: { clock.now() })
+
+        // Le moteur final travaille deux fois par phrase (bloc, puis session) : avant la 1re phrase le fichier n'existe pas ;
+        // pendant la 2e, il en porte une, incomplet ; pendant la 3e, deux, incomplet.
+        let log = seen.withLock { $0 }
+        #expect(log.first == "aucun fichier", "\(log)")
+        #expect(log.contains("1 phrase(s), complet : false"), "\(log)")
+        #expect(log.contains("2 phrase(s), complet : false"), "\(log)")
+        let final = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: json)) as? [String: Any])
+        #expect((final["items"] as? [Any])?.count == 3 && final["complete"] as? Bool == true)
+    }
+
+    @Test func overwriteReplacesTheReportsAndWithoutItTheyAreKept() async throws {
+        let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        try FileManager.default.createDirectory(at: f.out, withIntermediateDirectories: true)
+        try "ancien".write(to: f.out.appendingPathComponent("live.md"), atomically: true, encoding: .utf8)
+        let clock = TestClock()
+        let factory = Factory(
+            final: DoubleTranscriber(name: "final", reply: { _ in "texte" }),
+            preview: DoubleTranscriber(name: "apercu", reply: { _ in "texte" }))
+
+        await #expect(throws: OutputError.self) {
+            try await command(f).run(makeEngines: factory.make, pause: { _ in }, now: { clock.now() })
+        }
+        #expect(try String(contentsOf: f.out.appendingPathComponent("live.md"), encoding: .utf8) == "ancien")
+        #expect(factory.calls.isEmpty)
+
+        try await command(f, ["--overwrite"]).run(makeEngines: factory.make, pause: { _ in }, now: { clock.now() })
+        #expect(try String(contentsOf: f.out.appendingPathComponent("live.md"), encoding: .utf8).hasPrefix("# Dictée en direct"))
+    }
+
+    @Test func aMissingRecordingStopsTheCommandBeforeAnyEngineIsBuilt() async throws {
+        let f = try fixture(); defer { try? FileManager.default.removeItem(at: f.root) }
+        try FileManager.default.removeItem(at: f.audio.appendingPathComponent("b.wav"))
+        let clock = TestClock()
+        let factory = Factory(
+            final: DoubleTranscriber(name: "final", reply: { _ in "texte" }),
+            preview: DoubleTranscriber(name: "apercu", reply: { _ in "texte" }))
+        await #expect(throws: TranscribeError.missingAudio(["b"])) {
+            try await command(f).run(makeEngines: factory.make, pause: { _ in }, now: { clock.now() })
+        }
+        #expect(factory.calls.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: f.out.appendingPathComponent("live.md").path))
     }
 
     @Test func theReportFilesAreWrittenAndTheCommandIsRegistered() throws {
