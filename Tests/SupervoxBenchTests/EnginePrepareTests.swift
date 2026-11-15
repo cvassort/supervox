@@ -14,26 +14,32 @@ import WhisperKit
 @Suite(.timeLimit(.minutes(1))) struct EnginePrepareTests {
     struct Failure: Error, Equatable {}
 
-    /// Porte à ouvrir une fois ; `wait()` rend la main à l'ouverture.
+    /// Porte à ouvrir une fois ; `wait()` rend la main à l'ouverture, ou si la tâche qui attend est annulée (la limite de
+    /// temps du test annule le test : il échoue au lieu de pendre).
     final class Gate: Sendable {
-        private let state = Mutex<(isOpen: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
+        private let state = Mutex<(isOpen: Bool, waiters: [UUID: CheckedContinuation<Void, Never>])>((false, [:]))
 
         func wait() async {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let now = state.withLock { state -> Bool in
-                    if state.isOpen { return true }
-                    state.waiters.append(continuation)
-                    return false
+            let id = UUID()
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    let now = state.withLock { state -> Bool in
+                        if state.isOpen || Task.isCancelled { return true }
+                        state.waiters[id] = continuation
+                        return false
+                    }
+                    if now { continuation.resume() }
                 }
-                if now { continuation.resume() }
+            } onCancel: {
+                state.withLock { $0.waiters.removeValue(forKey: id) }?.resume()
             }
         }
 
         func open() {
             let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
                 state.isOpen = true
-                defer { state.waiters = [] }
-                return state.waiters
+                defer { state.waiters = [:] }
+                return Array(state.waiters.values)
             }
             for waiter in waiters { waiter.resume() }
         }

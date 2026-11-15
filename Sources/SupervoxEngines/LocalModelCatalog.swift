@@ -6,6 +6,8 @@ import WhisperKit
 public enum LocalModelCatalogError: Error, Equatable, LocalizedError {
     case unknownModel(String)
     case alreadyDownloading(String)
+    /// Suppression refusée : le modèle (son titre) est en cours de téléchargement, par la fenêtre de réglages ou par une dictée.
+    case busyDownloading(String)
     /// Un téléchargement qui s'est terminé sans laisser les fichiers attendus.
     case incomplete(String)
 
@@ -13,6 +15,8 @@ public enum LocalModelCatalogError: Error, Equatable, LocalizedError {
         switch self {
         case .unknownModel(let id): "Modèle inconnu : « \(id) »."
         case .alreadyDownloading: "Ce modèle est déjà en cours de téléchargement."
+        case .busyDownloading(let title):
+            "« \(title) » est en cours de téléchargement : attendez la fin du téléchargement pour le supprimer."
         case .incomplete(let title): "Le téléchargement de « \(title) » s'est terminé sans tous les fichiers attendus."
         }
     }
@@ -73,20 +77,29 @@ public actor LocalModelCatalog: ModelCatalog {
     public nonisolated let root: URL
     private let fluidAudioRoot: URL
     private let whisperVariants: [WhisperVariant]
-    /// Modèles en cours de téléchargement.
-    private var inFlight: Set<String> = []
+    /// Téléchargements en cours, par identifiant : un seul par modèle, que la fenêtre de réglages et les dictées partagent
+    /// (le second arrivé attend le même au lieu d'en lancer un autre dans le même dossier).
+    private var downloads: [String: Task<Void, any Error>] = [:]
     /// Fraction de téléchargement, seulement quand la bibliothèque en donne une (le détecteur de voix).
     private var fractions: [String: Double] = [:]
+    /// Pour les tests : remplace le vrai téléchargement d'un modèle (aucun réseau, aucun disque).
+    typealias Downloader = @Sendable (_ id: String, _ progress: @escaping @Sendable (Double) -> Void) async throws -> Void
+    private let downloader: Downloader?
 
     /// `root` : dossier des modèles de l'application (sous Application Support, jamais Documents). `fluidAudioRoot` :
     /// dossier de FluidAudio (`nil` : celui de la bibliothèque).
     public init(
         root: URL, fluidAudioRoot: URL? = nil, whisperVariants: [WhisperVariant] = LocalModelCatalog.offeredWhisperVariants
     ) {
+        self.init(root: root, fluidAudioRoot: fluidAudioRoot, whisperVariants: whisperVariants, downloader: nil)
+    }
+
+    init(root: URL, fluidAudioRoot: URL?, whisperVariants: [WhisperVariant], downloader: Downloader?) {
         self.root = root
         self.fluidAudioRoot =
             fluidAudioRoot ?? MLModelConfigurationUtils.defaultModelsDirectory().deletingLastPathComponent()
         self.whisperVariants = whisperVariants
+        self.downloader = downloader
     }
 
     // MARK: - Emplacements
@@ -167,10 +180,31 @@ public actor LocalModelCatalog: ModelCatalog {
         return size > 0
     }
 
+    /// Parakeet est « prêt » quand son modèle de transcription est là : le petit modèle de vocabulaire ne sert qu'avec un
+    /// vocabulaire, et n'est téléchargé qu'alors (`ParakeetTranscriber.session(for:)`).
     private func parakeetState() -> LocalModel.State {
         let folders = Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)
-        if AsrModels.modelsExist(at: folders[0], version: .v3) && CtcModels.modelsExist(at: folders[1]) { return .ready }
-        return folders.contains { FileManager.default.fileExists(atPath: $0.path) } ? .incomplete : .absent
+        return Self.parakeetState(
+            asrReady: AsrModels.modelsExist(at: folders[0], version: .v3),
+            asrFolderExists: FileManager.default.fileExists(atPath: folders[0].path))
+    }
+
+    static func parakeetState(asrReady: Bool, asrFolderExists: Bool) -> LocalModel.State {
+        asrReady ? .ready : (asrFolderExists ? .incomplete : .absent)
+    }
+
+    private func vocabularyModelState() -> LocalModel.State {
+        let folder = Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)[1]
+        if CtcModels.modelsExist(at: folder) { return .ready }
+        return FileManager.default.fileExists(atPath: folder.path) ? .incomplete : .absent
+    }
+
+    /// Ce que la ligne Parakeet dit en plus quand le modèle de transcription est prêt et que celui du vocabulaire manque.
+    static let parakeetVocabularyNote =
+        "Le petit modèle qui reconnaît votre vocabulaire sera téléchargé à la première dictée qui en a besoin."
+
+    static func parakeetNote(asr: LocalModel.State, vocabularyReady: Bool) -> String? {
+        asr == .ready && !vocabularyReady ? parakeetVocabularyNote : nil
     }
 
     private func voiceDetectorState() -> LocalModel.State {
@@ -200,14 +234,16 @@ public actor LocalModelCatalog: ModelCatalog {
 
     public func models() async -> [LocalModel] {
         func state(_ id: String, onDisk: @autoclosure () -> LocalModel.State) -> LocalModel.State {
-            inFlight.contains(id) ? .downloading(fractions[id]) : onDisk()
+            downloads[id] != nil ? .downloading(fractions[id]) : onDisk()
         }
+        let parakeet = state(LocalModelID.parakeet, onDisk: parakeetState())
         var list = [
             LocalModel(
                 id: LocalModelID.parakeet, title: "Parakeet",
                 detail:
-                    "Aperçu du texte en direct pendant que vous parlez, et moteur de dictée possible, très rapide. Comprend le petit modèle qui sert à reconnaître votre vocabulaire.",
-                state: state(LocalModelID.parakeet, onDisk: parakeetState()))
+                    "Aperçu du texte en direct pendant que vous parlez, et moteur de dictée possible, très rapide. Son bouton télécharge aussi le petit modèle qui sert à reconnaître votre vocabulaire.",
+                state: parakeet,
+                note: Self.parakeetNote(asr: parakeet, vocabularyReady: vocabularyModelState() == .ready))
         ]
         for variant in whisperVariants {
             let id = LocalModelID.whisper(variant.name)
@@ -229,18 +265,69 @@ public actor LocalModelCatalog: ModelCatalog {
     /// (`Progress` compté en fichiers, pas en octets, d'après `HubApi.snapshot`) et pour Parakeet (deux téléchargements
     /// enchaînés, FluidAudio repartant de zéro à chaque fichier), aucune fraction n'est donnée : un partage entre le modèle
     /// et son tokenizer, ou entre deux modèles, serait une invention.
+    ///
+    /// Refuse un téléchargement déjà en cours (`alreadyDownloading`) : c'est le bouton de la fenêtre, qui n'en lance qu'un.
     public func download(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        _ = try title(of: id)
+        guard downloads[id] == nil else { throw LocalModelCatalogError.alreadyDownloading(id) }
+        try await start(id, progress: progress).value
+    }
+
+    /// Le téléchargement du modèle, ou celui qui est déjà en cours (le sien ou celui d'un autre appelant) : jamais deux dans
+    /// le même dossier. Une dictée qui manque d'un modèle passe par ici, pour que la fenêtre de réglages le voie « en cours ».
+    public func ensureDownloaded(_ id: String) async throws {
+        _ = try title(of: id)
+        if let running = downloads[id] {
+            try await running.value
+            return
+        }
+        try await start(id, progress: { _ in }).value
+    }
+
+    public func state(of id: String) async -> LocalModel.State? {
+        guard id == LocalModelID.parakeetVocabulary else { return await models().first { $0.id == id }?.state }
+        return downloads[id] != nil ? .downloading(fractions[id]) : vocabularyModelState()
+    }
+
+    /// Lance le téléchargement dans une tâche à part (l'annulation de l'appelant ne l'interrompt pas : un autre appelant peut
+    /// l'attendre) et la garde jusqu'à sa fin, réussie ou non.
+    private func start(_ id: String, progress: @escaping @Sendable (Double) -> Void) -> Task<Void, any Error> {
+        let task = Task { () async throws -> Void in
+            defer { self.finished(id) }
+            try await self.perform(id, progress: progress)
+        }
+        downloads[id] = task
+        return task
+    }
+
+    private func finished(_ id: String) {
+        downloads[id] = nil
+        fractions[id] = nil
+    }
+
+    /// Les téléchargements que demande un modèle, dans l'ordre : le bouton de la ligne Parakeet télécharge la reconnaissance
+    /// puis le petit modèle de vocabulaire ; les autres modèles n'en demandent qu'un.
+    static func steps(for id: String) -> [String] {
+        id == LocalModelID.parakeet ? [LocalModelID.parakeet, LocalModelID.parakeetVocabulary] : [id]
+    }
+
+    private func perform(_ id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
+        for step in Self.steps(for: id) { try await download(step: step, progress: progress) }
+    }
+
+    /// Un téléchargement réel (ou celui du double des tests).
+    private func download(step id: String, progress: @escaping @Sendable (Double) -> Void) async throws {
         let title = try title(of: id)
-        guard !inFlight.contains(id) else { throw LocalModelCatalogError.alreadyDownloading(id) }
-        inFlight.insert(id)
-        defer {
-            inFlight.remove(id)
-            fractions[id] = nil
+        if let downloader {
+            try await downloader(id, progress)
+            return
         }
         if let variant = LocalModelID.whisperVariant(of: id) {
             try await downloadWhisper(variant, title: title)
         } else if id == LocalModelID.parakeet {
-            try await downloadParakeet()
+            try await downloadTranscriptionModel()
+        } else if id == LocalModelID.parakeetVocabulary {
+            try await downloadVocabularyModel()
         } else {
             // Une fraction qui ne recule jamais : la bibliothèque la fait repartir de zéro à chaque phase.
             let monotonic = MonotonicProgress { fraction in
@@ -257,7 +344,7 @@ public actor LocalModelCatalog: ModelCatalog {
 
     private func record(_ fraction: Double, of id: String) {
         // Une fraction qui arrive après la fin du téléchargement ne le ressuscite pas.
-        if inFlight.contains(id) { fractions[id] = fraction }
+        if downloads[id] != nil { fractions[id] = fraction }
     }
 
     /// Le modèle, puis son tokenizer (pour compter l'amorce du vocabulaire hors ligne).
@@ -269,17 +356,27 @@ public actor LocalModelCatalog: ModelCatalog {
         guard whisperState(variant) == .ready else { throw LocalModelCatalogError.incomplete(title) }
     }
 
-    /// Reconnaissance (TDT v3) puis recalage du vocabulaire (CTC).
-    private func downloadParakeet() async throws {
+    /// La reconnaissance de Parakeet (TDT v3).
+    private func downloadTranscriptionModel() async throws {
         let folders = Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)
         try await AsrModels.download(to: folders[0], version: .v3)
-        try await CtcModels.download(to: folders[1], variant: .ctc110m)
         guard parakeetState() == .ready else { throw LocalModelCatalogError.incomplete("Parakeet") }
     }
 
+    /// Le petit modèle de vocabulaire seul (une dictée avec vocabulaire en a besoin, même quand le moteur est WhisperKit :
+    /// l'aperçu en direct est Parakeet).
+    private func downloadVocabularyModel() async throws {
+        let folders = Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)
+        try await CtcModels.download(to: folders[1], variant: .ctc110m)
+        guard vocabularyModelState() == .ready else { throw LocalModelCatalogError.incomplete("Parakeet") }
+    }
+
     public func delete(_ id: String) async throws {
-        _ = try title(of: id)
-        guard !inFlight.contains(id) else { throw LocalModelCatalogError.alreadyDownloading(id) }
+        let title = try title(of: id)
+        // Refusée pendant un téléchargement du modèle (Parakeet : de l'un de ses deux modèles) : le dossier serait retiré
+        // sous le téléchargement.
+        let related = id == LocalModelID.parakeet ? [id, LocalModelID.parakeetVocabulary] : [id]
+        guard !related.contains(where: { downloads[$0] != nil }) else { throw LocalModelCatalogError.busyDownloading(title) }
         if let variant = LocalModelID.whisperVariant(of: id) {
             if let folder = Self.whisperFolder(for: variant, in: root) {
                 try removeIfPresent(folder)
@@ -290,6 +387,8 @@ public actor LocalModelCatalog: ModelCatalog {
             }
         } else if id == LocalModelID.parakeet {
             for folder in Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot) { try removeIfPresent(folder) }
+        } else if id == LocalModelID.parakeetVocabulary {
+            try removeIfPresent(Self.parakeetFolders(fluidAudioRoot: fluidAudioRoot)[1])
         } else {
             try removeIfPresent(Self.voiceDetectorFolder(fluidAudioRoot: fluidAudioRoot))
         }
@@ -310,6 +409,7 @@ public actor LocalModelCatalog: ModelCatalog {
 
     private func title(of id: String) throws -> String {
         if id == LocalModelID.parakeet { return "Parakeet" }
+        if id == LocalModelID.parakeetVocabulary { return "Reconnaissance du vocabulaire" }
         if id == LocalModelID.voiceDetector { return "Détecteur de voix" }
         if let variant = LocalModelID.whisperVariant(of: id), let known = whisperVariants.first(where: { $0.name == variant }) {
             return known.title

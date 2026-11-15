@@ -19,12 +19,16 @@ public struct LocalModel: Equatable, Identifiable, Sendable {
     public let title: String
     public let detail: String
     public var state: State
+    /// Une ligne de plus sur cet état, quand il y a quelque chose à dire que `state` ne dit pas (Parakeet prêt, dont le
+    /// petit modèle de vocabulaire n'est pas encore là). `nil` : rien à ajouter.
+    public var note: String?
 
-    public init(id: String, title: String, detail: String, state: State) {
+    public init(id: String, title: String, detail: String, state: State, note: String? = nil) {
         self.id = id
         self.title = title
         self.detail = detail
         self.state = state
+        self.note = note
     }
 }
 
@@ -32,6 +36,9 @@ public struct LocalModel: Equatable, Identifiable, Sendable {
 public enum LocalModelID {
     public static let parakeet = "parakeet"
     public static let voiceDetector = "vad"
+    /// Le petit modèle qui reconnaît le vocabulaire de l'utilisateur pour Parakeet. Il n'est pas une ligne de la liste (il
+    /// fait partie de Parakeet pour l'utilisateur) : le catalogue sait le télécharger, le supprimer et dire son état.
+    public static let parakeetVocabulary = "parakeet-vocabulary"
     private static let whisperPrefix = "whisper:"
 
     public static func whisper(_ variant: String) -> String { whisperPrefix + variant }
@@ -56,4 +63,22 @@ public protocol ModelCatalog: Sendable {
     /// Nombre de jetons de l'amorce que le moteur construirait pour `vocabulary` avec ce modèle Whisper ; `nil` si le
     /// modèle (son tokenizer) n'est pas sur le disque, donc impossible à compter sans le télécharger.
     func promptTokenCount(_ vocabulary: [String], whisperModel: String) async -> Int?
+    /// Fait en sorte que le modèle soit sur le disque : le télécharge, ou attend le téléchargement déjà en cours (celui de
+    /// la fenêtre de réglages comme celui d'une dictée), sans en lancer un second. Même état, même progression que
+    /// `download`, et le modèle apparaît « en cours » dans `models()` pendant ce temps.
+    func ensureDownloaded(_ id: String) async throws
+    /// L'état d'un modèle, y compris de ceux que la liste ne montre pas (`LocalModelID.parakeetVocabulary`). `nil` si le
+    /// catalogue ne connaît pas ce modèle.
+    func state(of id: String) async -> LocalModel.State?
+}
+
+extension ModelCatalog {
+    /// Pour un catalogue qui ne suit pas ses téléchargements : un téléchargement ordinaire.
+    public func ensureDownloaded(_ id: String) async throws {
+        try await download(id) { _ in }
+    }
+
+    public func state(of id: String) async -> LocalModel.State? {
+        await models().first { $0.id == id }?.state
+    }
 }
