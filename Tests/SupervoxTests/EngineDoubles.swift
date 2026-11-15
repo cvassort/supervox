@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import SupervoxApp
 import SupervoxCore
 
 @testable import Supervox
@@ -140,7 +141,7 @@ final class DoubleEngines: Sendable {
         let network = DoubleNetwork()
         self.network = network
         parakeet = DoubleTranscriber(
-            name: "parakeet", text: "texte parakeet", offlineProbe: { network.isOffline })
+            name: TranscriptionEngine.parakeet.rawValue, text: "texte parakeet", offlineProbe: { network.isOffline })
         detector = DoubleDetector(offlineProbe: { network.isOffline })
     }
 
@@ -149,7 +150,7 @@ final class DoubleEngines: Sendable {
         let network = network
         return whispers.withLock { whispers in
             if let existing = whispers[model] { return existing }
-            let made = DoubleTranscriber(name: "whisperkit", text: "texte whisper", offlineProbe: { network.isOffline })
+            let made = DoubleTranscriber(name: TranscriptionEngine.whisperKit.rawValue, text: "texte whisper", offlineProbe: { network.isOffline })
             whispers[model] = made
             return made
         }

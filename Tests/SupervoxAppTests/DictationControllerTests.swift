@@ -930,7 +930,7 @@ import SupervoxCore
             $0.tokenCount = { _, _ in nil }
         }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         let notice = h.controller.view.notice ?? ""
@@ -943,7 +943,7 @@ import SupervoxCore
         let h = DictationHarness()
         h.engines.configure { $0.modelMissing = true }
         h.knobs.settings = TranscriptionSettings(
-            engine: "parakeet", whisperModel: "base", language: "fr", vocabulary: ["terme"])
+            engine: .parakeet, whisperModel: "base", language: "fr", vocabulary: ["terme"])
         h.controller.hotKeyPressed()
         _ = await h.session()
 
@@ -953,8 +953,8 @@ import SupervoxCore
 
     /// N1 : le petit modèle de vocabulaire ne s'est pas téléchargé alors que le reste est là : la dictée a lieu quand même,
     /// sans vocabulaire, avec une notice en mots simples.
-    @Test(arguments: ["whisperkit", "parakeet"])
-    func aVocabularyModelThatCouldNotBeDownloadedLeavesTheVocabularyOutAndTheDictationGoesOn(engine: String) async {
+    @Test(arguments: TranscriptionEngine.allCases)
+    func aVocabularyModelThatCouldNotBeDownloadedLeavesTheVocabularyOutAndTheDictationGoesOn(engine: TranscriptionEngine) async {
         let h = DictationHarness()
         h.engines.configure {
             $0.modelMissing = true
@@ -983,7 +983,7 @@ import SupervoxCore
         let h = DictationHarness()
         h.engines.configure { $0.modelMissing = true }
         h.knobs.settings = TranscriptionSettings(
-            engine: "parakeet", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .parakeet, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [["a", "b"]])
@@ -1000,7 +1000,7 @@ import SupervoxCore
         let h = DictationHarness()
         h.engines.configure { $0.modelMissing = true }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.events == ["download", "count", "make"])
@@ -1150,14 +1150,14 @@ import SupervoxCore
     @Test func settingsAreReadAgainAtEveryDictation() async {
         let h = DictationHarness()
         let first = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["alpha"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["alpha"])
         h.knobs.settings = first
         let one = await h.startRecording()
         one.emit(.failed(.noSpeech))
         #expect(await until { h.controller.view.stage.isTerminal })
 
         let second = TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["beta", "gamma"])
+            engine: .parakeet, whisperModel: "small", language: "en", vocabulary: ["beta", "gamma"])
         h.knobs.settings = second
         h.controller.hotKeyPressed()
         _ = await h.session(1)
@@ -1172,7 +1172,7 @@ import SupervoxCore
             $0.tokenCount = { terms, _ in terms.count * 10 }
         }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b", "c", "d", "e"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b", "c", "d", "e"])
         h.controller.hotKeyPressed()
         let session = await h.session()
 
@@ -1193,7 +1193,7 @@ import SupervoxCore
             $0.tokenCount = { terms, _ in terms.count * 10 }
         }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [["a", "b"]])
@@ -1206,7 +1206,7 @@ import SupervoxCore
             $0.tokenCount = { terms, _ in terms.count * 10 }
         }
         h.knobs.settings = TranscriptionSettings(
-            engine: "parakeet", whisperModel: "base", language: "fr", vocabulary: ["a", "b", "c"])
+            engine: .parakeet, whisperModel: "base", language: "fr", vocabulary: ["a", "b", "c"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [["a", "b", "c"]])
@@ -1220,7 +1220,7 @@ import SupervoxCore
             $0.tokenCount = { terms, _ in terms.count * 10 }
         }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])
@@ -1236,7 +1236,7 @@ import SupervoxCore
             $0.tokenCount = { _, _ in nil }
         }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])
@@ -1252,7 +1252,7 @@ import SupervoxCore
         let h = DictationHarness()
         h.engines.configure { $0.tokenCount = { _, _ in nil } }
         h.knobs.settings = TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+            engine: .whisperKit, whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])

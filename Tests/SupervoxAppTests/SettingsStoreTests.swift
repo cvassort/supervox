@@ -505,7 +505,7 @@ private func sampleSettings() -> AppSettings {
         hotKey: .standard, hotKeyBehavior: .hold, lastModeID: "prompt",
         systemConflictShown: HotKey(keyCode: 40, modifiers: [.command, .shift]),
         transcription: TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["Kubernetes", "Docker"]),
+            engine: .parakeet, whisperModel: "small", language: "en", vocabulary: ["Kubernetes", "Docker"]),
         modeOptions: [:])
 
     @Test func aFileWrittenBeforeModeOptionsDecodesWithEveryFieldAndNoChoice() throws {
@@ -518,7 +518,7 @@ private func sampleSettings() -> AppSettings {
         #expect(decoded.hotKeyBehavior == .hold)
         #expect(decoded.lastModeID == "prompt")
         #expect(decoded.systemConflictShown == HotKey(keyCode: 40, modifiers: [.command, .shift]))
-        #expect(decoded.transcription.engine == "parakeet")
+        #expect(decoded.transcription.engine == .parakeet)
         #expect(decoded.transcription.whisperModel == "small")
         #expect(decoded.transcription.language == "en")
         #expect(decoded.transcription.vocabulary == ["Kubernetes", "Docker"])

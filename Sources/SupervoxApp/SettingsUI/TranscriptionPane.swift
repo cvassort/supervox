@@ -54,11 +54,12 @@ public struct TranscriptionPane: View {
                 "Moteur de dictée",
                 selection: Binding(get: { model.settings.engine }, set: { model.setEngine($0) })
             ) {
-                Text("WhisperKit").tag("whisperkit")
-                Text("Parakeet").tag("parakeet")
+                ForEach(TranscriptionEngine.allCases, id: \.self) { engine in
+                    Text(engine.title).tag(engine)
+                }
             }
             .pickerStyle(.radioGroup)
-            if model.settings.engine == "whisperkit" {
+            if model.settings.engine == .whisperKit {
                 Picker(
                     "Modèle WhisperKit",
                     selection: Binding(get: { model.settings.whisperModel }, set: { model.setWhisperModel($0) })

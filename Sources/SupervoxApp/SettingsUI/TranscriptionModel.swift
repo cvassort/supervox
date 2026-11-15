@@ -213,8 +213,8 @@ public final class TranscriptionModel {
     /// Vrai si le moteur choisi dans les réglages dicte avec ce modèle.
     public func isUsedByChosenEngine(_ id: String) -> Bool {
         switch settings.engine {
-        case "parakeet": id == LocalModelID.parakeet
-        default: id == LocalModelID.whisper(settings.whisperModel)
+        case .parakeet: id == LocalModelID.parakeet
+        case .whisperKit: id == LocalModelID.whisper(settings.whisperModel)
         }
     }
 
@@ -223,7 +223,7 @@ public final class TranscriptionModel {
     public func isUsedByDictation(_ id: String) -> Bool {
         switch id {
         case LocalModelID.parakeet, LocalModelID.voiceDetector: true
-        default: settings.engine == "whisperkit" && id == LocalModelID.whisper(settings.whisperModel)
+        default: settings.engine == .whisperKit && id == LocalModelID.whisper(settings.whisperModel)
         }
     }
 
@@ -263,9 +263,8 @@ public final class TranscriptionModel {
 
     // MARK: - Réglages
 
-    public func setEngine(_ engine: String) {
-        guard TranscriptionSettings.knownEngines.contains(engine) else { return }
-        let changedToWhisperKit = engine == "whisperkit" && settings.engine != "whisperkit"
+    public func setEngine(_ engine: TranscriptionEngine) {
+        let changedToWhisperKit = engine == .whisperKit && settings.engine != .whisperKit
         // Seul WhisperKit a une limite de longueur : le passage à ce moteur recompte la liste.
         if change({ $0.engine = engine }), changedToWhisperKit { scheduleRecheck() }
     }
@@ -301,7 +300,7 @@ public final class TranscriptionModel {
                     show(tooLongMessage(count: count, ending: "L'ancien vocabulaire est conservé : retirez des termes ou raccourcissez-les."), .error, in: .vocabulary)
                     return .refused
                 }
-            } else if settings.engine == "whisperkit" {
+            } else if settings.engine == .whisperKit {
                 warning = Self.modelAbsentWarning
             }
         }
@@ -317,7 +316,7 @@ public final class TranscriptionModel {
     /// « morceaux de mots », sans jargon et sans la confondre avec des mots entiers.
     private func tooLongMessage(count: Int, ending: String) -> String {
         let whisper = "Vocabulaire trop long pour Whisper : votre liste équivaut à \(count) morceaux de mots et le modèle en accepte \(promptTokenLimit) au plus (un terme long ou rare en compte plusieurs)."
-        if settings.engine == "parakeet" {
+        if settings.engine == .parakeet {
             return "Vocabulaire trop long pour WhisperKit : votre liste équivaut à \(count) morceaux de mots et Whisper en accepte \(promptTokenLimit) au plus. Parakeet n'a pas cette limite, mais la liste est la même pour les deux moteurs. \(ending)"
         }
         return "\(whisper) \(ending)"
@@ -349,7 +348,7 @@ public final class TranscriptionModel {
                     count: count,
                     ending: "Votre vocabulaire est conservé tel quel, mais WhisperKit ne pourra pas l'utiliser tant que la liste n'est pas raccourcie."),
                 .error, in: .vocabulary)
-        } else if count == nil, settings.engine == "whisperkit" {
+        } else if count == nil, settings.engine == .whisperKit {
             show(Self.modelAbsentWarning, .warning, in: .vocabulary)
         }
     }

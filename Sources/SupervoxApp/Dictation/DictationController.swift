@@ -190,7 +190,7 @@ public final class DictationController {
         if !panel.isOpen { panel.open() }
         // Relus à chaque dictée : un changement de moteur, de modèle, de langue ou de vocabulaire vaut dès la suivante.
         let current = settings()
-        log.notice("dictée commencée ; maintien : \(hold, privacy: .public) ; moteur : \(current.engine, privacy: .public)")
+        log.notice("dictée commencée ; maintien : \(hold, privacy: .public) ; moteur : \(current.engine.rawValue, privacy: .public)")
         run.task = Task { await self.execute(run, settings: current) }
         if hold { run.watch = Task { await self.watchModifiers(run) } }
     }
@@ -261,7 +261,7 @@ public final class DictationController {
             effective.vocabulary = []
             run.vocabularyNotice = Self.vocabularyModelNotice
             refreshNotice(run)
-        } else if settings.engine == "whisperkit", !settings.vocabulary.isEmpty {
+        } else if settings.engine == .whisperKit, !settings.vocabulary.isEmpty {
             let model = settings.whisperModel
             let environment = self.environment
             let outcome = await VocabularyFit.fit(settings.vocabulary, limit: environment.promptTokenLimit) {

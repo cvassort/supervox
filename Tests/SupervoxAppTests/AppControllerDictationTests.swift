@@ -194,7 +194,7 @@ final class TimeoutLog: Sendable {
         defer { try? FileManager.default.removeItem(at: directory) }
         var settings = AppSettings.defaults
         settings.transcription = TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "fr", vocabulary: ["terme"])
+            engine: .parakeet, whisperModel: "small", language: "fr", vocabulary: ["terme"])
         let controller = makeController(settings: settings)
         #expect(await until { engines.preloadedFor == [settings.transcription] })
         await controller.preloadTask?.value
@@ -287,7 +287,7 @@ final class TimeoutLog: Sendable {
         #expect(await until { controller.panelModel.dictation.stage == .failed(.noSpeech) })
 
         let changed = TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["terme"])
+            engine: .parakeet, whisperModel: "small", language: "en", vocabulary: ["terme"])
         try controller.updateSettings { $0.transcription = changed }
         hotKeys.press()
         #expect(await until { engines.sessions.count == 2 })

@@ -459,7 +459,7 @@ for dark in [false, true] {
     let allReadyModels = exampleModels(parakeet: .ready, turbo: .ready, small: .absent, base: .absent, voice: .ready)
     let tallSize = NSSize(width: 600, height: 1_260)
     let whisperChosen = TranscriptionSettings(
-        engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+        engine: .whisperKit, whisperModel: "large-v3-v20240930_turbo", language: "fr",
         vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"])
 
     // Tous les états d'une ligne : en cours sans fraction (Parakeet : deux téléchargements enchaînés, aucune fraction
@@ -492,7 +492,7 @@ for dark in [false, true] {
             model: await transcriptionModel(
                 ExampleCatalog(listed: allReadyModels),
                 settings: TranscriptionSettings(
-                    engine: "parakeet", whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
+                    engine: .parakeet, whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
         name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
     // Vocabulaire refusé : 40 termes d'exemple, trop longs pour Whisper. Le compte (136 pour une limite de 111) est une
     // valeur d'exemple fixée par le double du catalogue : elle n'a pas été mesurée avec le tokenizer sur cette liste. Le champ
@@ -500,7 +500,7 @@ for dark in [false, true] {
     let refused = await transcriptionModel(
         ExampleCatalog(listed: allReadyModels, tokenCount: 136),
         settings: TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+            engine: .whisperKit, whisperModel: "large-v3-v20240930_turbo", language: "fr",
             vocabulary: Array(exampleTerms.prefix(30))),
         act: { _ = await $0.setVocabulary(text: exampleTerms.joined(separator: "\n")) })
     try render(

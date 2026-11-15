@@ -17,7 +17,7 @@ import Testing
     }
 
     private static func settings(
-        engine: String = "whisperkit", model: String = "small", vocabulary: [String] = []
+        engine: TranscriptionEngine = .whisperKit, model: String = "small", vocabulary: [String] = []
     ) -> TranscriptionSettings {
         TranscriptionSettings(engine: engine, whisperModel: model, language: "fr", vocabulary: vocabulary)
     }
@@ -92,13 +92,13 @@ import Testing
 
     @Test func aParakeetDictationDoesNotNeedAWhisperVariant() {
         #expect(
-            LiveDictationEngines.neededModels(for: Self.settings(engine: "parakeet"))
+            LiveDictationEngines.neededModels(for: Self.settings(engine: .parakeet))
                 == [LocalModelID.voiceDetector, LocalModelID.parakeet])
     }
 
     /// Le petit modèle de vocabulaire ne sert qu'avec un vocabulaire, quel que soit le moteur final (l'aperçu est Parakeet).
-    @Test(arguments: ["whisperkit", "parakeet"])
-    func theVocabularyModelIsNeededOnlyWithAVocabulary(engine: String) {
+    @Test(arguments: TranscriptionEngine.allCases)
+    func theVocabularyModelIsNeededOnlyWithAVocabulary(engine: TranscriptionEngine) {
         let with = LiveDictationEngines.neededModels(for: Self.settings(engine: engine, vocabulary: ["terme"]))
         let without = LiveDictationEngines.neededModels(for: Self.settings(engine: engine))
         #expect(with.last == LocalModelID.parakeetVocabulary)
@@ -120,11 +120,11 @@ import Testing
         var states = StubCatalog.allReady
         states[LocalModelID.parakeetVocabulary] = .absent
         #expect(Self.missing(Self.settings(), states).isEmpty)
-        #expect(Self.missing(Self.settings(engine: "parakeet"), states).isEmpty)
+        #expect(Self.missing(Self.settings(engine: .parakeet), states).isEmpty)
     }
 
-    @Test(arguments: ["whisperkit", "parakeet"])
-    func withAVocabularyAMissingVocabularyModelIsADownload(engine: String) {
+    @Test(arguments: TranscriptionEngine.allCases)
+    func withAVocabularyAMissingVocabularyModelIsADownload(engine: TranscriptionEngine) {
         var states = StubCatalog.allReady
         states[LocalModelID.parakeetVocabulary] = .absent
         #expect(
@@ -148,13 +148,13 @@ import Testing
         states[LocalModelID.voiceDetector] = .absent
         states[LocalModelID.parakeet] = .incomplete
         #expect(
-            Self.missing(Self.settings(engine: "parakeet"), states) == [LocalModelID.voiceDetector, LocalModelID.parakeet])
+            Self.missing(Self.settings(engine: .parakeet), states) == [LocalModelID.voiceDetector, LocalModelID.parakeet])
     }
 
     @Test func aWhisperVariantNotReadyDoesNotMatterToParakeet() {
         var states = StubCatalog.allReady
         states[LocalModelID.whisper("small")] = .absent
-        #expect(Self.missing(Self.settings(engine: "parakeet"), states).isEmpty)
+        #expect(Self.missing(Self.settings(engine: .parakeet), states).isEmpty)
     }
 
     /// Un nom de variante saisi à la main n'est pas dans le catalogue : on ne dit pas « téléchargement » sans le savoir.
@@ -207,8 +207,8 @@ import Testing
     // MARK: - Une dictée ne télécharge que ce dont elle a besoin (N1)
 
     /// Parakeet, sans vocabulaire : seule la reconnaissance est demandée, jamais le petit modèle de vocabulaire.
-    @Test(arguments: ["whisperkit", "parakeet"])
-    func withoutAVocabularyTheDownloadLeavesTheVocabularyModelAlone(engine: String) async throws {
+    @Test(arguments: TranscriptionEngine.allCases)
+    func withoutAVocabularyTheDownloadLeavesTheVocabularyModelAlone(engine: TranscriptionEngine) async throws {
         let catalog = StubCatalog(StubCatalog.allReady)
         catalog.set(LocalModelID.parakeet, .absent)
         catalog.set(LocalModelID.parakeetVocabulary, .absent)
@@ -220,8 +220,8 @@ import Testing
     }
 
     /// Avec un vocabulaire, le petit modèle de vocabulaire suit la reconnaissance.
-    @Test(arguments: ["whisperkit", "parakeet"])
-    func withAVocabularyTheDownloadIncludesTheVocabularyModelAfterTheTranscriptionModel(engine: String) async throws {
+    @Test(arguments: TranscriptionEngine.allCases)
+    func withAVocabularyTheDownloadIncludesTheVocabularyModelAfterTheTranscriptionModel(engine: TranscriptionEngine) async throws {
         let catalog = StubCatalog(StubCatalog.allReady)
         catalog.set(LocalModelID.parakeet, .absent)
         catalog.set(LocalModelID.parakeetVocabulary, .absent)
@@ -285,7 +285,7 @@ import Testing
 
     @Test func parakeetServesAsPreviewAndAsFinalEngineWhenItIsTheSetting() {
         let cache = EngineCache(modelsRoot: URL(fileURLWithPath: "/tmp/supervox-test-modeles"))
-        let engines = cache.engines(for: Self.settings(engine: "parakeet"))
+        let engines = cache.engines(for: Self.settings(engine: .parakeet))
         #expect((engines.final as AnyObject) === (engines.preview as AnyObject))
     }
 
@@ -329,9 +329,9 @@ import Testing
     @Test(arguments: [LocalModelID.parakeet, LocalModelID.parakeetVocabulary])
     func deletingParakeetOrItsVocabularyModelDropsTheParakeetEngine(id: String) {
         let cache = EngineCache(modelsRoot: URL(fileURLWithPath: "/tmp/supervox-test-modeles"))
-        let before = cache.engines(for: Self.settings(engine: "parakeet"))
+        let before = cache.engines(for: Self.settings(engine: .parakeet))
         cache.evict(modelID: id)
-        let after = cache.engines(for: Self.settings(engine: "parakeet"))
+        let after = cache.engines(for: Self.settings(engine: .parakeet))
         #expect((after.preview as AnyObject) !== (before.preview as AnyObject))
         #expect((after.detector as AnyObject) === (before.detector as AnyObject))
     }

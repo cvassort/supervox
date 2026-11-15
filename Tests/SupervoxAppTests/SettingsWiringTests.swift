@@ -140,13 +140,13 @@ import Testing
             controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit)
         #expect(transcription.settings == .defaults)
 
-        transcription.setEngine("parakeet")
+        transcription.setEngine(.parakeet)
         transcription.setLanguage("en")
         controller.panelModel.select("prompt")
         await transcription.setVocabulary(text: "Docker")
 
         let onDisk = store.load().settings
-        #expect(onDisk.transcription.engine == "parakeet")
+        #expect(onDisk.transcription.engine == .parakeet)
         #expect(onDisk.transcription.language == "en")
         #expect(onDisk.transcription.vocabulary == ["Docker"])
         #expect(onDisk.lastModeID == "prompt")
@@ -195,10 +195,10 @@ import Testing
             controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit)
         try Data("pas du json".utf8).write(to: store.file)
 
-        transcription.setEngine("parakeet")
+        transcription.setEngine(.parakeet)
 
-        #expect(transcription.settings.engine == "whisperkit")
-        #expect(controller.settings.transcription.engine == "whisperkit")
+        #expect(transcription.settings.engine == .whisperKit)
+        #expect(controller.settings.transcription.engine == .whisperKit)
         #expect(transcription.message?.contains("settings.json") == true)
     }
 

@@ -74,7 +74,7 @@ final class EngineCache: Sendable {
         let root = modelsRoot
         let factory = factory
         return held.withLock { held in
-            if settings.engine == "parakeet" {
+            if settings.engine == .parakeet {
                 return Engines(preview: held.parakeet, detector: held.detector, final: held.parakeet)
             }
             if held.whisper?.model != settings.whisperModel {
@@ -252,7 +252,7 @@ final class LiveDictationEngines: Sendable {
         gate.begin()
         defer { gate.finish() }
         guard await allNeededModelsReady(for: settings) else { return }
-        if settings.engine == "whisperkit", await !cache.whisperLoadsOffline(settings.whisperModel) { return }
+        if settings.engine == .whisperKit, await !cache.whisperLoadsOffline(settings.whisperModel) { return }
         let engines = cache.engines(for: settings)
         cache.setOffline(true)
         defer { cache.setOffline(false) }
@@ -297,7 +297,7 @@ final class LiveDictationEngines: Sendable {
     /// l'aperçu même sous WhisperKit, l'utilise alors).
     static func neededModels(for settings: TranscriptionSettings) -> [String] {
         var needed = [LocalModelID.voiceDetector, LocalModelID.parakeet]
-        if settings.engine == "whisperkit" { needed.append(LocalModelID.whisper(settings.whisperModel)) }
+        if settings.engine == .whisperKit { needed.append(LocalModelID.whisper(settings.whisperModel)) }
         if !settings.vocabulary.isEmpty { needed.append(LocalModelID.parakeetVocabulary) }
         return needed
     }

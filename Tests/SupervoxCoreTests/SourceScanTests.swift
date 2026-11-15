@@ -195,6 +195,24 @@ import Testing
         }
     }
 
+    /// m11 : les noms de moteur enregistrés (`"whisperkit"`, `"parakeet"`) ne sont écrits qu'à un endroit,
+    /// `Settings/TranscriptionSettings.swift` (le type `TranscriptionEngine`) ; le reste de l'application et du programme compare
+    /// des cas, jamais des chaînes. Le fichier d'origine doit bien porter `"whisperkit"` (`parakeet` y prend son nom de cas : le
+    /// littéral n'y figure pas), sans quoi le balayage ne vérifierait rien.
+    static let engineNames = ["\"whisperkit\"", "\"parakeet\""]
+
+    @Test func engineNamesAreSpelledOnlyInTranscriptionSettings() throws {
+        let home = "SupervoxApp/Settings/TranscriptionSettings.swift"
+        let app = try Self.sources(under: "Sources/SupervoxApp").map { (place: "SupervoxApp/" + $0.place, code: $0.code) }
+        let program = try Self.sources(under: "Sources/Supervox").map { (place: "Supervox/" + $0.place, code: $0.code) }
+        let all = app + program
+        let origin = try #require(all.first { $0.place == home })
+        #expect(origin.code.contains("\"whisperkit\""), "\"whisperkit\" absent de \(home)")
+        let offending = all.filter { $0.place != home }
+            .flatMap { source in Self.engineNames.filter { source.code.contains($0) }.map { "\(source.place) : \($0)" } }
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
     /// Les identifiants de mode fixes (`ModeChip.rawID`, `cleanedID`, `interviewID`) ne sont écrits qu'à un endroit, dans
     /// `Panel/PanelModel.swift` : le reste de l'application les nomme par ces constantes. (`"prompt"`, trop courant, n'est pas
     /// balayé.) Le fichier d'origine doit bien les porter, sans quoi le balayage ne vérifierait rien.

@@ -223,13 +223,13 @@ final class ProgressBox: Sendable {
 
     @Test func everyChangeIsSavedWithTheWholeSettings() async {
         let model = makeModel()
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         model.setWhisperModel("small")
         model.setLanguage("en")
         await model.setVocabulary(text: "Docker")
         #expect(saver.saved.count == 4)
         #expect(saver.saved.last == TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["Docker"]))
+            engine: .parakeet, whisperModel: "small", language: "en", vocabulary: ["Docker"]))
         #expect(model.settings == saver.saved.last)
     }
 
@@ -237,8 +237,8 @@ final class ProgressBox: Sendable {
         let model = makeModel()
         saver.failure = SaveFailure()
 
-        model.setEngine("parakeet")
-        #expect(model.settings.engine == "whisperkit")
+        model.setEngine(.parakeet)
+        #expect(model.settings.engine == .whisperKit)
         #expect(model.message?.contains("disque plein") == true)
 
         model.setWhisperModel("small")
@@ -257,17 +257,16 @@ final class ProgressBox: Sendable {
     @Test func aSuccessfulChangeClearsThePreviousMessage() {
         let model = makeModel()
         saver.failure = SaveFailure()
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         #expect(model.message != nil)
         saver.failure = nil
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         #expect(model.message == nil)
-        #expect(model.settings.engine == "parakeet")
+        #expect(model.settings.engine == .parakeet)
     }
 
-    @Test func anUnknownEngineOrLanguageIsIgnored() {
+    @Test func aBlankLanguageIsIgnored() {
         let model = makeModel()
-        model.setEngine("moteur-inconnu")
         model.setLanguage("  ")
         #expect(model.settings == .defaults)
         #expect(saver.saved.isEmpty)
@@ -287,7 +286,7 @@ final class ProgressBox: Sendable {
 
     @Test func vocabularyBeyondThePromptLimitIsRefusedAndTheOldOneKept() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Ancien"]))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: ["Ancien"]))
         catalog.setTokenCount(Self.limit + 1)
         await model.setVocabulary(text: "un\ndeux")
         #expect(model.settings.vocabulary == ["Ancien"])
@@ -320,7 +319,7 @@ final class ProgressBox: Sendable {
 
     @Test func clearingTheVocabularyNeedsNoCountAndIsSaved() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
         await model.setVocabulary(text: " \n ")
         #expect(model.settings.vocabulary == [])
         #expect(saver.saved.count == 1)
@@ -347,7 +346,7 @@ final class ProgressBox: Sendable {
 
     @Test func anUnchangedVocabularyIsNotSavedAgain() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
         await model.setVocabulary(text: "Docker\n")
         #expect(saver.saved.isEmpty)
         #expect(catalog.countRequests.isEmpty)
@@ -516,7 +515,7 @@ final class ProgressBox: Sendable {
 
     @Test func deletingAnAbsentModelOfTheChosenEngineDoesNotWarn() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: []))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: []))
         await model.refresh()  // « small » est absent : rien à retélécharger
         await model.delete(FakeModelCatalog.small.id)
         #expect(model.message == nil)

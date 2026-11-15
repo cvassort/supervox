@@ -13,7 +13,7 @@ import Testing
     typealias Stub = LiveDictationTests.StubCatalog
 
     private static func settings(
-        engine: String = "whisperkit", model: String = "small", vocabulary: [String] = []
+        engine: TranscriptionEngine = .whisperKit, model: String = "small", vocabulary: [String] = []
     ) -> TranscriptionSettings {
         TranscriptionSettings(engine: engine, whisperModel: model, language: "fr", vocabulary: vocabulary)
     }
@@ -47,7 +47,7 @@ import Testing
 
     @Test func aParakeetSettingPreparesTheDetectorAndParakeetOnlyOnce() async {
         let rig = Self.rig()
-        await rig.engines.environment.preload(Self.settings(engine: "parakeet"))
+        await rig.engines.environment.preload(Self.settings(engine: .parakeet))
         #expect(rig.doubles.detector.prepares == 1)
         // Parakeet est à la fois l'aperçu et le moteur final : deux appels de préparation, sur le même moteur.
         #expect(rig.doubles.parakeet.prepares == 2)
@@ -119,7 +119,7 @@ import Testing
     @Test func theTokenizerIsNotNeededForAParakeetSetting() async {
         let rig = Self.rig()
         rig.doubles.setWhisperLoadsOffline(false)
-        await rig.engines.preload(for: Self.settings(engine: "parakeet"))
+        await rig.engines.preload(for: Self.settings(engine: .parakeet))
         #expect(rig.doubles.detector.prepares == 1)
     }
 
@@ -161,7 +161,7 @@ import Testing
 
     @Test func aParakeetPreloadCutsTheNetworkToo() async {
         let rig = Self.rig()
-        await rig.engines.preload(for: Self.settings(engine: "parakeet"))
+        await rig.engines.preload(for: Self.settings(engine: .parakeet))
         #expect(rig.doubles.network.changes == [true, false])
         #expect(rig.doubles.parakeet.offlineAtPrepare == [true, true])
     }
