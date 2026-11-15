@@ -63,6 +63,12 @@ public final class AudioCapture: @unchecked Sendable {
         self.promptsForAccess = promptsForAccess
     }
 
+    /// La raison d'une panne du moteur audio, telle qu'elle peut être montrée dans le panneau : le code d'erreur du système, et
+    /// rien du texte de l'erreur (une erreur système peut y mettre une adresse, un chemin ou un nom de fichier).
+    static func reason(for error: any Error) -> String {
+        "code d'erreur du système : \((error as NSError).code)"
+    }
+
     /// Nom du micro (si connu), nombre de canaux et fréquence vus au dernier `start()`.
     public var inputDescription: String { inputText.withLock { $0 } }
 
@@ -105,7 +111,7 @@ public final class AudioCapture: @unchecked Sendable {
             input.removeTap(onBus: 0)
             store.withLock { $0.accepting = false }
             currentGate.withLock { $0 }?.close()
-            throw error as? AudioCaptureError ?? AudioCaptureError.engineFailed(String(describing: error))
+            throw error as? AudioCaptureError ?? AudioCaptureError.engineFailed(Self.reason(for: error))
         }
         running = true
     }
@@ -205,7 +211,7 @@ public final class AudioCapture: @unchecked Sendable {
             engine.attach(anchorPlayer)
             try connectAnchorPlayer()
             do { try engine.inputNode.setVoiceProcessingEnabled(true) }
-            catch { throw AudioCaptureError.engineFailed("voice processing : \(error)") }
+            catch { throw AudioCaptureError.engineFailed("traitement de la voix : \(Self.reason(for: error))") }
             // Ducking au minimum : on ne veut pas baisser le volume des autres applications pendant la dictée.
             engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
                 AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
@@ -219,7 +225,7 @@ public final class AudioCapture: @unchecked Sendable {
     private func connectAnchorPlayer() throws {
         if #available(macOS 27, *) {
             do { try engine.connectNode(anchorPlayer, to: engine.mainMixerNode, format: nil) }
-            catch { throw AudioCaptureError.engineFailed("connexion du nœud de lecture : \(error)") }
+            catch { throw AudioCaptureError.engineFailed("connexion du nœud de lecture : \(Self.reason(for: error))") }
         } else {
             engine.connect(anchorPlayer, to: engine.mainMixerNode, format: nil)
         }

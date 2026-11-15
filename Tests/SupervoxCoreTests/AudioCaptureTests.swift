@@ -253,3 +253,20 @@ private func refusalMessage(_ decision: AudioCapture.AccessDecision) -> String? 
         #expect(refusalMessage(AudioCapture.accessDecision(for: .restricted, promptsForAccess: prompts)) != nil)
     }
 }
+
+/// La raison d'une panne du moteur audio, montrée dans le panneau : le code du système, jamais le texte de l'erreur.
+@Test func theReasonOfAnAudioEngineFailureIsTheSystemCodeAndNothingOfTheErrorsText() {
+    let error = NSError(
+        domain: "https://exemple.invalid/service", code: -10868,
+        userInfo: [NSLocalizedDescriptionKey: "échec avec la clé sk-123 vers https://exemple.invalid/v1"])
+    let reason = AudioCapture.reason(for: error)
+    #expect(reason.contains("-10868"))
+    #expect(!reason.contains("exemple.invalid"))
+    #expect(!reason.contains("sk-123"))
+    #expect(!reason.contains("clé"))
+}
+
+@Test func theReasonOfAnErrorThatIsNotAnNSErrorStillHasNoText() {
+    struct Odd: Error, CustomStringConvertible { var description: String { "https://exemple.invalid/secret" } }
+    #expect(!AudioCapture.reason(for: Odd()).contains("exemple.invalid"))
+}
