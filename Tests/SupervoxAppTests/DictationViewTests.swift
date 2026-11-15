@@ -432,6 +432,49 @@ import Testing
         }
     }
 
+    // MARK: Ligne d'aide et champ vide
+
+    @Test func theHintsAndThePlaceholderHaveTheirExactWords() {
+        #expect(
+            DictationText.reviewRetryHint
+                == "Cliquez dans le texte pour le corriger encore, ou sur « Coller » pour réessayer. Échap ferme sans coller.")
+        #expect(DictationText.reviewEmptyHint == "Tapez un texte, ou Échap pour fermer sans coller.")
+        #expect(DictationText.reviewPlaceholder == "Le texte est vide.")
+    }
+
+    @Test func inReviewWithTheKeyboardTheHintAnnouncesCommandReturn() {
+        let state = DictationViewState(stage: .review, notice: "Un avis du vocabulaire.", draft: "Un texte.")
+        #expect(display(state).review?.hint == DictationText.reviewHint)
+    }
+
+    @Test func afterAMissedPasteTheHintNoLongerAnnouncesCommandReturn() throws {
+        let state = DictationViewState(stage: .review, notice: "Une raison.", draft: "Un texte.", keyboardReleased: true)
+        let hint = try #require(display(state).review?.hint)
+        #expect(hint == DictationText.reviewRetryHint)
+        #expect(!hint.contains("⌘↩"))
+    }
+
+    @Test(arguments: [false, true])
+    func aBlankTextHasTheEmptyHintWhateverTheKeyboard(released: Bool) throws {
+        for draft in ["", "  \n "] {
+            let state = DictationViewState(stage: .review, draft: draft, keyboardReleased: released)
+            let hint = try #require(display(state).review?.hint)
+            #expect(hint == DictationText.reviewEmptyHint)
+            #expect(!hint.contains("⌘↩"))
+        }
+    }
+
+    @Test func whilePastingThereIsNoHint() {
+        #expect(display(DictationViewState(stage: .pasting, draft: "a")).review?.hint == nil)
+    }
+
+    @Test func thePlaceholderIsOnlyForAnEmptyText() throws {
+        #expect(try #require(display(DictationViewState(stage: .review, draft: "")).review).showsPlaceholder)
+        // Un texte fait d'espaces n'est pas vide : le curseur et les espaces sont là, rien ne se superpose.
+        #expect(!(try #require(display(DictationViewState(stage: .review, draft: " ")).review).showsPlaceholder))
+        #expect(!(try #require(display(DictationViewState(stage: .review, draft: "a")).review).showsPlaceholder))
+    }
+
     @Test func theReviewToneIsItsOwnAndPastingKeepsTheWaitingTone() {
         #expect(display(DictationViewState(stage: .review, draft: "a")).mood == .review)
         #expect(display(DictationViewState(stage: .pasting, draft: "a")).mood == .working)
@@ -553,6 +596,105 @@ import Testing
         #expect(!locked.isEditable)
     }
 
+    // MARK: « Copier » et « Coller » inactifs
+
+    /// L'image de la rangée de boutons : un bouton inactif ne se dessine pas comme un bouton actif. Les boutons ne sont pas des
+    /// `NSButton` ni des éléments d'accessibilité que l'on puisse interroger hors écran ; l'image est ce qui les distingue.
+    private func actionsImage(_ review: DictationDisplay.Review) throws -> Data {
+        let host = NSHostingView(rootView: ReviewActions(review: review, paste: {}, copy: {}).frame(width: 300).padding(8))
+        host.frame = NSRect(origin: .zero, size: host.fittingSize)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        return try #require(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    private func buttons(paste: Bool, copy: Bool) -> DictationDisplay.Review {
+        DictationDisplay.Review(
+            text: "a", isEditable: true, canPaste: paste, canCopy: copy, isPasting: false, copy: .idle, hint: nil,
+            showsPlaceholder: false)
+    }
+
+    @Test func aDisabledButtonDoesNotLookLikeAnEnabledOne() throws {
+        let both = try actionsImage(buttons(paste: true, copy: true))
+        #expect(try actionsImage(buttons(paste: true, copy: true)) == both, "le rendu n'est pas reproductible")
+        // Chaque bouton est inactif de son côté : retirer l'un des deux `.disabled` rend l'image de son cas identique à `both`.
+        #expect(try actionsImage(buttons(paste: false, copy: true)) != both, "« Coller » reste actif")
+        #expect(try actionsImage(buttons(paste: true, copy: false)) != both, "« Copier » reste actif")
+        let neither = try actionsImage(buttons(paste: false, copy: false))
+        #expect(neither != both)
+        #expect(try actionsImage(buttons(paste: false, copy: true)) != neither)
+        #expect(try actionsImage(buttons(paste: true, copy: false)) != neither)
+    }
+
+    @Test func theButtonsOfAReviewAndOfAPastingFollowTheDisplay() throws {
+        let reviewing = try #require(review("Un texte.").review)
+        let pasting = try #require(review("Un texte.", stage: .pasting).review)
+        #expect(try actionsImage(reviewing) == actionsImage(buttons(paste: true, copy: true)))
+        #expect(try actionsImage(pasting) == actionsImage(buttons(paste: false, copy: false)))
+        #expect(try actionsImage(pasting) != actionsImage(reviewing))
+    }
+
+    // MARK: La mesure ne touche pas au champ
+
+    /// La chaîne réelle : la frappe prévient le modèle, qui prévient le contrôleur, qui mesure le panneau (`fittingSize`) alors
+    /// que la frappe est encore en cours. Le champ ne doit rien perdre : la mesure ne le réécrit pas.
+    @Test func measuringThePanelDuringTheTypingKeepsWhatWasTyped() throws {
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        model.dictation = DictationViewState(stage: .review, draft: "Début.")
+        let panel = NSHostingView(
+            rootView: PanelView(
+                model: model, permissions: PermissionsModel(probe: ReviewProbe()), openSettings: {}, quit: {}))
+        panel.layoutSubtreeIfNeeded()
+        let textView = try #require(field(in: panel))
+        var heights: [CGFloat] = []
+        // Ce que fait `PanelController.contentChanged` dans la chaîne réelle, au milieu de `textDidChange`.
+        model.onDraftChange = { _ in heights.append(panel.fittingSize.height) }
+        let typed = " suite\n" + lines(12)
+        textView.insertText(typed, replacementRange: NSRange(location: textView.string.utf16.count, length: 0))
+        #expect(textView.string == "Début." + typed)
+        #expect(model.dictation.draft == "Début." + typed)
+        #expect(heights.count == 1)
+    }
+
+    @Test func measuringATextLeavesTheLiveFieldUntouched() throws {
+        let field = ReviewTextView.makeTextView()
+        // Hors fenêtre, un champ n'a pas de gestionnaire d'annulation : un délégué lui en donne un.
+        let provider = UndoProvider()
+        field.delegate = provider
+        field.string = "Un texte à garder."
+        // De quoi annuler : une frappe, que la mesure ne doit pas défaire.
+        let undo = provider.manager
+        undo.beginUndoGrouping()
+        field.insertText("!", replacementRange: NSRange(location: 0, length: 0))
+        undo.endUndoGrouping()
+        field.setSelectedRange(NSRange(location: 3, length: 4))
+        let canUndo = undo.canUndo
+        let size = try #require(field.textContainer).size
+        let storage = try #require(field.textContentStorage?.textStorage)
+        let before = storage.copy() as! NSAttributedString
+
+        let measured = ReviewTextView.contentHeight(of: lines(30), like: field, width: 300)
+
+        #expect(measured > 100)
+        #expect(field.string == "!Un texte à garder.")
+        #expect(field.selectedRange() == NSRange(location: 3, length: 4))
+        #expect(undo.canUndo == canUndo)
+        #expect(undo.canUndo, "la frappe de départ n'est pas annulable : le test ne prouve rien sur la pile")
+        #expect(try #require(field.textContainer).size == size)
+        #expect(storage.isEqual(to: before))
+    }
+
+    @Test func measuringATextGivesWhatTheFieldWouldTakeForIt() {
+        let live = ReviewTextView.makeTextView()
+        for text in ["", "Une ligne.", lines(9), String(repeating: "des mots qui se suivent ", count: 40), "a\n"] {
+            live.string = text
+            let direct = ReviewTextView.contentHeight(of: live, width: 400)
+            let disposable = ReviewTextView.contentHeight(of: text, like: ReviewTextView.makeTextView(), width: 400)
+            #expect(direct == disposable, "« \(text.prefix(12)) »")
+        }
+    }
+
     // MARK: La frappe arrive telle quelle
 
     /// Ce que le champ donne arrive tel quel, tout de suite, au modèle : ni rognage, ni normalisation, ni report.
@@ -572,6 +714,15 @@ import Testing
         #expect(model.dictation.draft == typed)
         #expect(told == [typed])
     }
+}
+
+@MainActor private final class UndoProvider: NSObject, NSTextViewDelegate {
+    let manager: UndoManager = {
+        let manager = UndoManager()
+        manager.groupsByEvent = false
+        return manager
+    }()
+    func undoManager(for view: NSTextView) -> UndoManager? { manager }
 }
 
 private struct ReviewProbe: PermissionsProbe {

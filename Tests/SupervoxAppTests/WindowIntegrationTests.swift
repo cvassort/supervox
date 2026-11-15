@@ -403,6 +403,40 @@ struct WindowIntegrationTests {
         #expect(abs(panel.frame.height - after) < 1)
     }
 
+    /// Le vrai panneau avec la vue de relecture, clé : ⌘↩ (un événement fabriqué, remis au panneau sans rien poster au système)
+    /// déclenche « Coller » une fois ; Retour seul ne colle pas et ajoute une ligne au texte.
+    @Test func commandReturnPastesOnceAndReturnAloneInsertsALine() async throws {
+        _ = NSApplication.shared
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        model.dictation = DictationViewState(stage: .review, draft: "Un texte.")
+        var pastes = 0
+        model.onPaste = { pastes += 1 }
+        let surface = FloatingPanelSurface(
+            content: PanelView(model: model, permissions: PermissionsModel(probe: WindowProbe()), openSettings: {}, quit: {}))
+        let panel = surface.panel
+        panel.setFrame(NSRect(x: -20_000, y: -20_000, width: 520, height: 400), display: false)
+        panel.orderFrontRegardless()
+        defer { panel.orderOut(nil) }
+        surface.setKeyboard(.focused)
+        try #require(panel.isKeyWindow, "le panneau n'est pas devenu clé")
+        let field = try #require(await waitUntil { reviewField(in: panel) != nil } ? reviewField(in: panel) : nil)
+        try #require(await waitUntil { panel.firstResponder === field }, "le champ n'a pas la frappe")
+
+        let commandReturn = try keyEvent("\r", .command, in: panel, keyCode: 36)
+        #expect(panel.performKeyEquivalent(with: commandReturn), "⌘↩ n'a été pris par personne")
+        #expect(pastes == 1)
+        #expect(field.string == "Un texte.", "⌘↩ a aussi écrit dans le champ")
+
+        // Retour seul : pas un équivalent de touche, et le champ reçoit la touche et ajoute une ligne.
+        let plain = try keyEvent("\r", [], in: panel, keyCode: 36)
+        #expect(!panel.performKeyEquivalent(with: plain))
+        field.setSelectedRange(NSRange(location: field.string.utf16.count, length: 0))
+        field.keyDown(with: plain)
+        #expect(field.string == "Un texte.\n")
+        #expect(pastes == 1, "Retour seul a collé")
+        #expect(model.dictation.draft == "Un texte.\n")
+    }
+
     /// Le vrai panneau avec la vraie vue de relecture, hors écran : la frappe dans le champ (insertion de texte, aucun événement
     /// clavier) fait grandir la hauteur que le panneau demande, et la vue d'hébergement le signale sans qu'on lise la surface.
     /// Puis le texte s'efface : la hauteur redescend à la borne basse. Ce que ce test ne dit pas : la frappe réelle au clavier.
@@ -432,9 +466,12 @@ struct WindowIntegrationTests {
         // Beaucoup plus de lignes : la hauteur ne dépasse pas la borne haute du champ.
         field.insertText(
             (1...200).map { "autre \($0)" }.joined(separator: "\n"), replacementRange: NSRange(location: 0, length: 0))
-        _ = await waitUntil { (surface.contentHeight() ?? 0) > grown + 20 }
-        let capped = try #require(surface.contentHeight())
-        #expect(capped - before <= DictationText.editorMaxHeight - DictationText.editorMinHeight + 1, "avant \(before), après \(capped)")
+        // Le champ était à sa borne basse : à sa borne haute, le panneau a gagné exactement l'écart des deux bornes, pas plus.
+        let ceiling = before + DictationText.editorMaxHeight - DictationText.editorMinHeight
+        #expect(
+            await waitUntil { abs((surface.contentHeight() ?? 0) - ceiling) < 1 },
+            "avant \(before), maintenant \(surface.contentHeight() ?? 0), borne haute attendue \(ceiling)")
+        #expect(grown < ceiling - 20, "dix lignes sont déjà à la borne : le test ne distingue plus la croissance du plafond")
 
         // Le texte effacé : retour à la borne basse.
         field.insertText("", replacementRange: NSRange(location: 0, length: field.string.utf16.count))

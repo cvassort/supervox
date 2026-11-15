@@ -15,6 +15,15 @@ public enum DictationText {
     /// La ligne d'aide sous le champ de relecture.
     public static let reviewHint = "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée »."
 
+    /// L'aide sous le champ quand le panneau n'a plus la frappe (un collage manqué l'a rendue à l'application de dessous) :
+    /// ⌘↩ n'y arriverait pas avant un clic.
+    public static let reviewRetryHint =
+        "Cliquez dans le texte pour le corriger encore, ou sur « Coller » pour réessayer. Échap ferme sans coller."
+    /// L'aide sous un champ vide : « Coller » est inactif, ⌘↩ ne fait rien.
+    public static let reviewEmptyHint = "Tapez un texte, ou Échap pour fermer sans coller."
+    /// Ce que dit un champ vide.
+    public static let reviewPlaceholder = "Le texte est vide."
+
     /// Hauteur la plus basse du champ de relecture : quatre lignes de `callout` à 15 points plus 2, la même mesure que la place
     /// du texte en direct (relevée sur les images de l'étape 3 ; voir `DictationView.liveText`).
     public static let editorMinHeight: CGFloat = 62
@@ -22,7 +31,8 @@ public enum DictationText {
     public static let editorMaxHeight: CGFloat = 242
 
     /// La hauteur du champ de relecture pour un contenu de cette hauteur : celle du contenu, entre les deux bornes. Une valeur
-    /// négative ou non finie (que la mesure ne devrait pas donner) vaut la borne basse.
+    /// négative ou non finie (que la mesure ne devrait pas donner) vaut la borne basse : y compris +∞, par cohérence avec
+    /// `duration` (une valeur absurde ne doit pas ouvrir le champ au maximum) ; le brief ne tranche que NaN et le négatif.
     public static func editorHeight(contentHeight: CGFloat) -> CGFloat {
         guard contentHeight.isFinite else { return editorMinHeight }
         return min(max(contentHeight, editorMinHeight), editorMaxHeight)
@@ -159,6 +169,11 @@ public struct DictationDisplay: Equatable, Sendable {
         public var isPasting: Bool
         /// Ce qu'a donné le dernier clic sur « Copier ».
         public var copy: CopyState
+        /// La ligne d'aide sous le champ ; aucune pendant le collage. Elle n'annonce ⌘↩ que si ⌘↩ colle : le texte n'est pas
+        /// blanc et le panneau a la frappe.
+        public var hint: String?
+        /// Le champ est vide (aucun caractère) : il dit « Le texte est vide. ».
+        public var showsPlaceholder: Bool
     }
 
     public var review: Review?
@@ -214,9 +229,15 @@ public struct DictationDisplay: Equatable, Sendable {
         // La relecture : le texte entier, à corriger, coller ou copier. Rien d'autre ne le montre.
         if stage == .review || stage == .pasting {
             let usable = stage == .review && Self.nonBlank(state.draft) != nil
+            let hint: String? =
+                stage == .pasting
+                ? nil
+                : !usable
+                    ? DictationText.reviewEmptyHint
+                    : state.keyboardReleased ? DictationText.reviewRetryHint : DictationText.reviewHint
             review = Review(
                 text: state.draft, isEditable: stage == .review, canPaste: usable, canCopy: usable,
-                isPasting: stage == .pasting, copy: copy)
+                isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: state.draft.isEmpty)
         } else {
             review = nil
         }

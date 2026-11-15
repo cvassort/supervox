@@ -125,7 +125,8 @@ struct MoodIcon: View {
         case .failure:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
         case .review:
-            Image(systemName: "square.and.pencil").foregroundStyle(.secondary)
+            // Décorative : « À relire » est à côté, VoiceOver ne doit pas lire un nom de symbole avant lui.
+            Image(systemName: "square.and.pencil").foregroundStyle(.secondary).accessibilityHidden(true)
         case .info, .ready:
             Image(systemName: "info.circle.fill").foregroundStyle(.secondary)
         }

@@ -58,31 +58,49 @@ struct ReviewTextView: NSViewRepresentable {
         (textView as? FocusingTextView)?.takesFocus = takesFocus
     }
 
-    /// La hauteur que demande `textView` à cette largeur : le texte mis en page (TextKit 2, sans passer par `layoutManager`, qui
-    /// ramènerait le champ à TextKit 1), plus les marges du haut et du bas. Le conteneur prend la largeur mesurée ; le champ la
-    /// reprend de son défileur dès qu'il en a une.
-    static func contentHeight(of textView: NSTextView, width: CGFloat) -> CGFloat {
-        guard let container = textView.textContainer, let layout = textView.textLayoutManager else { return 0 }
+    /// La hauteur que prend `text` à cette largeur dans un champ comme `textView` (même police, mêmes marges) : le texte mis en
+    /// page (TextKit 2) dans une mise en page jetable, plus les marges du haut et du bas. Le champ lui-même n'est que lu : ni
+    /// son texte, ni sa sélection, ni sa pile d'annulation, ni son conteneur ne bougent (une mesure faite pendant la frappe ne
+    /// doit rien défaire). `layoutManager` n'est jamais touché : il ramènerait le champ à TextKit 1.
+    static func contentHeight(of text: String, like textView: NSTextView, width: CGFloat) -> CGFloat {
         let inset = textView.textContainerInset
-        container.size = NSSize(width: max(width - 2 * inset.width, 1), height: .greatestFiniteMagnitude)
+        let padding = textView.textContainer?.lineFragmentPadding ?? 5
+        let storage = NSTextContentStorage()
+        storage.attributedString = NSAttributedString(
+            string: text, attributes: [.font: textView.font ?? NSFont.preferredFont(forTextStyle: .callout)])
+        let layout = NSTextLayoutManager()
+        let container = NSTextContainer(
+            size: NSSize(width: max(width - 2 * inset.width, 1), height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = padding
+        layout.textContainer = container
+        storage.addTextLayoutManager(layout)
         layout.ensureLayout(for: layout.documentRange)
         return ceil(layout.usageBoundsForTextContainer.height + 2 * inset.height)
+    }
+
+    /// La hauteur du texte que le champ montre maintenant.
+    static func contentHeight(of textView: NSTextView, width: CGFloat) -> CGFloat {
+        contentHeight(of: textView.string, like: textView, width: width)
     }
 
     /// Le champ prend la hauteur de son texte à la largeur qu'on lui propose, entre les deux bornes de
     /// `DictationText.editorHeight` ; au-delà, il défile. SwiftUI redemande cette taille chaque fois que le texte change, y
     /// compris à la frappe : la fenêtre du panneau suit (`FirstClickHostingView.layout`).
+    ///
+    /// La mesure porte sur le texte que SwiftUI donne (`text`) et ne touche pas au champ vivant : elle est demandée en pleine
+    /// frappe (le panneau se mesure dans `textDidChange`, quand `text` peut être en retard d'une frappe), et réécrire le champ
+    /// à ce moment effacerait ce qui vient d'être tapé. Un retard se corrige de lui-même : le brouillon change, SwiftUI
+    /// redemande la taille avec le nouveau texte.
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
         guard let textView = nsView.documentView as? NSTextView else { return nil }
-        // Le texte que SwiftUI vient de donner, pas celui d'avant `updateNSView` : l'ordre des deux appels n'est pas garanti.
-        if textView.string != text { textView.string = text }
-        let width = proposal.width ?? Self.fallbackWidth
-        let content = Self.contentHeight(of: textView, width: width)
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? Self.fallbackWidth
+        let content = Self.contentHeight(of: text, like: textView, width: width)
         return CGSize(width: width, height: DictationText.editorHeight(contentHeight: content))
     }
 
-    /// La largeur du champ quand on ne lui en propose aucune : celle du panneau moins ses marges.
-    private static let fallbackWidth: CGFloat = 488
+    /// La largeur du champ quand on ne lui en propose aucune : celle du panneau (520) moins ses marges (2 x 16) et celles de la
+    /// carte du champ (2 x 8).
+    private static let fallbackWidth: CGFloat = 472
 
     func makeCoordinator() -> Coordinator { Coordinator(onEdit: onEdit) }
 

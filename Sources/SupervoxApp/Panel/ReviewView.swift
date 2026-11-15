@@ -22,8 +22,8 @@ struct ReviewView: View {
             // La raison d'un collage qui n'a pas eu lieu, sous le texte qu'elle désigne.
             if let detail = display.detail { DetailText(text: detail) }
             actions
-            if !review.isPasting {
-                Text(DictationText.reviewHint)
+            if let hint = review.hint {
+                Text(hint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -45,12 +45,36 @@ struct ReviewView: View {
     /// `edit` va tel quel au champ : ni rognage, ni normalisation, ni report au tour suivant.
     private var field: some View {
         ReviewTextView(text: review.text, isEditable: review.isEditable, takesFocus: review.isEditable, onEdit: edit)
+            // Un champ vide le dit : `NSTextView` n'a pas de texte de substitution. Même place que le premier caractère (marge
+            // de ligne de 5 points, 2 de marge du haut), sans prendre le clic.
+            .overlay(alignment: .topLeading) {
+                if review.showsPlaceholder {
+                    Text(DictationText.reviewPlaceholder)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
             .padding(8)
             .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
             .opacity(review.isPasting ? 0.6 : 1)
     }
 
     private var actions: some View {
+        ReviewActions(review: review, paste: paste, copy: copy)
+    }
+}
+
+/// La rangée « Copier » et « Coller » : inactifs quand `canCopy` et `canPaste` sont faux (texte blanc, collage en cours).
+struct ReviewActions: View {
+    let review: DictationDisplay.Review
+    let paste: @MainActor () -> Void
+    let copy: @MainActor () -> Void
+
+    var body: some View {
         HStack(spacing: 8) {
             Spacer(minLength: 0)
             CopyControls(state: review.copy, action: copy)
