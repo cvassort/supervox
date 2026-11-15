@@ -3,35 +3,31 @@ import SwiftUI
 /// La dictée dans le panneau : l'état, la durée, la forme d'onde, le texte en direct, le message et le dernier texte à
 /// copier. Elle ne décide de rien : `DictationDisplay` dit quoi montrer, ceci le dessine.
 ///
-/// Hauteur constante. La fenêtre du panneau prend sa taille quand elle s'ouvre, pas quand son contenu change : une zone qui
-/// grandirait en cours de dictée serait coupée. Toute la zone a donc la même hauteur dans tous les états, et chaque texte
-/// est borné (`DictationText`, `lineLimit`) pour ne jamais la dépasser.
+/// Hauteur naturelle. Le panneau suit son contenu (`PanelController.contentChanged` : la fenêtre, ancrée par le haut, grandit et
+/// rétrécit vers le bas), donc chaque état prend la place qu'il lui faut. Pendant l'enregistrement et la transcription, la
+/// place de quatre lignes de texte en direct est réservée dès le début : la fenêtre ne saute pas à chaque ligne qui s'ajoute.
+/// Tout texte est borné (`DictationText`, `lineLimit`), donc la hauteur l'est aussi.
 struct DictationView: View {
     let display: DictationDisplay
     /// Le raccourci, montré sous « Prêt » ; `nil` s'il n'y en a aucun.
     let hotKeyLabel: String?
     let copy: @MainActor () -> Void
 
-    /// Hauteur de la zone, en points : le plus haut des états (un message de quatre lignes et le dernier texte, ou le
-    /// texte en direct de quatre lignes avec la forme d'onde), vérifié sur les images.
-    static let height: CGFloat = 200
-
     var body: some View {
         VStack(spacing: 10) {
             if display.mood == .ready, display.transcript == nil {
-                Spacer(minLength: 0)
                 ready
-                Spacer(minLength: 0)
+                    .frame(maxWidth: .infinity, minHeight: 84)
             } else {
                 header
                 if let bars = display.bars { Waveform(bars: bars) }
-                if let live = display.liveText { liveText(live) }
+                // Pendant la prise (durée affichée), la place du texte est réservée même sans texte encore.
+                if display.duration != nil { liveText(display.liveText ?? "") }
                 if let detail = display.detail { detailLine(detail) }
                 if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: copy) }
-                Spacer(minLength: 0)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: Self.height, maxHeight: Self.height, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     // MARK: - Prêt
@@ -42,7 +38,7 @@ struct DictationView: View {
                 .font(.title2.weight(.semibold))
             if display.showsHotKey, let label = hotKeyLabel {
                 Text(label)
-                    .font(.callout.monospaced())
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
@@ -59,7 +55,7 @@ struct DictationView: View {
                 // « Prêt », avec le dernier texte dessous : un titre simple, pas l'écran d'accueil.
                 Text(display.headline).font(.headline)
                 if display.showsHotKey, let label = hotKeyLabel {
-                    Text(label).font(.callout.monospaced()).foregroundStyle(.secondary)
+                    Text(label).font(.callout).foregroundStyle(.secondary)
                 }
             } else {
                 MoodIcon(mood: display.mood)
@@ -83,7 +79,7 @@ struct DictationView: View {
             .font(.callout)
             // Pendant la transcription finale, le texte en direct s'efface : il va être remplacé.
             .foregroundStyle(display.mood == .working ? .secondary : .primary)
-            .lineLimit(4)
+            .lineLimit(4, reservesSpace: true)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
     }

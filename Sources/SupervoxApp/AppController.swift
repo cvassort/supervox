@@ -116,8 +116,14 @@ public final class AppController {
             hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
             hold: holdWatch)
         self.dictation = dictationController
-        dictationController.onViewChange = { [panelModel] in panelModel.setDictation($0) }
-        dictationController.onTranscriptChange = { [panelModel] in panelModel.setTranscript($0) }
+        dictationController.onViewChange = { [panelModel, panel] in
+            panelModel.setDictation($0)
+            panel.contentChanged()
+        }
+        dictationController.onTranscriptChange = { [panelModel, panel] in
+            panelModel.setTranscript($0)
+            panel.contentChanged()
+        }
         // Le presse-papiers passe par l'insertion, qui le tient : un seul accès, injecté.
         panelModel.onCopy = { [inserter] in inserter.copy($0) }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }

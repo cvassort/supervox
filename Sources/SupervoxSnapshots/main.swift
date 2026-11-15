@@ -284,7 +284,7 @@ for dark in [false, true] {
         PanelView(model: noticed, permissions: PermissionsModel(probe: missing), openSettings: {}, quit: {}),
         name: "panneau-avis", dark: dark, background: panelBackground)
 
-    // La dictée dans le panneau. Même largeur et même zone de dictée dans tous les états (voir `DictationView.height`).
+    // La dictée dans le panneau. Chaque état a sa hauteur naturelle : le panneau suit son contenu.
     let reason = await accessibilityReason()
     let cases: [(String, PanelModel, any PermissionsProbe)] = [
         ("dictee-preparation-telechargement",

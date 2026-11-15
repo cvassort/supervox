@@ -9,6 +9,23 @@ public protocol PanelSurface: AnyObject {
     /// Place le panneau et le montre, sans le rendre clé ni activer l'application.
     func show()
     func hide()
+    /// La hauteur, en points, que le contenu demande maintenant ; `nil` si la surface ne sait pas la mesurer. Le contrôleur la
+    /// compare à celle qu'il a vue pour décider d'un redimensionnement.
+    func contentHeight() -> CGFloat?
+    /// Donne cette hauteur à la fenêtre : le haut ne bouge pas (la fenêtre grandit et rétrécit vers le bas) sauf pour ne pas
+    /// sortir de l'écran.
+    func resize(toHeight height: CGFloat)
+}
+
+extension PanelSurface {
+    public func contentHeight() -> CGFloat? { nil }
+    public func resize(toHeight height: CGFloat) {}
+}
+
+/// Une surface qui sait dire que son contenu a changé de taille (la vue d'hébergement le sait avant tout autre).
+@MainActor
+public protocol ContentSizeObserving: AnyObject {
+    var onContentSizeChange: (@MainActor () -> Void)? { get set }
 }
 
 /// Surveille les clics de souris adressés à d'autres applications, le temps que le panneau est ouvert.
@@ -50,6 +67,12 @@ public final class PanelController: PanelOpening {
     /// Échap, sans modificateur.
     static let escape = HotKey(keyCode: UInt32(kVK_Escape), modifiers: [])
 
+    /// La hauteur du contenu telle que la surface l'a donnée à l'ouverture ou au dernier redimensionnement.
+    private var shownHeight: CGFloat?
+
+    /// Écart de hauteur, en points, en deçà duquel un contenu est le même (arrondis de mise en page).
+    private static let heightTolerance: CGFloat = 0.5
+
     public init(
         model: PanelModel, escapeRegistrar: any HotKeyRegistrar,
         clickMonitor: any OutsideClickMonitor, surface: any PanelSurface
@@ -58,6 +81,25 @@ public final class PanelController: PanelOpening {
         self.escapeRegistrar = escapeRegistrar
         self.clickMonitor = clickMonitor
         self.surface = surface
+        (surface as? any ContentSizeObserving)?.onContentSizeChange = { [weak self] in self?.contentChanged() }
+    }
+
+    /// Le contenu du panneau a changé (l'état de la dictée, un texte, une permission) : si sa hauteur n'est plus celle de la
+    /// fenêtre, la surface est redimensionnée. Mesuré tout de suite puis au tour suivant : le contenu ne se met en page
+    /// qu'après le changement. Un panneau fermé n'est jamais redimensionné.
+    public func contentChanged() {
+        refit()
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.refit()
+        }
+    }
+
+    private func refit() {
+        guard model.isOpen, let height = surface.contentHeight() else { return }
+        if let shownHeight, abs(height - shownHeight) < Self.heightTolerance { return }
+        shownHeight = height
+        surface.resize(toHeight: height)
     }
 
     public var isOpen: Bool { model.isOpen }
@@ -107,6 +149,7 @@ public final class PanelController: PanelOpening {
             model.setNotice(escapeHeld ? nil : Self.escapeRefusedNotice, for: .escape)
             clickMonitor.start { [weak self] in self?.outsideClick() }
             surface.show()
+            shownHeight = surface.contentHeight()
             log.notice("panneau ouvert ; Échap tenu : \(escapeHeld, privacy: .public)")
         } else {
             escapeRegistrar.unregister()
@@ -121,6 +164,21 @@ public final class PanelController: PanelOpening {
     private static let escapeRefusedNotice =
         "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors quand aucune dictée n'est en cours."
 
+    /// Le cadre de la fenêtre pour une nouvelle hauteur : le haut ne bouge pas, la fenêtre grandit et rétrécit vers le bas.
+    /// Si le bas sortirait de la zone utile de l'écran, la fenêtre remonte ; plus haute que la zone utile, elle est bornée à
+    /// celle-ci. Sans écran connu, seul le haut est conservé.
+    nonisolated static func resizedFrame(_ frame: CGRect, height: CGFloat, in visibleFrame: CGRect?) -> CGRect {
+        var height = height
+        var y = frame.maxY - height
+        if let visibleFrame {
+            height = min(height, visibleFrame.height)
+            y = frame.maxY - height
+            if y < visibleFrame.minY { y = visibleFrame.minY }
+            if y + height > visibleFrame.maxY { y = visibleFrame.maxY - height }
+        }
+        return CGRect(x: frame.minX, y: y, width: frame.width, height: height)
+    }
+
     /// Cadre du panneau : centré horizontalement, son centre au milieu du tiers supérieur de la zone
     /// utile ; ramené contre le haut s'il dépasserait.
     nonisolated static func frame(size: CGSize, in visibleFrame: CGRect) -> CGRect {
@@ -134,12 +192,30 @@ public final class PanelController: PanelOpening {
 
 /// La surface réelle : un `FloatingPanel`, placé sur l'écran de la souris.
 @MainActor
-public final class FloatingPanelSurface: PanelSurface {
-    private let panel: FloatingPanel
+public final class FloatingPanelSurface: PanelSurface, ContentSizeObserving {
+    /// La fenêtre (visible des tests d'intégration, qui la placent hors écran).
+    let panel: FloatingPanel
     private let log = Logger(subsystem: "dev.supervox.app", category: "panel")
+
+    /// Appelé quand le contenu de la vue change de taille (voir `PanelController.contentChanged`).
+    public var onContentSizeChange: (@MainActor () -> Void)? {
+        get { panel.hosting.onSizeChange }
+        set { panel.hosting.onSizeChange = newValue }
+    }
 
     public init<Content: View>(content: Content) {
         panel = FloatingPanel(content: content)
+    }
+
+    public func contentHeight() -> CGFloat? {
+        panel.contentView?.layoutSubtreeIfNeeded()
+        return panel.hosting.fittingSize.height
+    }
+
+    public func resize(toHeight height: CGFloat) {
+        let screen = panel.screen ?? Self.screenUnderMouse()
+        let next = PanelController.resizedFrame(panel.frame, height: height, in: screen?.visibleFrame)
+        panel.setFrame(next, display: true, animate: false)
     }
 
     public func show() {
@@ -193,7 +269,12 @@ public final class GlobalClickMonitor: OutsideClickMonitor {
 final class FloatingPanel: NSPanel {
     private static let cornerRadius: CGFloat = 20
 
+    /// La vue d'hébergement du contenu : elle seule sait quand sa taille change.
+    let hosting: FirstClickHostingView
+
     init<Content: View>(content: Content) {
+        let hosting = FirstClickHostingView(rootView: AnyView(content))
+        self.hosting = hosting
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 160),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -214,7 +295,6 @@ final class FloatingPanel: NSPanel {
         background.state = .active
         background.maskImage = Self.roundedMask(radius: Self.cornerRadius)
 
-        let hosting = FirstClickHostingView(rootView: content)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         background.addSubview(hosting)
         NSLayoutConstraint.activate([
@@ -245,6 +325,22 @@ final class FloatingPanel: NSPanel {
 }
 
 /// Le premier clic dans le panneau (qui n'est pas clé) agit tout de suite au lieu d'être consommé.
-private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+final class FirstClickHostingView: NSHostingView<AnyView> {
+    /// Appelé, au tour suivant, quand la taille que le contenu demande change.
+    var onSizeChange: (@MainActor () -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// La dernière hauteur vue à la mise en page : un contenu qui change de taille remet la vue en page, c'est là qu'on le voit.
+    private var lastHeight: CGFloat?
+
+    override func layout() {
+        super.layout()
+        let height = intrinsicContentSize.height
+        guard height != lastHeight else { return }
+        lastHeight = height
+        // Au tour suivant de la boucle principale, pas pendant la mise en page : la fenêtre ne se redimensionne pas en plein
+        // calcul de sa propre disposition.
+        DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.onSizeChange?() } }
+    }
 }

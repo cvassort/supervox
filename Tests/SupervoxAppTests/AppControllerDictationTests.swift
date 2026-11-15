@@ -192,6 +192,25 @@ import SupervoxCore
         #expect(controller.panelModel.copyState == .idle)
     }
 
+    /// Le panneau suit son contenu : quand l'état de la dictée change la hauteur du contenu, la surface est redimensionnée.
+    @Test func thePanelIsResizedWhenTheDictationChangesTheHeightOfItsContent() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        hotKeys.press()
+        let session = await record(controller)
+        #expect(surface.resizes.isEmpty)
+
+        // « Enregistrement » demande plus de place : la surface le mesure à chaque changement.
+        surface.height = 220
+        session.emit(DictationSnapshot(phase: .recording, liveText: "bonjour à tous", level: 0.4, elapsed: 2))
+        #expect(await until { surface.resizes == [220] })
+
+        // Le même état qui avance (durée, niveau) ne change pas la hauteur : rien n'est demandé.
+        session.emit(DictationSnapshot(phase: .recording, liveText: "bonjour à tous", level: 0.5, elapsed: 3))
+        #expect(await until { controller.panelModel.dictation.elapsed == 3 })
+        #expect(surface.resizes == [220])
+    }
+
     @Test func escapeDuringADictationCancelsItAndClosesThePanel() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()

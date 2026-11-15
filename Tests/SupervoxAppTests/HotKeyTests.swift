@@ -23,6 +23,15 @@ import Testing
 
     // MARK: - Validation et libellé
 
+    /// Le signe de Contrôle est U+2303 (le symbole du clavier Mac), jamais l'accent circonflexe ASCII « ^ » : les polices
+    /// l'écrivent en chevron proche du « ^ », mais le texte, lui, doit rester le bon caractère (copié, lu à voix haute).
+    @Test func theControlSignIsTheKeyboardSymbolAndNeverTheAsciiCaret() {
+        let label = HotKey.standard.label(layout: Self.ansi)
+        #expect(label.unicodeScalars.first?.value == 0x2303)
+        #expect(!label.unicodeScalars.contains { $0.value == 0x5E })
+        #expect(label.unicodeScalars.map(\.value).contains(0x2325), "le signe d'Option est U+2325")
+    }
+
     @Test func standardHotKeyIsValidAndLabelled() {
         #expect(HotKey.standard.validate(layout: Self.ansi) == .valid)
         #expect(HotKey.standard.label(layout: Self.ansi) == "⌃⌥Espace")
