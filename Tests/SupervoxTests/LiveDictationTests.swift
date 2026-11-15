@@ -82,31 +82,6 @@ import Testing
 
     struct Refused: Error {}
 
-    /// Porte à ouvrir une fois (les tests l'ouvrent dans un `defer` : rien ne reste pendu).
-    final class Gate: Sendable {
-        private let state = Mutex<(isOpen: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
-
-        func wait() async {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                let now = state.withLock { state -> Bool in
-                    if state.isOpen { return true }
-                    state.waiters.append(continuation)
-                    return false
-                }
-                if now { continuation.resume() }
-            }
-        }
-
-        func open() {
-            let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
-                state.isOpen = true
-                defer { state.waiters = [] }
-                return state.waiters
-            }
-            for waiter in waiters { waiter.resume() }
-        }
-    }
-
     // MARK: - Modèles nécessaires
 
     @Test func aWhisperDictationNeedsTheVoiceDetectorParakeetAndTheChosenVariant() {
@@ -311,22 +286,22 @@ import Testing
     @Test func parakeetServesAsPreviewAndAsFinalEngineWhenItIsTheSetting() {
         let cache = EngineCache(modelsRoot: URL(fileURLWithPath: "/tmp/supervox-test-modeles"))
         let engines = cache.engines(for: Self.settings(engine: "parakeet"))
-        #expect((engines.final as AnyObject) === engines.preview)
+        #expect((engines.final as AnyObject) === (engines.preview as AnyObject))
     }
 
     @Test func whisperKitIsTheFinalEngineAndParakeetStaysThePreview() {
         let cache = EngineCache(modelsRoot: URL(fileURLWithPath: "/tmp/supervox-test-modeles"))
         let engines = cache.engines(for: Self.settings())
         #expect(engines.final is WhisperKitTranscriber)
-        #expect((engines.final as AnyObject) !== engines.preview)
+        #expect((engines.final as AnyObject) !== (engines.preview as AnyObject))
     }
 
     @Test func enginesAreKeptFromOneDictationToTheNextWhileTheSettingsStay() {
         let cache = EngineCache(modelsRoot: URL(fileURLWithPath: "/tmp/supervox-test-modeles"))
         let first = cache.engines(for: Self.settings())
         let second = cache.engines(for: Self.settings(vocabulary: ["terme"]))
-        #expect(first.preview === second.preview)
-        #expect(first.detector === second.detector)
+        #expect((first.preview as AnyObject) === (second.preview as AnyObject))
+        #expect((first.detector as AnyObject) === (second.detector as AnyObject))
         #expect((first.final as AnyObject) === (second.final as AnyObject))
     }
 
@@ -335,7 +310,7 @@ import Testing
         let small = cache.engines(for: Self.settings(model: "small"))
         let base = cache.engines(for: Self.settings(model: "base"))
         #expect((small.final as AnyObject) !== (base.final as AnyObject))
-        #expect(small.preview === base.preview)
+        #expect((small.preview as AnyObject) === (base.preview as AnyObject))
     }
 
     @Test func deletingTheChosenWhisperModelDropsItsEngineAndOnlyIt() {
@@ -347,8 +322,8 @@ import Testing
         cache.evict(modelID: LocalModelID.whisper("small"))
         let after = cache.engines(for: Self.settings(model: "small"))
         #expect((after.final as AnyObject) !== (before.final as AnyObject))
-        #expect(after.preview === before.preview)
-        #expect(after.detector === before.detector)
+        #expect((after.preview as AnyObject) === (before.preview as AnyObject))
+        #expect((after.detector as AnyObject) === (before.detector as AnyObject))
     }
 
     @Test(arguments: [LocalModelID.parakeet, LocalModelID.parakeetVocabulary])
@@ -357,8 +332,8 @@ import Testing
         let before = cache.engines(for: Self.settings(engine: "parakeet"))
         cache.evict(modelID: id)
         let after = cache.engines(for: Self.settings(engine: "parakeet"))
-        #expect(after.preview !== before.preview)
-        #expect(after.detector === before.detector)
+        #expect((after.preview as AnyObject) !== (before.preview as AnyObject))
+        #expect((after.detector as AnyObject) === (before.detector as AnyObject))
     }
 
     @Test func deletingTheVoiceDetectorDropsTheDetector() {
@@ -366,8 +341,8 @@ import Testing
         let before = cache.engines(for: Self.settings())
         cache.evict(modelID: LocalModelID.voiceDetector)
         let after = cache.engines(for: Self.settings())
-        #expect(after.detector !== before.detector)
-        #expect(after.preview === before.preview)
+        #expect((after.detector as AnyObject) !== (before.detector as AnyObject))
+        #expect((after.preview as AnyObject) === (before.preview as AnyObject))
     }
 
     @Test func aSessionIsBuiltFromTheKeptEnginesAndAScriptedFeed() async throws {

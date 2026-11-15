@@ -71,6 +71,9 @@ public actor ParakeetTranscriber: Transcriber {
         return manager
     }
 
+    /// Vrai quand la reconnaissance est chargée en mémoire (un `prepare()` a réussi).
+    public var isPrepared: Bool { manager != nil }
+
     /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier
     /// verrait `manager == nil` et lancerait un second chargement. Les appels qui arrivent pendant un chargement attendent le
     /// même ; un chargement qui échoue peut être retenté.

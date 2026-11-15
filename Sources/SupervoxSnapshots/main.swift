@@ -289,6 +289,8 @@ for dark in [false, true] {
     let cases: [(String, PanelModel, any PermissionsProbe)] = [
         ("dictee-preparation-telechargement",
          dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.downloadNotice)), granted),
+        ("dictee-preparation-chargement",
+         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.loadingNotice)), granted),
         ("dictee-enregistrement",
          dictationPanelModel(state: DictationViewState(phase: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
         ("dictee-enregistrement-texte-long",

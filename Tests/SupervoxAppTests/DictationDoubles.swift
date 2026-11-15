@@ -97,6 +97,12 @@ final class FakeEngines: Sendable {
         var downloadedFor: [TranscriptionSettings] = []
         var tokenCount: @Sendable ([String], String) -> Int? = { terms, _ in terms.count }
         var limit = 1000
+        /// Les moteurs sont déjà chargés en mémoire (une préparation instantanée) : le défaut, qui laisse les avis inchangés.
+        var enginesLoaded = true
+        /// Retient `enginesLoaded` (puis la fabrication) tant que la porte n'est pas ouverte.
+        var loadedGate: TestGate?
+        var preloadedFor: [TranscriptionSettings] = []
+        var preloadGate: TestGate?
     }
 
     let state = Mutex(State())
@@ -107,6 +113,7 @@ final class FakeEngines: Sendable {
     var cancelledDuringMake: Bool { state.withLock { $0.cancelledDuringMake } }
     var events: [String] { state.withLock { $0.events } }
     var downloadedFor: [TranscriptionSettings] { state.withLock { $0.downloadedFor } }
+    var preloadedFor: [TranscriptionSettings] { state.withLock { $0.preloadedFor } }
 
     func configure(_ change: (inout State) -> Void) { state.withLock { change(&$0) } }
 
@@ -148,7 +155,21 @@ final class FakeEngines: Sendable {
                 }
                 return count(terms, model)
             },
-            promptTokenLimit: state.withLock { $0.limit })
+            promptTokenLimit: state.withLock { $0.limit },
+            enginesLoaded: { [self] _ in
+                let (loaded, gate) = state.withLock { state -> (Bool, TestGate?) in
+                    return (state.enginesLoaded, state.loadedGate)
+                }
+                await gate?.wait()
+                return loaded
+            },
+            preload: { [self] settings in
+                let gate = state.withLock { state -> TestGate? in
+                    state.preloadedFor.append(settings)
+                    return state.preloadGate
+                }
+                await gate?.wait()
+            })
     }
 }
 

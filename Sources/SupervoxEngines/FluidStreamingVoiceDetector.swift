@@ -56,6 +56,9 @@ public actor FluidStreamingVoiceDetector: StreamingVoiceDetector {
         self.minSilence = minSilence
     }
 
+    /// Vrai quand le modèle est chargé en mémoire.
+    public var isPrepared: Bool { manager != nil }
+
     public func prepare() async throws {
         await gate.enter()
         defer { gate.leave() }

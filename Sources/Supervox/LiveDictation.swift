@@ -4,58 +4,95 @@ import SupervoxCore
 import SupervoxEngines
 import Synchronization
 
+/// Un moteur dont on sait s'il est déjà chargé en mémoire.
+protocol Loadable: Sendable {
+    var isPrepared: Bool { get async }
+}
+
+extension ParakeetTranscriber: Loadable {}
+extension WhisperKitTranscriber: Loadable {}
+extension FluidStreamingVoiceDetector: Loadable {}
+
+typealias LoadableTranscriber = Transcriber & Loadable
+typealias LoadableDetector = StreamingVoiceDetector & Loadable
+
+/// Comment l'application fabrique ses moteurs. Les tests en donnent d'autres : aucun vrai modèle n'est alors chargé.
+/// Fabriquer ne charge, ne prépare et ne télécharge rien.
+struct EngineFactory: Sendable {
+    var parakeet: @Sendable () -> any LoadableTranscriber
+    var detector: @Sendable () -> any LoadableDetector
+    var whisper: @Sendable (_ model: String, _ modelsRoot: URL) -> any LoadableTranscriber
+    /// Vrai si ce modèle se charge sans réseau (dossier prêt et tokenizer sur le disque) : condition du préchargement.
+    var whisperLoadsOffline: @Sendable (_ model: String, _ modelsRoot: URL) -> Bool
+
+    static let real = EngineFactory(
+        parakeet: { ParakeetTranscriber() },
+        detector: { FluidStreamingVoiceDetector() },
+        whisper: { WhisperKitTranscriber(model: $0, downloadBase: $1) },
+        whisperLoadsOffline: { WhisperKitTranscriber.canLoadWithoutNetwork(model: $0, downloadBase: $1) })
+}
+
 /// Les moteurs réels de la dictée, gardés d'une dictée à l'autre : sans cela, le modèle se rechargerait à chaque appui.
 ///
 /// Construire ne charge, ne prépare et ne télécharge rien (pas même un tokenizer) : les moteurs se préparent dans
-/// `DictationSession.start()`, au premier appui. Le catalogue des modèles et les moteurs partagent une seule racine de
+/// `DictationSession.start()`, au premier appui, ou, si tous les modèles sont déjà sur le disque, en tâche de fond au
+/// lancement (`LiveDictationEngines.preload`). Le catalogue des modèles et les moteurs partagent une seule racine de
 /// modèles, sous Application Support, jamais dans Documents.
 final class EngineCache: Sendable {
     /// Ce qu'une session reçoit.
     struct Engines {
         /// L'aperçu en direct : toujours Parakeet. Aussi le moteur final quand le réglage est Parakeet.
-        let preview: ParakeetTranscriber
-        let detector: FluidStreamingVoiceDetector
-        let final: any Transcriber
+        let preview: any LoadableTranscriber
+        let detector: any LoadableDetector
+        let final: any LoadableTranscriber
     }
 
     private struct Held {
-        var parakeet = ParakeetTranscriber()
-        var detector = FluidStreamingVoiceDetector()
+        var parakeet: any LoadableTranscriber
+        var detector: any LoadableDetector
         /// La variante WhisperKit chargée, gardée tant que le modèle choisi ne change pas.
-        var whisper: (model: String, engine: WhisperKitTranscriber)?
+        var whisper: (model: String, engine: any LoadableTranscriber)?
     }
 
     private let modelsRoot: URL
-    private let held = Mutex(Held())
+    private let factory: EngineFactory
+    private let held: Mutex<Held>
 
-    init(modelsRoot: URL) {
+    init(modelsRoot: URL, factory: EngineFactory = .real) {
         self.modelsRoot = modelsRoot
+        self.factory = factory
+        held = Mutex(Held(parakeet: factory.parakeet(), detector: factory.detector()))
     }
 
     /// Un seul exemplaire de chaque moteur, un seul chargement : Parakeet sert d'aperçu et, au réglage Parakeet, de moteur
     /// final ; la variante WhisperKit est gardée tant que le modèle des réglages est le même.
     func engines(for settings: TranscriptionSettings) -> Engines {
         let root = modelsRoot
+        let factory = factory
         return held.withLock { held in
             if settings.engine == "parakeet" {
                 return Engines(preview: held.parakeet, detector: held.detector, final: held.parakeet)
             }
             if held.whisper?.model != settings.whisperModel {
-                held.whisper = (settings.whisperModel, WhisperKitTranscriber(model: settings.whisperModel, downloadBase: root))
+                held.whisper = (settings.whisperModel, factory.whisper(settings.whisperModel, root))
             }
             return Engines(preview: held.parakeet, detector: held.detector, final: held.whisper!.engine)
         }
     }
 
+    /// Ce modèle Whisper se charge-t-il sans réseau ?
+    func whisperLoadsOffline(_ model: String) -> Bool { factory.whisperLoadsOffline(model, modelsRoot) }
+
     /// Un modèle vient d'être supprimé du disque : le moteur qui le tient en mémoire est abandonné, la dictée suivante en
     /// recharge un neuf (et retélécharge le modèle). Le petit modèle de vocabulaire vit dans Parakeet.
     func evict(modelID id: String) {
+        let factory = factory
         held.withLock { held in
             switch id {
             case LocalModelID.parakeet, LocalModelID.parakeetVocabulary:
-                held.parakeet = ParakeetTranscriber()
+                held.parakeet = factory.parakeet()
             case LocalModelID.voiceDetector:
-                held.detector = FluidStreamingVoiceDetector()
+                held.detector = factory.detector()
             default:
                 if let variant = LocalModelID.whisperVariant(of: id), held.whisper?.model == variant {
                     held.whisper = nil
@@ -99,19 +136,25 @@ final class LiveDictationEngines: Sendable {
     /// Les moteurs gardés (internes : les tests y lisent l'identité des moteurs).
     let cache: EngineCache
     private let makeFeed: @Sendable () -> any MicrophoneFeed
+    private let watchdog: MicrophoneWatchdog?
 
     /// - Parameters:
     ///   - base: le catalogue sous-jacent (les tests en donnent un double ; en production, `LocalModelCatalog`).
     ///   - makeFeed: le micro d'une session (les tests donnent un micro scripté).
+    ///   - factory: les moteurs (les tests en donnent des doubles : aucun vrai modèle).
+    ///   - watchdog: la surveillance du micro de chaque session ; `.system` en production. Un micro scripté livre tout à
+    ///     l'ouverture puis se tait : les tests qui l'utilisent passent `nil`.
     init(
         modelsRoot: URL = LiveDictationEngines.defaultModelsRoot(), base: (any ModelCatalog)? = nil,
-        makeFeed: @escaping @Sendable () -> any MicrophoneFeed = { LiveMicrophoneFeed() }
+        makeFeed: @escaping @Sendable () -> any MicrophoneFeed = { LiveMicrophoneFeed() },
+        factory: EngineFactory = .real, watchdog: MicrophoneWatchdog? = .system
     ) {
-        let cache = EngineCache(modelsRoot: modelsRoot)
+        let cache = EngineCache(modelsRoot: modelsRoot, factory: factory)
         let base = base ?? LocalModelCatalog(root: modelsRoot)
         self.cache = cache
         self.base = base
         self.makeFeed = makeFeed
+        self.watchdog = watchdog
         catalog = EvictingModelCatalog(base: base, cache: cache)
     }
 
@@ -129,7 +172,39 @@ final class LiveDictationEngines: Sendable {
             needsModelDownload: { [self] settings in !(await missingModels(for: settings)).isEmpty },
             downloadModels: { [self] settings in try await downloadModels(for: settings) },
             promptTokenCount: { [self] terms, model in await base.promptTokenCount(terms, whisperModel: model) },
-            promptTokenLimit: WhisperKitTranscriber.promptTokenLimit)
+            promptTokenLimit: WhisperKitTranscriber.promptTokenLimit,
+            enginesLoaded: { [self] settings in await enginesLoaded(for: settings) },
+            preload: { [self] settings in await preload(for: settings) })
+    }
+
+    /// Détecteur, aperçu et moteur final de ces réglages sont-ils déjà chargés en mémoire ?
+    func enginesLoaded(for settings: TranscriptionSettings) async -> Bool {
+        let engines = cache.engines(for: settings)
+        guard await engines.detector.isPrepared, await engines.preview.isPrepared else { return false }
+        return await engines.final.isPrepared
+    }
+
+    /// Prépare, au lancement et en tâche de fond, les moteurs des réglages courants, dans l'ordre de la session (détecteur,
+    /// moteur final, aperçu), **seulement** si tout ce dont une dictée a besoin est déjà « Prêt » sur le disque : détecteur,
+    /// Parakeet, la variante WhisperKit (dossier et tokenizer) si c'est le moteur, le petit modèle de vocabulaire s'il y a un
+    /// vocabulaire. Sinon, rien : le préchargement ne télécharge jamais (un modèle inconnu du catalogue, en cours de
+    /// téléchargement ou incomplet empêche aussi le préchargement). Un échec est silencieux : la dictée refera la
+    /// préparation et dira l'erreur.
+    func preload(for settings: TranscriptionSettings) async {
+        guard await allNeededModelsReady(for: settings) else { return }
+        if settings.engine == "whisperkit", !cache.whisperLoadsOffline(settings.whisperModel) { return }
+        let engines = cache.engines(for: settings)
+        try? await engines.detector.prepare()
+        try? await engines.final.prepare()
+        try? await engines.preview.prepare()
+    }
+
+    /// Tous les modèles nécessaires sont exactement « Prêt » (un modèle absent du catalogue n'est pas prêt).
+    private func allNeededModelsReady(for settings: TranscriptionSettings) async -> Bool {
+        for id in Self.neededModels(for: settings) {
+            guard await base.state(of: id) == .ready else { return false }
+        }
+        return true
     }
 
     /// Télécharge, par le catalogue, ce qui manque à cette dictée et rien de plus. Une tâche annulée (Échap) ne lance pas le
@@ -190,6 +265,6 @@ final class LiveDictationEngines: Sendable {
             now: { ProcessInfo.processInfo.systemUptime },
             // Un micro qui s'arrête en pleine prise (casque débranché) fait échouer la dictée au lieu de la laisser « en
             // enregistrement ». Seul le vrai micro est surveillé : `live` et les tests n'en ont pas.
-            watchdog: .system)
+            watchdog: watchdog)
     }
 }

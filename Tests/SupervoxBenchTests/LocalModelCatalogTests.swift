@@ -389,6 +389,39 @@ import WhisperKit
         #expect(!FileManager.default.fileExists(atPath: sandbox.root.path))
     }
 
+    /// I4 : le préchargement du lancement ne doit jamais télécharger : il faut le dossier « Prêt » ET le tokenizer sur le disque
+    /// (WhisperKit se rabat sur le dépôt en ligne quand le tokenizer manque).
+    @Test func aWhisperModelLoadsWithoutTheNetworkOnlyWithItsFolderAndItsTokenizer() throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+
+        try sandbox.makeWhisperFolder("openai_whisper-small")
+        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+
+        let tokenizer = LocalModelCatalog.tokenizerFile(for: .small, in: sandbox.root)
+        try FileManager.default.createDirectory(
+            at: tokenizer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: tokenizer)
+        #expect(WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+
+        // Le tokenizer d'une autre variante ne compte pas, ni un dossier incomplet.
+        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "base", downloadBase: sandbox.root))
+        try sandbox.makeWhisperFolder("openai_whisper-base", omitting: ["TextDecoder"])
+        let baseTokenizer = LocalModelCatalog.tokenizerFile(for: .base, in: sandbox.root)
+        try FileManager.default.createDirectory(
+            at: baseTokenizer.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: baseTokenizer)
+        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "base", downloadBase: sandbox.root))
+    }
+
+    @Test func aVariantWhoseTokenizerCannotBeDeducedCannotLoadOffline() throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.cleanUp() }
+        try sandbox.makeWhisperFolder("openai_whisper-variante-inconnue")
+        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "variante-inconnue", downloadBase: sandbox.root))
+    }
+
     /// Sans dossier de base, rien n'est cherché sur le disque (le dossier par défaut de la bibliothèque est Documents).
     @Test func withoutADownloadBaseNothingIsLookedUpOnDisk() {
         let config = WhisperKitTranscriber.configuration(model: "small", downloadBase: nil)

@@ -33,19 +33,29 @@ public struct DictationEnvironment: Sendable {
     public var promptTokenCount: @Sendable (_ vocabulary: [String], _ whisperModel: String) async -> Int?
     /// Jetons d'amorce que Whisper garde (`WhisperKitTranscriber.promptTokenLimit`).
     public var promptTokenLimit: Int
+    /// Vrai si les moteurs de ces réglages (détecteur, aperçu, moteur final) sont déjà chargés en mémoire : la préparation
+    /// de la dictée est alors instantanée et le panneau ne montre pas « Chargement du modèle… ».
+    public var enginesLoaded: @Sendable (TranscriptionSettings) async -> Bool
+    /// Au lancement : prépare en tâche de fond les moteurs de ces réglages, **seulement** si tous leurs modèles sont déjà sur
+    /// le disque. Ne télécharge jamais ; un échec est silencieux (la dictée refera la préparation et dira l'erreur).
+    public var preload: @Sendable (TranscriptionSettings) async -> Void
 
     public init(
         makeSession: @escaping @Sendable (TranscriptionSettings) async throws -> any DictationSessioning,
         needsModelDownload: @escaping @Sendable (TranscriptionSettings) async -> Bool,
         downloadModels: @escaping @Sendable (TranscriptionSettings) async throws -> ModelDownloadOutcome,
         promptTokenCount: @escaping @Sendable ([String], String) async -> Int?,
-        promptTokenLimit: Int
+        promptTokenLimit: Int,
+        enginesLoaded: @escaping @Sendable (TranscriptionSettings) async -> Bool = { _ in true },
+        preload: @escaping @Sendable (TranscriptionSettings) async -> Void = { _ in }
     ) {
         self.makeSession = makeSession
         self.needsModelDownload = needsModelDownload
         self.downloadModels = downloadModels
         self.promptTokenCount = promptTokenCount
         self.promptTokenLimit = promptTokenLimit
+        self.enginesLoaded = enginesLoaded
+        self.preload = preload
     }
 
     /// Aucun moteur : la dictée dit qu'elle n'est pas disponible. Sert aux fenêtres et aux tests qui ne dictent pas.

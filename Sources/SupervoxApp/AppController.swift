@@ -48,6 +48,9 @@ public final class AppController {
     private let settingsView: SettingsViewProvider
     private let makeSettingsWindow: SettingsWindowMaker
     private let terminate: @MainActor () -> Void
+    private let dictationEnvironment: DictationEnvironment
+    /// Le préchargement des moteurs lancé au lancement (les tests l'attendent).
+    private(set) var preloadTask: Task<Void, Never>?
     private var statusItem: NSStatusItem?
     private var statusMenuRefresher: MenuRefresher?
     private var settingsWindow: (any SettingsWindowSurface)?
@@ -78,6 +81,7 @@ public final class AppController {
         self.settingsView = settingsView
         self.makeSettingsWindow = makeSettingsWindow
         self.terminate = terminate
+        dictationEnvironment = dictation
         self.systemHotKeys = systemHotKeys
         self.keyboardLayout = keyboardLayout
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar, layout: keyboardLayout)
@@ -195,6 +199,16 @@ public final class AppController {
             }
         }
         if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
+        preloadEngines()
+    }
+
+    /// Prépare les moteurs des réglages courants en tâche de fond, hors du fil principal et à basse priorité : rien n'est
+    /// attendu, l'affichage n'est pas retardé. L'environnement ne le fait que si tous les modèles sont déjà sur le disque,
+    /// jamais en téléchargeant, et ses échecs sont silencieux.
+    private func preloadEngines() {
+        let environment = dictationEnvironment
+        let transcription = settings.transcription
+        preloadTask = Task.detached(priority: .utility) { await environment.preload(transcription) }
     }
 
     /// L'accueil du premier lancement ; `hotKeyLabel` est `nil` sans raccourci actif.

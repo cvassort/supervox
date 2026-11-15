@@ -113,6 +113,31 @@ import WhisperKit
         #expect(calls.value == 2)
     }
 
+    /// I4 : un moteur dit s'il est déjà chargé en mémoire (la dictée en tient compte pour sa mention « Chargement du modèle… »).
+    @Test func parakeetSaysWhetherItIsLoaded() async throws {
+        let transcriber = ParakeetTranscriber(loader: { AsrManager(config: .default) })
+        #expect(await transcriber.isPrepared == false)
+        try await transcriber.prepare()
+        #expect(await transcriber.isPrepared == true)
+    }
+
+    @Test func aParakeetWhoseLoadFailedIsNotLoaded() async {
+        let transcriber = ParakeetTranscriber(loader: { throw Failure() })
+        _ = try? await transcriber.prepare()
+        #expect(await transcriber.isPrepared == false)
+    }
+
+    @Test func aWhisperKitWhoseLoadFailedIsNotLoaded() async {
+        let transcriber = WhisperKitTranscriber(model: "base", downloadBase: nil, loader: { _, _ in throw Failure() })
+        #expect(await transcriber.isPrepared == false)
+        _ = try? await transcriber.prepare()
+        #expect(await transcriber.isPrepared == false)
+    }
+
+    @Test func aFreshVoiceDetectorIsNotLoaded() async {
+        #expect(await FluidStreamingVoiceDetector().isPrepared == false)
+    }
+
     // MARK: - WhisperKit
 
     @Test func twoWhisperKitPreparesAtTheSameTimeLoadOnceAndShareTheFailure() async throws {

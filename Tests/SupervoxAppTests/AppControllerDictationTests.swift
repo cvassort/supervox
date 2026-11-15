@@ -71,6 +71,38 @@ import SupervoxCore
         return session
     }
 
+    // MARK: - Préchargement au lancement (I4)
+
+    /// Au lancement, les moteurs des réglages courants sont préparés en tâche de fond (l'environnement décide s'il y a de quoi :
+    /// il ne télécharge jamais).
+    @Test func theLaunchPreloadsTheEnginesOfTheCurrentSettings() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.transcription = TranscriptionSettings(
+            engine: "parakeet", whisperModel: "small", language: "fr", vocabulary: ["terme"])
+        let controller = makeController(settings: settings)
+        #expect(await until { engines.preloadedFor == [settings.transcription] })
+        await controller.preloadTask?.value
+        #expect(engines.preloadedFor.count == 1)
+    }
+
+    /// Le préchargement ne retarde rien : retenu, il laisse le lancement finir, le raccourci marcher et le panneau s'ouvrir.
+    @Test func aSlowPreloadDelaysNeitherTheLaunchNorTheFirstDictation() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = TestGate()
+        defer { gate.open() }
+        engines.configure { $0.preloadGate = gate }
+        let controller = makeController()
+        #expect(await until { engines.preloadedFor.count == 1 })
+        // Le lancement est fini (`makeController` l'a attendu) et le préchargement est encore en cours.
+        #expect(hotKeys.onPress != nil)
+
+        hotKeys.press()
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation.phase == .preparing)
+        _ = await record(controller)
+    }
+
     @Test func theHotKeyStartsADictationAndOpensThePanel() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()

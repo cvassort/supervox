@@ -797,18 +797,102 @@ import SupervoxCore
         _ = await h.session()
     }
 
-    @Test func aMissingModelShowsTheDownloadMentionOnlyWhilePreparing() async {
+    /// I4 (b) : « Téléchargement du modèle… » n'est montré que pendant le téléchargement ; ensuite, tant que les moteurs se
+    /// chargent en mémoire, c'est « Chargement du modèle… » ; à l'enregistrement, plus aucune mention.
+    @Test func theDownloadMentionIsShownOnlyDuringTheDownloadThenTheLoadingMentionUntilRecording() async {
         let h = DictationHarness()
-        h.engines.configure { $0.modelMissing = true }
+        let download = TestGate()
+        let make = TestGate()
+        defer {
+            download.open()
+            make.open()
+        }
+        h.engines.configure {
+            $0.modelMissing = true
+            $0.enginesLoaded = false
+            $0.downloadGate = download
+            $0.makeGate = make
+        }
         h.controller.hotKeyPressed()
-        let session = await h.session()
-        #expect(await until { h.controller.view.notice == "Téléchargement du modèle…" })
+        #expect(await until { h.controller.view.notice == DictationController.downloadNotice })
         #expect(h.controller.view.phase == .preparing)
 
+        download.open()
+        #expect(await until { h.controller.view.notice == DictationController.loadingNotice })
+        #expect(h.controller.view.phase == .preparing)
+
+        // La session se fabrique, puis prépare : la mention de chargement reste, celle de téléchargement ne revient pas.
+        make.open()
+        let session = await h.session()
         session.emit(.preparing)
+        #expect(await until { session.calls.contains("start") })
+        await settle()
+        #expect(h.controller.view.notice == DictationController.loadingNotice)
+
         session.emit(.recording)
         #expect(await until { h.controller.view.phase == .recording })
         #expect(h.controller.view.notice == nil)
+        // Aucun état montré n'a porté les deux mentions à la fois.
+        #expect(h.views.allSatisfy { ($0.notice ?? "").contains("Téléchargement") == false || ($0.notice ?? "").contains("Chargement") == false })
+    }
+
+    /// Des moteurs déjà chargés (préchargement au lancement, ou dictée précédente) : la préparation est instantanée, aucune mention
+    /// de chargement ne s'affiche, même brièvement.
+    @Test func loadedEnginesShowNoLoadingMentionAtAll() async {
+        let h = DictationHarness()
+        h.engines.configure { $0.enginesLoaded = true }
+        let session = await h.startRecording()
+        #expect(session.calls.contains("start"))
+        #expect(h.views.allSatisfy { !($0.notice ?? "").contains("Chargement") })
+        #expect(h.controller.view.notice == nil)
+    }
+
+    /// Rien à télécharger, moteurs froids : seule la mention de chargement, jamais celle de téléchargement.
+    @Test func coldEnginesWithNothingToDownloadShowOnlyTheLoadingMention() async {
+        let h = DictationHarness()
+        let make = TestGate()
+        defer { make.open() }
+        h.engines.configure {
+            $0.enginesLoaded = false
+            $0.makeGate = make
+        }
+        h.controller.hotKeyPressed()
+        #expect(await until { h.controller.view.notice == DictationController.loadingNotice })
+        make.open()
+        _ = await h.session()
+        #expect(h.views.allSatisfy { !($0.notice ?? "").contains("Téléchargement") })
+    }
+
+    /// Un téléchargement fait, des moteurs que l'on dit chargés : plus aucune mention.
+    @Test func afterTheDownloadNoMentionRemainsWhenTheEnginesAreLoaded() async {
+        let h = DictationHarness()
+        let make = TestGate()
+        defer { make.open() }
+        h.engines.configure {
+            $0.modelMissing = true
+            $0.enginesLoaded = true
+            $0.makeGate = make
+        }
+        h.controller.hotKeyPressed()
+        #expect(await until { h.engines.events.contains("make") })
+        await settle()
+        #expect(h.controller.view.notice == nil)
+    }
+
+    /// La mention de chargement ne remplace pas l'avis sur le vocabulaire : les deux se lisent.
+    @Test func theLoadingMentionAndTheVocabularyNoticeAreShownTogether() async {
+        let h = DictationHarness()
+        h.engines.configure {
+            $0.enginesLoaded = false
+            $0.tokenCount = { _, _ in nil }
+        }
+        h.knobs.settings = TranscriptionSettings(
+            engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
+        h.controller.hotKeyPressed()
+        _ = await h.session()
+        let notice = h.controller.view.notice ?? ""
+        #expect(notice.contains(DictationController.loadingNotice))
+        #expect(notice.contains("vocabulaire n'a pas servi"))
     }
 
     /// I5 : un modèle qui manque se télécharge par le catalogue, avant que la session soit fabriquée.
@@ -1101,7 +1185,8 @@ import SupervoxCore
         _ = await h.session()
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])
         let notice = h.controller.view.notice ?? ""
-        #expect(notice.contains("Téléchargement du modèle…"))
+        // Le téléchargement est fini : sa mention ne reste pas pendant la préparation.
+        #expect(!notice.contains("Téléchargement"))
         #expect(notice.contains("vocabulaire n'a pas servi"))
     }
 

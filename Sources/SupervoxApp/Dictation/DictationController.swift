@@ -24,6 +24,8 @@ public final class DictationController {
     // Les phrases que le panneau montre, publiques pour que l'outil de rendu des écrans montre celles de l'application.
     public static let laterModeNotice = "Ce mode arrive à une étape suivante."
     public static let downloadNotice = "Téléchargement du modèle…"
+    /// Pendant que les moteurs se chargent en mémoire (après le téléchargement, ou au premier appui qui suit le lancement).
+    public static let loadingNotice = "Chargement du modèle…"
     public static let interruptedNotice = "La dictée a été interrompue."
     public static let uncountableNotice =
         "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
@@ -204,7 +206,16 @@ public final class DictationController {
                 return
             }
             guard isLive(run) else { return }
+            // Le téléchargement est fini : sa mention ne reste pas pendant le chargement qui suit.
+            run.downloadNotice = nil
         }
+
+        // Les moteurs se chargent en mémoire pendant la préparation de la session : la mention le dit, sauf s'ils le sont déjà
+        // (préchargement au lancement, dictée précédente), où la préparation est instantanée.
+        let loaded = await environment.enginesLoaded(settings)
+        guard isLive(run) else { return }
+        run.loadingNotice = loaded ? nil : Self.loadingNotice
+        refreshNotice(run)
 
         var effective = settings
         if vocabularyModelUnavailable {
@@ -270,6 +281,7 @@ public final class DictationController {
             next.elapsed = snapshot.elapsed
             if snapshot.phase == .recording {
                 run.downloadNotice = nil
+                run.loadingNotice = nil
                 next.levels = Array((view.levels + [snapshot.level]).suffix(DictationViewState.levelCount))
             }
             next.notice = notice(for: run, phase: snapshot.phase)
@@ -398,10 +410,12 @@ public final class DictationController {
         setView(next)
     }
 
-    /// L'avis d'une dictée en cours : la mention de téléchargement (tant que la préparation dure), puis celui du vocabulaire.
+    /// L'avis d'une dictée en cours : la mention de téléchargement (pendant le téléchargement), celle de chargement (pendant le
+    /// chargement des moteurs), puis celui du vocabulaire.
     private func notice(for run: Run, phase: DictationPhase) -> String? {
         var lines: [String] = []
         if phase == .preparing, let download = run.downloadNotice { lines.append(download) }
+        if phase == .preparing, let loading = run.loadingNotice { lines.append(loading) }
         if let vocabulary = run.vocabularyNotice { lines.append(vocabulary) }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
     }
@@ -442,6 +456,7 @@ private final class Run {
     var watch: Task<Void, Never>?
     var insertion: Task<Void, Never>?
     var downloadNotice: String?
+    var loadingNotice: String?
     var vocabularyNotice: String?
 
     init(startedByHold: Bool) { self.startedByHold = startedByHold }

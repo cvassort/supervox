@@ -75,6 +75,20 @@ public actor WhisperKitTranscriber: Transcriber {
             load: true, download: false)
     }
 
+    /// Vrai quand le modèle est chargé en mémoire (un `prepare()` a réussi).
+    public var isPrepared: Bool { kit != nil }
+
+    /// Vrai si ce modèle se charge sans aucun accès au réseau : son dossier est « Prêt » et le fichier de son tokenizer est
+    /// sur le disque (sans lui, WhisperKit se rabat sur le dépôt en ligne). Le préchargement du lancement ne tourne que dans
+    /// ce cas : il ne télécharge jamais. Ne lit que le disque.
+    public static func canLoadWithoutNetwork(model: String, downloadBase: URL) -> Bool {
+        guard LocalModelCatalog.readyWhisperFolder(for: model, in: downloadBase) != nil,
+            let variant = tokenizerVariant(of: model)
+        else { return false }
+        return FileManager.default.fileExists(
+            atPath: LocalModelCatalog.tokenizerFile(for: variant, in: downloadBase).path)
+    }
+
     /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier
     /// verrait `kit == nil` et lancerait un second chargement (ou téléchargement) du même dossier. Les appels qui arrivent
     /// pendant un chargement attendent le même ; un chargement qui échoue peut être retenté.
