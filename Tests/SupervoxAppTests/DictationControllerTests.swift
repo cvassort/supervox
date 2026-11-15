@@ -667,18 +667,23 @@ import SupervoxCore
         #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])
         let notice = h.controller.view.notice ?? ""
         #expect(notice.contains("Téléchargement du modèle…"))
-        #expect(notice.contains("vocabulaire"))
+        #expect(notice.contains("vocabulaire n'a pas servi"))
     }
 
-    @Test func anUncountableVocabularyWithTheModelOnDiskIsPassedAsIs() async {
+    /// Décision 6 : la dictée n'échoue jamais à cause du vocabulaire. Longueur incomptable avec le modèle prêt (tokenizer
+    /// introuvable, nom de variante dont il ne se déduit pas) : la liste ne part pas, et la notice le dit, en mots simples.
+    @Test func anUncountableVocabularyWithTheModelOnDiskIsLeftOutAndSaysSo() async {
         let h = DictationHarness()
         h.engines.configure { $0.tokenCount = { _, _ in nil } }
         h.knobs.settings = TranscriptionSettings(
             engine: "whisperkit", whisperModel: "base", language: "fr", vocabulary: ["a", "b"])
         h.controller.hotKeyPressed()
         _ = await h.session()
-        #expect(h.engines.settingsSeen.map(\.vocabulary) == [["a", "b"]])
-        #expect(h.controller.view.notice == nil)
+        #expect(h.engines.settingsSeen.map(\.vocabulary) == [[]])
+        let notice = h.controller.view.notice ?? ""
+        #expect(notice.contains("vocabulaire n'a pas servi"))
+        #expect(!notice.contains("Téléchargement"))
+        #expect(!notice.contains("jeton"))
     }
 
     // MARK: - État montré

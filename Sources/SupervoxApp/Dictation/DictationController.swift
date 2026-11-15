@@ -23,6 +23,8 @@ public final class DictationController {
     static let rawModeID = "dictee-brute"
     static let laterModeNotice = "Ce mode arrive à une étape suivante."
     static let downloadNotice = "Téléchargement du modèle…"
+    static let uncountableNotice =
+        "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
     static let preparationFailedNotice =
         "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription, pour vérifier le moteur et le modèle choisis, ou pour télécharger le modèle."
 
@@ -158,15 +160,11 @@ public final class DictationController {
                 effective.vocabulary = kept
                 run.vocabularyNotice = Self.trimmedNotice(kept: kept.count, of: total)
             case .unknown:
-                // Le tokenizer n'est pas sur le disque : le moteur le téléchargera avec le modèle, puis refuserait une liste
-                // trop longue après que l'utilisateur a parlé. La dictée ne doit pas être bloquée : sans modèle à
-                // télécharger, la liste part telle quelle (le modèle est là, le moteur sait la compter) ; sinon elle reste
-                // de côté pour cette fois.
-                if download {
-                    effective.vocabulary = []
-                    run.vocabularyNotice =
-                        "Le vocabulaire n'a pas servi à cette dictée : sa longueur ne peut être vérifiée qu'une fois le modèle téléchargé."
-                }
+                // Longueur impossible à compter (tokenizer introuvable) : le moteur refuserait une liste trop longue après
+                // que l'utilisateur a parlé, et la dictée ne doit jamais échouer à cause du vocabulaire. La liste ne part pas
+                // pour cette dictée, et la notice le dit.
+                effective.vocabulary = []
+                run.vocabularyNotice = Self.uncountableNotice
             }
             refreshNotice(run)
         }
