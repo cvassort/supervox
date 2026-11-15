@@ -247,6 +247,8 @@ import SupervoxCore
         #expect(await until { h.controller.view.phase == .failed(.noSpeech) })
         #expect(h.panel.isOpen)
         #expect(h.pasted.isEmpty)
+        // Un texte d'espaces n'est pas une dictée réussie : rien à récupérer.
+        #expect(h.controller.lastTranscript == nil)
     }
 
     // MARK: - Échap et fermeture du panneau
@@ -319,6 +321,8 @@ import SupervoxCore
         await settle()
         // Une session fabriquée trop tard n'est jamais démarrée : aucun micro ne s'ouvre, panneau fermé.
         #expect(session.count(of: "start") == 0)
+        // Et l'annulation est arrivée jusqu'à la fabrication, pour qu'un moteur qui la respecte s'arrête.
+        #expect(h.engines.cancelledDuringMake)
         #expect(h.controller.view == DictationViewState())
     }
 
@@ -346,6 +350,25 @@ import SupervoxCore
         session.emit(.finished("tardif"))
         await settle()
         #expect(h.pasted.isEmpty)
+    }
+
+    /// Échap pendant l'attente du relâchement des modificateurs (avant ⌘V) : l'annulation arrive jusqu'au `TextInserter`, qui ne
+    /// colle rien et rend le presse-papiers de l'utilisateur.
+    @Test func escapeBeforeTheShortcutIsPostedPastesNothingAndGivesTheClipboardBack() async {
+        let log = CallLog()
+        let sleeper = SleepingWait(log: log)
+        let h = DictationHarness(wait: { await sleeper.wait($0) }, log: log, heldModifiers: [true])
+        let session = await h.startRecording()
+        session.emit(.finished("texte"))
+        #expect(await until { sleeper.isSleeping })
+        #expect(h.rig.board.text == "texte")
+
+        h.controller.escapePressed()
+        #expect(await until { h.rig.board.contents == FakeInsertion.original })
+        #expect(h.pasted.isEmpty)
+        #expect(!log.entries.contains { $0.hasPrefix("postPaste") })
+        #expect(h.controller.view == DictationViewState())
+        #expect(!h.panel.isOpen)
     }
 
     // MARK: - Résultat tardif

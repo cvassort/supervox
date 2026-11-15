@@ -297,7 +297,6 @@ public final class DictationController {
 
     private func cancelCurrentRun() {
         guard let run else { return }
-        run.isCancelled = true
         run.task?.cancel()
         run.insertion?.cancel()
         if let session = run.session {
@@ -310,7 +309,8 @@ public final class DictationController {
 
     // MARK: - État
 
-    private func isLive(_ run: Run) -> Bool { self.run === run && !run.isCancelled }
+    /// `run` est la dictée courante : une dictée annulée ou finie n'est plus `self.run`.
+    private func isLive(_ run: Run) -> Bool { self.run === run }
 
     private func setView(_ next: DictationViewState) {
         view = next
@@ -348,7 +348,6 @@ public final class DictationController {
 private final class Run {
     /// Commencée par un appui en maintien : seul le relâchement qui suit la termine.
     let startedByHold: Bool
-    var isCancelled = false
     var session: (any DictationSessioning)?
     /// La dernière phase vue dans les instantanés de la session.
     var sessionPhase: DictationPhase = .idle

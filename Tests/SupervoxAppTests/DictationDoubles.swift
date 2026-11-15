@@ -86,6 +86,8 @@ final class FakeEngines: Sendable {
         var makeError: (any Error)?
         var modelMissing = false
         var countCalls = 0
+        /// La tâche qui fabriquait la session était annulée quand la fabrication a repris.
+        var cancelledDuringMake = false
         var tokenCount: @Sendable ([String], String) -> Int? = { terms, _ in terms.count }
         var limit = 1000
     }
@@ -95,6 +97,7 @@ final class FakeEngines: Sendable {
     var sessions: [FakeSession] { state.withLock { $0.sessions } }
     var settingsSeen: [TranscriptionSettings] { state.withLock { $0.settingsSeen } }
     var countCalls: Int { state.withLock { $0.countCalls } }
+    var cancelledDuringMake: Bool { state.withLock { $0.cancelledDuringMake } }
 
     func configure(_ change: (inout State) -> Void) { state.withLock { change(&$0) } }
 
@@ -106,6 +109,8 @@ final class FakeEngines: Sendable {
                     return state.makeGate
                 }
                 await gate?.wait()
+                let wasCancelled = Task.isCancelled
+                state.withLock { $0.cancelledDuringMake = wasCancelled }
                 let (error, session) = state.withLock { state -> ((any Error)?, FakeSession) in
                     let session = state.queue.isEmpty ? FakeSession() : state.queue.removeFirst()
                     if state.makeError == nil { state.sessions.append(session) }
@@ -166,12 +171,13 @@ final class FakeEngines: Sendable {
     private(set) var pasted: [String] = []
     private(set) var views: [DictationViewState] = []
 
-    /// `limit` : la limite de jetons d'amorce de Whisper que l'environnement double annonce.
+    /// `limit` : la limite de jetons d'amorce de Whisper que l'environnement double annonce. `heldModifiers` : ce que le poseur
+    /// de touches double répond aux sondages des modificateurs.
     init(
         trusted: Bool = true, wait: (@MainActor (Double) async -> Void)? = nil, log: CallLog = CallLog(),
-        limit: Int = 1000
+        limit: Int = 1000, heldModifiers: [Bool] = [false]
     ) {
-        rig = InsertionRig(log: log, trusted: trusted, wait: wait)
+        rig = InsertionRig(log: log, trusted: trusted, held: heldModifiers, wait: wait)
         engines.configure { $0.limit = limit }
         let knobs = knobs
         controller = DictationController(
@@ -211,11 +217,12 @@ final class FakeEngines: Sendable {
     }
 }
 
-/// Rend la main aux tâches en attente jusqu'à ce que `condition` soit vraie. Aucune horloge de test : au plus 5 000 passages,
-/// avec une attente d'une milliseconde tous les 50 (soit moins de 0,1 s) pour laisser avancer les fils d'arrière-plan.
+/// Rend la main aux tâches en attente jusqu'à ce que `condition` soit vraie. Aucune horloge de test : au plus 20 000 passages,
+/// avec une attente d'une milliseconde tous les 50 (soit au plus environ 0,4 s, consommées seulement en cas d'échec) pour
+/// laisser avancer les fils d'arrière-plan, même sous charge.
 @MainActor
 func until(_ condition: @MainActor () -> Bool) async -> Bool {
-    for round in 0..<5000 {
+    for round in 0..<20000 {
         if condition() { return true }
         if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
     }
