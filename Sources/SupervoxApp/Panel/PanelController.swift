@@ -184,10 +184,11 @@ public final class PanelController: PanelOpening {
         }
     }
 
-    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée :
-    /// seul le menu de l'icône ferme toujours.
+    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée comme
+    /// pendant une relecture (`DictationStage.holdsPanel`) : seul le menu de l'icône ferme toujours. (Pendant la relecture,
+    /// « Coller » ferme aussi, mais l'avis ne le dit pas : il parle du panneau en général.)
     private static let escapeRefusedNotice =
-        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors quand aucune dictée n'est en cours."
+        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors, sauf pendant une dictée ou une relecture."
 
     /// Le cadre de la fenêtre pour une nouvelle hauteur : le haut ne bouge pas, la fenêtre grandit et rétrécit vers le bas.
     /// Si le bas sortirait de la zone utile de l'écran, la fenêtre remonte ; plus haute que la zone utile, elle est bornée à

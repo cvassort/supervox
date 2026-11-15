@@ -257,7 +257,7 @@ import Testing
     }
 
     @Test func aTextCopiedForWantOfAccessibilityShowsItsReasonAndTheTextOnce() {
-        let reason = "Le texte dicté est copié dans le presse-papiers : faites ⌘V."
+        let reason = "Le texte est copié dans le presse-papiers : faites ⌘V."
         let shown = display(
             DictationViewState(stage: .copied, notice: reason, lastTranscript: "Bonjour à tous."))
         #expect(shown.headline == "Texte copié")

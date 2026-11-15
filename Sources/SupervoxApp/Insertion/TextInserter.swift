@@ -193,11 +193,11 @@ public enum InsertionOutcome: Equatable, Sendable {
     }
 
     private static let accessibilityReason =
-        "Le texte dicté est copié dans le presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V pour le coller, et accordez l'Accessibilité à Supervox dans Réglages Système, Confidentialité et sécurité, Accessibilité, pour que le collage soit automatique."
+        "Le texte est copié dans le presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V pour le coller, et accordez l'Accessibilité à Supervox dans Réglages Système, Confidentialité et sécurité, Accessibilité, pour que le collage soit automatique."
 
     private static let modifiersReason =
-        "Le texte dicté est copié dans le presse-papiers, mais des touches de modification (⌃, ⌥, ⇧ ou ⌘) sont restées enfoncées et auraient faussé le collage : relâchez-les, puis faites ⌘V pour coller le texte."
+        "Le texte est copié dans le presse-papiers, mais des touches de modification (⌃, ⌥, ⇧ ou ⌘) sont restées enfoncées et auraient faussé le collage : relâchez-les, puis faites ⌘V pour coller le texte."
 
     private static let postFailureReason =
-        "Le texte dicté est copié dans le presse-papiers, mais Supervox n'a pas pu envoyer le raccourci de collage : faites ⌘V pour le coller."
+        "Le texte est copié dans le presse-papiers, mais Supervox n'a pas pu envoyer le raccourci de collage : faites ⌘V pour le coller."
 }

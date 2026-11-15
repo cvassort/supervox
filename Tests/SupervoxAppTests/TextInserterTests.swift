@@ -275,6 +275,25 @@ enum FakeInsertion {
         #expect(rig.board.contents == FakeInsertion.original)
     }
 
+    // MARK: - Les trois raisons de repli
+
+    /// Le texte que l'on laisse copié est aussi, depuis la relecture, un texte que l'utilisateur a corrigé : « dicté » serait
+    /// faux. Les trois raisons parlent du « texte », sans plus.
+    @Test("les raisons de repli ne disent pas « texte dicté » : le texte peut avoir été corrigé en relecture",
+        arguments: ["accessibilité", "modificateurs", "touche"])
+    func theFallbackReasonsDoNotCallTheTextDictated(cause: String) async throws {
+        let rig =
+            switch cause {
+            case "accessibilité": InsertionRig(trusted: false)
+            case "modificateurs": InsertionRig(held: [true], modifierPatience: 0)
+            default: InsertionRig(postSucceeds: false)
+            }
+        let outcome = await rig.inserter.insert(FakeInsertion.dictated)
+        let reason = try #require(reason(outcome))
+        #expect(!reason.contains("dicté"))
+        #expect(reason.hasPrefix("Le texte est copié dans le presse-papiers, mais "))
+    }
+
     // MARK: - Sans Accessibilité
 
     @Test("sans Accessibilité, le texte reste dans le presse-papiers, marqué transitoire, et la raison nomme ⌘V et l'Accessibilité")

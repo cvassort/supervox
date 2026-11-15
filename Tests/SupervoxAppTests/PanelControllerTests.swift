@@ -326,11 +326,12 @@ import Testing
         let notice = try #require(model.notices[.escape])
         #expect(notice.contains("Échap"))
         // L'avis dit comment fermer quand même : le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en
-        // dehors est ignoré pendant une dictée ; le menu de la barre de menus ferme toujours.
+        // dehors est ignoré pendant une dictée comme pendant une relecture (`holdsPanel`) ; le menu de la barre de menus ferme
+        // toujours.
         #expect(notice.contains("menu"))
         #expect(notice.contains("barre de menus"))
-        #expect(notice.contains("clic en dehors"))
-        #expect(notice.contains("aucune dictée"))
+        #expect(notice.contains("clic en dehors, sauf pendant une dictée ou une relecture"))
+        #expect(!notice.contains("aucune dictée"), "pendant la relecture aucune dictée ne court, et le clic est ignoré")
         #expect(!notice.contains("⌃⌥Espace"))
 
         controller.close()
