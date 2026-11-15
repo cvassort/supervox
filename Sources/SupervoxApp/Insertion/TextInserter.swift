@@ -87,7 +87,19 @@ public enum InsertionOutcome: Equatable, Sendable {
     /// application y a écrit) et le résultat est `.nothing` ; après le ⌘V, la restauration a lieu quand même au délai
     /// prévu. Dans les deux replis `.copied` (modificateurs tenus, ⌘V non posté), le contenu d'origine n'est pas rendu :
     /// le texte dicté reste dans le presse-papiers pour que l'utilisateur le colle.
+    ///
+    /// Sans `leaveCopied` : la dictée sans relecture, qui rend toujours le presse-papiers d'origine.
     public func insert(_ text: String) async -> InsertionOutcome {
+        await insert(text, leaveCopied: false)
+    }
+
+    /// `leaveCopied` ne change que le point de restauration, après le ⌘V : le contenu d'origine n'est pas rendu et le texte
+    /// y reste comme une copie ordinaire, non transitoire (le geste « Coller » de la relecture le colle et le copie). Tout ce
+    /// qui précède est identique : écriture transitoire, replis `.copied`, `.clipboardRefused`, et annulation avant le ⌘V
+    /// (qui rend toujours le contenu d'origine). Une autre application qui a écrit entre-temps n'est jamais écrasée. Si le
+    /// système refuse la réécriture en copie ordinaire (il a alors vidé le presse-papiers), le contenu d'origine est rendu :
+    /// un presse-papiers vide ne sert à personne. Le résultat reste `.pasted`, le collage a eu lieu.
+    public func insert(_ text: String, leaveCopied: Bool) async -> InsertionOutcome {
         // Annulée avant d'avoir commencé (Échap, fermeture du panneau) : rien n'est écrit, rien n'est collé.
         guard !Task.isCancelled else { return .nothing }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .nothing }
@@ -131,7 +143,15 @@ public enum InsertionOutcome: Equatable, Sendable {
         let restoreDelay = self.restoreDelay
         await Task { @MainActor in await wait(restoreDelay) }.value
         // Une autre application a écrit entre-temps : son contenu est plus récent que la sauvegarde, on n'y touche pas.
-        restoreIfUnchanged()
+        if leaveCopied {
+            if pasteboard.changeCount == changeCountAfterWrite,
+                !pasteboard.writeText(text, transient: false)
+            {
+                pasteboard.write(original)
+            }
+        } else {
+            restoreIfUnchanged()
+        }
         return .pasted
     }
 
