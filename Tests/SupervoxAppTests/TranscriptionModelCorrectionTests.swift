@@ -172,6 +172,21 @@ import Testing
         #expect(catalog.countRequests.count == 1)
     }
 
+    /// Un téléchargement en cours (lancé ailleurs) n'est pas un état du disque : seul son aboutissement change l'état.
+    @Test func aDownloadInProgressElsewhereIsNotAChangeOfTheDiskState() async {
+        let model = makeModel(settings(model: "small", vocabulary: ["Kubernetes"]))
+        await model.refresh()
+        catalog.setTokenCount(150)
+
+        catalog.setDiskState(.downloading(0.3), of: FakeModelCatalog.small.id)
+        await model.refresh()
+        #expect(catalog.countRequests.isEmpty)
+
+        catalog.setDiskState(.ready, of: FakeModelCatalog.small.id)
+        await model.refresh()
+        #expect(catalog.countRequests.count == 1)
+    }
+
     @Test func aChangeOnDiskOfAnotherModelDoesNotRecount() async {
         let model = makeModel(settings(model: "small", vocabulary: ["Kubernetes"]))
         await model.refresh()

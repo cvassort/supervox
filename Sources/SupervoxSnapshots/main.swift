@@ -297,12 +297,14 @@ for dark in [false, true] {
                     await model.download(turboID)
                 })),
         name: "transcription-echec", dark: dark, background: window, size: tallSize)
-    // Parakeet choisi, rien de téléchargé.
+    // Parakeet choisi alors que le modèle Whisper des réglages est le modèle par défaut, prêt : seul Parakeet porte
+    // « moteur choisi », jamais la ligne Whisper.
     try render(
         TranscriptionPane(
             model: await transcriptionModel(
-                ExampleCatalog(listed: allAbsentModels),
-                settings: TranscriptionSettings(engine: "parakeet", whisperModel: "small", language: "en", vocabulary: []))),
+                ExampleCatalog(listed: allReadyModels),
+                settings: TranscriptionSettings(
+                    engine: "parakeet", whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
         name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
     // Vocabulaire refusé : un vrai vocabulaire (40 termes d'infrastructure) trop long pour Whisper. Le compte vient du
     // tokenizer de large-v3, celui du modèle par défaut (`WhisperKitTranscriber.promptTokenCount`, hors ligne) : 30
