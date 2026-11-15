@@ -435,8 +435,9 @@ public final class AppController {
     }
 
     /// Durée maximale d'attente d'un collage en cours avant de se terminer quand même, en secondes. Un collage dure au plus la
-    /// patience des modificateurs (1 s) et le délai de restauration (0,4 s) ; 3 s laissent de la marge sans retenir
-    /// l'utilisateur. Choix de conception, non mesuré.
+    /// patience des modificateurs (1 s) et le délai de restauration (0,4 s), plus, pour le collage d'une relecture, l'attente
+    /// de passation de la frappe (0,15 s), soit 1,55 s au plus ; 3 s laissent de la marge sans retenir l'utilisateur. Choix de
+    /// conception, non mesuré.
     static let terminationTimeout = 3.0
 
     /// Appelé par le délégué à la demande de fin. Pendant un collage, quitter laisserait le texte dicté dans le presse-papiers et

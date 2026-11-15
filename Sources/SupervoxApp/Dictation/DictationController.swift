@@ -71,8 +71,10 @@ public final class DictationController {
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
-    /// Vrai de l'appui jusqu'à la fin du collage (ou de l'échec, de l'annulation) : une dictée est en cours. Les réglages s'en
-    /// servent pour refuser de supprimer un modèle que la dictée utilise.
+    /// Vrai de l'appui jusqu'à la fin de la dictée : fin du collage (sans relecture), échec, annulation, ou arrivée du texte en
+    /// relecture. Faux pendant la relecture et le collage qui la suit : la dictée est finie, plus aucun modèle ne sert. Les
+    /// réglages s'en servent pour refuser de supprimer un modèle que la dictée utilise ; `isInserting`, lui, reste vrai pendant
+    /// le collage d'une relecture.
     public var isBusy: Bool { run != nil }
 
     /// La dictée en cours, `nil` hors dictée (y compris pendant que le panneau montre un échec ou une copie, et pendant la
