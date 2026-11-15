@@ -107,9 +107,24 @@ final class ProgressBox: Sendable {
     }
 }
 
-/// Rend la main au fil principal tant que `condition` est fausse. Borné en tours de boucle, jamais en durée.
-@MainActor func settle(_ condition: @MainActor () -> Bool) async {
+/// Laisse passer un nombre fixe de tours pour prouver qu'une chose n'arrive PAS (`condition` reste fausse). Une absence ne
+/// se prouve pas par un signal : le pire qu'un faux départ puisse donner est un faux succès, jamais un faux échec.
+@MainActor func settleAbsence(of condition: @MainActor () -> Bool) async {
     for _ in 0..<10_000 where !condition() { await Task.yield() }
+}
+
+/// Rend la main au fil principal jusqu'à ce que `condition` soit vraie, et rend aussitôt qu'elle l'est. Les méthodes du
+/// catalogue double travaillent sur le pool global : un nombre fixe de `Task.yield()` pouvait finir avant elles sur une machine
+/// chargée. L'attente cède donc aussi le fil quelques millisecondes à intervalles réguliers, et ne s'arrête que sur la
+/// condition ou, par sécurité seulement (un test qui échoue), au bout de 30 s : aucune durée n'est jamais attendue quand la
+/// condition vient.
+@MainActor func settle(_ condition: @MainActor () -> Bool) async {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+    var round = 0
+    while !condition(), ContinuousClock.now < deadline {
+        round += 1
+        if round % 20 == 0 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
+    }
 }
 
 @MainActor @Suite struct TranscriptionModelTests {
@@ -387,7 +402,7 @@ final class ProgressBox: Sendable {
 
         let second = Task { await model.download(id) }
         // Un second téléchargement lancé aurait atteint le catalogue : on lui laisse tous les tours qu'il lui faut.
-        await settle { catalog.downloads.count > 1 }
+        await settleAbsence(of: { catalog.downloads.count > 1 })
         #expect(catalog.downloads == [id])
 
         gate.open()
@@ -439,7 +454,7 @@ final class ProgressBox: Sendable {
         #expect(Self.state(model, id) == .ready)
 
         report.call(0.5)
-        await settle { Self.state(model, id) == .downloading(0.5) }
+        await settleAbsence(of: { Self.state(model, id) == .downloading(0.5) })
         #expect(Self.state(model, id) == .ready)
     }
 

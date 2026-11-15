@@ -60,7 +60,7 @@ import Testing
         let download = Task { await model.download(id) }
         await settle { Self.state(model, id) == .downloading(0.5) }
         // Le second rapport (0,3) arrive après le premier : on lui laisse tous les tours qu'il lui faut.
-        await settle { Self.state(model, id) == .downloading(0.3) }
+        await settleAbsence(of: { Self.state(model, id) == .downloading(0.3) })
         #expect(Self.state(model, id) == .downloading(0.5))
         gate.open()
         await download.value
