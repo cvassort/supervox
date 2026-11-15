@@ -210,7 +210,8 @@ de `docs/essai-final.md`).
   frappe : l'aide dit de cliquer dans le texte pour le corriger, ou sur « Coller » pour le coller, et ⌘↩ n'y serait pas
   reçu. C'est la même aide chaque fois que le panneau n'est pas la fenêtre clé (le panneau le remonte lui-même, à chaque
   prise et perte de la clé) : après un clic dans une autre application, ⌘↩ n'est plus annoncé, et il l'est de nouveau
-  dès que le panneau reprend la frappe.
+  dès que le panneau reprend la frappe. Ce suivi est testé sur une fenêtre hors écran ; sur un vrai écran, il reste à
+  confirmer (liste d'essai, essai 38).
 - **Copier** met le texte entier du champ dans le presse-papiers (copie ordinaire), indique « Copié », et laisse le panneau
   ouvert ; une modification du texte remet « Copier ».
 - **Échap** ferme sans coller ni copier, comme toute autre fermeture du panneau (menu de l'icône, « Réglages… », « Quitter

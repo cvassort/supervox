@@ -699,7 +699,7 @@ peut garder la copie laissée par « Coller ».
 5. Faites deux relectures de suite, sans quitter Supervox : dans la première, tapez et corrigez quelques mots ; fermez
    (Échap) ; faites une seconde dictée avec relecture et tapez ⌘Z **avant d'avoir rien tapé**.
    - Attendu : rien ne se passe : le texte de la seconde relecture reste tel quel, et rien de la première ne revient.
-     Après avoir tapé un mot, ⌘Z ne retire que ce mot. (Avant la correction, ce ⌘Z visait la frappe d'un champ disparu.)
+     Après avoir tapé un mot, ⌘Z ne retire que ce mot. **Comportement à confirmer.**
 6. Tapez Échap pour terminer.
 
 ### 37. Accents
@@ -811,8 +811,7 @@ Copiez d'abord un texte reconnaissable (⌘C).
    puis cliquez sur « Coller ».
    - Attendu : rien n'est collé. Le panneau revient à la relecture : le titre reste « À relire » (et non « Texte copié »),
      le texte est intact avec votre correction, et sous le champ la phrase de l'étape 3 : « Le texte est copié dans le
-     presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V… » (« Le texte dicté »
-     avant la relecture : « dicté » est retiré, le texte peut avoir été corrigé). La ligne des permissions dit que
+     presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V… ». La ligne des permissions dit que
      l'Accessibilité manque. L'aide devient « Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller.
      Échap ferme sans coller. » tant que le panneau n'a pas repris la frappe (la même phrase qu'après un clic dans une
      autre application, essai 38 ; sans « réessayer », qui échouerait de la même façon). **Dans cet état, n'utilisez pas

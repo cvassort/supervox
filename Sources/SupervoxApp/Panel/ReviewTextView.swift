@@ -52,7 +52,8 @@ struct ReviewTextView: NSViewRepresentable {
     }
 
     /// Met le champ à jour. La chaîne n'est remplacée que si elle diffère de celle du champ : la remplacer par la même
-    /// renverrait le curseur à la fin et vide la pile d'annulation. Et jamais pendant une saisie en attente (touche morte,
+    /// renverrait le curseur à la fin. Remplacer la chaîne ne vide pas la pile d'annulation : le champ et sa pile sont neufs à
+    /// chaque relecture, c'est ce qui l'empêche de viser un texte disparu. Et jamais pendant une saisie en attente (touche morte,
     /// méthode de saisie : `hasMarkedText()`) : le texte marqué ne remonte pas par `textDidChange`, donc `text` a du retard, et
     /// la réécriture effacerait la saisie. La saisie validée, `textDidChange` remet le modèle d'accord avec le champ.
     static func update(_ textView: NSTextView, text: String, isEditable: Bool, takesFocus: Bool) {
