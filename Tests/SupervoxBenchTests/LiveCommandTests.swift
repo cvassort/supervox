@@ -43,12 +43,44 @@ private final class DoubleTranscriber: Transcriber, @unchecked Sendable {
         self.work = work
     }
 
+    private let completions = Mutex<(count: Int, waiters: [UUID: (need: Int, continuation: CheckedContinuation<Void, Never>)])>(
+        (0, [:]))
+
     var seenLengths: [Int] { lengths.withLock { $0 } }
     func prepare() async throws {}
     func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {
         lengths.withLock { $0.append(clip.samples.count) }
+        defer { completed() }
         work()
         return try reply(clip)
+    }
+
+    private func completed() {
+        let ready = completions.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.count += 1
+            let due = state.waiters.filter { $0.value.need <= state.count }
+            for key in due.keys { state.waiters[key] = nil }
+            return due.values.map(\.continuation)
+        }
+        for continuation in ready { continuation.resume() }
+    }
+
+    /// Rend la main quand `count` transcriptions au moins ont rendu leur résultat (ou quand la tâche est annulée) : un signal,
+    /// aucune durée.
+    func waitForCompletions(_ count: Int) async {
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let ready = completions.withLock { state -> Bool in
+                    if state.count >= count || Task.isCancelled { return true }
+                    state.waiters[id] = (count, continuation)
+                    return false
+                }
+                if ready { continuation.resume() }
+            }
+        } onCancel: {
+            completions.withLock { $0.waiters.removeValue(forKey: id) }?.continuation.resume()
+        }
     }
 }
 
@@ -68,8 +100,31 @@ private func clip(seconds: Double) -> AudioClip {
 /// Une configuration de session sans attente entre deux passes d'aperçu.
 private let eagerConfig = DictationConfig(language: "fr", previewInterval: 0)
 
-/// Pause réelle de quelques millisecondes : assez pour que l'aperçu tourne entre deux blocs, sans durée réelle longue.
-private let shortPause: @Sendable (Double) async -> Void = { _ in try? await Task.sleep(for: .milliseconds(3)) }
+/// La cadence du rejeu sans durée réelle : chaque bloc « attend » sa durée en faisant avancer l'horloge du test, et, à partir du
+/// troisième, attend un signal : que le moteur d'aperçu ait rendu au moins une passe. La première passe est lancée dès que le
+/// détecteur a annoncé la voix (au premier bloc), donc bien avant le troisième : l'attente se termine toujours, et l'aperçu a
+/// tourné pendant que l'audio était rejoué, sans pause réelle (ce que faisait un `Task.sleep` de 3 ms, qui ne garantissait rien
+/// sur une machine chargée).
+private func pacing(preview: DoubleTranscriber, clock: TestClock? = nil) -> @Sendable (Double) async -> Void {
+    let paced = Mutex(0)
+    return { seconds in
+        clock?.advance(seconds)
+        let index = paced.withLock { value -> Int in
+            value += 1
+            return value
+        }
+        if index >= 3 {
+            // Sortie de secours seulement (une session défaillante n'ouvrirait jamais ce signal et laisserait `finish()`
+            // attendre la pompe sans fin) : en temps normal le signal arrive tout de suite et la minuterie est annulée.
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { await preview.waitForCompletions(1) }
+                group.addTask { try? await Task.sleep(for: .seconds(10)) }
+                await group.next()
+                group.cancelAll()
+            }
+        }
+    }
+}
 
 @Suite(.timeLimit(.minutes(1))) struct LiveReplayTests {
     // MARK: - Le rejeu
@@ -89,10 +144,7 @@ private let shortPause: @Sendable (Double) async -> Void = { _ in try? await Tas
             config: eagerConfig, settle: 0.5,
             // L'horloge avance aussi pendant le rejeu (chaque bloc attend sa durée) : le délai ne doit compter ni ce temps ni
             // le silence de fin, seulement ce qui suit l'appel de `finish()`.
-            pause: { seconds in
-                clock.advance(seconds)
-                await shortPause(seconds)
-            }, now: { clock.now() })
+            pause: pacing(preview: preview, clock: clock), now: { clock.now() })
 
         #expect(outcome.finalText == "texte de la session")
         #expect(outcome.failure == nil && !outcome.noSpeech)
@@ -115,17 +167,20 @@ private let shortPause: @Sendable (Double) async -> Void = { _ in try? await Tas
 
         _ = await LiveReplay.run(
             clip: clip(seconds: seconds), detector: DoubleDetector(), preview: preview, final: final,
-            config: eagerConfig, settle: 0.5, pause: shortPause, now: { clock.now() })
+            config: eagerConfig, settle: 0.5, pause: pacing(preview: preview), now: { clock.now() })
 
+        // Ce qui est garanti sans horloge : l'aperçu a tourné au moins une fois pendant le rejeu (la cadence attend sa première
+        // passe), sur des clips qui ne rapetissent jamais ; combien d'autres passes se glissent entre deux blocs dépend de
+        // l'ordonnancement et n'est pas affirmé.
         let lengths = preview.seenLengths
         let total = Int((seconds + 0.5) * 16_000)
-        #expect(lengths.count >= 2, "\(lengths)")
+        #expect(!lengths.isEmpty, "aucune passe d'aperçu")
         #expect(lengths == lengths.sorted(), "les clips d'aperçu grandissent : \(lengths)")
-        let first = try #require(lengths.first, "aucune passe d'aperçu")
-        let last = try #require(lengths.last)
-        #expect(last > first, "\(lengths)")
-        // `finish()` n'est demandé qu'une fois les derniers blocs passés : l'aperçu a vu presque toute la prise.
-        #expect(last >= total / 2, "\(lengths)")
+        // `finish()` n'est demandé qu'une fois le dernier bloc passé : le moteur final reçoit une prise qui couvre presque tout
+        // l'audio (le silence de fin compris), et une seule fois.
+        #expect(final.seenLengths.count == 1, "\(final.seenLengths)")
+        let finalLength = try #require(final.seenLengths.first)
+        #expect(finalLength >= total - 2 * 4_096, "\(finalLength) échantillons pour \(total)")
     }
 
     @Test func eachBlockIsPacedByItsOwnDurationAndTheFlushAtTheEndIsNot() async {
@@ -208,7 +263,7 @@ private let shortPause: @Sendable (Double) async -> Void = { _ in try? await Tas
         let results = await LiveBench.run(
             corpus: Array(corpus.prefix(1)), audio: { _ in clip(seconds: 2) }, detector: DoubleDetector(),
             preview: preview, final: final, settle: 0.5,
-            sessionConfig: eagerConfig, pause: shortPause, now: { clock.now() }, progress: { said.append($0) })
+            sessionConfig: eagerConfig, pause: pacing(preview: preview), now: { clock.now() }, progress: { said.append($0) })
 
         #expect(results.count == 1)
         #expect(results[0].id == "a")
