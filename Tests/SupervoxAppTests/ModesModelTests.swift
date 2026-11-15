@@ -139,6 +139,30 @@ import Testing
         #expect(try row(model, ModeChip.promptID).reviews == false)
     }
 
+    /// Le compteur sert à recréer l'interrupteur après un refus (il doit revenir à la valeur enregistrée) : il avance d'un cran
+    /// par enregistrement refusé, et ne bouge ni sur un succès ni sur une bascule sans effet.
+    @Test func theRevisionAdvancesOnEachRefusedSaveOnly() {
+        let (model, saves) = make()
+        #expect(model.revision == 0)
+
+        model.setReview(true, for: ModeChip.rawID)  // succès
+        #expect(model.revision == 0)
+        model.setReview(true, for: ModeChip.rawID)  // déjà montré : rien
+        model.setReview(false, for: ModeChip.interviewID)  // verrouillé : rien
+        model.setReview(true, for: "mode-inconnu")  // inconnu : rien
+        #expect(model.revision == 0)
+
+        saves.failure = ForeignError()
+        model.setReview(false, for: ModeChip.rawID)
+        #expect(model.revision == 1)
+        model.setReview(false, for: ModeChip.rawID)
+        #expect(model.revision == 2)
+
+        saves.failure = nil
+        model.setReview(false, for: ModeChip.rawID)  // succès
+        #expect(model.revision == 2)
+    }
+
     @Test func theMessageNeverCarriesTheTextOfAForeignError() throws {
         let (model, saves) = make()
         saves.failure = ForeignError()

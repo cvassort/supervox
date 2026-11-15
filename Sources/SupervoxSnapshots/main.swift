@@ -200,7 +200,7 @@ let secondProvider = Provider(
 }
 
 /// Le panneau dans un état de dictée : `state`, qui porte le dernier texte récupérable s'il y en a un.
-@MainActor func dictationPanelModel(mode: String = "dictee-brute", state: DictationViewState) -> PanelModel {
+@MainActor func dictationPanelModel(mode: String = ModeChip.rawID, state: DictationViewState) -> PanelModel {
     let model = panelModel(mode: mode)
     model.dictation = state
     return model
@@ -273,19 +273,19 @@ for dark in [false, true] {
 
     // Panneau prêt.
     try render(
-        PanelView(model: panelModel(mode: "dictee-brute"), permissions: PermissionsModel(probe: granted),
+        PanelView(model: panelModel(mode: ModeChip.rawID), permissions: PermissionsModel(probe: granted),
                   openSettings: {}, quit: {}),
         name: "panneau-pret", dark: dark, background: panelBackground)
 
     // Panneau du premier lancement : accueil et permissions manquantes.
-    let first = panelModel(mode: "dictee-brute")
+    let first = panelModel(mode: ModeChip.rawID)
     first.welcome = AppController.welcome(hotKeyLabel: standardLabel)
     try render(
         PanelView(model: first, permissions: PermissionsModel(probe: missing), openSettings: {}, quit: {}),
         name: "panneau-premier-lancement", dark: dark, background: panelBackground)
 
     // Panneau avec avis et permissions manquantes.
-    let noticed = PanelModel(lastModeID: "prompt")
+    let noticed = PanelModel(lastModeID: ModeChip.promptID)
     noticed.setNotice(
         "Le raccourci \(standardLabel) a été refusé par macOS : ouvrez le panneau depuis la barre de menus, puis choisissez-en un autre dans Réglages.",
         for: .hotKey)
@@ -332,7 +332,7 @@ for dark in [false, true] {
          granted),
         ("dictee-mode-indisponible",
          dictationPanelModel(
-            mode: "entretien", state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
+            mode: ModeChip.interviewID, state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
         ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(lastTranscript: exampleShortText)), granted),
         ("dictee-dernier-texte-copie", {
             let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))

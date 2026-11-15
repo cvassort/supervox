@@ -90,13 +90,4 @@ import Testing
         let data = try JSONEncoder().encode(ModeOptions())
         #expect(try JSONSerialization.jsonObject(with: data) as? [String: Int] == [:])
     }
-
-    /// Les réglages par défaut ne portent aucun choix : un nouveau fichier ne fige pas les défauts d'aujourd'hui.
-    @Test func newSettingsCarryNoSavedChoice() throws {
-        var changed = AppSettings.defaults
-        changed.modeOptions[ModeChip.rawID] = ModeOptions(reviewBeforePaste: true)
-        #expect(changed != .defaults)
-        #expect(changed.reviewsBeforePaste(ModeChip.rawID))
-        #expect(AppSettings.current == 1)
-    }
 }

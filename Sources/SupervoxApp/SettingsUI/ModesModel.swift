@@ -33,6 +33,10 @@ public final class ModesModel {
 
     public private(set) var rows: [Row]
     public private(set) var message: String?
+    /// Avance d'un cran à chaque enregistrement refusé. La vue s'en sert pour recréer l'interrupteur : sans cela, rien ne le
+    /// ramène à la valeur enregistrée (le modèle n'a pas changé, donc SwiftUI n'a aucune raison de redessiner le contrôle
+    /// que l'utilisateur vient de basculer).
+    public private(set) var revision = 0
 
     @ObservationIgnored private var options: [String: ModeOptions]
     @ObservationIgnored private let save: Save
@@ -67,6 +71,7 @@ public final class ModesModel {
             try save(updated)
         } catch {
             message = Self.message(for: error)
+            revision += 1
             return
         }
         options = updated

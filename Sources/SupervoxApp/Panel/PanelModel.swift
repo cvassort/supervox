@@ -22,7 +22,8 @@ public struct ModeChip: Equatable, Identifiable, Sendable {
     public static let fallbackID = rawID
 }
 
-/// Les identifiants des modes fixes, écrits ici et nulle part ailleurs (un contrôle de sources le vérifie) : ils sont
+/// Les identifiants des modes fixes, écrits ici et nulle part ailleurs dans `Sources/SupervoxApp` (un contrôle de sources le
+/// vérifie ; l'outil de rendu des écrans les nomme par ces constantes) : ils sont
 /// enregistrés dans `settings.json`, où ils servent de clés (`AppSettings.modeOptions`).
 extension ModeChip {
     public static let rawID = "dictee-brute"

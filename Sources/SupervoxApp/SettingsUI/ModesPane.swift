@@ -33,6 +33,9 @@ public struct ModesPane: View {
                 Section {
                     ForEach(model.rows) { row in
                         ModeRow(row: row, model: model)
+                            // Recrée l'interrupteur après un enregistrement refusé : il revient à la valeur enregistrée.
+                            // L'identité reste propre à chaque ligne : un `.id` commun aux quatre les confondrait.
+                            .id("\(row.id)#\(model.revision)")
                     }
                 }
             }
