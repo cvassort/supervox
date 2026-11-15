@@ -33,7 +33,7 @@ public final class DictationController {
     public static let vocabularyModelNotice =
         "Le vocabulaire n'a pas servi à cette dictée : le petit modèle qui le reconnaît n'a pas pu être téléchargé. Il sera retenté à la prochaine dictée."
     public static let preparationFailedNotice =
-        "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription : vérifiez le moteur et le modèle choisis ; si le modèle manque, téléchargez-le ; s'il est indiqué « Prêt », supprimez-le puis téléchargez-le de nouveau."
+        "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription : vérifiez le moteur et le modèle choisis ; si le modèle manque, téléchargez-le ; s'il est indiqué « Prêt », vous pouvez le supprimer puis le télécharger de nouveau (cela demande une connexion à Internet)."
 
     /// Ce que la vue du panneau montre.
     public private(set) var view = DictationViewState()

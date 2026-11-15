@@ -1034,14 +1034,27 @@ import SupervoxCore
         #expect(h.engines.events == ["download", "count", "make"])
     }
 
-    /// I1 : quand le moteur ne se charge pas alors que le modèle est indiqué « Prêt », la phrase renvoie à l'onglet
-    /// Transcription pour supprimer puis télécharger de nouveau le modèle (plus rien ne le répare en silence).
-    @Test func thePreparationFailureSendsTheUserToDeleteThenDownloadTheModelAgain() {
-        let notice = DictationController.preparationFailedNotice
+    /// I1 / M4 : quand le moteur ne se charge pas pendant la préparation alors que le modèle est indiqué « Prêt », le panneau
+    /// renvoie à l'onglet Transcription (supprimer puis télécharger de nouveau, ce qui demande une connexion : le conseil ne
+    /// laisse pas croire qu'on peut le faire hors ligne) et ne montre jamais la raison brute de l'échec. Parcours réel : la session
+    /// échoue pendant `preparing`.
+    @Test func aPreparationFailureSendsTheUserToDeleteThenDownloadAgainAndSaysItNeedsAConnection() async {
+        let h = DictationHarness()
+        h.controller.hotKeyPressed()
+        let session = await h.session()
+        session.emit(.preparing)
+        session.emit(.failed(.engine("raison brute https://exemple.invalid/clé")))
+
+        #expect(await until { h.controller.view.phase.isTerminal })
+        #expect(h.panel.isOpen)
+        let notice = h.controller.view.notice ?? ""
+        #expect(notice == DictationController.preparationFailedNotice)
         #expect(notice.contains("onglet Transcription"))
-        #expect(notice.contains("supprimez-le"))
-        #expect(notice.contains("téléchargez-le de nouveau"))
         #expect(notice.contains("« Prêt »"))
+        #expect(notice.contains("supprimer"))
+        #expect(notice.contains("de nouveau"))
+        #expect(notice.contains("connexion à Internet"))
+        #expect(!notice.contains("exemple.invalid"))
     }
 
     @Test func aDownloadThatFailsFailsThePreparationWithTheFixedPhraseAndBuildsNoSession() async {
