@@ -21,12 +21,13 @@ import os
 public final class DictationController {
     /// Le seul mode dont la dictée est mise en œuvre à cette étape.
     static let rawModeID = "dictee-brute"
-    static let laterModeNotice = "Ce mode arrive à une étape suivante."
-    static let downloadNotice = "Téléchargement du modèle…"
-    static let interruptedNotice = "La dictée a été interrompue."
-    static let uncountableNotice =
+    // Les phrases que le panneau montre, publiques pour que l'outil de rendu des écrans montre celles de l'application.
+    public static let laterModeNotice = "Ce mode arrive à une étape suivante."
+    public static let downloadNotice = "Téléchargement du modèle…"
+    public static let interruptedNotice = "La dictée a été interrompue."
+    public static let uncountableNotice =
         "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
-    static let preparationFailedNotice =
+    public static let preparationFailedNotice =
         "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription, pour vérifier le moteur et le modèle choisis, ou pour télécharger le modèle."
 
     /// Ce que la vue du panneau montre.

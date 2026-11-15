@@ -50,6 +50,23 @@ struct ExamplePermissions: PermissionsProbe {
     func stop() {}
 }
 
+/// Presse-papiers en mémoire : le seul que l'outil de rendu touche. `insert` y écrit sans rien envoyer à personne.
+@MainActor final class MemoryPasteboard: PasteboardAccess {
+    private(set) var changeCount = 0
+    private var contents = PasteboardContents(items: [])
+    func read() -> PasteboardContents { contents }
+    func write(_ contents: PasteboardContents) {
+        self.contents = contents
+        changeCount += 1
+    }
+    func writeText(_ text: String, transient: Bool) { changeCount += 1 }
+}
+
+@MainActor final class NoKeyPoster: KeyPoster {
+    func modifiersHeld() -> Bool { false }
+    func postPaste(keyCode: UInt16) -> Bool { false }
+}
+
 /// Catalogue d'exemple : une liste figée (un modèle par état) et un nombre de jetons d'amorce donné.
 struct ExampleDownloadFailure: LocalizedError {
     var errorDescription: String? { "la connexion Internet semble interrompue" }
@@ -165,6 +182,38 @@ let secondProvider = Provider(
     return model
 }
 
+/// Le panneau dans un état de dictée : `state`, et le dernier texte récupérable s'il y en a un.
+@MainActor func dictationPanelModel(
+    mode: String = "dictee-brute", state: DictationViewState, transcript: String? = nil
+) -> PanelModel {
+    let model = panelModel(mode: mode)
+    model.dictation = state
+    model.setTranscript(transcript)
+    return model
+}
+
+/// Une courbe de niveaux plausible, du plus ancien au plus récent : des syllabes et un creux.
+func exampleLevels(_ count: Int) -> [Float] {
+    (0..<count).map { index in
+        let syllable = abs(sin(Double(index) * 0.55)) * 0.7 + abs(sin(Double(index) * 1.7)) * 0.25
+        return Float(index % 17 == 0 ? 0.04 : min(syllable, 1))
+    }
+}
+
+/// Textes d'exemple inventés et neutres.
+let exampleShortText = "Bonjour à tous, voici le compte rendu de la réunion de ce matin."
+let exampleLongText =
+    "Bonjour à tous, voici le compte rendu de la réunion de ce matin. Nous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée. Pensez aussi à relire le dernier paragraphe, car il manque encore une précision sur le budget."
+
+/// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
+/// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
+@MainActor func accessibilityReason() async -> String {
+    let inserter = TextInserter(
+        pasteboard: MemoryPasteboard(), keys: NoKeyPoster(), layout: layout, isTrusted: { false }, wait: { _ in })
+    if case .copied(let reason) = await inserter.insert(exampleShortText) { return reason }
+    return "(raison introuvable)"
+}
+
 // MARK: - Rendu
 
 /// La vue seule, posée dans une fenêtre hors écran, à la taille donnée ou à sa taille idéale.
@@ -230,6 +279,54 @@ for dark in [false, true] {
     try render(
         PanelView(model: noticed, permissions: PermissionsModel(probe: missing), openSettings: {}, quit: {}),
         name: "panneau-avis", dark: dark, background: panelBackground)
+
+    // La dictée dans le panneau. Même largeur et même zone de dictée dans tous les états (voir `DictationView.height`).
+    let reason = await accessibilityReason()
+    let cases: [(String, PanelModel, any PermissionsProbe)] = [
+        ("dictee-preparation-telechargement",
+         dictationPanelModel(state: DictationViewState(phase: .preparing, notice: DictationController.downloadNotice)), granted),
+        ("dictee-enregistrement",
+         dictationPanelModel(state: DictationViewState(phase: .recording, levels: exampleLevels(30), elapsed: 7.4)), granted),
+        ("dictee-enregistrement-texte-long",
+         dictationPanelModel(
+            state: DictationViewState(
+                phase: .recording, liveText: exampleLongText, levels: exampleLevels(48), elapsed: 65.2)), granted),
+        ("dictee-transcription",
+         dictationPanelModel(
+            state: DictationViewState(
+                phase: .finalizing, liveText: exampleShortText, levels: exampleLevels(48), elapsed: 12.9)), granted),
+        ("dictee-echec-aucune-voix",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.noSpeech), notice: DictationFailure.noSpeech.message)), granted),
+        ("dictee-echec-preparation",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.engine("x")), notice: DictationController.preparationFailedNotice),
+            transcript: exampleShortText), granted),
+        ("dictee-texte-copie",
+         dictationPanelModel(
+            state: DictationViewState(phase: .finished(exampleLongText), notice: reason), transcript: exampleLongText),
+         ExamplePermissions(microphoneState: .granted, accessibilityState: .denied)),
+        // Le pire cas de hauteur : un message de quatre lignes et un dernier texte de trois lignes.
+        ("dictee-echec-message-long",
+         dictationPanelModel(
+            state: DictationViewState(phase: .failed(.engine("x")), notice: reason + " " + reason), transcript: exampleLongText + " " + exampleLongText),
+         granted),
+        ("dictee-mode-indisponible",
+         dictationPanelModel(
+            mode: "entretien", state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
+        ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(), transcript: exampleShortText), granted),
+        ("dictee-dernier-texte-copie", {
+            let model = dictationPanelModel(state: DictationViewState(), transcript: exampleLongText)
+            model.onCopy = { _ in }
+            model.copyTranscript()
+            return model
+        }(), granted),
+    ]
+    for (name, model, probe) in cases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground)
+    }
 
     // Réglages : vides, puis deux fournisseurs.
     for (name, list) in [("reglages-vide", [Provider]()), ("reglages-fournisseurs", [firstProvider, secondProvider])] {

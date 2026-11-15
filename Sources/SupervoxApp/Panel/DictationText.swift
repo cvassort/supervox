@@ -3,9 +3,9 @@ import SupervoxCore
 
 /// Les textes de la vue de dictée : tout ce qui se décide sans dessiner.
 public enum DictationText {
-    /// Texte en direct : quatre lignes au plus à la largeur du panneau (une ligne tient environ 75 caractères en
-    /// `callout`), avec la marge d'une coupe à une limite de mot. Choix de mise en page, vérifié sur les images.
-    public static let liveTextLimit = 220
+    /// Texte en direct : quatre lignes au plus à la largeur du panneau (une ligne tient environ 78 caractères en
+    /// `callout`, relevé sur les images), avec la marge d'une coupe à une limite de mot. Choix de mise en page.
+    public static let liveTextLimit = 260
     /// Dernier texte récupérable : trois lignes. Même nature.
     public static let transcriptLimit = 170
     /// Message sous le titre (raison d'un échec, d'une copie) : quatre lignes en `caption`.

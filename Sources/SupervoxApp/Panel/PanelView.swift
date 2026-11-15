@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Contenu du panneau : pastilles de modes en haut, état « Prêt » au centre avec le raccourci,
+/// Contenu du panneau : pastilles de modes en haut, la dictée au centre (« Prêt » avec le raccourci, ou la dictée en cours),
 /// ligne des permissions et ligne d'avis si besoin, menu « … » en bas à droite.
 public struct PanelView: View {
     let model: PanelModel
@@ -24,7 +24,7 @@ public struct PanelView: View {
             if let welcome = model.welcome {
                 welcomeLine(welcome)
             }
-            ready
+            dictation
             if let summary = permissions.summary {
                 permissionsLine(summary)
             }
@@ -44,20 +44,12 @@ public struct PanelView: View {
         }
     }
 
-    private var ready: some View {
-        VStack(spacing: 6) {
-            Text("Prêt")
-                .font(.title2.weight(.semibold))
-            if let label = model.hotKeyLabel {
-                Text(label)
-                    .font(.callout.monospaced())
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 84)
+    /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.
+    private var dictation: some View {
+        DictationView(
+            display: DictationDisplay(state: model.dictation, transcript: model.lastTranscript),
+            hotKeyLabel: model.hotKeyLabel, copied: model.transcriptCopied,
+            copy: { model.copyTranscript() })
     }
 
     private func welcomeLine(_ text: String) -> some View {
