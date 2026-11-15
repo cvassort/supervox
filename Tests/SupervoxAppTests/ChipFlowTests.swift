@@ -42,6 +42,33 @@ import Testing
         }
     }
 
+    /// Les cas dégénérés : aucune ligne vide, aucun indice perdu ni répété, pas de plantage.
+    @Test(arguments: [CGFloat(0), -5, .nan, -.infinity])
+    func noRoomPutsEachChipOnItsOwnRow(available: CGFloat) {
+        #expect(ChipFlow.rows(widths: [50, 60, 70], available: available, spacing: 6) == [0..<1, 1..<2, 2..<3])
+    }
+
+    @Test func zeroWidthsStillCountTheSpacing() {
+        // Des pastilles de largeur nulle : l'espacement seul compte (0 + 6 + 0 <= 10, puis 6 + 6 > 10).
+        #expect(ChipFlow.rows(widths: [0, 0, 0], available: 10, spacing: 6) == [0..<2, 2..<3])
+        #expect(ChipFlow.rows(widths: [0, 0, 0], available: 0, spacing: 0) == [0..<3])
+    }
+
+    @Test func aSingleWideChipAndAnEmptyListAreHandled() {
+        #expect(ChipFlow.rows(widths: [], available: 0, spacing: 6).isEmpty)
+        #expect(ChipFlow.rows(widths: [900], available: 100, spacing: 6) == [0..<1])
+        #expect(ChipFlow.rows(widths: [10, 900, 10], available: 100, spacing: 6) == [0..<1, 1..<2, 2..<3])
+    }
+
+    /// Ce que la disposition propose à chaque pastille : sa largeur, sans jamais dépasser la place, et jamais négative.
+    @Test func theWidthsGivenToTheChipsNeverExceedTheRoomNorGoBelowZero() {
+        #expect(ChipFlow.fitted(ideals: [50, 400], available: 300) == [50, 300])
+        #expect(ChipFlow.fitted(ideals: [50, 400], available: .infinity) == [50, 400])
+        #expect(ChipFlow.fitted(ideals: [50, 400], available: 0) == [0, 0])
+        #expect(ChipFlow.fitted(ideals: [50, 400], available: -20) == [0, 0])
+        #expect(ChipFlow.fitted(ideals: [50, 400], available: .nan) == [0, 0])
+    }
+
     @Test func anInfiniteRoomKeepsOneRow() {
         #expect(ChipFlow.rows(widths: [500, 500, 500], available: .infinity, spacing: 6) == [0..<3])
     }

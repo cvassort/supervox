@@ -22,6 +22,12 @@ public enum ChipFlow {
         if start < widths.count { rows.append(start..<widths.count) }
         return rows
     }
+
+    /// La largeur proposée à chaque pastille : la sienne, sans dépasser la place, et jamais négative (une place nulle, négative
+    /// ou indéfinie ne donne rien de plus que zéro).
+    public static func fitted(ideals: [CGFloat], available: CGFloat) -> [CGFloat] {
+        ideals.map { min($0, max(0, available)) }
+    }
 }
 
 /// Dispose ses enfants en lignes qui suivent `ChipFlow.rows` : sans largeur proposée (ou infinie), une seule ligne ; sinon, à la
@@ -39,7 +45,7 @@ struct ChipFlowLayout: Layout {
 
     private func measure(_ subviews: Subviews, available: CGFloat) -> Measure {
         let ideals = subviews.map { $0.sizeThatFits(.unspecified).width }
-        let widths = ideals.map { min($0, available) }
+        let widths = ChipFlow.fitted(ideals: ideals, available: available)
         let sizes = zip(subviews, widths).map { subview, width in
             subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
         }
