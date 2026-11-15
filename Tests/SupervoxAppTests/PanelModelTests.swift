@@ -114,6 +114,45 @@ import Testing
         #expect(reported.isEmpty)
     }
 
+    // MARK: - Les pastilles suivent les réglages
+
+    private static let custom = [
+        ModeChip(id: "dictee-brute", title: "Dictée brute"),
+        ModeChip(id: "perso-un", title: "Un mode"),
+        ModeChip(id: "perso-deux", title: "Un autre"),
+    ]
+
+    @Test func theChipsAreTheOnesGivenInTheirOrder() {
+        let model = PanelModel(lastModeID: "dictee-brute", modes: Self.custom)
+        #expect(model.modes == Self.custom)
+        #expect(PanelModel(lastModeID: "perso-deux", modes: Self.custom).selectedModeID == "perso-deux")
+        #expect(PanelModel(lastModeID: "prompt", modes: Self.custom).selectedModeID == "dictee-brute")
+    }
+
+    @Test func setModesReplacesTheChipsInTheirNewOrder() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setModes(Self.custom.reversed())
+        #expect(model.modes.map(\.id) == ["perso-deux", "perso-un", "dictee-brute"])
+        model.setModes([ModeChip(id: "dictee-brute", title: "Brute"), Self.custom[1]])
+        #expect(model.modes.map(\.title) == ["Brute", "Un mode"])
+    }
+
+    @Test func aChosenModeThatDisappearsFallsBackToRawWithoutSavingIt() {
+        let model = PanelModel(lastModeID: "perso-un", modes: Self.custom)
+        var reported: [String] = []
+        model.onModeChanged = { reported.append($0) }
+
+        model.setModes([Self.custom[0], Self.custom[2]])
+        #expect(model.selectedModeID == ModeChip.fallbackID)
+        #expect(reported.isEmpty)
+    }
+
+    @Test func aChosenModeThatStaysIsKeptEvenWhenRenamedOrMoved() {
+        let model = PanelModel(lastModeID: "perso-un", modes: Self.custom)
+        model.setModes([ModeChip(id: "perso-un", title: "Renommé"), Self.custom[0]])
+        #expect(model.selectedModeID == "perso-un")
+    }
+
     // MARK: - Avis
 
     @Test func noticesFromDifferentOriginsCoexistInAFixedOrder() {

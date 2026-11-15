@@ -35,7 +35,8 @@ public struct PanelView: View {
     }
 
     private var chips: some View {
-        HStack(spacing: 6) {
+        // Les pastilles des réglages, dans leur ordre ; à la ligne quand elles débordent, le panneau grandit.
+        ChipFlowLayout {
             ForEach(model.modes) { mode in
                 ModeChipButton(
                     title: mode.title, isSelected: mode.id == model.selectedModeID

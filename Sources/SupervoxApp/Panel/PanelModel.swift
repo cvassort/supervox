@@ -59,7 +59,8 @@ public enum CopyState: Equatable, Sendable {
 /// État du panneau : ouvert ou fermé, mode choisi. Ne connaît ni AppKit ni le disque.
 @MainActor @Observable
 public final class PanelModel {
-    public let modes: [ModeChip]
+    /// Les pastilles, dans l'ordre des réglages (`AppSettings.modes`).
+    public private(set) var modes: [ModeChip]
     public private(set) var isOpen = false
     public private(set) var selectedModeID: String
 
@@ -100,10 +101,19 @@ public final class PanelModel {
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
 
-    /// `lastModeID` vient des réglages ; un identifiant inconnu retombe sur la dictée brute.
-    public init(lastModeID: String) {
-        modes = ModeChip.fixed
+    /// `lastModeID` vient des réglages ; un identifiant inconnu retombe sur la dictée brute. `modes` : les pastilles des
+    /// réglages ; sans elles, les quatre modes de base.
+    public init(lastModeID: String, modes: [ModeChip] = ModeChip.fixed) {
+        self.modes = modes
         selectedModeID = modes.contains { $0.id == lastModeID } ? lastModeID : ModeChip.fallbackID
+    }
+
+    /// Les pastilles suivent les réglages : ajout, nom, ordre, suppression. Le mode choisi qui n'y est plus devient la dictée
+    /// brute, sans que `onModeChanged` soit appelé : ce n'est pas un choix de l'utilisateur, et le fichier de réglages garde
+    /// l'ancien identifiant jusqu'au prochain choix.
+    public func setModes(_ modes: [ModeChip]) {
+        self.modes = modes
+        if !modes.contains(where: { $0.id == selectedModeID }) { selectedModeID = ModeChip.fallbackID }
     }
 
     /// L'état de la dictée tel que la vue le montre. Un nouveau dernier texte, un brouillon modifié, ou une dictée qui commence,
