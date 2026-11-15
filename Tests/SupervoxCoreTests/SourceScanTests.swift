@@ -77,4 +77,40 @@ import Testing
             .filter { $0.line.contains(needle) && !$0.place.hasPrefix("SupervoxCoreTests/LocalHTTPServer.swift:") }
         #expect(offending.isEmpty, "\(offending.map(\.place))")
     }
+
+    /// Un `TextInserter` du système (presse-papiers général, ⌘V réel) ne se donne jamais par défaut : `inserter` est
+    /// toujours passé explicitement, et seule la cible `Supervox` (le programme) ou le constructeur de production
+    /// d'`AppController` (`inserter: .system()` passé, non défini comme défaut) le construit. La forme interdite est une
+    /// valeur par défaut `= .system(` ou `= TextInserter.system(`, quelle que soit la coupure de ligne.
+    static let forbiddenSystemInserterDefault = #"=\s*(TextInserter\s*)?\.\s*system\s*\("#
+
+    @Test func noSourceDefaultsAnInserterToTheSystemOne() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserterDefault)
+        let offending = try Self.sources(under: "Sources")
+            .filter { !$0.place.hasPrefix("Supervox/") && $0.code.contains(pattern) }
+        #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    /// Les tests ne construisent jamais l'insertion du système : un collage fautif viserait le vrai presse-papiers.
+    @Test func noTestBuildsTheSystemInserter() throws {
+        let pattern = try Regex(#"TextInserter\s*\.\s*system\s*\(|=\s*\.\s*system\s*\("#)
+        let offending = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(pattern) }
+        #expect(offending.isEmpty, "\(offending.map(\.place))")
+    }
+
+    @Test(arguments: [
+        "inserter: TextInserter = .system()", "inserter: TextInserter = TextInserter.system()",
+        "inserter: TextInserter =\n    .system()", "= .system (", "x = TextInserter . system(",
+    ])
+    func theSystemInserterDefaultPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenSystemInserterDefault)))
+    }
+
+    @Test func theSystemInserterDefaultPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenSystemInserterDefault)
+        for code in ["inserter: .system())", "inserter: TextInserter,", "let system = SystemPermissions()", "static func system() -> TextInserter {"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
 }

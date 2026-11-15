@@ -34,7 +34,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
             escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
     }
 
     func corruptTheSettingsFile() throws {
@@ -164,7 +165,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
         next.launch()
         #expect(next.panelModel.welcome == nil)
         #expect(!next.panelModel.isOpen)
@@ -198,7 +200,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(next.panelModel.welcome == nil)
@@ -315,7 +318,8 @@ import Testing
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
             escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in nextSurface }, clickMonitor: FakeClickMonitor(),
-            makeSettingsWindow: presenter.make, terminate: presenter.terminate)
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(nextSurface.showCount == 0)

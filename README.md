@@ -69,8 +69,8 @@ signature (`codesign --verify --strict`).
 open build/Supervox.app
 ```
 
-- Raccourci par défaut : ⌃⌥Espace (contrôle, option, espace). Il ouvre et ferme le panneau, depuis n'importe quelle
-  application.
+- Raccourci par défaut : ⌃⌥Espace (contrôle, option, espace). Il ouvre le panneau et lance la dictée, depuis n'importe
+  quelle application ; selon le réglage, un second appui la termine (bascule) ou le relâcher la termine (maintien).
 - Au premier lancement (aucun fichier de réglages), le panneau s'ouvre seul : il dit à quoi sert le raccourci et où
   sont les réglages, et propose d'autoriser le micro puis l'Accessibilité. Rien n'est demandé avant ce clic.
 - Relancer l'application déjà ouverte (`open build/Supervox.app`) ouvre le panneau, sans second exemplaire. Vérifié

@@ -70,7 +70,7 @@ public final class AppController {
         makeSettingsWindow: @escaping SettingsWindowMaker,
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
-        inserter: TextInserter = .system()
+        inserter: TextInserter
     ) {
         self.settingsStore = settingsStore
         self.secrets = secrets

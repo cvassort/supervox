@@ -62,8 +62,8 @@ public final class PanelController: PanelOpening {
 
     public var isOpen: Bool { model.isOpen }
 
-    /// Appelé chaque fois qu'un panneau ouvert se ferme, par quelque chemin que ce soit (Échap, clic en dehors, raccourci,
-    /// menu, Quitter, Réglages) : le contrôleur de dictée y annule la dictée en cours.
+    /// Appelé chaque fois qu'un panneau ouvert se ferme, par quelque chemin que ce soit (Échap, clic en dehors, menu,
+    /// Quitter, Réglages, fin d'une dictée collée) : le contrôleur de dictée y annule la dictée en cours.
     public var onClosed: (@MainActor () -> Void)?
     /// Ce que fait Échap pendant que le panneau est ouvert. Sans gestionnaire, Échap ferme le panneau. Avec un
     /// gestionnaire (la dictée), c'est lui qui décide, et il ferme le panneau lui-même.
@@ -81,8 +81,8 @@ public final class PanelController: PanelOpening {
         if !model.isOpen { toggle() }
     }
 
-    /// Seul chemin de fermeture : Échap, le raccourci, les actions du menu y passent tous, pour
-    /// qu'Échap soit toujours rendu.
+    /// Seul chemin de fermeture : Échap, le clic en dehors, les actions du menu et la fin d'une dictée collée y passent
+    /// tous, pour qu'Échap soit toujours rendu.
     public func close() {
         let wasOpen = model.isOpen
         model.close()
@@ -104,7 +104,7 @@ public final class PanelController: PanelOpening {
     private func sync() {
         if model.isOpen {
             let escapeHeld = escapeRegistrar.register(Self.escape) { [weak self] in self?.escapePressed() }
-            model.setNotice(escapeHeld ? nil : Self.escapeRefusedNotice(hotKeyLabel: model.hotKeyLabel), for: .escape)
+            model.setNotice(escapeHeld ? nil : Self.escapeRefusedNotice, for: .escape)
             clickMonitor.start { [weak self] in self?.outsideClick() }
             surface.show()
             log.notice("panneau ouvert ; Échap tenu : \(escapeHeld, privacy: .public)")
@@ -116,10 +116,10 @@ public final class PanelController: PanelOpening {
         }
     }
 
-    private static func escapeRefusedNotice(hotKeyLabel: String?) -> String {
-        let ways = hotKeyLabel.map { "avec \($0) ou d'un clic en dehors" } ?? "d'un clic en dehors"
-        return "Échap n'a pas pu être réservé : refermez le panneau \(ways)."
-    }
+    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée :
+    /// seul le menu de l'icône ferme toujours.
+    private static let escapeRefusedNotice =
+        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors quand aucune dictée n'est en cours."
 
     /// Cadre du panneau : centré horizontalement, son centre au milieu du tiers supérieur de la zone
     /// utile ; ramené contre le haut s'il dépasserait.
