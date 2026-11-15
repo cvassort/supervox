@@ -36,7 +36,13 @@ import Testing
         calls.append(.hide)
     }
 
-    func setKeyboard(_ keyboard: PanelKeyboard) { calls.append(.keyboard(keyboard)) }
+    /// Le journal de l'insertion, partagé pour comparer l'ordre des appels.
+    var log: CallLog?
+
+    func setKeyboard(_ keyboard: PanelKeyboard) {
+        calls.append(.keyboard(keyboard))
+        log?.entries.append("keyboard(\(keyboard))")
+    }
 
     /// La hauteur que le contenu demande : le test la change comme le ferait un contenu qui grandit ou rétrécit.
     var height: CGFloat = 120
@@ -337,6 +343,33 @@ import Testing
         #expect(model.isOpen)
         #expect(surface.isShown)
         #expect(clicks.isWatching)
+    }
+
+    /// Le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas fermer la relecture : le panneau est tenu tant que
+    /// le texte attend d'être relu ou se colle (`holdsPanel`), pas seulement pendant l'enregistrement (`isActive`).
+    @Test("règle 13 : le clic en dehors est ignoré en relecture et pendant le collage", arguments: [DictationStage.review, .pasting])
+    func outsideClickIsIgnoredWhileTheTextIsReviewedOrPasted(_ stage: DictationStage) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(stage: stage, lastTranscript: "Un texte.", draft: "Un texte.")
+
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        #expect(surface.isShown)
+        #expect(clicks.isWatching)
+        #expect(!surface.calls.contains(.hide))
+    }
+
+    @Test("règle 13 : le clic en dehors ferme comme avant en copie, au repos, après un échec, une interruption", arguments: [
+        DictationStage.copied, .idle, .cancelled, .failed(.clipboard),
+    ])
+    func outsideClickClosesAfterTheReviewToo(_ stage: DictationStage) {
+        let controller = makeController()
+        controller.open()
+        model.dictation = DictationViewState(stage: stage, lastTranscript: "Un texte.")
+        clicks.clickOutside()
+        #expect(!model.isOpen)
+        #expect(surface.calls.last == .hide)
     }
 
     @Test(arguments: [

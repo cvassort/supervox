@@ -78,7 +78,8 @@ public final class AppController {
         dictation: DictationEnvironment = .unavailable,
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
-        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
         self.terminationWait = terminationWait
         self.settingsStore = settingsStore
@@ -123,7 +124,10 @@ public final class AppController {
             },
             panel: panel,
             hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
-            hold: holdWatch)
+            hold: holdWatch,
+            // Lu une fois, à l'appui qui commence la dictée, pour le mode choisi.
+            reviewBeforePaste: { relay.settings?()?.reviewsBeforePaste($0) ?? false },
+            wait: reviewHandoverWait)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
             panelModel.setDictation($0)
@@ -131,6 +135,8 @@ public final class AppController {
         }
         // Le presse-papiers passe par l'insertion, qui le tient : un seul accès, injecté.
         panelModel.onCopy = { [inserter] in inserter.copy($0) }
+        panelModel.onDraftChange = { [dictationController] in dictationController.reviewEdited($0) }
+        panelModel.onPaste = { [dictationController] in dictationController.pasteReview() }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }

@@ -275,4 +275,125 @@ import Testing
             #expect(model.copyState == .idle, "\(stage)")
         }
     }
+
+    // MARK: - Relecture
+
+    private func reviewing(_ draft: String, lastTranscript: String? = nil, stage: DictationStage = .review) -> PanelModel {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setDictation(DictationViewState(stage: stage, lastTranscript: lastTranscript ?? draft, draft: draft))
+        return model
+    }
+
+    @Test("règle 9 : on ne peut coller qu'en relecture, avec un brouillon non blanc")
+    func pastingIsPossibleOnlyInReviewWithATextToPaste() {
+        #expect(reviewing("Un texte.").canPaste)
+        #expect(!reviewing("").canPaste)
+        #expect(!reviewing("  \n\t ").canPaste)
+        for stage in [
+            DictationStage.idle, .preparing, .recording, .finalizing, .pasting, .copied, .cancelled, .failed(.noSpeech),
+        ] {
+            #expect(!reviewing("Un texte.", stage: stage).canPaste, "\(stage)")
+        }
+    }
+
+    @Test("règle 9 : paste() appelle le gestionnaire quand on peut coller, et seulement alors")
+    func pasteCallsTheHandlerOnlyWhenPastingIsPossible() {
+        var pasted = 0
+        let model = reviewing("Un texte.")
+        model.onPaste = { pasted += 1 }
+        model.paste()
+        #expect(pasted == 1)
+
+        model.setDictation(DictationViewState(stage: .review, lastTranscript: "Un texte.", draft: " \n"))
+        model.paste()
+        model.setDictation(DictationViewState(stage: .pasting, lastTranscript: "Un texte.", draft: "Un texte."))
+        model.paste()
+        model.setDictation(DictationViewState(stage: .idle, lastTranscript: "Un texte."))
+        model.paste()
+        #expect(pasted == 1)
+    }
+
+    @Test("règle 4 : editDraft change le brouillon que la vue montre et prévient le contrôleur")
+    func editingTheDraftUpdatesTheViewAndReportsIt() {
+        let model = reviewing("Premier.")
+        var reported: [String] = []
+        model.onDraftChange = { reported.append($0) }
+        model.editDraft("Premier, corrigé.")
+        #expect(model.dictation.draft == "Premier, corrigé.")
+        #expect(reported == ["Premier, corrigé."])
+        #expect(model.dictation.stage == .review)
+    }
+
+    @Test("règle 4 : editDraft est ignoré hors relecture (aucun appel, le brouillon ne bouge pas)")
+    func editingTheDraftOutsideTheReviewIsIgnored() {
+        for stage in [DictationStage.idle, .recording, .pasting, .copied] {
+            let model = reviewing("Premier.", stage: stage)
+            var reported: [String] = []
+            model.onDraftChange = { reported.append($0) }
+            model.editDraft("Autre.")
+            #expect(model.dictation.draft == "Premier.", "\(stage)")
+            #expect(reported.isEmpty, "\(stage)")
+        }
+    }
+
+    @Test("règle 15 : « Copier » en relecture copie le brouillon entier, pas le dernier texte")
+    func copyingInReviewCopiesTheWholeDraft() {
+        let long = (1...300).map { "mot\($0)" }.joined(separator: " ")
+        let model = reviewing(long, lastTranscript: "Le texte d'avant.")
+        var copied: [String] = []
+        model.onCopy = { copied.append($0); return true }
+        model.copyTranscript()
+        #expect(copied == [long])
+        #expect(model.copyState == .copied)
+    }
+
+    @Test("règle 15 : hors relecture, « Copier » copie toujours le dernier texte, même pendant le collage")
+    func copyingOutsideTheReviewCopiesTheLastTranscript() {
+        for stage in [DictationStage.idle, .pasting, .copied, .failed(.noSpeech)] {
+            let model = reviewing("Le brouillon.", lastTranscript: "Le dernier texte.", stage: stage)
+            var copied: [String] = []
+            model.onCopy = { copied.append($0); return true }
+            model.copyTranscript()
+            #expect(copied == ["Le dernier texte."], "\(stage)")
+        }
+    }
+
+    @Test("règle 15 : une modification du texte remet « Copier » à neuf, un échec de copie aussi se reprend")
+    func editingTheDraftResetsTheCopyState() {
+        let model = reviewing("Premier.")
+        let accepts = Acceptance(false)
+        model.onCopy = { _ in accepts.value }
+        model.copyTranscript()
+        #expect(model.copyState == .failed)
+        model.editDraft("Premier, corrigé.")
+        #expect(model.copyState == .idle)
+
+        accepts.value = true
+        model.copyTranscript()
+        #expect(model.copyState == .copied)
+        model.editDraft("Premier, encore corrigé.")
+        #expect(model.copyState == .idle)
+
+        // Le même texte renvoyé par le contrôleur (écho de la modification) ne remet rien à zéro d'autre.
+        model.copyTranscript()
+        model.setDictation(DictationViewState(stage: .review, lastTranscript: "Premier.", draft: "Premier, encore corrigé."))
+        #expect(model.copyState == .copied)
+        // Une modification qui vient d'ailleurs que du panneau (le contrôleur) remet « Copier » à neuf aussi.
+        model.setDictation(DictationViewState(stage: .review, lastTranscript: "Premier.", draft: "Autre."))
+        #expect(model.copyState == .idle)
+    }
+
+    @Test("règle 9 : « Copier » d'un texte blanc ne copie rien et laisse « Copier » à neuf", arguments: ["", "  \n\t "])
+    func copyingABlankTextDoesNothing(text: String) {
+        for stage in [DictationStage.review, .idle] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            var copied = 0
+            model.onCopy = { _ in copied += 1; return true }
+            model.setDictation(
+                DictationViewState(stage: stage, lastTranscript: stage == .review ? "Le dernier." : text, draft: stage == .review ? text : ""))
+            model.copyTranscript()
+            #expect(copied == 0, "\(stage)")
+            #expect(model.copyState == .idle, "\(stage)")
+        }
+    }
 }

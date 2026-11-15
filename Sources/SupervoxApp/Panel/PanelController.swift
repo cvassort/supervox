@@ -55,7 +55,8 @@ public protocol OutsideClickMonitor: AnyObject {
 /// Échap n'arrive plus à l'application de dessous. Si Échap ne peut pas être réservé, un avis le dit.
 ///
 /// Clic en dehors. Tant que le panneau est ouvert, un clic dans une autre application le ferme
-/// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`).
+/// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`), une
+/// relecture ou un collage (`review`, `pasting`).
 ///
 /// Dictée. Le panneau ne connaît de la dictée que son état (`PanelModel.dictation`). Sa fermeture est signalée par `onClosed`,
 /// et Échap peut être confié à un gestionnaire (`escapeHandler`).
@@ -145,10 +146,11 @@ public final class PanelController: PanelOpening {
         if let escapeHandler { escapeHandler() } else { close() }
     }
 
-    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée : le clic qui sert à passer à la fenêtre
-    /// où le texte doit aller ne doit pas annuler ce qu'on dit.
+    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée, une relecture ou un collage
+    /// (`DictationStage.holdsPanel`) : le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas annuler ce
+    /// qu'on dit ni ce qu'on relit.
     private func outsideClick() {
-        guard !model.dictation.stage.isActive else { return }
+        guard !model.dictation.stage.holdsPanel else { return }
         close()
     }
 

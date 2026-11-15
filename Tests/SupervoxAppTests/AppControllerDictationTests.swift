@@ -34,6 +34,8 @@ final class TimeoutLog: Sendable {
     /// La surveillance du maintien : un sommeil qui dure jusqu'à `holdSleeper.release()`, et les modificateurs tenus.
     let holdSleeper = SleepingWait(log: CallLog())
     let held = HeldModifiers()
+    /// L'attente de la relecture avant l'insertion : instantanée, elle journalise sa durée dans le journal de l'insertion.
+    let handover: HandoverWait
 
     @MainActor final class Flag { var on = false }
 
@@ -50,6 +52,9 @@ final class TimeoutLog: Sendable {
         let sleeper = insertionSleeper
         let blocks = blocksInsertion
         rig = InsertionRig(wait: { seconds in if blocks.on { await sleeper.wait(seconds) } })
+        handover = HandoverWait(log: rig.log)
+        // La surface du panneau écrit ses demandes de clavier dans le même journal que l'insertion : l'ordre se compare.
+        surface.log = rig.log
     }
 
     func makeController(
@@ -68,7 +73,8 @@ final class TimeoutLog: Sendable {
                     return held.value
                 },
                 wait: { [holdSleeper] in await holdSleeper.wait($0) }),
-            terminationWait: terminationWait ?? { try? await Task.sleep(for: .seconds($0)) })
+            terminationWait: terminationWait ?? { try? await Task.sleep(for: .seconds($0)) },
+            reviewHandoverWait: { [handover] in await handover.wait($0) })
         controller.launch()
         return controller
     }
@@ -466,5 +472,169 @@ final class TimeoutLog: Sendable {
         let welcome = AppController.welcome(hotKeyLabel: "⌃⌥Espace")
         #expect(welcome.contains("⌃⌥Espace lance la dictée"))
         #expect(!welcome.contains("ouvre et ferme"))
+    }
+
+    // MARK: - Relecture
+
+    /// Active « Relire avant de coller » pour la dictée brute, par l'onglet Modes, comme le fait l'utilisateur.
+    func enableReview(_ controller: AppController) {
+        let modes = SettingsView.makeModesModel(controller)
+        modes.setReview(true, for: ModeChip.rawID)
+        #expect(modes.message == nil)
+        #expect(controller.settings.reviewsBeforePaste(ModeChip.rawID))
+    }
+
+    /// Une dictée menée jusqu'à la relecture de `text`.
+    @discardableResult
+    func reviewedDictation(_ controller: AppController, _ text: String = "Texte dicté.", index: Int = 0) async
+        -> FakeSession
+    {
+        hotKeys.press()
+        let session = await record(controller, index: index)
+        session.emit(.finished(text))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        return session
+    }
+
+    /// Règle 18, de bout en bout : la bascule de Dictée brute par l'onglet Modes, une dictée, la relecture, « Coller ».
+    @Test func theModesSwitchLeadsToTheReviewAndPasteInsertsInTheOrderOfTheJournal() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        // Sans la bascule, la dictée brute se colle toute seule (comportement de l'étape 3).
+        enableReview(controller)
+
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finished("Texte dicté."))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.draft == "Texte dicté.")
+        #expect(controller.panelModel.canPaste)
+        #expect(controller.panelModel.isOpen)
+        await settle()
+        #expect(rig.log.entries == ["keyboard(focused)"], "rien n'est inséré tant que « Coller » n'est pas choisi")
+
+        // Le texte est corrigé dans le panneau, puis collé par le geste.
+        controller.panelModel.editDraft("Texte dicté, corrigé.")
+        controller.panelModel.paste()
+        #expect(await until { controller.panelModel.dictation.stage == .idle && !controller.panelModel.isOpen })
+        #expect(rig.log.entries == [
+            "keyboard(focused)",
+            "keyboard(none)", "wait(0.15)",
+            "read", "writeText(transient: true)", "modifiersHeld", "postPaste(9)", "writeText(transient: false)",
+            "keyboard(none)",
+        ])
+        #expect(rig.board.text == "Texte dicté, corrigé.")
+        #expect(handover.durations == [DictationController.focusHandoverDelay])
+        #expect(controller.dictation.lastTranscript == "Texte dicté, corrigé.")
+        #expect(controller.panelModel.dictation.lastTranscript == "Texte dicté, corrigé.")
+        #expect(!controller.dictation.isBusy)
+    }
+
+    @Test func withTheSwitchOffTheRawDictationPastesByItselfAsBefore() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finished("Texte dicté."))
+        #expect(await until { !controller.panelModel.isOpen })
+        #expect(rig.board.contents == FakeInsertion.original, "le presse-papiers d'origine est rendu")
+        #expect(!rig.log.entries.contains("keyboard(focused)"), "aucune relecture : la frappe n'est jamais prise")
+        #expect(handover.durations.isEmpty)
+    }
+
+    /// Règle 10 : par chaque chemin de fermeture, la relecture finit sans collage ni copie, et le brouillon est gardé.
+    @Test(arguments: ["escape", "menu", "settings", "quit"])
+    func closingThePanelDuringTheReviewKeepsTheDraftAndInsertsNothing(_ path: String) async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+        controller.panelModel.editDraft("Le brouillon relu.")
+        rig.log.entries.removeAll()
+
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        switch path {
+        case "escape": escape.press()
+        case "menu": controller.togglePanelFromMenu()
+        case "settings": controller.openSettings()
+        default: controller.quit()
+        }
+        #expect(!controller.panelModel.isOpen)
+        await settle()
+        #expect(controller.dictation.lastTranscript == "Le brouillon relu.")
+        #expect(controller.panelModel.dictation == DictationViewState(lastTranscript: "Le brouillon relu."))
+        #expect(rig.log.entries.filter { !$0.hasPrefix("keyboard") }.isEmpty, "aucun collage, aucune copie")
+        #expect(rig.board.contents == FakeInsertion.original)
+    }
+
+    /// Règle 14 : changer de pastille pendant la relecture ne touche ni le texte ni l'étape ; la dictée suivante suit le mode.
+    @Test func changingTheModeDuringTheReviewKeepsItAndTheNextDictationFollowsTheNewMode() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+        controller.panelModel.editDraft("Texte à garder.")
+        let before = controller.panelModel.dictation
+
+        controller.panelModel.select(ModeChip.promptID)
+        #expect(controller.panelModel.dictation == before)
+        #expect(controller.panelModel.dictation.stage == .review)
+        #expect(controller.settings.lastModeID == ModeChip.promptID, "le mode choisi est enregistré")
+
+        // Le raccourci est ignoré : le panneau reste ouvert, la relecture intacte.
+        hotKeys.press()
+        await settle()
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation == before)
+        #expect(engines.sessions.count == 1)
+
+        // Fermée, la relecture laisse la place : la dictée suivante suit le nouveau mode (ici, pas encore de dictée).
+        escape.press()
+        hotKeys.press()
+        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(engines.sessions.count == 1)
+        controller.panelModel.select(ModeChip.rawID)
+        #expect(controller.settings.lastModeID == ModeChip.rawID)
+        hotKeys.press()
+        #expect(await until { engines.sessions.count == 2 })
+    }
+
+    /// Règle 15 : « Copier » en relecture copie le brouillon entier par l'insertion, sans quitter la relecture.
+    @Test func copyingDuringTheReviewCopiesTheDraftAndStaysInTheReview() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+        controller.panelModel.editDraft("Le brouillon entier, corrigé.")
+        rig.log.entries.removeAll()
+
+        controller.panelModel.copyTranscript()
+        #expect(rig.board.text == "Le brouillon entier, corrigé.")
+        #expect(rig.log.entries == ["writeText(transient: false)"])
+        #expect(controller.panelModel.copyState == .copied)
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation.stage == .review)
+
+        controller.panelModel.editDraft("Le brouillon entier, corrigé encore.")
+        #expect(controller.panelModel.copyState == .idle)
+        rig.board.acceptsWrites = false
+        controller.panelModel.copyTranscript()
+        #expect(controller.panelModel.copyState == .failed)
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation.stage == .review)
+    }
+
+    /// Règle 13 : un clic en dehors ne ferme pas la relecture (le clic sert à aller dans la fenêtre cible).
+    @Test func aClickOutsideDoesNotCloseTheReview() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+
+        clicks.clickOutside()
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation.stage == .review)
+        #expect(controller.panelModel.dictation.draft == "Texte dicté.")
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// Une pastille de mode en haut du panneau.
@@ -88,6 +89,10 @@ public final class PanelModel {
     /// Ce que fait « Copier » : met le texte entier dans le presse-papiers (par l'insertion, qui tient le presse-papiers) et
     /// rend vrai si le système l'a accepté.
     @ObservationIgnored public var onCopy: (@MainActor (String) -> Bool)?
+    /// Appelé quand l'utilisateur modifie le texte en relecture, avec le texte entier : le contrôleur de dictée le garde.
+    @ObservationIgnored public var onDraftChange: (@MainActor (String) -> Void)?
+    /// Ce que fait « Coller » : le contrôleur de dictée insère le texte en relecture.
+    @ObservationIgnored public var onPaste: (@MainActor () -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
 
@@ -97,19 +102,41 @@ public final class PanelModel {
         selectedModeID = modes.contains { $0.id == lastModeID } ? lastModeID : ModeChip.fallbackID
     }
 
-    /// L'état de la dictée tel que la vue le montre. Un nouveau dernier texte, ou une dictée qui commence, remet « Copier » à
-    /// neuf ; un échec ou une interruption n'y touchent pas (le dernier texte est toujours là).
+    /// L'état de la dictée tel que la vue le montre. Un nouveau dernier texte, un brouillon modifié, ou une dictée qui commence,
+    /// remet « Copier » à neuf ; un échec ou une interruption n'y touchent pas (le dernier texte est toujours là).
     public func setDictation(_ state: DictationViewState) {
-        let textChanged = state.lastTranscript != dictation.lastTranscript
+        let textChanged = state.lastTranscript != dictation.lastTranscript || state.draft != dictation.draft
         dictation = state
         if textChanged || state.stage.isActive { copyState = .idle }
     }
 
-    /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre.
+    /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre. En relecture, c'est le brouillon que l'on est en
+    /// train de corriger ; ailleurs, le dernier texte. Un texte blanc ne se copie pas : rien ne change.
     public func copyTranscript() {
-        guard let text = dictation.lastTranscript, let onCopy else { return }
+        let text = dictation.stage == .review ? dictation.draft : dictation.lastTranscript
+        guard let text, !Self.isBlank(text), let onCopy else { return }
         copyState = onCopy(text) ? .copied : .failed
     }
+
+    /// On peut coller en relecture, quand le brouillon n'est pas blanc.
+    public var canPaste: Bool { dictation.stage == .review && !Self.isBlank(dictation.draft) }
+
+    /// « Coller » : ne fait rien si l'on ne peut pas coller.
+    public func paste() {
+        guard canPaste else { return }
+        onPaste?()
+    }
+
+    /// L'utilisateur a modifié le texte en relecture. Ignoré hors relecture. La vue montre tout de suite le nouveau texte, le
+    /// contrôleur de dictée est prévenu, et « Copier » repart à neuf : le texte n'est plus celui qui a été copié.
+    public func editDraft(_ text: String) {
+        guard dictation.stage == .review else { return }
+        dictation.draft = text
+        copyState = .idle
+        onDraftChange?(text)
+    }
+
+    private static func isBlank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// Réservé à `PanelController`, qui montre et cache la fenêtre en même temps.
     func toggle() {
