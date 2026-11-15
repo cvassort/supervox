@@ -3,9 +3,9 @@
 [![Tests](https://github.com/cvassort/supervox/actions/workflows/tests.yml/badge.svg)](https://github.com/cvassort/supervox/actions/workflows/tests.yml)
 
 supervox sera une application macOS de dictée et d'entretien vocal. Elle est en cours de construction.
-Ce dépôt contient le socle de l'application (voir « Application ») et le banc d'essai : `supervox-bench`, un outil
-en ligne de commande qui mesure la qualité de transcription de plusieurs moteurs et le délai de réponse de bout en
-bout.
+Ce dépôt contient l'application telle qu'elle est (le socle et la dictée brute, voir « Application » et « Dictée ») et
+le banc d'essai : `supervox-bench`, un outil en ligne de commande qui mesure la qualité de transcription de plusieurs
+moteurs, le délai de réponse de bout en bout et la dictée en direct.
 
 ## Prérequis
 
@@ -36,8 +36,8 @@ Ils ne tournent pas dans le pipeline.
 ## Application
 
 Supervox est une application de barre de menus : pas d'icône dans le Dock, une icône d'onde dans la barre de menus.
-La dictée elle-même n'est pas encore branchée ; l'application tient aujourd'hui le panneau, les fournisseurs, le
-raccourci et les permissions.
+L'application tient le panneau, la dictée brute (voir « Dictée »), les fournisseurs, le raccourci et les permissions.
+Les trois autres modes du panneau (dictée nettoyée, prompt, entretien) ne sont pas encore faits : le panneau le dit.
 
 ### Construire
 
@@ -71,6 +71,10 @@ open build/Supervox.app
 
 - Raccourci par défaut : ⌃⌥Espace (contrôle, option, espace). Il ouvre le panneau et lance la dictée, depuis n'importe
   quelle application ; selon le réglage, un second appui la termine (bascule) ou le relâcher la termine (maintien).
+  Le raccourci ne ferme pas le panneau : un appui, panneau ouvert et sans dictée en cours, relance une dictée. Le panneau
+  se ferme par Échap, par un clic dans une autre application (sauf pendant une dictée), par le menu de l'icône, par
+  « Réglages… » et « Quitter Supervox », ou après un collage réussi. Seule exception : dans un mode autre que la dictée
+  brute, un second appui, panneau ouvert, le ferme.
 - Au premier lancement (aucun fichier de réglages), le panneau s'ouvre seul : il dit à quoi sert le raccourci et où
   sont les réglages, et propose d'autoriser le micro puis l'Accessibilité. Rien n'est demandé avant ce clic.
 - Relancer l'application déjà ouverte (`open build/Supervox.app`) ouvre le panneau, sans second exemplaire. Vérifié
@@ -86,11 +90,12 @@ open build/Supervox.app
 
 ### Ce qui est stocké, et où
 
-- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode) : `~/Library/Application Support/Supervox/settings.json`.
+- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode, réglages de transcription) : `~/Library/Application Support/Supervox/settings.json`.
   Un fichier au contenu illisible est mis de côté dans le même dossier (`settings.json.illisible-<date>`), jamais
   écrasé ; un fichier qui ne peut pas être lu (droits, disque) reste en place et rien n'y est écrit jusqu'à la fin de
   la session, même s'il redevient lisible ; un fichier écrit par une version plus récente de Supervox est gardé tel
   quel et n'est pas réécrit.
+- Le texte dicté n'est écrit nulle part : ni dans ce fichier, ni dans un journal ; le panneau n'en garde que le dernier, en mémoire.
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
   identifiant). Jamais dans un fichier. Elles ne sont lues qu'au moment d'une requête qui en a besoin.
 - Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et
@@ -102,12 +107,71 @@ open build/Supervox.app
 swift run supervox-snapshots /chemin/vers/un/dossier
 ```
 
-`supervox-snapshots` écrit chaque écran du panneau et des réglages en PNG, en clair et en sombre, avec des données
-d'exemple (`example.com`) : aucun accès au trousseau, au réseau ni aux réglages réels. Les onglets des réglages
+`supervox-snapshots` écrit chaque écran du panneau (y compris la dictée dans tous ses états) et des réglages en PNG, en
+clair et en sombre, avec des données d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au
+presse-papiers ni aux réglages réels. Les onglets des réglages
 sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas fidèlement.
 
 Le logo est dessiné par le code (`BrandMark`) : aucune image n'est suivie dans le dépôt. `Scripts/make-app.sh`
 fabrique l'icône de l'application avec `supervox-snapshots --iconset <dossier.iconset>` puis `iconutil`.
+
+## Dictée
+
+La dictée brute de bout en bout : le raccourci ouvre le panneau, enregistre, puis colle le texte dans l'application au
+premier plan.
+
+### Ce qui marche
+
+- **Bascule ou maintien** (Réglages, onglet Raccourci). En maintien, la dictée s'arrête dès que les touches de
+  modification du raccourci sont relâchées, même si le système ne signale pas le relâchement de la touche principale
+  (vérifié quatre fois par seconde).
+- **Le panneau montre la dictée** : préparation (avec « Téléchargement du modèle… » si un modèle manque), enregistrement
+  (point rouge, durée, forme d'onde, texte en direct sur quatre lignes au plus, la fin toujours visible), transcription,
+  puis le résultat. Échap annule la dictée : rien n'est collé.
+- **Le collage est un ⌘V simulé** : le texte est mis dans le presse-papiers, collé, puis le contenu d'origine du
+  presse-papiers (texte, image, tout ce qui s'y trouvait) est rendu, sauf si une autre application y a écrit entre-temps.
+  La touche envoyée est celle qui produit « v » dans la disposition de clavier en cours. Cela demande l'autorisation
+  d'Accessibilité ; sans elle, ou si des touches de modification restent enfoncées, le texte est copié, laissé dans le
+  presse-papiers, et le panneau dit pourquoi.
+- **« Collé » ne prouve pas que l'application visée a reçu le texte** : l'application ne sait que ce qu'elle a envoyé. Le
+  texte de la dernière dictée reste donc dans le panneau (carte « Dernière dictée », avec un bouton « Copier » qui copie
+  le texte entier). Il n'est gardé qu'en mémoire : ni fichier, ni journal, et il disparaît quand on quitte l'application.
+- **Silence** : « Aucune parole n'a été entendue. » ; rien n'est collé et le panneau reste ouvert.
+- **Réglages de transcription** (Réglages, onglet Transcription) : moteur (WhisperKit, plus précis dans les mesures de
+  l'étape 1 ; ou Parakeet, bien plus rapide), variante du modèle WhisperKit, langue (WhisperKit seulement), vocabulaire
+  (une liste de termes à mieux reconnaître ; une liste trop longue pour WhisperKit est refusée sans effacer la saisie).
+  Ils sont relus à chaque dictée : pas besoin de relancer l'application.
+- **Durée maximale** d'une prise : 5 minutes, après quoi la dictée se termine d'elle-même (choix de conception, non
+  mesuré).
+
+### Où sont les modèles
+
+Rien n'est embarqué : les modèles se téléchargent depuis Internet, à la demande (bouton « Télécharger » de l'onglet
+Transcription, ou à la première dictée qui en a besoin), puis tournent sur ce Mac.
+
+- WhisperKit : `~/Library/Application Support/Supervox/Models/` (sous-dossier `models/argmaxinc/whisperkit-coreml/`).
+- Parakeet (avec son petit modèle de vocabulaire) et le détecteur de voix : le dossier de la bibliothèque FluidAudio,
+  `~/Library/Application Support/FluidAudio/Models/`, partagé avec les autres applications qui l'utilisent. (Chemins lus
+  dans le code ; pas relevés sur un disque ici.)
+
+Supprimer un modèle se fait depuis le même onglet ; c'est refusé pendant une dictée et pendant le téléchargement du
+modèle. Une dictée qui en a besoin le télécharge de nouveau.
+
+### Ce que l'aperçu en direct est, et n'est pas
+
+- C'est un texte **provisoire**, fait par Parakeet pendant que vous parlez (au plus toutes les 0,5 s, sur les
+  15 dernières secondes du passage en cours), quel que soit le moteur choisi pour le texte final. Il peut changer d'une
+  passe à l'autre et se tromper.
+- Ce n'est **pas** le texte collé. Le texte collé vient du moteur choisi, une fois la prise terminée, sur toute la
+  parole (avec 0,3 s de marge de chaque côté).
+- **Limite connue, non corrigée** : le texte en direct peut perdre le début d'un passage de parole de plus de 15 s. Le
+  texte final, lui, est complet.
+
+### Vérifier
+
+- Les essais à faire à la main, que les tests automatiques ne couvrent pas : `docs/essai-final.md`.
+- La mesure de la dictée en direct (texte final contre transcription en bloc, dernier aperçu, délai) : commande
+  `supervox-bench live` (voir « Le banc d'essai ») ; méthode et tableau dans `docs/bench/2026-11-14-dictee-en-direct.md`.
 
 ## Le banc d'essai
 
@@ -136,23 +200,29 @@ swift run supervox-bench <commande> --help
   chaque essai, la connexion de l'appel de synthèse (protocole négocié, connexion réutilisée ou nouvelle), et signale
   un enregistrement dont la voix court jusqu'à la fin du fichier (clip non coupé).
 
+- `live` : rejoue les enregistrements du corpus dans une vraie session de dictée, avec le micro scripté et à la vitesse
+  de la parole, et mesure le taux d'erreur du texte final de la session, celui de la transcription en bloc par le même
+  moteur (la mesure de `transcribe`), celui du dernier aperçu, et le délai entre `finish()` et le texte final
+  (`--corpus`, `--audio`, `--out`, `--engine`, `--vocabulary`, `--settle`, `--overwrite`). Écrit `live.md` et
+  `live.json`. Aucune variable d'environnement. Méthode et incertitudes : `docs/bench/2026-11-14-dictee-en-direct.md`.
+
 Pannes et interruptions :
 
 - chaque requête à l'endpoint est abandonnée après `--request-timeout` secondes (30 par défaut) sans aucune donnée
   reçue : c'est un délai d'inactivité, pas une durée totale. La phrase (ou l'essai) est alors en échec.
 - dans `transcribe`, un moteur est arrêté après 3 échecs de transport consécutifs (endpoint injoignable ou muet) :
   ses phrases restantes, et sa passe avec vocabulaire, sont en échec avec cette raison ; les moteurs suivants passent.
-- les rapports sont réécrits au fil de l'eau, après chaque passe de moteur (`transcribe`) ou chaque essai
-  (`latency`), avec la mention « Rapport partiel » en tête (et `"complete": false` dans le JSON) tant que le
+- les rapports sont réécrits au fil de l'eau, après chaque passe de moteur (`transcribe`), chaque essai
+  (`latency`) ou chaque phrase (`live`), avec la mention « Rapport partiel » en tête (et `"complete": false` dans le JSON) tant que le
   lancement n'est pas allé au bout. Un Ctrl-C laisse sur le disque le dernier rapport partiel ; le relancer dans le
   même dossier demande `--overwrite`.
 
 Dossier de sortie (`--out`), contrôlé avant tout chargement de modèle et tout appel réseau :
 
-- `transcribe` et `latency` refusent d'écrire sur un rapport existant (`transcription.md`, `transcription.json`,
-  `latence.md`) sans `--overwrite`, et le message nomme le fichier : une mesure ne se refait pas à l'identique.
+- `transcribe`, `latency` et `live` refusent d'écrire sur un rapport existant (`transcription.md`, `transcription.json`,
+  `latence.md`, `live.md`, `live.json`) sans `--overwrite`, et le message nomme le fichier : une mesure ne se refait pas à l'identique.
   Le registre des requêtes de synthèse de `latency` est cumulatif et n'est jamais effacé.
-- les trois commandes refusent un dossier situé dans un dépôt git qui ne l'ignore pas (vérifié avec
+- les quatre commandes refusent un dossier situé dans un dépôt git qui ne l'ignore pas (vérifié avec
   `git check-ignore`) : enregistrements et rapports contiennent ta voix et ce que tu as dit. Sans `git`, ou hors de
   tout dépôt, elles écrivent normalement.
 
