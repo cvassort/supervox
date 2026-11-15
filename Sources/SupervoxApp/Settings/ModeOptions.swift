@@ -1,10 +1,11 @@
 import Foundation
 
-/// Les options d'un mode, enregistrées dans `settings.json` sous `AppSettings.modeOptions`.
+/// Les options d'un mode dans le fichier de la version 1, sous `modeOptions`. Depuis la version 2, ce choix vit dans chaque
+/// `Mode` : ce type ne sert plus qu'à la migration (`AppSettings.init(from:)`, une fois) et à l'onglet Modes jusqu'à ce qu'il
+/// lise les modes.
 ///
-/// Chaque champ est optionnel : `nil` veut dire « la valeur par défaut du mode ». Le décodage est tolérant (voir la règle
-/// d'évolution de `AppSettings`) : un champ absent vaut `nil`, un champ inconnu est ignoré, pour que l'étape suivante y
-/// ajoute les siens sans changer `AppSettings.current`.
+/// Chaque champ est optionnel : `nil` veut dire « la valeur par défaut du mode ». Le décodage est tolérant : un champ absent
+/// vaut `nil`, un champ inconnu est ignoré.
 public struct ModeOptions: Codable, Equatable, Sendable {
     /// Montrer le texte dans le panneau pour relecture avant de le coller. `nil` : le défaut du mode
     /// (`AppSettings.reviewDefault`).

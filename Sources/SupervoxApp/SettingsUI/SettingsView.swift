@@ -100,10 +100,24 @@ public struct SettingsView: View {
     }
 
     /// Les choix de relecture s'enregistrent par `AppController.updateSettings`, comme tous les autres.
+    ///
+    /// Pont jusqu'à la lecture des modes par l'onglet : le modèle garde son interface de l'étape 4 (un dictionnaire d'options
+    /// par identifiant). Il reçoit celles que portent `settings.modes`, et chaque `reviewBeforePaste` qu'il rend est reporté
+    /// dans le mode de même identifiant des réglages en vigueur, rien d'autre.
     static func makeModesModel(_ controller: AppController) -> ModesModel {
-        ModesModel(
-            modes: controller.panelModel.modes, options: controller.settings.modeOptions,
-            save: { [weak controller] options in try controller?.updateSettings { $0.modeOptions = options } })
+        let options = controller.settings.modes.reduce(into: [String: ModeOptions]()) { options, mode in
+            if let review = mode.reviewBeforePaste { options[mode.id] = ModeOptions(reviewBeforePaste: review) }
+        }
+        return ModesModel(
+            modes: controller.panelModel.modes, options: options,
+            save: { [weak controller] options in
+                try controller?.updateSettings { settings in
+                    for (id, option) in options {
+                        guard let index = settings.modes.firstIndex(where: { $0.id == id }) else { continue }
+                        settings.modes[index].reviewBeforePaste = option.reviewBeforePaste
+                    }
+                }
+            })
     }
 
     /// Construit sans appeler le magasin de secrets.

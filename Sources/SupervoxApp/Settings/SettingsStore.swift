@@ -93,7 +93,10 @@ public struct SettingsStore: Sendable {
                 saveRefusal: .unreadableFileKept(fileName: file.lastPathComponent))
         }
         switch Self.decode(data) {
-        case .success(.current(let settings)):
+        case .success(.current(var settings)):
+            // Un fichier plus ancien est lu, migré, puis tenu pour un fichier de la version courante : la première
+            // écriture le met à cette version.
+            settings.version = AppSettings.current
             return SettingsLoad(settings: settings, notice: nil)
         case .success(.newer(let settings, let version)):
             let use = settings == nil ? "les réglages par défaut sont utilisés" : "les réglages que cette version sait lire sont utilisés"
@@ -126,6 +129,9 @@ public struct SettingsStore: Sendable {
         }
         try FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Ce qui s'écrit est de la version courante : `modes` y est, et un fichier plus ancien est migré par cette écriture.
+        var settings = settings
+        if settings.version < AppSettings.current { settings.version = AppSettings.current }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(settings).write(to: file, options: .atomic)

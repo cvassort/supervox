@@ -163,7 +163,7 @@ import Testing
         modes.setReview(true, for: ModeChip.rawID)
 
         let onDisk = store.load().settings
-        #expect(onDisk.modeOptions[ModeChip.rawID] == ModeOptions(reviewBeforePaste: true))
+        #expect(onDisk.mode(ModeChip.rawID)?.reviewBeforePaste == true)
         #expect(onDisk.reviewsBeforePaste(ModeChip.rawID))
         #expect(controller.settings == onDisk)
         #expect(controller.settings.reviewsBeforePaste(ModeChip.rawID))
@@ -173,6 +173,45 @@ import Testing
         // Un modèle construit plus tard part des choix enregistrés.
         let reopened = SettingsView.makeModesModel(controller)
         #expect(reopened.rows.map(\.reviews) == [true, false, true, true])
+    }
+
+    /// Le pont de l'onglet Modes ne reporte que `reviewBeforePaste` : consigne, modèle, moteur, raccourci et champs inconnus
+    /// d'un mode, comme tout le reste des réglages, restent ce que le fichier portait.
+    @Test func theModesBridgeOnlyCarriesTheReviewChoiceIntoTheModes() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data(
+            #"""
+            {"version": 2, "lastModeID": "perso-1", "futur": {"a": 1},
+             "modes": [
+               {"id": "dictee-brute", "name": "Dictée brute", "futur-mode": [true]},
+               {"id": "dictee-nettoyee", "name": "Dictée nettoyée", "instruction": "Ma consigne.", "engine": "parakeet"},
+               {"id": "perso-1", "name": "Courriel", "instruction": "Écris.", "reviewBeforePaste": false,
+                "hotKey": {"keyCode": 12, "modifiers": 6144}, "futur-mode": null},
+               {"id": "entretien", "name": "Entretien"}]}
+            """#.utf8
+        ).write(to: store.file)
+        let before = store.load().settings
+        let controller = makeController()
+        let modes = SettingsView.makeModesModel(controller)
+
+        modes.setReview(true, for: ModeChip.rawID)
+        modes.setReview(true, for: ModeChip.cleanedID)
+
+        let onDisk = store.load().settings
+        #expect(controller.settings == onDisk)
+        var expected = before
+        expected.modes[0].reviewBeforePaste = true
+        expected.modes[1].reviewBeforePaste = true
+        #expect(onDisk == expected)
+        #expect(onDisk.mode(ModeChip.cleanedID)?.instruction == "Ma consigne.")
+        #expect(onDisk.mode(ModeChip.cleanedID)?.engine == .parakeet)
+        #expect(onDisk.mode("perso-1")?.reviewBeforePaste == false)
+        #expect(onDisk.lastModeID == "perso-1")
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+        #expect((written["futur"] as? NSDictionary)?.isEqual(to: ["a": 1]) == true)
+        let writtenModes = try #require(written["modes"] as? [[String: Any]])
+        #expect(writtenModes[0]["futur-mode"] != nil)
+        #expect(writtenModes[2]["futur-mode"] is NSNull)
     }
 
     @Test func aRefusedSaveLeavesTheReviewChoiceAsItWas() throws {

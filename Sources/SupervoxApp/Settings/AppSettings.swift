@@ -48,17 +48,23 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 /// Réglages de l'application, tels qu'ils sont écrits dans `settings.json`.
 ///
 /// Règle d'évolution du format : tout champ ajouté est décodé avec `decodeIfPresent` et une valeur par défaut, pour
-/// qu'un fichier écrit avant son ajout se lise encore ; un champ inconnu est ignoré. `version` ne change que pour un
-/// format que l'ancienne application ne saurait pas lire correctement (voir `SettingsStore`).
+/// qu'un fichier écrit avant son ajout se lise encore. Un champ que cette version ne connaît pas (d'une version plus récente,
+/// ou `modeOptions` de la version 1) est lu, gardé et réécrit tel quel : l'enregistrer ne le perd jamais. `version` ne change que
+/// pour un format que l'ancienne application ne saurait pas lire correctement (voir `SettingsStore`).
 ///
 /// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, ou toute énumération ajoutée plus
-/// tard) est un tel format : il exige d'augmenter `current`. Sans cela, une application plus ancienne lit un cas
-/// inconnu à sa propre version, ne sait pas décoder le fichier et le met entièrement de côté (fournisseurs compris) ;
-/// avec une version plus récente, elle le garde intact, n'y écrit rien et prend les réglages par défaut. Les deux
-/// comportements sont fixés par `SettingsStoreTests` (`unknownEnumCase…`).
+/// tard, hors `TranscriptionEngine` qui se lit `whisperkit` quand il ne reconnaît pas la valeur) est un tel format : il exige
+/// d'augmenter `current`. Sans cela, une application plus ancienne lit un cas inconnu à sa propre version, ne sait pas décoder
+/// le fichier et le met entièrement de côté (fournisseurs compris) ; avec une version plus récente, elle le garde intact,
+/// n'y écrit rien et prend les réglages par défaut. Les deux comportements sont fixés par `SettingsStoreTests`
+/// (`unknownEnumCase…`).
+///
+/// Version 2 : les modes deviennent des données (`modes`). Un fichier de la version 1 n'a pas `modes` : il reçoit `Mode.base`,
+/// avec le choix de relecture que `modeOptions` portait. `modeOptions` reste dans le fichier, tel quel, mais ne sert qu'à cette
+/// migration, faite une fois : un fichier qui a `modes`, ou qui est déjà en version 2, ne le relit jamais.
 public struct AppSettings: Codable, Equatable, Sendable {
     /// Version du format du fichier que cette application sait lire et écrire.
-    public static let current = 1
+    public static let current = 2
 
     public var version: Int
     public var providers: [Provider]
@@ -70,15 +76,21 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var systemConflictShown: HotKey?
     /// Moteur, modèle, langue et vocabulaire de la dictée. Absent d'un fichier plus ancien : les défauts s'appliquent.
     public var transcription: TranscriptionSettings
-    /// Les options de chaque mode, par identifiant de mode. Un mode sans entrée, ou une entrée sans choix, prend les
-    /// valeurs par défaut du mode. Un identifiant inconnu est gardé tel quel (modes personnalisés d'une étape suivante).
-    /// Absent d'un fichier plus ancien : `[:]`.
-    public var modeOptions: [String: ModeOptions]
+    /// Les modes, dans l'ordre des pastilles. Dictée brute et Entretien y sont toujours (`Mode.normalized`). Absent d'un
+    /// fichier de la version 2 : `Mode.base`.
+    public var modes: [Mode]
+    /// Le modèle des modes qui n'en choisissent pas un. `nil` : aucun choix fait.
+    public var strongModel: ModelChoice?
+    /// Le modèle rapide, enregistré dès cette version et employé à l'étape 6. `nil` : aucun choix fait.
+    public var fastModel: ModelChoice?
+    /// Ce que cette version ne connaît pas, réécrit tel quel.
+    var unknown = UnknownFields()
 
     public init(
         version: Int, providers: [Provider], hotKey: HotKey,
         hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil,
-        transcription: TranscriptionSettings = .defaults, modeOptions: [String: ModeOptions] = [:]
+        transcription: TranscriptionSettings = .defaults, modes: [Mode] = Mode.base,
+        strongModel: ModelChoice? = nil, fastModel: ModelChoice? = nil
     ) {
         self.version = version
         self.providers = providers
@@ -87,27 +99,69 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.lastModeID = lastModeID
         self.systemConflictShown = systemConflictShown
         self.transcription = transcription
-        self.modeOptions = modeOptions
+        self.modes = modes
+        self.strongModel = strongModel
+        self.fastModel = fastModel
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription, modeOptions
+    private enum CodingKeys: String, CaseIterable {
+        case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription, modes, strongModel,
+            fastModel
     }
 
-    /// Un champ absent prend sa valeur par défaut ; un champ inconnu est ignoré ; un champ présent mais d'une autre
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+    /// Le champ de la version 1 que la migration lit une fois.
+    private static let legacyOptionsKey = "modeOptions"
+
+    /// Un champ absent prend sa valeur par défaut ; un champ inconnu est gardé ; un champ présent mais d'une autre
     /// forme lève une erreur (le fichier est alors illisible). Seul `version` est obligatoire.
     public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let container = try decoder.container(keyedBy: JSONKey.self)
+        func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
         let defaults = AppSettings.defaults
-        version = try container.decode(Int.self, forKey: .version)
-        providers = try container.decodeIfPresent([Provider].self, forKey: .providers) ?? defaults.providers
-        hotKey = try container.decodeIfPresent(HotKey.self, forKey: .hotKey) ?? defaults.hotKey
-        hotKeyBehavior = try container.decodeIfPresent(HotKeyBehavior.self, forKey: .hotKeyBehavior) ?? defaults.hotKeyBehavior
-        lastModeID = try container.decodeIfPresent(String.self, forKey: .lastModeID) ?? defaults.lastModeID
-        systemConflictShown = try container.decodeIfPresent(HotKey.self, forKey: .systemConflictShown)
+        version = try container.decode(Int.self, forKey: key(.version))
+        providers = try container.decodeIfPresent([Provider].self, forKey: key(.providers)) ?? defaults.providers
+        hotKey = try container.decodeIfPresent(HotKey.self, forKey: key(.hotKey)) ?? defaults.hotKey
+        hotKeyBehavior =
+            try container.decodeIfPresent(HotKeyBehavior.self, forKey: key(.hotKeyBehavior)) ?? defaults.hotKeyBehavior
+        lastModeID = try container.decodeIfPresent(String.self, forKey: key(.lastModeID)) ?? defaults.lastModeID
+        systemConflictShown = try container.decodeIfPresent(HotKey.self, forKey: key(.systemConflictShown))
         transcription =
-            try container.decodeIfPresent(TranscriptionSettings.self, forKey: .transcription) ?? defaults.transcription
-        modeOptions = try container.decodeIfPresent([String: ModeOptions].self, forKey: .modeOptions) ?? [:]
+            try container.decodeIfPresent(TranscriptionSettings.self, forKey: key(.transcription))
+            ?? defaults.transcription
+        strongModel = try container.decodeIfPresent(ModelChoice.self, forKey: key(.strongModel))
+        fastModel = try container.decodeIfPresent(ModelChoice.self, forKey: key(.fastModel))
+        if let modes = try container.decodeIfPresent([Mode].self, forKey: key(.modes)) {
+            self.modes = Mode.normalized(modes)
+        } else if version < 2 {
+            // Un fichier de la version 1, ou avant : les choix de relecture de `modeOptions`. Une valeur d'une autre forme ne
+            // fait pas perdre le fichier pour un champ qui ne sert plus : elle est gardée, et rien n'est repris.
+            let options = (try? container.decode([String: ModeOptions].self, forKey: JSONKey(Self.legacyOptionsKey))) ?? [:]
+            modes = Mode.base.map { mode in
+                var mode = mode
+                mode.reviewBeforePaste = options[mode.id]?.reviewBeforePaste
+                return mode
+            }
+        } else {
+            modes = Mode.base
+        }
+        unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: JSONKey.self)
+        func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
+        try container.encode(version, forKey: key(.version))
+        try container.encode(providers, forKey: key(.providers))
+        try container.encode(hotKey, forKey: key(.hotKey))
+        try container.encode(hotKeyBehavior, forKey: key(.hotKeyBehavior))
+        try container.encode(lastModeID, forKey: key(.lastModeID))
+        try container.encodeIfPresent(systemConflictShown, forKey: key(.systemConflictShown))
+        try container.encode(transcription, forKey: key(.transcription))
+        try container.encode(modes, forKey: key(.modes))
+        try container.encodeIfPresent(strongModel, forKey: key(.strongModel))
+        try container.encodeIfPresent(fastModel, forKey: key(.fastModel))
+        try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 
     public static var defaults: AppSettings {
@@ -115,6 +169,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
             version: current, providers: [], hotKey: .standard,
             hotKeyBehavior: .toggle, lastModeID: ModeChip.rawID)
     }
+
+    /// Le mode de cet identifiant, `nil` s'il n'y en a pas.
+    public func mode(_ id: String) -> Mode? { modes.first { $0.id == id } }
 
     // MARK: - Relire avant de coller
 
@@ -129,10 +186,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Vrai si le texte de ce mode s'affiche pour relecture avant d'être collé. Entretien l'est toujours, même si le fichier
     /// de réglages dit le contraire : la règle est ici, à la lecture, pas dans ce que le fichier porte.
     public func reviewsBeforePaste(_ modeID: String) -> Bool {
-        Self.reviews(modeID, options: modeOptions)
+        if Self.alwaysReviewed.contains(modeID) { return true }
+        return mode(modeID)?.reviewBeforePaste ?? Self.reviewDefault(modeID)
     }
 
-    /// La même règle pour des options prises hors d'un `AppSettings` (l'onglet Modes).
+    /// La même règle pour des options prises hors d'un `AppSettings` (l'onglet Modes, jusqu'à ce qu'il lise les modes).
     static func reviews(_ modeID: String, options: [String: ModeOptions]) -> Bool {
         if alwaysReviewed.contains(modeID) { return true }
         return options[modeID]?.reviewBeforePaste ?? reviewDefault(modeID)
