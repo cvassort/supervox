@@ -85,8 +85,11 @@ public actor WhisperKitTranscriber: Transcriber {
         guard LocalModelCatalog.readyWhisperFolder(for: model, in: downloadBase) != nil,
             let variant = tokenizerVariant(of: model)
         else { return false }
-        return FileManager.default.fileExists(
-            atPath: LocalModelCatalog.tokenizerFile(for: variant, in: downloadBase).path)
+        // `tokenizer.json` et `tokenizer_config.json` : la lecture locale de WhisperKit exige les deux (sans la configuration,
+        // elle échoue et se rabat sur le dépôt en ligne).
+        let tokenizer = LocalModelCatalog.tokenizerFile(for: variant, in: downloadBase)
+        return [tokenizer, tokenizer.deletingLastPathComponent().appendingPathComponent("tokenizer_config.json")]
+            .allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// Un acteur accepte un autre appel à chaque `await` : sans `loading`, un second `prepare()` arrivé pendant le premier

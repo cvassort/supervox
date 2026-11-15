@@ -403,6 +403,9 @@ import WhisperKit
         try FileManager.default.createDirectory(
             at: tokenizer.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("{}".utf8).write(to: tokenizer)
+        // Le fichier du tokenizer seul ne suffit pas : sa configuration est lue aussi (sinon WhisperKit va sur le réseau).
+        #expect(!WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
+        try Data("{}".utf8).write(to: tokenizer.deletingLastPathComponent().appendingPathComponent("tokenizer_config.json"))
         #expect(WhisperKitTranscriber.canLoadWithoutNetwork(model: "small", downloadBase: sandbox.root))
 
         // Le tokenizer d'une autre variante ne compte pas, ni un dossier incomplet.
