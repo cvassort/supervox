@@ -48,16 +48,23 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 /// Réglages de l'application, tels qu'ils sont écrits dans `settings.json`.
 ///
 /// Règle d'évolution du format : tout champ ajouté est décodé avec `decodeIfPresent` et une valeur par défaut, pour
-/// qu'un fichier écrit avant son ajout se lise encore. Un champ que cette version ne connaît pas (d'une version plus récente,
-/// ou `modeOptions` de la version 1) est lu, gardé et réécrit tel quel : l'enregistrer ne le perd jamais. `version` ne change que
-/// pour un format que l'ancienne application ne saurait pas lire correctement (voir `SettingsStore`).
+/// qu'un fichier écrit avant son ajout se lise encore. `version` ne change que pour un format que l'ancienne application ne
+/// saurait pas lire ou réécrire correctement (voir `SettingsStore`).
 ///
-/// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, ou toute énumération ajoutée plus
-/// tard, hors `TranscriptionEngine` qui se lit `whisperkit` quand il ne reconnaît pas la valeur) est un tel format : il exige
-/// d'augmenter `current`. Sans cela, une application plus ancienne lit un cas inconnu à sa propre version, ne sait pas décoder
-/// le fichier et le met entièrement de côté (fournisseurs compris) ; avec une version plus récente, elle le garde intact,
-/// n'y écrit rien et prend les réglages par défaut. Les deux comportements sont fixés par `SettingsStoreTests`
-/// (`unknownEnumCase…`).
+/// Ce que cette version garde, et ce qu'elle perd, à la réécriture d'un fichier :
+/// - un champ inconnu de `AppSettings` (premier niveau) ou de `Mode` est lu, gardé et réécrit tel quel (`UnknownFields`) ;
+///   `modeOptions` de la version 1 en fait partie ;
+/// - un champ inconnu de `Provider`, `HotKey`, `TranscriptionSettings` ou `ModelChoice` est PERDU à l'enregistrement
+///   (`SettingsStoreTests.unknownFieldsAreKeptAndWrittenBack` le fixe). Ajouter un champ à l'un de ces types exige donc
+///   d'augmenter `current`, ou d'étendre la garde à ce type.
+///
+/// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, `TranscriptionEngine`, ou toute énumération
+/// ajoutée plus tard) est un tel format : il exige d'augmenter `current`. Sans cela, une application plus ancienne lit un cas
+/// inconnu à sa propre version, ne sait pas décoder le fichier et le met entièrement de côté (fournisseurs compris) ; pour
+/// `TranscriptionEngine`, dont le décodage est tolérant, elle le réécrit `whisperkit` sans avis, dans l'onglet Transcription et
+/// dans chaque mode (`SettingsStoreTests.anUnknownEngineInAVersionTwoFile…`). Avec une version plus récente, elle garde le
+/// fichier intact, n'y écrit rien et prend les réglages par défaut (ou ce qu'elle sait en lire). Ces comportements sont fixés par
+/// `SettingsStoreTests` (`unknownEnumCase…`).
 ///
 /// Version 2 : les modes deviennent des données (`modes`). Un fichier de la version 1 n'a pas `modes` : il reçoit `Mode.base`,
 /// avec le choix de relecture que `modeOptions` portait. `modeOptions` reste dans le fichier, tel quel, mais ne sert qu'à cette

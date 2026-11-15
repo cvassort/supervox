@@ -294,9 +294,9 @@ private func sampleSettings() -> AppSettings {
         #expect(try Data(contentsOf: file) == original)
     }
 
-    /// M7 : un champ inconnu (écrit par une version future qui a gardé le même numéro, ou à la main) est lu, gardé, et réécrit
-    /// à l'identique ; le fichier n'est pas mis de côté. Le test qui disait « ignoré » disait aussi, sans le vouloir, que
-    /// l'enregistrement suivant le perdait.
+    /// M7 : un champ inconnu du premier niveau (écrit par une version future qui a gardé le même numéro, ou à la main) est lu,
+    /// gardé, et réécrit à l'identique ; le fichier n'est pas mis de côté. Pour un fournisseur, le champ inconnu est perdu :
+    /// voir la fin du test.
     @Test func unknownFieldsAreKeptAndWrittenBack() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
@@ -320,6 +320,49 @@ private func sampleSettings() -> AppSettings {
         let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         #expect(written["langue"] as? String == "fr")
         #expect((written["moteur"] as? NSDictionary)?.isEqual(to: ["nom": "x"]) == true)
+
+        // Limite connue, fixée ici pour qu'elle reste visible (I2) : seuls `AppSettings` et `Mode` gardent leurs champs
+        // inconnus. Ceux d'un fournisseur (`couleur`), de `HotKey`, de `TranscriptionSettings` et de `ModelChoice` sont perdus
+        // à la réécriture ; ajouter un champ à l'un de ces types exige donc d'augmenter `AppSettings.current`, ou d'étendre la
+        // garde (`UnknownFields`) à ce type. Si ce test tombe parce que la garde a été étendue, mettre le commentaire de
+        // `AppSettings` à jour avec elle.
+        let providers = try #require(written["providers"] as? [[String: Any]])
+        #expect(providers.count == 1)
+        #expect(providers[0]["couleur"] == nil)
+        #expect(providers[0]["name"] as? String == "Local")
+    }
+
+    /// I1 : un moteur que cette version ne connaît pas se lit `whisperkit` (règle 6), et l'enregistrement suivant l'écrit
+    /// ainsi, sans avis, dans l'onglet Transcription comme dans chaque mode qui l'avait choisi (où il devient un choix explicite
+    /// de WhisperKit). Un nouveau moteur exige donc d'augmenter `AppSettings.current` : à la version suivante, un fichier plus
+    /// ancien que l'application qui l'écrit est protégé (gardé intact, non enregistrable) au lieu d'être réécrit. Ce test fixe la
+    /// conséquence de ne pas le faire.
+    @Test func anUnknownEngineInAVersionTwoFileIsRewrittenAsWhisperKitOnTheNextSave() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(
+            #"""
+            {"version": 2, "lastModeID": "dictee-brute", "transcription": {"engine": "moteur-futur", "language": "en"},
+             "modes": [{"id": "dictee-brute", "name": "Dictée brute"},
+                       {"id": "perso-1", "name": "Courriel", "instruction": "Écris.", "engine": "moteur-futur"},
+                       {"id": "entretien", "name": "Entretien"}]}
+            """#.utf8
+        ).write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        var settings = store.load().settings
+        #expect(settings.transcription.engine == .whisperKit)
+        #expect(settings.mode("perso-1")?.engine == .whisperKit)
+        settings.lastModeID = ModeChip.promptID
+        try store.save(settings)
+
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect((written["transcription"] as? [String: Any])?["engine"] as? String == "whisperkit")
+        #expect((written["transcription"] as? [String: Any])?["language"] as? String == "en")
+        let modes = try #require(written["modes"] as? [[String: Any]])
+        #expect(modes[1]["engine"] as? String == "whisperkit")
+        #expect(modes[0]["engine"] == nil)
     }
 
     /// m1 : une erreur de lecture (ici un fichier sans droit de lecture) n'est pas un fichier abîmé : il reste à
