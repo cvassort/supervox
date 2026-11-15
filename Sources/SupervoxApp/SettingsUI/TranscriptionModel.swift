@@ -72,6 +72,8 @@ public final class TranscriptionModel {
     private var overrides: [String: LocalModel.State] = [:]
     /// Dernier échec de téléchargement, par identifiant de modèle, jusqu'au prochain essai.
     private var failures: [String: String] = [:]
+    /// Le dernier état du disque lu pour chaque modèle (hors téléchargement en cours).
+    @ObservationIgnored private var diskStates: [String: LocalModel.State] = [:]
     @ObservationIgnored private var recheckGeneration = 0
     @ObservationIgnored private var recheckTask: Task<Void, Never>?
     /// Vrai une fois la liste lue au moins une fois (même vide).
@@ -98,11 +100,21 @@ public final class TranscriptionModel {
 
     // MARK: - Modèles locaux
 
+    /// Relit les modèles du disque. Un échec de téléchargement n'est pas effacé par la relecture : il reste affiché jusqu'à
+    /// une nouvelle action (Réessayer, Supprimer, ou un téléchargement réussi), même si le disque dit « prêt » juste après.
+    /// Quand l'état sur le disque du modèle Whisper choisi change (téléchargé ici, ailleurs, ou supprimé), le vocabulaire
+    /// est recompté : une première lecture n'est pas un changement, un téléchargement en cours n'est pas un état du disque.
     public func refresh() async {
-        listed = await catalog.models()
+        let fresh = await catalog.models()
+        let chosen = LocalModelID.whisper(settings.whisperModel)
+        let before = diskStates[chosen]
+        listed = fresh
         hasListed = true
-        // Un modèle que le disque dit prêt n'est plus en échec (le moteur l'a peut-être téléchargé entre-temps).
-        for model in listed where model.state == .ready { failures[model.id] = nil }
+        for model in fresh {
+            if case .downloading = model.state { continue }
+            diskStates[model.id] = model.state
+        }
+        if let before, before != diskStates[chosen] { await recheckVocabulary() }
     }
 
     /// Les variantes WhisperKit de la liste, dans l'ordre du catalogue.
@@ -143,26 +155,24 @@ public final class TranscriptionModel {
         }
     }
 
-    /// Lance le téléchargement. Sans effet si ce modèle est déjà en cours de téléchargement. Une fois le modèle Whisper
-    /// choisi téléchargé, le vocabulaire est recompté (il a pu être accepté sans pouvoir l'être).
+    /// Lance le téléchargement. Sans effet si ce modèle est déjà en cours de téléchargement. Un échec reste affiché jusqu'à la
+    /// prochaine action.
     public func download(_ id: String) async {
         if case .downloading? = overrides[id] { return }
         overrides[id] = .downloading(nil)
         failures[id] = nil
         clearMessage()
-        var succeeded = false
         do {
             try await catalog.download(id) { [weak self] fraction in
                 Task { @MainActor in self?.progress(fraction, of: id) }
             }
-            succeeded = true
         } catch {
             failures[id] = "Le téléchargement a échoué : \(Self.describe(error))"
         }
-        // La liste est relue avant de lâcher l'état « en cours » : la ligne ne passe jamais par un état périmé.
+        // La liste est relue avant de lâcher l'état « en cours » : la ligne ne passe jamais par un état périmé. La relecture
+        // recompte le vocabulaire si le modèle choisi a changé sur le disque, succès ou échec.
         await refresh()
         overrides[id] = nil
-        if succeeded, id == LocalModelID.whisper(settings.whisperModel) { await recheckVocabulary() }
     }
 
     /// Une fraction donnée par la bibliothèque. Elle ne recule jamais (les rapports peuvent arriver dans le désordre) et
@@ -204,7 +214,7 @@ public final class TranscriptionModel {
     public func isUsedByDictation(_ id: String) -> Bool {
         switch id {
         case LocalModelID.parakeet, LocalModelID.voiceDetector: true
-        default: id == LocalModelID.whisper(settings.whisperModel)
+        default: settings.engine == "whisperkit" && id == LocalModelID.whisper(settings.whisperModel)
         }
     }
 

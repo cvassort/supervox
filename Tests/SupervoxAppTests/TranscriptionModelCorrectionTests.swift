@@ -81,20 +81,103 @@ import Testing
         #expect(Self.state(model, id) == .ready)
     }
 
-    /// Un échec ne masque pas le disque : si le modèle est finalement là (téléchargé par le moteur), la ligne dit « Prêt ».
-    @Test func aRememberedFailureYieldsToTheDiskWhenTheModelIsThereAfterAll() async {
+    /// Un échec reste affiché tant qu'aucune nouvelle action ne l'a remplacé, même si le disque dit « prêt » juste après lui
+    /// (le modèle est là mais le tokenizer, ou le chargement, a échoué).
+    @Test func aFailureStaysVisibleEvenWhenTheDiskSaysReadyJustAfterIt() async {
         let model = makeModel()
         await model.refresh()
         let id = LocalModelID.parakeet
-        catalog.setDownload { _, _ in throw SaveFailure() }
+        let catalog = catalog
+        catalog.setDownload { id, _ in
+            catalog.setDiskState(.ready, of: id)
+            throw SaveFailure()
+        }
         await model.download(id)
-        guard case .failed? = Self.state(model, id) else {
+        guard case .failed(let reason)? = Self.state(model, id) else {
+            Issue.record("échec attendu, état reçu \(String(describing: Self.state(model, id)))")
+            return
+        }
+        #expect(reason.contains("disque plein"))
+        // Relire le disque ne l'efface pas non plus.
+        await model.refresh()
+        #expect(Self.state(model, id) == .failed(reason))
+        #expect(TranscriptionModel.actions(for: Self.state(model, id)!).map(\.label) == ["Réessayer", "Supprimer…"])
+    }
+
+    @Test func aSuccessfulRetryReplacesTheFailure() async {
+        let model = makeModel()
+        await model.refresh()
+        let id = LocalModelID.parakeet
+        let catalog = catalog
+        catalog.setDownload { id, _ in
+            catalog.setDiskState(.ready, of: id)
+            throw SaveFailure()
+        }
+        await model.download(id)
+        catalog.setDownload { _, _ in }
+        await model.download(id)
+        #expect(Self.state(model, id) == .ready)
+    }
+
+    @Test func deletingReplacesTheFailure() async {
+        let model = makeModel()
+        await model.refresh()
+        let id = LocalModelID.parakeet
+        let catalog = catalog
+        catalog.setDownload { id, _ in
+            catalog.setDiskState(.ready, of: id)
+            throw SaveFailure()
+        }
+        await model.download(id)
+        await model.delete(id)
+        #expect(Self.state(model, id) == .absent)
+    }
+
+    // MARK: - Recomptage : chaque fois que l'état du disque du modèle choisi change
+
+    /// Même sur le chemin d'un échec : le modèle est là, le vocabulaire est recompté.
+    @Test func aFailedDownloadWhoseDiskIsReadyStillRecountsTheVocabulary() async {
+        let model = makeModel(settings(model: "small", vocabulary: ["Kubernetes"]))
+        await model.refresh()
+        let catalog = catalog
+        catalog.setTokenCount(150)
+        catalog.setDownload { id, _ in
+            catalog.setDiskState(.ready, of: id)
+            throw SaveFailure()
+        }
+        await model.download(FakeModelCatalog.small.id)
+        guard case .failed? = Self.state(model, FakeModelCatalog.small.id) else {
             Issue.record("échec attendu")
             return
         }
-        catalog.setDiskState(.ready, of: id)
+        #expect(catalog.countRequests.count == 1)
+        #expect(model.messageKind == .error)
+        #expect(model.messageArea == .vocabulary)
+        #expect(model.settings.vocabulary == ["Kubernetes"])
+    }
+
+    /// Le moteur a téléchargé le modèle de son côté : la relecture de la liste voit le changement et recompte.
+    @Test func aRefreshSeeingTheChosenModelChangeOnDiskRecountsTheVocabulary() async {
+        let model = makeModel(settings(model: "small", vocabulary: ["Kubernetes"]))
         await model.refresh()
-        #expect(Self.state(model, id) == .ready)
+        #expect(catalog.countRequests.isEmpty)  // première lecture : rien n'a changé
+
+        catalog.setDiskState(.ready, of: FakeModelCatalog.small.id)
+        catalog.setTokenCount(150)
+        await model.refresh()
+        #expect(catalog.countRequests.count == 1)
+        #expect(model.messageKind == .error)
+
+        await model.refresh()  // rien n'a changé : pas de nouveau comptage
+        #expect(catalog.countRequests.count == 1)
+    }
+
+    @Test func aChangeOnDiskOfAnotherModelDoesNotRecount() async {
+        let model = makeModel(settings(model: "small", vocabulary: ["Kubernetes"]))
+        await model.refresh()
+        catalog.setDiskState(.ready, of: LocalModelID.parakeet)
+        await model.refresh()
+        #expect(catalog.countRequests.isEmpty)
     }
 
     @Test func anIncompleteModelCanBeDeletedWithoutAWarning() async {
@@ -342,5 +425,34 @@ import Testing
         #expect(chosen.contains("prochaine dictée"))
         let other = model.deletionConfirmation(for: FakeModelCatalog.small)
         #expect(!other.contains("FluidAudio") && !other.contains("prochaine dictée"))
+    }
+
+    // MARK: - « Moteur choisi » : le modèle du texte final seulement
+
+    @Test func aWhisperModelIsNeverTheChosenOneWhenParakeetIsTheEngine() {
+        let model = makeModel(settings(engine: "parakeet"))
+        #expect(!model.isUsedByChosenEngine(FakeModelCatalog.turbo.id))
+        #expect(!model.isUsedByDictation(FakeModelCatalog.turbo.id))
+        #expect(model.isUsedByChosenEngine(LocalModelID.parakeet))
+        // Parakeet et le détecteur de voix servent toujours.
+        #expect(model.isUsedByDictation(LocalModelID.parakeet))
+        #expect(model.isUsedByDictation(LocalModelID.voiceDetector))
+    }
+
+    @Test func theTagFollowsTheEngineBothWays() {
+        let whisper = makeModel(settings())
+        #expect(whisper.isUsedByChosenEngine(FakeModelCatalog.turbo.id))
+        #expect(!whisper.isUsedByChosenEngine(LocalModelID.parakeet))
+        #expect(!whisper.isUsedByChosenEngine(FakeModelCatalog.small.id))
+    }
+
+    @Test func deletingTheWhisperModelOfTheSettingsDoesNotWarnWhenParakeetIsTheEngine() async {
+        let model = makeModel(settings(engine: "parakeet"))
+        await model.refresh()
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message == nil)
+        let confirmation = model.deletionConfirmation(for: FakeModelCatalog.turbo)
+        #expect(!confirmation.contains("prochaine dictée") && !confirmation.contains("moteur choisi"))
+        #expect(confirmation.contains("plus tard"))
     }
 }
