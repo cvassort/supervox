@@ -275,4 +275,31 @@ import Testing
             .flatMap { source in Self.modeIdentifiers.filter { source.code.contains($0) }.map { "\(source.place) : \($0)" } }
         #expect(offending.isEmpty, "\(offending)")
     }
+
+    /// I1 : les rappels de `AVSpeechSynthesizer` arrivent sur le fil que le système choisit ; rien dans la couche de voix ne suppose
+    /// le fil principal (`MainActor.assumeIsolated` planterait ailleurs). Ils copient et poussent dans un flux.
+    static let forbiddenMainThreadAssumption = #"assumeIsolated|MainActor\s*\.\s*run\b|DispatchQueue\s*\.\s*main\s*\.\s*(sync|async)"#
+
+    @Test func noSpeechCodeAssumesTheCallbackThread() throws {
+        let pattern = try Regex(Self.forbiddenMainThreadAssumption)
+        let sources = try Self.sources(under: "Sources/SupervoxCore/Speech")
+        #expect(sources.contains { $0.place == "AVSpeechBufferSource.swift" }, "le balayage doit voir la couche système")
+        let offending = sources.filter { $0.code.contains(pattern) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "MainActor.assumeIsolated { onBuffer(buffer) }", "MainActor\n    .assumeIsolated {", "MainActor . run { x }",
+        "DispatchQueue.main.async { }", "DispatchQueue . main . sync { }",
+    ])
+    func theMainThreadAssumptionPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenMainThreadAssumption)))
+    }
+
+    @Test func theMainThreadAssumptionPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenMainThreadAssumption)
+        for code in ["@MainActor final class AVSpeechBufferSource", "Task { @MainActor in }", "let mainQueue = 1", "events.yield(.end)"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
 }

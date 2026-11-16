@@ -1,30 +1,38 @@
 import AVFAudio
 import Foundation
 
-/// Ce que `SpeechRendering` demande à un synthétiseur de tampons : lancer une phrase, rendre chaque tampon et la fin du délégué,
-/// et s'arrêter. La seule réalisation est `AVSpeechBufferSource` (la mince couche qui appelle `AVSpeechSynthesizer`) ; les tests
-/// en mettent une double. Tout se passe sur le fil principal : c'est là que le système rend les tampons et le délégué
-/// (mesuré, `docs/bench/2026-11-16-essai-voix-et-lecture.md`).
+/// Ce que `SpeechRendering` demande à un synthétiseur de tampons : lancer une phrase et pousser les événements qu'il reçoit du
+/// système, et s'arrêter. La seule réalisation est `AVSpeechBufferSource` (la mince couche qui appelle `AVSpeechSynthesizer`) ;
+/// les tests en mettent une double.
+///
+/// **Aucune hypothèse sur le fil des rappels du système** : `emit` est `@Sendable` et sûr depuis n'importe quel fil. Le rappel
+/// ne fait que copier le tampon en `AudioClip` (`SynthesisGate.Event.from`) et le pousser ; l'ordre d'un même producteur est
+/// gardé. La source elle-même (le synthétiseur, sa boucle d'exécution) reste, elle, sur le fil principal : la mesure dit que le
+/// système exige sa boucle (`docs/bench/2026-11-16-essai-voix-et-lecture.md`).
 @MainActor
 protocol SpeechBufferSource: AnyObject {
-    /// Lance la synthèse. `onBuffer` reçoit chaque tampon (le rappel doit le copier sans attendre), `onFinish` la fin signalée par
-    /// le délégué. Lève `SpeechError.noVoice` si la voix n'existe plus.
-    func start(text: String, voiceIdentifier: String, onBuffer: @escaping @MainActor (AVAudioBuffer) -> Void,
-               onFinish: @escaping @MainActor () -> Void) throws(SpeechError)
-    /// Coupe tout de suite la synthèse ; n'appelle plus aucun rappel.
+    /// Lance la synthèse. `emit` reçoit un `.chunk` par tampon, puis `.end` (tampon de longueur nulle **ou** `didFinish`, le
+    /// premier des deux), ou `.interrupted` (`didCancel`). Lève `SpeechError.noVoice` si la voix n'existe plus.
+    func start(text: String, voiceIdentifier: String, emit: @escaping @Sendable (SynthesisGate.Event) -> Void) throws(SpeechError)
+    /// Coupe tout de suite la synthèse ; n'appelle plus `emit`.
     func stop()
 }
 
 /// La machine d'état d'une synthèse en cours : pure, sans fil ni système. Le premier verdict gagne, une seule fois ; tout ce qui
 /// vient après (le délégué après le tampon nul, un tampon tardif, la garde de durée après la fin) est ignoré.
 struct SynthesisGate {
-    enum Event {
+    enum Event: Sendable {
         /// Un tampon lu.
         case chunk(AudioClip)
         /// La fin : le tampon de longueur nulle **ou** `didFinish`, le premier des deux (mesuré : ils se suivent à 0,2 ms).
         case end
         case fail(SpeechError)
+        /// L'appelant annule.
         case cancelled
+        /// `didCancel` : le système a interrompu la synthèse de lui-même. Rendue tout de suite (sans attendre la garde de durée)
+        /// comme `SpeechError.timedOut` : « rien de rendu » pour l'appelant, qui traite la voix comme indisponible. Ce n'est
+        /// pas `.cancelled` : l'appelant n'a rien annulé, et le repli ne doit pas le prendre pour une annulation.
+        case interrupted
     }
 
     enum Verdict: Equatable {
@@ -46,85 +54,66 @@ struct SynthesisGate {
         case .end: verdict = .finished(clips)
         case .fail(let error): verdict = .failed(error)
         case .cancelled: verdict = .cancelled
+        case .interrupted: verdict = .failed(.timedOut)
         }
         return verdict
     }
 }
 
-@MainActor
-private final class RenderRun {
-    private var gate = SynthesisGate()
-    private var continuation: CheckedContinuation<[AudioClip], any Error>?
-    /// Verdict tombé avant que l'attente ne soit installée.
-    private var early: SynthesisGate.Verdict?
-
-    var isSettled: Bool { gate.verdict != nil }
-    var finishedCleanly: Bool { if case .finished = gate.verdict { return true } else { return false } }
-
-    func handle(_ event: SynthesisGate.Event) {
-        guard let verdict = gate.handle(event) else { return }
-        guard let continuation else { early = verdict; return }
-        self.continuation = nil
-        continuation.resume(with: Self.result(of: verdict))
-    }
-
-    func install(_ continuation: CheckedContinuation<[AudioClip], any Error>) {
-        if let early {
-            self.early = nil
-            continuation.resume(with: Self.result(of: early))
-        } else {
-            self.continuation = continuation
-        }
-    }
-
-    private static func result(of verdict: SynthesisGate.Verdict) -> Result<[AudioClip], any Error> {
-        switch verdict {
-        case .finished(let clips): .success(clips)
-        case .failed(let error): .failure(error)
-        case .cancelled: .failure(CancellationError())
-        }
+extension SynthesisGate.Event {
+    /// Ce que le rappel de `write` fait d'un tampon, **quel que soit le fil** (fonction pure, sans état) : un tampon de longueur
+    /// nulle est la fin ; un tampon lisible est copié en `AudioClip` avec **son** format (le tampon appartient au système et n'est
+    /// valable que pendant le rappel) ; un tampon qu'on ne sait pas lire fait échouer la synthèse (`.empty`), car l'ignorer
+    /// tronquerait la parole en silence.
+    static func from(_ buffer: AVAudioBuffer) -> SynthesisGate.Event {
+        guard let pcm = buffer as? AVAudioPCMBuffer else { return .fail(.empty) }
+        if pcm.frameLength == 0 { return .end }
+        guard let clip = SystemSpeechSynthesizer.clip(from: pcm) else { return .fail(.empty) }
+        return .chunk(clip)
     }
 }
 
 enum SpeechRendering {
-    /// Rend les morceaux d'une phrase, dans l'ordre. Ne bloque jamais le fil principal : il attend une continuation.
+    /// Rend les morceaux d'une phrase, dans l'ordre. Ne bloque jamais le fil principal : il consomme un `AsyncStream` où le
+    /// rappel du système, la garde de durée et l'annulation poussent leurs événements (un seul consommateur, donc l'ordre de
+    /// chaque producteur est gardé).
     ///
-    /// - La fin est le premier de : tampon de longueur nulle, `didFinish`. Prise une seule fois.
+    /// - La fin est le premier de : tampon de longueur nulle, `didFinish`. Prise une seule fois (`SynthesisGate`).
     /// - Garde de durée : `sleep(timeout)` qui rend avant la fin donne `SpeechError.timedOut` (un synthétiseur libéré, ou une
     ///   boucle principale arrêtée, ne signalent rien du tout : mesuré). L'attente est injectée.
-    /// - Un tampon qu'on ne sait pas lire fait échouer la synthèse (`.empty`) : l'ignorer tronquerait la parole en silence.
-    /// - Annulation : la source est arrêtée, et `CancellationError` est levée sans attendre un signal du système.
+    /// - `didCancel` (`.interrupted`) échoue tout de suite, sans attendre la garde.
+    /// - Annulation de l'appelant : la source est arrêtée, `CancellationError` est levée sans attendre un signal du système. Si la
+    ///   fin du système arrive dans le même tour que l'annulation, `render` peut rendre les morceaux ; l'appelant
+    ///   (`SystemSpeechSynthesizer.synthesize`) revérifie l'annulation avant de livrer.
     /// - La source reste vivante jusqu'au retour (un synthétiseur libéré avant la fin ne signale plus rien : mesuré).
     @MainActor
     static func render(text: String, voiceIdentifier: String, source: any SpeechBufferSource, timeout: Double,
                        sleep: @escaping @Sendable (Double) async throws -> Void) async throws -> [AudioClip] {
-        let run = RenderRun()
-        let timer = Task { @MainActor in
+        try Task.checkCancellation()
+        let (stream, events) = AsyncStream.makeStream(of: SynthesisGate.Event.self)
+        var gate = SynthesisGate()
+        let timer = Task {
             do { try await sleep(timeout) } catch { return }
-            run.handle(.fail(.timedOut))
+            events.yield(.fail(.timedOut))
         }
         defer {
             timer.cancel()
-            if !run.finishedCleanly { source.stop() }
+            events.finish()
+            if case .finished = gate.verdict {} else { source.stop() }
         }
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[AudioClip], any Error>) in
-                run.install(continuation)
-                if Task.isCancelled { run.handle(.cancelled); return }
-                do throws(SpeechError) {
-                    try source.start(text: text, voiceIdentifier: voiceIdentifier, onBuffer: { buffer in
-                        guard !run.isSettled else { return }
-                        guard let pcm = buffer as? AVAudioPCMBuffer else { return run.handle(.fail(.empty)) }
-                        if pcm.frameLength == 0 { return run.handle(.end) }
-                        guard let clip = SystemSpeechSynthesizer.clip(from: pcm) else { return run.handle(.fail(.empty)) }
-                        run.handle(.chunk(clip))
-                    }, onFinish: { run.handle(.end) })
-                } catch {
-                    run.handle(.fail(error))
-                }
+        try source.start(text: text, voiceIdentifier: voiceIdentifier, emit: { events.yield($0) })
+        let verdict: SynthesisGate.Verdict? = await withTaskCancellationHandler {
+            for await event in stream {
+                if let verdict = gate.handle(event) { return verdict }
             }
+            return nil   // le flux s'est arrêté sans verdict : la tâche est annulée
         } onCancel: {
-            Task { @MainActor in run.handle(.cancelled) }
+            events.yield(.cancelled)
+        }
+        switch verdict {
+        case .finished(let clips): return clips
+        case .failed(let error): throw error
+        case .cancelled, nil: throw CancellationError()
         }
     }
 }

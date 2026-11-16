@@ -26,3 +26,9 @@ public enum SpeechError: Error, Equatable, Sendable {
 public protocol SpeechSynthesizer: Sendable {
     func synthesize(_ text: String) async throws -> Speech
 }
+
+extension String {
+    /// Rien à dire : vide, ou seulement des espaces et des sauts de ligne. Contrôlé par chaque voix **avant** tout appel et, pour
+    /// le repli, avant de toucher à l'état : une phrase sans son n'est la panne d'aucune voix.
+    var isBlankForSpeech: Bool { trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}

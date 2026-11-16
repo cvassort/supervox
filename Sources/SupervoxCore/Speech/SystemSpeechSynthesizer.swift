@@ -20,9 +20,9 @@ public struct SystemVoiceInfo: Equatable, Sendable {
 /// (`AVSpeechBufferSource` sous `SpeechRendering`) appelle le système et n'est exécuté que par l'essai d'intégration
 /// `SUPERVOX_SPEECH=1`.
 public final class SystemSpeechSynthesizer: SpeechSynthesizer {
-    /// Secondes laissées à un `write` avant `SpeechError.timedOut` : choix non mesuré (mesuré : premier tampon entre 0,55 et 1,6 s,
-    /// puis tout le flux en 33 à 42 ms, pour une phrase de 3,5 s ; la durée d'une phrase longue n'est pas mesurée).
-    static let renderTimeout: Double = 20
+    /// Secondes laissées à un `write` avant `SpeechError.timedOut` : 8, choix non mesuré ; premier tampon mesuré jusqu'à 1,6 s sur
+    /// une machine (3 passages, une phrase de 3,5 s, flux entier en 33 à 42 ms) ; la durée d'une phrase longue n'est pas mesurée.
+    static let renderTimeout: Double = 8
 
     private let language: String
     private let voices: @Sendable () -> [SystemVoiceInfo]
@@ -51,7 +51,7 @@ public final class SystemSpeechSynthesizer: SpeechSynthesizer {
     public func synthesize(_ text: String) async throws -> Speech {
         try Task.checkCancellation()
         guard let voice = Self.pickVoice(language: language, among: voices()) else { throw SpeechError.noVoice(language: language) }
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SpeechError.empty }
+        guard !text.isBlankForSpeech else { throw SpeechError.empty }
         let chunks: [AudioClip]
         do {
             chunks = try await render(text, voice.identifier)

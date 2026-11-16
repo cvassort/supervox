@@ -177,6 +177,11 @@ private func synthesizer(language: String = "fr-FR", voices: [SystemVoiceInfo] =
     }
 }
 
+/// La garde de durée du vrai `write` : 8 s, choix non mesuré (premier tampon mesuré jusqu'à 1,6 s sur une machine).
+@Test func theSystemRenderGuardIsEightSeconds() {
+    #expect(SystemSpeechSynthesizer.renderTimeout == 8)
+}
+
 // MARK: - Règle 3 : annulation de la tâche
 
 @Suite(.timeLimit(.minutes(1))) struct SystemSpeechCancellationTests {
