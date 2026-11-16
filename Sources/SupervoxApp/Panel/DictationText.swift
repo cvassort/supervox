@@ -28,6 +28,34 @@ public enum DictationText {
     /// La ligne d'aide sous le champ de relecture.
     public static let reviewHint = "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée »."
 
+    /// Les boutons de la rangée de la relecture. « Terminer » prend la place de « Corriger à la voix » pendant que la consigne se dit.
+    public static let correctLabel = "Corriger à la voix"
+    public static let finishCorrectionLabel = "Terminer"
+    /// Les deux boutons à flèche : sans texte visible (la rangée ne tiendrait pas dans le panneau avec leurs libellés), ils portent
+    /// ces libellés pour VoiceOver et en info-bulle.
+    public static let previousVersionLabel = "Version précédente"
+    public static let nextVersionLabel = "Version suivante"
+
+    /// La ligne sous l'aide de la relecture : comment commencer une correction. `hotKeyLabel` est le libellé du raccourci global
+    /// réellement enregistré (`PanelModel.hotKeyLabel`, qui suit la disposition du clavier), `nil` s'il n'y en a aucun : le bouton
+    /// reste alors seul nommé. Espaces insécables dans les guillemets et devant « : » (une ligne ne finit pas sur « « »).
+    public static func correctionHint(hotKeyLabel: String?) -> String {
+        let button = "«\u{00A0}\(correctLabel.replacingOccurrences(of: " ", with: "\u{00A0}"))\u{00A0}»\u{00A0}: dites ce qu'il faut changer."
+        guard let label = hotKeyLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else { return button }
+        return "\(label) ou \(button)"
+    }
+
+    /// Ce que VoiceOver lit pour l'indicateur d'attente d'une étape de la correction ; l'écoute n'en a pas (le point rouge dit
+    /// « Enregistrement en cours »).
+    public static func correctionActivityLabel(for step: CorrectionStep) -> String? {
+        switch step {
+        case .preparing: "Préparation de la correction en cours"
+        case .recording: nil
+        case .transcribing: "Transcription de la consigne en cours"
+        case .rewriting: "Réécriture en cours"
+        }
+    }
+
     /// L'aide sous le champ quand le panneau n'a pas la frappe (un collage manqué la lui a fait rendre, ou un clic dans une autre
     /// application la lui a prise) : ⌘↩ partirait dans l'autre application, et n'est donc pas annoncé. Une seule phrase pour
     /// les deux cas, et sans « réessayer » : sans Accessibilité, un nouveau « Coller » échouerait de la même façon.
@@ -121,7 +149,7 @@ public enum DictationText {
         case .review: "À relire"
         case .pasting: "Collage…"
         case .correcting(.preparing): "Préparation…"
-        case .correcting(.recording): "Correction à la voix"
+        case .correcting(.recording): "Écoute de la consigne"
         case .correcting(.transcribing): "Transcription de la consigne…"
         case .correcting(.rewriting): "Réécriture…"
         case .copied: "Texte copié"
@@ -176,7 +204,7 @@ public struct DictationDisplay: Equatable, Sendable {
     public var waitingText: String?
     /// Pendant la mise en forme : ce qu'Échap fait.
     public var cancelHint: String?
-    /// Pendant la mise en forme : le libellé d'accessibilité de l'indicateur d'attente.
+    /// Pendant la mise en forme et les étapes d'attente de la correction : le libellé d'accessibilité de l'indicateur d'attente.
     public var activityLabel: String?
     /// Pendant la mise en forme : le libellé d'accessibilité du texte reçu.
     public var streamLabel: String?
@@ -201,6 +229,38 @@ public struct DictationDisplay: Equatable, Sendable {
         public var hint: String?
         /// Le champ est vide (aucun caractère) : il dit « Le texte est vide. ».
         public var showsPlaceholder: Bool
+        /// On peut commencer une correction à la voix : relecture d'un texte non blanc (jamais pendant le collage ni une correction).
+        public var canCorrect = false
+        /// L'étape de la correction à la voix en cours ; `nil` hors correction.
+        public var correctionStep: CorrectionStep?
+        /// Une version précédente (suivante) existe : le bouton à flèche s'affiche. Vrai seulement en relecture ; le champ ne montre
+        /// jamais qu'une version, la courante.
+        public var canGoBack = false
+        public var canGoForward = false
+
+        /// Une correction à la voix est en cours, à n'importe quelle étape.
+        public var isCorrecting: Bool { correctionStep != nil }
+
+        /// Le bouton de la correction existe : pas pendant le collage (« Copier » et « Coller » y sont déjà inactifs).
+        public var showsCorrectButton: Bool { !isPasting }
+
+        /// « Terminer » pendant que la consigne se prépare et se dit (la phrase du contrôleur le nomme dès la préparation) ;
+        /// « Corriger à la voix » sinon, y compris inactif pendant la transcription et la réécriture.
+        public var correctTitle: String {
+            finishesCorrection ? DictationText.finishCorrectionLabel : DictationText.correctLabel
+        }
+
+        /// Le bouton de la correction termine la consigne au lieu de la commencer.
+        public var finishesCorrection: Bool { correctionStep == .preparing || correctionStep == .recording }
+
+        /// Le bouton agit : il commence une correction (`canCorrect`) ou la termine (pendant l'écoute seulement). Les deux cas de
+        /// `PanelModel.correct()`.
+        public var canPressCorrect: Bool { canCorrect || correctionStep == .recording }
+
+        /// L'aide de la correction, sous celle de la relecture : seulement quand on peut corriger.
+        public func correctionHint(hotKeyLabel: String?) -> String? {
+            canCorrect ? DictationText.correctionHint(hotKeyLabel: hotKeyLabel) : nil
+        }
     }
 
     public var review: Review?
@@ -270,6 +330,13 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .working
         case .correcting(let step):
             mood = step == .recording ? .recording : .working
+            activityLabel = DictationText.correctionActivityLabel(for: step)
+            // La consigne se dit : durée et forme d'onde au-dessus du champ. Son texte en direct ne se montre pas (le champ garde le
+            // brouillon).
+            if step == .recording {
+                duration = DictationText.duration(state.elapsed)
+                bars = DictationText.bars(state.levels)
+            }
         case .copied:
             mood = .success
         case .cancelled:
@@ -290,10 +357,14 @@ public struct DictationDisplay: Equatable, Sendable {
                 : !usable
                     ? DictationText.reviewEmptyHint
                     : panelHasKeyboard ? DictationText.reviewHint : DictationText.reviewNoKeyboardHint
+            var correction: CorrectionStep?
+            if case .correcting(let step) = stage { correction = step }
             review = Review(
                 text: shown, isEditable: stage == .review, canPaste: usable,
                 canCopy: usable || (stage.isCorrecting && Self.nonBlank(state.draft) != nil),
-                isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: shown.isEmpty)
+                isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: shown.isEmpty, canCorrect: usable,
+                correctionStep: correction, canGoBack: stage == .review && state.canGoBack,
+                canGoForward: stage == .review && state.canGoForward)
         } else {
             review = nil
         }

@@ -62,7 +62,10 @@ public struct PanelView: View {
                 case .redo: model.nextVersion()
                 default: break
                 }
-            })
+            },
+            correct: { model.correct() },
+            previousVersion: { model.previousVersion() },
+            nextVersion: { model.nextVersion() })
     }
 
     private func welcomeLine(_ text: String) -> some View {

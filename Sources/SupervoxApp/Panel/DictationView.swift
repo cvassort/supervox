@@ -17,11 +17,17 @@ struct DictationView: View {
     let paste: @MainActor () -> Void
     /// ⌘Z ou ⇧⌘Z en bout de pile du champ : changer de version.
     var history: @MainActor (EditingCommand) -> Void = { _ in }
+    /// « Corriger à la voix » ou, pendant l'écoute, « Terminer » ; « Version précédente » ; « Version suivante ».
+    var correct: @MainActor () -> Void = {}
+    var previousVersion: @MainActor () -> Void = {}
+    var nextVersion: @MainActor () -> Void = {}
 
     var body: some View {
         VStack(spacing: 10) {
             if let review = display.review {
-                ReviewView(display: display, review: review, edit: edit, paste: paste, copy: copy, history: history)
+                ReviewView(
+                    display: display, review: review, hotKeyLabel: hotKeyLabel, edit: edit, paste: paste, copy: copy,
+                    history: history, correct: correct, previousVersion: previousVersion, nextVersion: nextVersion)
             } else if display.mood == .ready, display.transcript == nil {
                 ready
                     .frame(maxWidth: .infinity, minHeight: 84)
@@ -80,12 +86,7 @@ struct DictationView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            if let duration = display.duration {
-                Text(duration)
-                    .font(.headline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Durée \(duration)")
-            }
+            if let duration = display.duration { DurationText(duration: duration) }
         }
     }
 
@@ -171,8 +172,20 @@ struct MoodIcon: View {
     }
 }
 
-/// La forme d'onde : une barre par niveau, la plus récente à droite.
-private struct Waveform: View {
+/// La durée de la prise, à droite du titre : celle de la dictée et celle de la consigne d'une correction.
+struct DurationText: View {
+    let duration: String
+
+    var body: some View {
+        Text(duration)
+            .font(.headline.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Durée \(duration)")
+    }
+}
+
+/// La forme d'onde : une barre par niveau, la plus récente à droite. Celle de la dictée et celle de la consigne d'une correction.
+struct Waveform: View {
     let bars: [Float]
 
     private static let height: CGFloat = 32
