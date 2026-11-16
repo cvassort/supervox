@@ -8,6 +8,8 @@ import Synchronization
 /// l'entretien : une voix qui vient de manquer une phrase ferait attendre `timeout` secondes à chacune des suivantes. Si la
 /// voix de secours échoue aussi, son erreur est celle qu'on lève.
 ///
+/// Un texte blanc lève `SpeechError.empty` sans appeler aucune voix et sans toucher à cet état : ce n'est la panne d'aucune voix.
+///
 /// L'annulation de l'appelant n'est jamais un échec : elle lève `CancellationError`, sans repli, et la voix choisie reste
 /// en place.
 public final class FallbackSpeechSynthesizer: SpeechSynthesizer {
@@ -29,6 +31,8 @@ public final class FallbackSpeechSynthesizer: SpeechSynthesizer {
 
     public func synthesize(_ text: String) async throws -> Speech {
         try Task.checkCancellation()
+        // Avant toute chose : une phrase blanche n'est pas une panne de la voix choisie, qui ne doit pas être écartée pour elle.
+        guard !text.isBlankForSpeech else { throw SpeechError.empty }
         if !primaryFailed.withLock({ $0 }) {
             do {
                 let primary = primary

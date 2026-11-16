@@ -25,6 +25,9 @@ public struct ProviderVoice: Equatable, Sendable {
 /// Dit une phrase par la voix d'un fournisseur : une requête `wav`, dont les octets sont lus par `WavFile.decode` (qui accepte la
 /// taille provisoire d'un WAV produit en flux).
 public final class ProviderSpeechSynthesizer: SpeechSynthesizer {
+    /// Fréquences acceptées dans la réponse du fournisseur : 8 000 à 192 000 Hz, choix non mesuré (de la téléphonie au haut de gamme).
+    static let acceptedSampleRates: ClosedRange<Double> = 8_000...192_000
+
     private let endpoint: any SpeechEndpoint
     private let voice: ProviderVoice
 
@@ -34,7 +37,7 @@ public final class ProviderSpeechSynthesizer: SpeechSynthesizer {
     }
 
     public func synthesize(_ text: String) async throws -> Speech {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw SpeechError.empty }
+        guard !text.isBlankForSpeech else { throw SpeechError.empty }
         let clip: AudioClip
         do {
             let data = try await endpoint.speech(model: voice.model, input: text, voice: voice.identifier, format: "wav", extra: voice.extra)
@@ -44,6 +47,11 @@ public final class ProviderSpeechSynthesizer: SpeechSynthesizer {
             throw error
         }
         try Task.checkCancellation()
+        guard Self.acceptedSampleRates.contains(clip.sampleRate) else {
+            // Un clip à une fréquence absurde se rééchantillonne en clip vide, que la lecture rend « jouée » sans rien jouer :
+            // on le refuse ici, par une erreur nommée, pour que le repli prenne la phrase.
+            throw WavFileError.unsupported("fréquence d'échantillonnage hors de la plage acceptée")
+        }
         guard !clip.samples.isEmpty else { throw SpeechError.empty }
         return Speech(clip: clip)
     }

@@ -96,6 +96,77 @@ private func wav(_ samples: [Float], rate: Double = 24000) throws -> Data {
         #expect((await outcome(task)).failureValue is CancellationError)
     }
 
+    /// Un point d'accès sourd rend ses octets alors que la tâche est annulée : la parole n'est pas livrée (branche
+    /// `Task.checkCancellation()` du fournisseur).
+    @Test(.timeLimit(.minutes(1))) func anEndpointThatIgnoresTheCancellationDoesNotDeliverASpeech() async throws {
+        let data = try wav([0.1, 0.2])
+        let latch = DeafLatch(), started = Gate()
+        let endpoint = RecordingEndpoint { started.open(); await latch.wait(); return data }
+        let task = Task { try await ProviderSpeechSynthesizer(endpoint: endpoint, voice: exampleVoice).synthesize("Bonjour") }
+        await started.wait()
+        task.cancel()
+        latch.open()
+        #expect((await outcome(task)).failureValue is CancellationError)
+    }
+
+    /// Une panne quelconque levée parce qu'on annule (ici une erreur de point d'accès, pas une `CancellationError`) reste une
+    /// annulation pour l'appelant (branche `Task.isCancelled` du `catch`).
+    @Test(.timeLimit(.minutes(1))) func anyErrorRaisedWhileCancelledIsReportedAsCancellation() async {
+        let latch = DeafLatch(), started = Gate()
+        let endpoint = RecordingEndpoint { started.open(); await latch.wait(); throw EndpointError.http(status: 503, body: "") }
+        let task = Task { try await ProviderSpeechSynthesizer(endpoint: endpoint, voice: exampleVoice).synthesize("Bonjour") }
+        await started.wait()
+        task.cancel()
+        latch.open()
+        #expect((await outcome(task)).failureValue is CancellationError)
+    }
+
+    /// Fréquence hors de 8 000 à 192 000 Hz (choix non mesuré) : une erreur nommée, donc le repli, et non un clip muet.
+    @Test(arguments: [4000, 7999, 192_001, 384_000])
+    func aSampleRateOutsideTheAcceptedRangeIsRefusedByName(rate: Int) async throws {
+        let data = try wav([0.1, 0.2, 0.3], rate: Double(rate))
+        do {
+            _ = try await ProviderSpeechSynthesizer(endpoint: RecordingEndpoint { data }, voice: exampleVoice).synthesize("Bonjour")
+            Issue.record("fréquence \(rate) acceptée")
+        } catch let error as WavFileError {
+            if case .unsupported = error {} else { Issue.record("autre erreur : \(error)") }
+        }
+    }
+
+    @Test(arguments: [8000, 16000, 24000, 48000, 192_000])
+    func aSampleRateInsideTheAcceptedRangeIsAccepted(rate: Int) async throws {
+        let data = try wav([0.1, 0.2, 0.3], rate: Double(rate))
+        let speech = try await ProviderSpeechSynthesizer(endpoint: RecordingEndpoint { data }, voice: exampleVoice).synthesize("Bonjour")
+        #expect(speech.clip.sampleRate == Double(rate))
+    }
+
+    /// Un fournisseur qui répond une fréquence absurde fait basculer sur la voix de secours (au lieu d'un clip muet joué en silence).
+    @Test func anAbsurdSampleRateMakesTheFallbackSpeak() async throws {
+        let absurd = try wav([0.1, 0.2, 0.3], rate: 1)
+        let fallback = SystemSpeechSynthesizer(language: "fr-FR", voices: { [SystemVoiceInfo(identifier: "v", language: "fr-FR", quality: 1)] },
+                                               render: { _, _ in [AudioClip(samples: [0.5], sampleRate: 8000)] })
+        let voice = FallbackSpeechSynthesizer(primary: ProviderSpeechSynthesizer(endpoint: RecordingEndpoint { absurd }, voice: exampleVoice),
+                                              fallback: fallback)
+        #expect(try await voice.synthesize("Bonjour").fellBack)
+    }
+
+    /// Un texte blanc n'est pas une panne de la voix du fournisseur : la phrase suivante lui revient (une seule requête, la sienne).
+    @Test func aBlankSentenceDoesNotDiscardTheProviderVoiceForTheRestOfTheInterview() async throws {
+        let data = try wav([0.1, 0.2])
+        let endpoint = RecordingEndpoint { data }
+        let rendered = OSAllocatedUnfairLock(initialState: 0)
+        let system = SystemSpeechSynthesizer(language: "fr-FR", voices: { [SystemVoiceInfo(identifier: "v", language: "fr-FR", quality: 1)] },
+                                             render: { _, _ in rendered.withLock { $0 += 1 }; return [AudioClip(samples: [0.5], sampleRate: 8000)] })
+        let voice = FallbackSpeechSynthesizer(primary: ProviderSpeechSynthesizer(endpoint: endpoint, voice: exampleVoice), fallback: system)
+
+        await #expect(throws: SpeechError.empty) { try await voice.synthesize("  ") }
+        let next = try await voice.synthesize("Suite")
+
+        #expect(!next.fellBack)
+        #expect(endpoint.requests.map(\.input) == ["Suite"])
+        #expect(rendered.withLock { $0 } == 0)
+    }
+
     /// Le client réel est un point d'accès de synthèse (compilation) et sa réponse passe par le décodeur : un client rejoué.
     @Test func theOpenAICompatibleClientIsASpeechEndpoint() {
         let endpoint: any SpeechEndpoint = stubbedClient(status: 200, fixture: "speech-200.wav")

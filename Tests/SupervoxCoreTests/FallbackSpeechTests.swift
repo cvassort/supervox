@@ -91,6 +91,16 @@ private func fallback(_ primary: ScriptedVoice, _ secondary: ScriptedVoice, slee
         #expect(secondary.calls.isEmpty)
     }
 
+    /// Un texte blanc n'est une panne d'aucune voix : `.empty` sans appeler ni l'une ni l'autre, et la voix choisie reste en place.
+    @Test(arguments: ["", "  ", "\n\t "]) func aBlankTextIsEmptyAndNeverCountsAsAFailureOfTheChosenVoice(text: String) async throws {
+        let primary = ScriptedVoice(.speech(spoken(1))), secondary = ScriptedVoice(.speech(spoken(2)))
+        let voice = fallback(primary, secondary)
+        await #expect(throws: SpeechError.empty) { try await voice.synthesize(text) }
+        #expect(primary.calls.isEmpty && secondary.calls.isEmpty)
+        #expect(try await voice.synthesize("Suite") == spoken(1))
+        #expect(primary.calls == ["Suite"] && secondary.calls.isEmpty)
+    }
+
     @Test func whenBothVoicesFailTheErrorOfTheFallbackIsThrown() async {
         let primary = ScriptedVoice(.fail(.timedOut)), secondary = ScriptedVoice(.fail(.noVoice(language: "fr-FR")))
         await #expect(throws: SpeechError.noVoice(language: "fr-FR")) { try await fallback(primary, secondary).synthesize("Bonjour") }
