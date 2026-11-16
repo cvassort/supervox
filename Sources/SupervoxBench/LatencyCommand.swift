@@ -6,10 +6,10 @@ import SupervoxEngines
 
 // MARK: - Consigne
 
-/// Message système d'un essai : la consigne d'intervieweur du cœur (`InterviewPrompt`, huit questions restantes : l'entretien
-/// commence), suivie d'une référence propre à l'essai. La passerelle rend une requête identique depuis son cache (toute la
-/// réponse d'un bloc, bien plus vite) : sans cette référence, deux essais sur le même enregistrement enverraient la même
-/// requête. Le message de l'utilisateur est la transcription.
+/// Message système d'un essai : la consigne d'intervieweur du cœur (`InterviewPrompt`), suivie d'une référence propre à
+/// l'essai. Huit questions restantes : le début d'un entretien (choix non mesuré). La passerelle rend une requête
+/// identique depuis son cache (toute la réponse d'un bloc, bien plus vite) : sans cette référence, deux essais sur le même
+/// enregistrement enverraient la même requête. Le message de l'utilisateur est la transcription.
 func interviewerSystemMessage(nonce: String) -> String {
     InterviewPrompt.instruction(remainingQuestions: 8) + "\n\n(Référence technique de la requête, à ignorer : \(nonce).)"
 }
