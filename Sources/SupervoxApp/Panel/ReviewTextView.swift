@@ -86,9 +86,8 @@ struct ReviewTextView: NSViewRepresentable {
             field?.isReplacing = true
             defer { field?.isReplacing = false }
             if textView.hasMarkedText() {
+                // Une fin de saisie pour le panneau aussi (`FocusingTextView.unmarkText` le lui dit : `fieldIsComposing`).
                 textView.unmarkText()
-                // L'abandon du marquage est une fin de saisie pour le panneau (`PanelModel.fieldIsComposing`).
-                (textView as? FocusingTextView)?.reportComposingIfChanged()
             }
             textView.string = text
             textView.undoManager?.removeAllActions()
@@ -214,8 +213,6 @@ final class FocusingTextView: NSTextView {
     var isReplacing = false
 
     /// Le panneau sait quand une saisie est en attente (`PanelModel.fieldIsComposing`).
-    func reportComposingIfChanged() { reportComposing() }
-
     private func reportComposing() {
         let composing = hasMarkedText()
         guard composing != wasComposing else { return }
