@@ -74,7 +74,7 @@ public struct ModesPane: View {
         }
         .sheet(item: $removal) { row in
             DeletionSheet(
-                title: Self.deletionTitle(for: row), message: Self.deletionMessage(for: row),
+                title: Self.deletionTitle(for: row), message: Self.deletionMessage(for: row, chosenInPanel: model.isChosenInPanel(row.id)),
                 cancel: { removal = nil },
                 confirm: {
                     removal = nil
@@ -90,12 +90,14 @@ public struct ModesPane: View {
     public static func deletionTitle(for row: ModesModel.Row) -> String { "Supprimer le mode « \(row.title) » ?" }
 
     /// Ce qu'une suppression fait perdre. Dictée nettoyée et Prompt se remettent par « Ajouter un mode », avec leur consigne
-    /// d'origine.
-    public static func deletionMessage(for row: ModesModel.Row) -> String {
-        if ModeChip.fixed.contains(where: { $0.id == row.id }) {
-            return "Le mode, votre consigne et son raccourci seront supprimés. Vous pourrez le remettre avec « Ajouter un mode », avec sa consigne d'origine."
-        }
-        return "Le mode, sa consigne et son raccourci seront supprimés. Cette action ne peut pas être annulée."
+    /// d'origine. `chosenInPanel` : le mode est celui du panneau, qui reviendra à Dictée brute.
+    public static func deletionMessage(for row: ModesModel.Row, chosenInPanel: Bool) -> String {
+        var message =
+            ModeChip.fixed.contains(where: { $0.id == row.id })
+            ? "Le mode, votre consigne et son raccourci seront supprimés. Vous pourrez le remettre avec « Ajouter un mode », avec sa consigne d'origine."
+            : "Le mode, sa consigne et son raccourci seront supprimés. Cette action ne peut pas être annulée."
+        if chosenInPanel { message += " " + ModesModel.panelBackToRawNote }
+        return message
     }
 }
 

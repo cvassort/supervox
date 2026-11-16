@@ -956,6 +956,64 @@ import Testing
         #expect(rig.mode(ofCopy)?.name == "Courriel (copie 2)", "pas « Courriel (copie) (copie) »")
     }
 
+    // MARK: - Détails relevés à la revue
+
+    /// Un refus suivi d'un raccourci général qui ne revient pas : les deux phrases sont dites, la raison du refus n'est pas perdue.
+    @Test func aRefusalAndAFailedResumeAreBothSaid() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        rig.resumeResult = false
+        model.startRecording(for: "perso-deux")
+        model.record(Self.keyA, for: "perso-deux")  // tenu par le raccourci général
+        let message = model.message ?? ""
+        #expect(message.contains(HotKeyConflicts.heldByGlobal(label: Self.labelA)))
+        #expect(message.contains(ModesModel.resumeFailure(label: Self.labelA)))
+    }
+
+    /// Une capture commence sans le message d'une précédente.
+    @Test func aNewCaptureStartsWithoutTheMessageOfThePreviousOne() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        model.record(Self.keyA, for: "perso-deux")
+        #expect(model.message != nil)
+        model.startRecording(for: "perso-deux")
+        #expect(model.message == nil)
+        model.cancelRecording()
+    }
+
+    /// Fermer la feuille pendant une capture rend les raccourcis, retire le moniteur et efface le refus resté à l'écran.
+    @Test func closingTheSheetDuringACaptureGivesTheHotKeysBack() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        model.save(ModeDraft.example(id: "perso-un", name: ""))  // un refus reste à l'écran
+        #expect(model.message != nil)
+        model.startRecording(for: "perso-deux")
+        #expect(rig.suspends == 1 && rig.monitor.isActive)
+
+        model.editorClosed()
+        #expect(model.recordingModeID == nil)
+        #expect(!rig.monitor.isActive)
+        #expect(rig.resumes == 1, "les raccourcis sont rétablis")
+        #expect(rig.applied.isEmpty && rig.updates == 0)
+        #expect(model.message == nil)
+        model.editorClosed()  // sans capture : rien de plus
+        #expect(rig.resumes == 1)
+    }
+
+    /// La confirmation de suppression dit que le panneau revient à Dictée brute quand le mode y était choisi.
+    @Test func theDeletionMessageSaysWhenThePanelWillGoBackToTheRawMode() throws {
+        let rig = Rig(Self.personalSettings(lastModeID: "perso-un"))
+        let model = rig.makeModel()
+        #expect(model.isChosenInPanel("perso-un"))
+        #expect(!model.isChosenInPanel("perso-deux"))
+        let chosen = ModesPane.deletionMessage(for: try row(model, "perso-un"), chosenInPanel: true)
+        let other = ModesPane.deletionMessage(for: try row(model, "perso-deux"), chosenInPanel: false)
+        #expect(chosen.hasSuffix(" Ce mode est choisi dans le panneau : le panneau reviendra à Dictée brute."))
+        #expect(!other.contains("panneau"))
+        #expect(
+            ModesPane.deletionMessage(for: try row(model, ModeChip.promptID), chosenInPanel: false).contains("« Ajouter un mode »"))
+    }
+
     // MARK: - Trous relevés à la revue
 
     /// Un mode sans consigne n'envoie rien : un modèle périmé qu'il porte n'ajoute aucune note sur sa ligne.

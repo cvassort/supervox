@@ -81,12 +81,13 @@ public struct SettingsView: View {
                     providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
                     permissions: permissions, openSystemSettings: openSystemSettings)),
             onPresent: {
-                await providers.checkKeys()
-                await transcription.refresh()
                 // La fenêtre gardée d'une ouverture à l'autre relit les réglages : un mode ou un fournisseur changé entre-temps
-                // (le panneau, un autre onglet, le fichier) s'y voit.
+                // (le panneau, un autre onglet, le fichier) s'y voit. Avant les attentes ci-dessous : la fenêtre ne s'affiche pas
+                // un instant avec l'ancien état.
                 modes.reload()
                 modes.clearMessage()
+                await providers.checkKeys()
+                await transcription.refresh()
             },
             onLeave: {
                 hotKey.cancelRecording()

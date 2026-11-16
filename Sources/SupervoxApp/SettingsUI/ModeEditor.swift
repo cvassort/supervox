@@ -109,10 +109,7 @@ public struct ModeEditor: View {
         }
         .frame(width: 520, height: height)
         // Une capture ne survit pas à la feuille : les raccourcis reviennent. Un refus resté à l'écran n'a plus d'objet.
-        .onDisappear {
-            model.cancelRecording()
-            model.clearMessage()
-        }
+        .onDisappear { model.editorClosed() }
     }
 
     // MARK: - Consigne

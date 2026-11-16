@@ -530,7 +530,7 @@ for dark in [false, true] {
         let row = deletion.rows.first { $0.id == id }!
         try render(
             DeletionSheet(
-                title: ModesPane.deletionTitle(for: row), message: ModesPane.deletionMessage(for: row), cancel: {}, confirm: {}),
+                title: ModesPane.deletionTitle(for: row), message: ModesPane.deletionMessage(for: row, chosenInPanel: id != ModeChip.promptID), cancel: {}, confirm: {}),
             name: "mode-suppression-\(name)", dark: dark, background: window)
     }
 

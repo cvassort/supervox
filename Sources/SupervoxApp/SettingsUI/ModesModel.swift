@@ -152,6 +152,7 @@ public final class ModesModel {
     public static let nameLimit = 60
     public static let nameTooLongMessage = "Le nom d'un mode ne peut pas dépasser 60 caractères."
     public static let nameTakenMessage = "Un autre mode porte déjà ce nom : choisissez-en un autre."
+    public static let panelBackToRawNote = "Ce mode est choisi dans le panneau : le panneau reviendra à Dictée brute."
     public static let noActiveHotKeyNote = "Aucun raccourci n'est actif pour ce mode."
 
     /// La note de vie privée de la feuille d'un mode, sous le modèle. Le nom du fournisseur est rogné (`Provider.shortName`).
@@ -206,6 +207,16 @@ public final class ModesModel {
     public func reload() {
         settings = read()
     }
+
+    /// La feuille d'édition se ferme (« Annuler », « Enregistrer », ou la fenêtre) : une capture de raccourci en cours prend fin, les
+    /// raccourcis reviennent, et le refus resté à l'écran n'a plus d'objet.
+    public func editorClosed() {
+        cancelRecording()
+        clearMessage()
+    }
+
+    /// Le mode est celui que le panneau a choisi (le dernier mode des réglages).
+    public func isChosenInPanel(_ id: String) -> Bool { settings.lastModeID == id }
 
     /// Efface le message (le refus d'un geste dont l'écran n'est plus ouvert, un message d'avant la présentation de la fenêtre).
     public func clearMessage() {
@@ -541,6 +552,7 @@ public final class ModesModel {
     public func startRecording(for id: String) {
         guard current(id) != nil, recordingModeID != id else { return }
         let wasRecording = recordingModeID != nil
+        message = nil
         recordingModeID = id
         guard !wasRecording else { return }
         hotKeys.suspend()
@@ -564,7 +576,9 @@ public final class ModesModel {
     /// refuse à son tour le dit dans le panneau (le contrôleur s'en charge).
     private func resumeAfterCapture() {
         guard !hotKeys.resume() else { return }
-        message = Self.resumeFailure(label: hotKeys.global().map { $0.label(layout: layout) } ?? "")
+        // Après un refus, la raison du refus reste dite : les deux phrases se suivent.
+        let failure = Self.resumeFailure(label: hotKeys.global().map { $0.label(layout: layout) } ?? "")
+        message = [message, failure].compactMap { $0 }.joined(separator: " ")
     }
 
     /// Une touche pressée pendant la capture. Échap seul annule ; toute autre combinaison est proposée au mode capté.
