@@ -76,7 +76,7 @@ final class MadeModels: Sendable {
         id: UUID(), name: "Fournisseur exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
         models: ["modele-exemple"])
     let secondary = Provider(
-        id: UUID(), name: "Second exemple", baseURL: "https://example.org/api", kind: .anthropic, models: ["autre-exemple"])
+        id: UUID(), name: "Second exemple", baseURL: "https://example.com/api", kind: .anthropic, models: ["autre-exemple"])
 
     func settings(
         strong: ModelChoice? = nil, providers: [Provider]? = nil
@@ -116,7 +116,7 @@ final class MadeModels: Sendable {
         let outcome = await env.rewrite(job(model: choice(secondary, "autre-exemple"))) { _ in }
 
         #expect(outcome == .rewritten("Bonjour."))
-        #expect(made.made == [.init(kind: .anthropic, baseURL: URL(string: "https://example.org/api")!, apiKey: Self.apiKey)])
+        #expect(made.made == [.init(kind: .anthropic, baseURL: URL(string: "https://example.com/api")!, apiKey: Self.apiKey)])
         #expect(made.model.requests.map(\.model) == ["autre-exemple"])
     }
 
@@ -300,6 +300,19 @@ final class MadeModels: Sendable {
         #expect(env.providerName(ModelChoice(providerID: UUID(), model: "m")) == nil, "fournisseur disparu")
         let none = environment(settings(), secrets: access, made: MadeModels(.never))
         #expect(none.providerName(nil) == nil, "aucun modèle")
+    }
+
+    // MARK: - Le journal
+
+    @Test func theLogCarriesOnlyTheKindOfAFailure() {
+        #expect(LiveRewriter.kind(of: .noKey(provider: "Nom-secret-du-fournisseur")) == "noKey")
+        #expect(LiveRewriter.kind(of: .server(503)) == "server")
+        #expect(LiveRewriter.kind(of: .timedOut(120)) == "timedOut")
+        #expect(LiveRewriter.kind(of: .truncated) == "truncated")
+        for failure in [RewriteFailure.noKey(provider: "Nom-secret-du-fournisseur"), .server(503), .unauthorized(401)] {
+            let kind = LiveRewriter.kind(of: failure)
+            #expect(!kind.contains("secret") && !kind.contains("503") && !kind.contains("401"), "\(kind)")
+        }
     }
 
     @Test func theUnavailableEnvironmentFailsForLackOfAModel() async {

@@ -222,6 +222,7 @@ import Testing
         let model = try #require(app.first { $0.place == "SettingsUI/TranscriptionModel.swift" })
         #expect(!model.code.contains("localizedDescription"), "SettingsUI/TranscriptionModel.swift")
         let language = try Self.sources(under: "Sources/SupervoxCore/Language")
+            + Self.sources(under: "Sources/SupervoxApp/Language").map { (place: "SupervoxApp/Language/" + $0.place, code: $0.code) }
         #expect(!language.isEmpty)
         let offending = language.filter { $0.code.contains("localizedDescription") }.map(\.place)
         #expect(offending.isEmpty, "\(offending)")

@@ -321,6 +321,19 @@ import SupervoxCore
         #expect(h.controller.view.notice == RewriteFailure.interrupted.message + " " + DictationController.rawTextNotice)
     }
 
+    @Test("règle 5 : une réponse blanche du modèle ramène le texte brut, comme une réponse vide")
+    func aBlankResponseBringsTheRawTextBack() async {
+        let h = harness(review: true)
+        let call = await formatting(h)
+        call.finish(.rewritten("  \n "))
+
+        #expect(await until { h.controller.view.stage == .review })
+        #expect(h.controller.view.draft == Self.raw)
+        #expect(h.controller.view.notice == RewriteFailure.empty.message + " " + DictationController.rawTextNotice)
+        #expect(h.controller.lastTranscript == Self.raw)
+        #expect(h.pasted.isEmpty)
+    }
+
     @Test("règle 5 : les phrases fixes du contrôleur")
     func theFixedSentences() {
         #expect(DictationController.rawTextNotice == "Le texte ci-dessus est la transcription brute : corrigez-la, collez-la ou copiez-la.")

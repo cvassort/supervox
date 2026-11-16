@@ -155,6 +155,20 @@ import Testing
         #expect(store.load().settings.lastModeID == "perso-un")
     }
 
+    @Test func theInterviewsHotKeyStillOpensThePanelWithTheLaterModeSentence() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = Self.settings([Self.report])
+        settings.modes[2].hotKey = Self.keyC
+        let controller = makeController(settings)
+        controller.launch()
+
+        modeRegistrars.press(Self.keyC)
+        #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(store.load().settings.lastModeID == ModeChip.interviewID)
+    }
+
     // MARK: - Refus, dits dans le panneau
 
     @Test func aRefusedModeDoesNotStopTheOthersAndIsNamedInThePanel() {

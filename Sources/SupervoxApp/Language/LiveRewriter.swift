@@ -88,7 +88,7 @@ public enum LiveRewriter {
     }
 
     /// La nature d'une panne pour le journal : le nom du cas, jamais ses valeurs.
-    private static func kind(of failure: RewriteFailure) -> String {
+    static func kind(of failure: RewriteFailure) -> String {
         String(String(describing: failure).prefix { $0 != "(" })
     }
 }

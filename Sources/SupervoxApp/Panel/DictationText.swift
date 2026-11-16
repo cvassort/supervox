@@ -220,7 +220,6 @@ public struct DictationDisplay: Equatable, Sendable {
             liveText = live
         case .formatting:
             mood = .working
-            liveText = live
         case .review:
             mood = .review
         case .pasting:
