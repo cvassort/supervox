@@ -34,6 +34,9 @@ import Testing
         var settings: AppSettings
         var updates = 0
         var failure: (any Error)?
+        /// Ce qui s'écrit « ailleurs » pendant que l'enregistrement est refusé : le double l'applique avant de lever, pour que
+        /// l'affichage ait un autre état que `read` à retrouver.
+        var writtenElsewhereBeforeFailing: ((inout AppSettings) -> Void)?
         /// Les appels du modèle au système de raccourcis, dans l'ordre.
         var applied: [Applied] = []
         /// Ce que répondent les prochains `apply` ; épuisé, le système accepte.
@@ -63,7 +66,10 @@ import Testing
                 read: { self.settings },
                 update: { change in
                     self.updates += 1
-                    if let failure = self.failure { throw failure }
+                    if let failure = self.failure {
+                        self.writtenElsewhereBeforeFailing?(&self.settings)
+                        throw failure
+                    }
                     change(&self.settings)
                 },
                 hotKeys: ModeHotKeyControl(
@@ -297,26 +303,58 @@ import Testing
         #expect(try row(model, ModeChip.rawID).reviews)
     }
 
-    /// Chaque geste refusé par l'enregistrement laisse les réglages comme ils étaient.
-    @Test func everyGestureThatFailsToSaveLeavesTheSettingsAsTheyWere() {
+    /// Geste par geste : l'enregistrement est refusé alors qu'une écriture venue d'ailleurs a changé les réglages ; l'affichage
+    /// (lignes, modèles, brouillon de chaque mode) revient à ce que `read` donne, le message est la phrase de `SettingsError`, la
+    /// révision avance d'un cran, et `update` a été appelé une seule fois.
+    @Test(arguments: [
+        "setReview", "add", "duplicate", "delete", "move", "save", "resetInstruction", "setStrongModel", "setFastModel",
+        "clearHotKey", "addBase", "record",
+    ])
+    func everyRefusedGestureBringsTheDisplayBackToWhatReadGives(gesture: String) throws {
         let rig = Rig(Self.personalSettings())
-        rig.settings.modes[2].instruction = "Ma version."
+        rig.settings.modes.removeAll { $0.id == ModeChip.cleanedID }  // `addBase` a quelque chose à faire
+        rig.settings.modes[rig.ids.firstIndex(of: ModeChip.promptID)!].instruction = "Ma version."  // et `resetInstruction`
         let model = rig.makeModel()
-        let before = rig.settings
-        rig.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        let error = SettingsError.unreadableFileKept(fileName: "settings.json")
+        rig.failure = error
+        rig.writtenElsewhereBeforeFailing = { settings in
+            settings.modes[settings.modes.firstIndex { $0.id == ModeChip.promptID }!].name = "Prompt renommé ailleurs"
+            settings.strongModel = Self.strong
+            settings.modes[settings.modes.firstIndex { $0.id == "perso-deux" }!].instruction = "Écrite ailleurs."
+        }
+        // Avant le geste : l'affichage montre l'état d'avant l'écriture venue d'ailleurs.
+        #expect(try row(model, ModeChip.promptID).title == "Prompt")
+        #expect(model.strongModel == nil)
 
-        model.setReview(true, for: ModeChip.rawID)
-        _ = model.add()
-        _ = model.duplicate("perso-un")
-        model.delete("perso-un")
-        model.move("perso-un", by: 1)
-        model.save(ModeDraft.example(id: "perso-un", name: "Renommé"))
-        model.resetInstruction(ModeChip.promptID)
-        model.setStrongModel(Self.strong)
-        model.setFastModel(Self.fast)
-        model.clearHotKey(for: "perso-un")
-        #expect(rig.settings == before)
-        #expect(model.message != nil)
+        switch gesture {
+        case "setReview": model.setReview(true, for: ModeChip.rawID)
+        case "add": model.add()
+        case "duplicate": model.duplicate("perso-un")
+        case "delete": model.delete("perso-un")
+        case "move": model.move("perso-un", by: 1)
+        case "save": model.save(ModeDraft.example(id: "perso-un", name: "Autre nom"))
+        case "resetInstruction": model.resetInstruction(ModeChip.promptID)
+        case "setStrongModel": model.setStrongModel(Self.fast)
+        case "setFastModel": model.setFastModel(Self.fast)
+        case "clearHotKey": model.clearHotKey(for: "perso-un")
+        case "addBase": model.addBase(ModeChip.cleanedID)
+        case "record": model.record(Self.keyC, for: "perso-deux")
+        default: Issue.record("geste inconnu : \(gesture)")
+        }
+
+        #expect(rig.updates == 1, "un seul appel à `update`")
+        #expect(model.message == error.errorDescription)
+        #expect(model.revision == 1)
+        // L'affichage est exactement ce qu'un modèle neuf construit sur `read` montrerait.
+        rig.failure = nil
+        rig.writtenElsewhereBeforeFailing = nil
+        let fresh = rig.makeModel()
+        #expect(model.rows == fresh.rows)
+        #expect(model.strongModel == fresh.strongModel && model.fastModel == fresh.fastModel)
+        #expect(model.missingBaseModes == fresh.missingBaseModes)
+        for id in rig.ids { #expect(model.draft(for: id) == fresh.draft(for: id), "brouillon de \(id)") }
+        #expect(try row(model, ModeChip.promptID).title == "Prompt renommé ailleurs", "ce que `read` donne")
+        #expect(model.strongModel == Self.strong)
     }
 
     @Test func theRevisionAdvancesOnEachRefusedSaveOnly() {
