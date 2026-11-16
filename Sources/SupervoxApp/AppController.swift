@@ -344,7 +344,12 @@ public final class AppController {
 
     /// Donne ce raccourci à ce mode, ou le lui retire avec `nil`, avec le même effet que l'application des réglages : s'il est
     /// accepté, l'avis qui nommait ce mode s'efface. N'enregistre pas les réglages. En cas de refus, l'ancien reste actif.
+    ///
+    /// Un identifiant que les réglages ne portent pas (le mode a été supprimé pendant ce temps) est refusé : rien n'est
+    /// enregistré auprès du système, aucun registraire n'est fabriqué. La réponse est `.refused` ; l'onglet Modes, qui vérifie
+    /// l'existence du mode avant d'appeler, dit alors une phrase fixe.
     public func changeModeHotKey(_ hotKey: HotKey?, for modeID: String) -> Result<Void, HotKeyError> {
+        guard settings.mode(modeID) != nil else { return .failure(.refused) }
         let result = modeHotKeys.set(hotKey, for: modeID)
         if case .success = result {
             modeHotKeyNotices[modeID] = nil

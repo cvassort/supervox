@@ -117,4 +117,11 @@ import Testing
         #expect(sentence.contains("réservé"))
         #expect(!sentence.contains("Compte rendu"))
     }
+
+    /// Le refus du système est dit par la table, pour la fenêtre du raccourci global comme pour l'onglet des modes.
+    @Test func theSystemRefusalHasOneSentenceInTheTable() {
+        #expect(
+            HotKeyConflicts.refusedBySystem(label: "⌃⌥B")
+                == "⌃⌥B a été refusé par macOS : il est sans doute déjà pris par une autre application. Choisissez-en un autre.")
+    }
 }

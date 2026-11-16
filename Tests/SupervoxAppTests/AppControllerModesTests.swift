@@ -339,6 +339,23 @@ import Testing
         #expect(modeRegistrars.registered.isEmpty)
     }
 
+    /// Un identifiant que les réglages ne portent pas (mode supprimé pendant ce temps) : rien n'est enregistré, aucun registraire
+    /// n'est fabriqué, et la réponse est un échec que l'onglet Modes traduit en phrase.
+    @Test func aHotKeyForAnUnknownModeIsRefusedAndRegistersNothing() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(Self.settings([Self.report]))
+        controller.launch()
+        let registrarsBefore = modeRegistrars.made.count
+
+        #expect(HotKeyTests.failure(controller.changeModeHotKey(Self.keyC, for: "perso-absent")) == .refused)
+        #expect(HotKeyTests.failure(controller.changeModeHotKey(nil, for: "perso-absent")) == .refused)
+
+        #expect(modeRegistrars.made.count == registrarsBefore, "aucun registraire n'est fabriqué pour un mode inconnu")
+        #expect(controller.modeHotKeys.active == ["perso-un": Self.keyB])
+        #expect(modeRegistrars.registered == [Self.keyB])
+        #expect(controller.settings == Self.settings([Self.report]))
+    }
+
     // MARK: - Capture
 
     @Test func aCaptureGivesEveryHotKeyBackToTheSystemAndTheEndTakesThemAgain() {

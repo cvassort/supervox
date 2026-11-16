@@ -37,6 +37,12 @@ public enum HotKeyConflicts {
         }
     }
 
+    /// Refus d'une combinaison que le système n'a pas voulu enregistrer : macOS ne dit pas pourquoi, une autre application la tient
+    /// sans doute.
+    static func refusedBySystem(label: String) -> String {
+        "\(label) a été refusé par macOS : il est sans doute déjà pris par une autre application. Choisissez-en un autre."
+    }
+
     /// Refus d'une combinaison que macOS utilise déjà.
     static func systemShortcutRefusal(label: String) -> String {
         "\(label) est un raccourci de macOS activé sur ce Mac (Réglages Système, Clavier, Raccourcis clavier) : choisissez-en un autre."

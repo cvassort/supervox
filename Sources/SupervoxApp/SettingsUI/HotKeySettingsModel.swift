@@ -165,7 +165,7 @@ public final class HotKeySettingsModel {
         let previous = hotKey
         switch control.apply(candidate) {
         case .failure(.refused):
-            message = "\(candidateLabel) a été refusé par macOS : il est sans doute déjà pris par une autre application. Choisissez-en un autre."
+            message = HotKeyConflicts.refusedBySystem(label: candidateLabel)
         case .failure(.invalid(let validation)):
             message = HotKeyConflicts.refusal(validation, label: candidateLabel)
         case .success:
