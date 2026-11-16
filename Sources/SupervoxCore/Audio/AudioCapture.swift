@@ -63,11 +63,11 @@ public final class AudioCapture: @unchecked Sendable {
     private let player = AVAudioPlayerNode()
     /// Les clips en file : générations, fin rendue une fois, position. Son propre verrou ; jamais tenu pendant un appel au lecteur.
     let playback = PlaybackTracker()
-    private let voiceProcessing: Bool
+    let voiceProcessing: Bool
     private let buffer = OSAllocatedUnfairLock(initialState: Buffer())
     /// Porte de livraison de la prise en cours (une neuve par prise, voir `DeliveryGate`) ; `nil` hors prise.
     private let currentGate = OSAllocatedUnfairLock<DeliveryGate?>(initialState: nil)
-    private let promptsForAccess: Bool
+    let promptsForAccess: Bool
     /// Sérialise `start` et `stop` : protège `wired` et `running`.
     private let lifecycle = NSLock()
     private var wired = false
