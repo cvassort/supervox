@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import SupervoxApp
@@ -1030,6 +1031,25 @@ import Testing
         #expect(ModeEditor.sheetHeight <= 700)
         #expect(ModeEditor.instructionMaxHeight <= 120)
         #expect(ModeEditor.instructionMinHeight <= ModeEditor.instructionMaxHeight)
+    }
+
+    /// Sous un bandeau d'erreur, la dernière phrase d'aide de la feuille (« Le raccourci lance ce mode… ») était coupée par la
+    /// barre des boutons : la feuille grandit de la place du bandeau, et le budget de 700 points tient encore.
+    @Test func theSheetGrowsByTheBannerRoomWhileAnErrorShowsAndStaysUnderTheBudget() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        func sheetHeight() -> CGFloat {
+            let host = NSHostingView(rootView: ModeEditor(model: model, id: "perso-deux"))
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.height
+        }
+        #expect(model.message == nil)
+        #expect(sheetHeight() == ModeEditor.sheetHeight)
+
+        model.record(Self.keyA, for: "perso-deux")  // tenu par le raccourci général : un refus, donc un bandeau
+        #expect(model.message != nil)
+        #expect(sheetHeight() == ModeEditor.sheetHeight + ModeEditor.bannerRoom)
+        #expect(ModeEditor.sheetHeight + ModeEditor.bannerRoom <= 700)
     }
 
     // MARK: - Trous relevés à la revue

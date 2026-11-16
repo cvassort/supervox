@@ -22,6 +22,12 @@ public struct ModeEditor: View {
     /// La feuille a une hauteur fixe, qui tient dans un écran de portable sous la fenêtre de réglages : le formulaire défile.
     /// `height` ne change que pour rendre toute la feuille en une image.
     public static let sheetHeight: CGFloat = 640
+    /// La place que la feuille prend de plus tant qu'un bandeau d'erreur est affiché. Le bandeau est au-dessus du formulaire, dans
+    /// une feuille de hauteur fixe : sans cette place, il pousse la dernière phrase d'aide (« Le raccourci lance ce mode… ») sous
+    /// la barre des boutons, coupée à mi-ligne. 48 points laissent entrer un bandeau de deux lignes, dont celui d'un refus qui
+    /// nomme un mode au nom de 60 caractères (vu en image) ; un bandeau de trois lignes tiendrait d'après le calcul (non vu).
+    /// Au-delà, le formulaire défile. La feuille reste sous le budget de 700 points.
+    public static let bannerRoom: CGFloat = 48
     /// Le champ de consigne est borné : une consigne plus longue défile dans le champ.
     static let instructionMinHeight: CGFloat = 80
     static let instructionMaxHeight: CGFloat = 120
@@ -100,7 +106,7 @@ public struct ModeEditor: View {
             }
             .padding([.horizontal, .bottom], 20)
         }
-        .frame(width: 520, height: height)
+        .frame(width: 520, height: height + (model.message == nil ? 0 : Self.bannerRoom))
         // Une capture ne survit pas à la feuille : les raccourcis reviennent. Un refus resté à l'écran n'a plus d'objet.
         .onDisappear { model.editorClosed() }
     }

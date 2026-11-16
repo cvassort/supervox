@@ -719,13 +719,25 @@ for dark in [false, true] {
     try render(
         ModeEditor(model: ExampleModes(unlisted).makeModel(), id: "perso-compte-rendu", height: sheetHeight),
         name: "mode-edition-sans-modele", dark: dark, background: window, size: sheetSize, keyWindow: true)
-    // Une combinaison refusée : celle du raccourci général.
+    // Une combinaison refusée : celle du raccourci général. Le bandeau d'erreur est au-dessus du formulaire : la feuille grandit de
+    // sa place (`bannerRoom`), pour que la dernière phrase d'aide (« Le raccourci lance ce mode… ») ne passe pas sous les boutons.
+    let bannerSheetSize = NSSize(width: 520, height: sheetHeight + ModeEditor.bannerRoom)
     let refusedHotKey = ExampleModes(exampleModesSettings())
     let refusedModel = refusedHotKey.makeModel()
     refusedModel.record(.standard, for: "perso-compte-rendu")
     try render(
         ModeEditor(model: refusedModel, id: "perso-compte-rendu", height: sheetHeight),
-        name: "mode-raccourci-refuse", dark: dark, background: window, size: sheetSize, keyWindow: true)
+        name: "mode-raccourci-refuse", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // Le bandeau le plus long que l'on sache produire : une combinaison tenue par un mode au nom de 60 caractères (deux lignes pleines).
+    var heldByLongName = exampleModesSettings()
+    heldByLongName.modes[3].hotKey = nil
+    heldByLongName.modes[4].name = "Compte rendu détaillé de la réunion hebdomadaire de l'équipe"
+    heldByLongName.modes[4].hotKey = keyB
+    let longRefusedModel = ExampleModes(heldByLongName).makeModel()
+    longRefusedModel.record(keyB, for: "perso-compte-rendu")
+    try render(
+        ModeEditor(model: longRefusedModel, id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-raccourci-refuse-long", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
     // Une consigne de plusieurs milliers de caractères : elle défile dans son champ, la feuille garde sa taille.
     var long = exampleModesSettings()
     long.modes[3].instruction = Array(
