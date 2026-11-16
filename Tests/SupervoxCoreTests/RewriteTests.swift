@@ -46,6 +46,21 @@ struct RewriteTests {
         #expect(model.requests == [CompletionRequest(model: "modele-exemple", instruction: "la consigne", input: "l'entrée", maxTokens: 777)])
     }
 
+    /// Règle 1 : `Rewriter.run` transmet `history` tel quel au client, et sans historique la demande est celle d'avant.
+    @Test func theHistoryIsPassedToTheClientAsIsAndIsEmptyByDefault() async throws {
+        let history = [CompletionTurn(role: .assistant, text: "Que voulez-vous faire ?"), CompletionTurn(role: .user, text: "Refactorer.")]
+        let model = ScriptedModel([.text("ok"), .stop(.complete), .finish])
+        _ = try await Rewriter.run(model, model: "modele-exemple", instruction: "la consigne", input: "l'entrée", history: history,
+                                   policy: policy(maxTokens: 777), onText: { _ in })
+        #expect(model.requests == [CompletionRequest(model: "modele-exemple", instruction: "la consigne", input: "l'entrée",
+                                                     maxTokens: 777, history: history)])
+        #expect(model.requests[0].history == history)
+
+        let without = ScriptedModel([.text("ok"), .stop(.complete), .finish])
+        _ = try await rewrite(without)
+        #expect(without.requests[0].history.isEmpty)
+    }
+
     @Test func theStandardPolicyIsSixteenThousandTokensAndTwoMinutes() {
         #expect(RewritePolicy.standard.maxTokens == 16_000)
         #expect(RewritePolicy.standard.timeout == 120)

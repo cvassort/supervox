@@ -27,6 +27,25 @@ import Testing
     #expect(try await firstSentence(of: two) == "D'accord.")
 }
 
+/// Règle 9 : le marqueur de conclusion n'est ni dit ni compté dans la première phrase, où qu'il tombe dans les morceaux.
+@Test func theConclusionMarkerIsNeverPartOfTheFirstSentence() async throws {
+    let whole = AsyncThrowingStream<ChatDelta, Error> { c in
+        c.yield(.content("[SUITE]\nBonjour. Que voulez-vous faire ?")); c.finish()
+    }
+    #expect(try await firstSentence(of: whole) == "Bonjour.")
+
+    let cut = AsyncThrowingStream<ChatDelta, Error> { c in
+        c.yield(.content("[SU")); c.yield(.content("ITE]")); c.yield(.content("\nQuelle est la con")); c.yield(.content("trainte ?")); c.finish()
+    }
+    #expect(try await readFirstSentence(cut) == FirstSentence(text: "Quelle est la contrainte ?", contentChunks: 4))
+
+    let onlyAMarker = AsyncThrowingStream<ChatDelta, Error> { c in c.yield(.content("[CONCLURE]")); c.finish() }
+    #expect(try await firstSentence(of: onlyAMarker) == nil)
+
+    let endsOnAMarkerStart = AsyncThrowingStream<ChatDelta, Error> { c in c.yield(.content("D'accord [SU")); c.finish() }
+    #expect(try await firstSentence(of: endsOnAMarkerStart) == "D'accord [SU")
+}
+
 @Test func noContentRunIsReportedNotAveraged() {
     let t = [TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.4, synthesis: 0.3),
              TurnTiming(silence: 0.6, transcription: 0.2, firstSentence: 0.6, synthesis: 0.5),
@@ -290,7 +309,7 @@ private func launch(runs: Int, recordings: [LatencyRecording] = [recording],
     _ = try await trials(runs: 5, chat: { _ in stream(streamed) }, sent: sent)
     let systems = sent.systems, users = sent.users, inputs = sent.speechInputs
     #expect(systems.count == 5 && Set(systems).count == 5)
-    #expect(systems.allSatisfy { $0.hasPrefix(interviewerPrompt) })
+    #expect(systems.allSatisfy { $0.hasPrefix(InterviewPrompt.interviewer) })
     #expect(users == Array(repeating: "je veux refactorer", count: 5))
     #expect(inputs.count == 5 && Set(inputs).count == 5)
     #expect(inputs.allSatisfy { $0.trimmingCharacters(in: .whitespaces) == "Quel est l'objectif ?" })

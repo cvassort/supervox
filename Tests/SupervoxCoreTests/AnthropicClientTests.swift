@@ -95,6 +95,39 @@ struct AnthropicClientTests {
         #expect(object as NSDictionary == expected)
     }
 
+    /// Règle 1 : `system` = consigne, `messages` = l'historique dans l'ordre, puis `input`.
+    @Test func theHistoryGoesBeforeTheInputInOrderAndTheInstructionStaysTheSystem() async throws {
+        let (client, stub) = anthropicStub(.response(status: 200, body: fixtureData("messages-anthropic-text.sse")))
+        let request = CompletionRequest(
+            model: "modele-exemple", instruction: "Consigne.", input: "Dernier message.", maxTokens: 50,
+            history: [CompletionTurn(role: .assistant, text: "Première question ?"),
+                      CompletionTurn(role: .user, text: "Première réponse."),
+                      CompletionTurn(role: .assistant, text: "Seconde question ?")])
+        _ = await collectEvents(client.complete(request))
+
+        let object = try #require(try JSONSerialization.jsonObject(with: stub.lastBody) as? [String: Any])
+        let expected: NSDictionary = [
+            "model": "modele-exemple", "max_tokens": 50, "system": "Consigne.",
+            "messages": [["role": "assistant", "content": "Première question ?"],
+                         ["role": "user", "content": "Première réponse."],
+                         ["role": "assistant", "content": "Seconde question ?"],
+                         ["role": "user", "content": "Dernier message."]],
+            "stream": true,
+        ]
+        #expect(object as NSDictionary == expected)
+    }
+
+    /// Règle 1 : sans historique, le corps est celui de l'étape 5 (un seul message, mêmes clés).
+    @Test func anEmptyHistoryLeavesTheBodyOfStepFiveUnchanged() async throws {
+        let (client, stub) = anthropicStub(.response(status: 200, body: fixtureData("messages-anthropic-text.sse")))
+        _ = await collectEvents(client.complete(CompletionRequest(
+            model: "modele-exemple", instruction: "Consigne.", input: "Texte à traiter.", maxTokens: 50, history: [])))
+
+        let object = try #require(try JSONSerialization.jsonObject(with: stub.lastBody) as? [String: Any])
+        #expect(Set(object.keys) == ["model", "max_tokens", "system", "messages", "stream"])
+        #expect(object["messages"] as? [[String: String]] == [["role": "user", "content": "Texte à traiter."]])
+    }
+
     @Test func theKeyIsNeverInTheAddressNorTheBody() async throws {
         let (client, stub) = anthropicStub(.response(status: 200, body: fixtureData("messages-anthropic-text.sse")),
                                            apiKey: "cle-secrete-0123")

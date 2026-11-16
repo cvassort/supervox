@@ -60,6 +60,23 @@ func occurrences(of needle: String, in haystack: String) -> Int {
         return RewritePrompt.correction(text: text, change: change, vocabulary: vocabulary, using: &source)
     }
 
+    // MARK: Mécanisme partagé avec l'entretien (internes)
+
+    /// `freshSuffix` et `vocabularyBlock` sont internes : la conclusion de l'entretien les réutilise, sans seconde fonction de délimitation.
+    @Test func theSharedHelpersDrawASuffixAvoidingTheDataAndBuildTheVocabularyBlock() {
+        var source = ScriptedBits([Self.first, Self.second])
+        #expect(RewritePrompt.freshSuffix(avoiding: ["rien", "ici"], using: &source) == "3f9a0c71b2d458e6")
+        #expect(source.drawn == 1)
+
+        var again = ScriptedBits([Self.first, Self.second])
+        #expect(RewritePrompt.freshSuffix(avoiding: ["a 3F9A0C71B2D458E6 b"], using: &again) == "000000abcdef0123")
+        #expect(again.drawn == 2)
+
+        #expect(RewritePrompt.vocabularyBlock([" ", ""]) == nil)
+        #expect(RewritePrompt.vocabularyBlock([" Supervox ", "SwiftPM"])
+            == "Vocabulaire personnel (orthographe exacte à respecter quand ces termes apparaissent) : Supervox, SwiftPM.")
+    }
+
     // MARK: Délimitation (règle 1)
 
     @Test func formatPutsTheDictatedTextBetweenSuffixedTagsAndNeverInTheInstruction() {

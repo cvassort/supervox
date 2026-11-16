@@ -127,13 +127,15 @@ public struct RewritePolicy: Sendable {
 public enum Rewriter {
     /// Réécrit `input` selon `instruction` avec `model`, et rend le texte de la réponse entier, rogné. Le raisonnement du
     /// modèle est écarté, comme un bloc `<think>…</think>` (ou `<thinking>`) en tête de réponse ; `onText` reçoit le texte
-    /// visible cumulé à chaque morceau (jamais vide, et rien tant qu'un bloc de tête n'est pas fermé). Lève `RewriteFailure`,
-    /// ou `CancellationError` quand la tâche appelante est annulée.
+    /// visible cumulé à chaque morceau (jamais vide, et rien tant qu'un bloc de tête n'est pas fermé). `history` est transmis
+    /// tel quel au client (les tours déjà joués, avant `input`). Lève `RewriteFailure`, ou `CancellationError` quand la tâche
+    /// appelante est annulée.
     public static func run(
-        _ client: any LanguageModel, model: String, instruction: String, input: String, policy: RewritePolicy,
-        onText: @escaping @Sendable (String) -> Void
+        _ client: any LanguageModel, model: String, instruction: String, input: String, history: [CompletionTurn] = [],
+        policy: RewritePolicy, onText: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        let request = CompletionRequest(model: model, instruction: instruction, input: input, maxTokens: policy.maxTokens)
+        let request = CompletionRequest(model: model, instruction: instruction, input: input, maxTokens: policy.maxTokens,
+                                        history: history)
         let collected: Collected
         do {
             collected = try await Deadline.run(seconds: policy.timeout, sleep: policy.sleep) {

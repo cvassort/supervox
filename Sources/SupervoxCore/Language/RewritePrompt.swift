@@ -64,7 +64,7 @@ public enum RewritePrompt {
     /// Un suffixe de 64 bits, en seize chiffres hexadécimaux minuscules, absent de toutes les chaînes de `data` (la casse n'y
     /// compte pas : un lecteur qui ignore la casse ne doit pas non plus y retrouver le suffixe). Tant qu'il y figure, on tire
     /// un autre : la probabilité est négligeable, mais c'est l'invariant, et il ne dépend d'aucune table.
-    private static func freshSuffix(avoiding data: [String], using generator: inout some RandomNumberGenerator) -> String {
+    static func freshSuffix(avoiding data: [String], using generator: inout some RandomNumberGenerator) -> String {
         let haystacks = data.map { Array($0.lowercased().utf8) }
         while true {
             let digits = String(generator.next(), radix: 16)
@@ -85,7 +85,7 @@ public enum RewritePrompt {
     }
 
     /// Le bloc du vocabulaire personnel ; `nil` s'il n'y a aucun terme (les termes blancs sont écartés).
-    private static func vocabularyBlock(_ vocabulary: [String]) -> String? {
+    static func vocabularyBlock(_ vocabulary: [String]) -> String? {
         let terms = vocabulary.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !terms.isEmpty else { return nil }
         return "Vocabulaire personnel (orthographe exacte à respecter quand ces termes apparaissent) : \(terms.joined(separator: ", "))."

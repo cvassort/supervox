@@ -345,7 +345,8 @@ private struct OpenAICompletionReader: SSEReader {
 }
 
 extension OpenAICompatibleClient: LanguageModel {
-    /// `POST <base>/v1/chat/completions` (`stream: true`), messages `[system: instruction, user: input]`. Même lecteur
+    /// `POST <base>/v1/chat/completions` (`stream: true`), messages `[system: instruction, l'historique dans l'ordre,
+    /// user: input]` (sans historique : `[system: instruction, user: input]`). Même lecteur
     /// que `chatStream`, qui ne livre pas la raison d'arrêt ; ici elle arrive en `.stop`. Un silence est
     /// `CompletionError.stalled`, alors que `chatStream` le rend en `.transport`.
     public func complete(_ request: CompletionRequest) -> AsyncThrowingStream<CompletionEvent, Error> {
@@ -353,8 +354,9 @@ extension OpenAICompatibleClient: LanguageModel {
             request: {
                 try self.streamingRequest(
                     model: request.model,
-                    messages: [ChatMessage(role: "system", content: request.instruction),
-                               ChatMessage(role: "user", content: request.input)],
+                    messages: [ChatMessage(role: "system", content: request.instruction)]
+                        + request.history.map { ChatMessage(role: $0.role.rawValue, content: $0.text) }
+                        + [ChatMessage(role: "user", content: request.input)],
                     maxTokens: request.maxTokens)
             },
             reader: { status, redact in OpenAICompletionReader(status: status, redact: redact) },

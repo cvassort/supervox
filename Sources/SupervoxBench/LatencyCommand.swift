@@ -6,17 +6,12 @@ import SupervoxEngines
 
 // MARK: - Consigne
 
-/// Consigne d'intervieweur (design, section 6.2), envoyée comme message système ; le message de l'utilisateur est la
-/// transcription.
-let interviewerPrompt = "Tu mènes un entretien oral pour aider quelqu'un à préciser une demande destinée à un agent "
-    + "de programmation. Pose une seule question à la fois. Fais des phrases courtes, faites pour être dites à voix "
-    + "haute. Pas de liste, pas de mise en forme, pas de préambule."
-
-/// Message système d'un essai : la consigne, suivie d'une référence propre à l'essai. La passerelle rend une requête
-/// identique depuis son cache (toute la réponse d'un bloc, bien plus vite) : sans cette référence, deux essais sur le
-/// même enregistrement enverraient la même requête.
+/// Message système d'un essai : la consigne d'intervieweur du cœur (`InterviewPrompt`, huit questions restantes : l'entretien
+/// commence), suivie d'une référence propre à l'essai. La passerelle rend une requête identique depuis son cache (toute la
+/// réponse d'un bloc, bien plus vite) : sans cette référence, deux essais sur le même enregistrement enverraient la même
+/// requête. Le message de l'utilisateur est la transcription.
 func interviewerSystemMessage(nonce: String) -> String {
-    interviewerPrompt + "\n\n(Référence technique de la requête, à ignorer : \(nonce).)"
+    InterviewPrompt.instruction(remainingQuestions: 8) + "\n\n(Référence technique de la requête, à ignorer : \(nonce).)"
 }
 
 // MARK: - Première phrase
@@ -31,17 +26,25 @@ struct FirstSentence: Equatable {
 /// la requête). Si le flux se termine sans qu'aucune phrase ait été coupée, le texte restant (`flush()`) est la
 /// première phrase. `nil` seulement si le flux n'a rendu aucun contenu. Les morceaux de réflexion sont ignorés.
 ///
+/// Le marqueur de conclusion que la consigne demande en tête de réponse (`[SUITE]`…) est retiré par `ReplyFilter` : il n'est
+/// ni dit ni compté dans la première phrase, même coupé entre deux morceaux.
+///
 /// Une tâche annulée voit la boucle se terminer sans erreur : le texte en attente n'est alors pas une phrase
 /// complète, et l'annulation est levée au lieu de le rendre.
 func readFirstSentence(_ stream: AsyncThrowingStream<ChatDelta, Error>) async throws -> FirstSentence? {
     var splitter = SentenceSplitter()
+    var filter = ReplyFilter()
+    var received = ""
     var chunks = 0
     for try await delta in stream {
         guard case .content(let text) = delta else { continue }
         chunks += 1
-        if let sentence = splitter.feed(text).first { return FirstSentence(text: sentence, contentChunks: chunks) }
+        received += text
+        if let sentence = splitter.feed(filter.feed(received)).first { return FirstSentence(text: sentence, contentChunks: chunks) }
     }
     if Task.isCancelled { throw CancellationError() }
+    // Ce que le filtre retenait (un début de marqueur en fin de flux) est du texte : il rejoint la dernière phrase.
+    if let sentence = splitter.feed(filter.finish()).first { return FirstSentence(text: sentence, contentChunks: chunks) }
     return splitter.flush().map { FirstSentence(text: $0, contentChunks: chunks) }
 }
 
