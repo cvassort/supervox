@@ -231,6 +231,7 @@ private let someClip = AudioClip(samples: [0.1, 0.2, 0.3], sampleRate: 22_050)
         io.stopPlayback()
         finished.signal()
     }
+    // Borne de vivacité de 10 s : choix non mesuré, un interblocage doit faire échouer le test et non le suspendre.
     #expect(finished.wait(timeout: .now() + 10) == .success, "stopPlayback() ne revient pas : interblocage")
     #expect(received.ends == [.stopped])
 }
@@ -395,6 +396,7 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
         io.stop()
         stopReturned.signal()
     }
+    // 0,2 s : choix non mesuré. Une attente d'un événement qui ne doit pas arriver ne peut produire qu'un faux succès, jamais un faux échec.
     #expect(stopReturned.wait(timeout: .now() + 0.2) == .timedOut, "stop() est revenu pendant une livraison")
     release.signal()
     #expect(stopReturned.wait(timeout: .now() + 10) == .success)

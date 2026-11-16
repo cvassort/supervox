@@ -15,7 +15,8 @@ public enum AudioLevel {
         return max(10 * log10(power), floorDecibels)
     }
 
-    /// Niveau affichable, entre 0 et 1 : −60 dB → 0, 0 dB → 1. Une tranche vide ou non numérique donne 0.
+    /// Niveau affichable, entre 0 et 1 : −60 dB → 0, 0 dB → 1. Une tranche vide ou non numérique donne 0. La plage de 60 dB est celle de
+    /// l'ancienne `DictationSession.level(of:)` (reprise du brief de la tâche 2, choix d'affichage non mesuré).
     public static func display(of samples: [Float]) -> Float {
         let level = (decibels(of: samples) + 60) / 60
         return level.isNaN ? 0 : Float(min(max(level, 0), 1))

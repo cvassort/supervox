@@ -30,7 +30,8 @@ private final class Probe: Sendable {
     static func seconds(from start: UInt64, to end: UInt64) -> Double { Double(end &- start) / 1e9 }
 }
 
-/// Attend, par sondages de 10 ms et jamais plus de `timeout` secondes, qu'une condition devienne vraie.
+/// Attend, par sondages de 10 ms et jamais plus de `timeout` secondes, qu'une condition devienne vraie. Sondage de 10 ms et délai de
+/// 10 s : choix non mesurés (le délai n'est qu'une borne de vivacité, un test suspendu doit échouer, non rester en vie).
 private func wait(timeout: Double = 10, until condition: () -> Bool) async throws -> Bool {
     let limit = DispatchTime.now().uptimeNanoseconds + UInt64(timeout * 1e9)
     while !condition() {
@@ -40,7 +41,8 @@ private func wait(timeout: Double = 10, until condition: () -> Bool) async throw
     return true
 }
 
-/// Ton de 440 Hz à faible amplitude (0,05, soit −26 dB pleine échelle) : un essai réel ne doit pas surprendre.
+/// Ton de 440 Hz à faible amplitude (0,05, soit −26 dB pleine échelle, calculé : 20·log10(0,05)) : un essai réel ne doit pas surprendre.
+/// Choix non mesuré : le niveau réellement entendu dépend du volume du système.
 private func quietTone(seconds: Double) -> AudioClip {
     let rate = 22_050.0
     return AudioClip(samples: (0..<Int(seconds * rate)).map { 0.05 * Float(sin(2 * Double.pi * 440 * Double($0) / rate)) }, sampleRate: rate)
@@ -73,7 +75,7 @@ struct RealAudioIOTests {
         let duration = 0.5
         let before = DispatchTime.now().uptimeNanoseconds
         try io.play(quietTone(seconds: duration), onEnd: probe.onEnd("tone"))
-        try await Task.sleep(for: .milliseconds(200))
+        try await Task.sleep(for: .milliseconds(200))   // choix non mesuré : un moment bien après le début et avant la fin (0,5 s)
         let midway = io.playbackPosition
         #expect(try await wait { !probe.ends(of: "tone").isEmpty }, "aucune fin de lecture en 10 s")
         let ended = try #require(probe.ends(of: "tone").first)
@@ -83,6 +85,8 @@ struct RealAudioIOTests {
         #expect(ended.end == .played)
         #expect(elapsed >= duration, "`.played` est arrivé après \(elapsed) s, avant la fin du son (\(duration) s)")
         #expect(!ended.onMainThread)
+        // Seuil de 2 tranches : choix non mesuré. 0,5 s de lecture et des fenêtres de 100 ms (demandées au tap) en donnent environ 5 ;
+        // 2 tolère un retard sans accepter l'absence de livraison.
         #expect(probe.chunks(between: before, and: ended.at) >= 2, "le micro n'a pas livré pendant la lecture")
         #expect(try #require(midway) > 0 && midway! <= duration, "position à mi-lecture : \(String(describing: midway))")
         #expect(io.playbackPosition == nil, "plus de clip en file : pas de position")
@@ -90,7 +94,7 @@ struct RealAudioIOTests {
 
         io.stop()
         let afterStop = probe.chunkCount
-        try await Task.sleep(for: .milliseconds(400))
+        try await Task.sleep(for: .milliseconds(400))   // 4 fenêtres du tap (100 ms chacune, valeur demandée) : choix non mesuré
         #expect(probe.chunkCount == afterStop, "tranches arrivées après stop()")
     }
 
@@ -105,7 +109,7 @@ struct RealAudioIOTests {
         let before = DispatchTime.now().uptimeNanoseconds
         try io.play(quietTone(seconds: 3), onEnd: probe.onEnd("a"))
         try io.play(quietTone(seconds: 3), onEnd: probe.onEnd("b"))
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(300))   // choix non mesuré : bien dans les 3 s des clips en file
         let stoppedAt = DispatchTime.now().uptimeNanoseconds
         io.stopPlayback()
         #expect(try await wait { !probe.ends(of: "a").isEmpty && !probe.ends(of: "b").isEmpty }, "`.stopped` n'est pas arrivé en 10 s")
@@ -134,7 +138,7 @@ struct RealAudioIOTests {
         try io.start { _ in probe.chunk() }
         #expect(try await wait { probe.chunkCount > 0 })
         try io.play(quietTone(seconds: 3), onEnd: probe.onEnd("a"))
-        try await Task.sleep(for: .milliseconds(200))
+        try await Task.sleep(for: .milliseconds(200))   // choix non mesuré : le clip joue encore (3 s) au moment du stop()
         io.stop()
         #expect(try await wait { !probe.ends(of: "a").isEmpty })
         #expect(probe.ends(of: "a").first?.end == .stopped)
