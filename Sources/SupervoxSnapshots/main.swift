@@ -212,6 +212,8 @@ let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple
 @MainActor final class ExampleModes {
     var settings: AppSettings
     var failure: (any Error)?
+    /// Le système rétablit-il le raccourci général après une capture ? Faux : la phrase qui le dit s'ajoute au refus.
+    var resumeResult = true
 
     /// Par défaut : les quatre modes de base, un fournisseur d'exemple, les modèles fort et rapide choisis.
     init(_ settings: AppSettings? = nil) {
@@ -234,7 +236,7 @@ let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple
                 change(&self.settings)
             },
             hotKeys: ModeHotKeyControl(
-                apply: { _, _ in .success(()) }, suspend: {}, resume: { true }, global: { .standard }),
+                apply: { _, _ in .success(()) }, suspend: {}, resume: { self.resumeResult }, global: { .standard }),
             layout: layout, systemHotKeys: NoSystemHotKeys(), keyMonitor: NoKeyMonitor())
     }
 }
@@ -728,7 +730,7 @@ for dark in [false, true] {
     try render(
         ModeEditor(model: refusedModel, id: "perso-compte-rendu", height: sheetHeight),
         name: "mode-raccourci-refuse", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
-    // Le bandeau le plus long que l'on sache produire : une combinaison tenue par un mode au nom de 60 caractères (deux lignes pleines).
+    // Un refus qui nomme un mode au nom de 60 caractères : deux lignes pleines.
     var heldByLongName = exampleModesSettings()
     heldByLongName.modes[3].hotKey = nil
     heldByLongName.modes[4].name = "Compte rendu détaillé de la réunion hebdomadaire de l'équipe"
@@ -738,6 +740,24 @@ for dark in [false, true] {
     try render(
         ModeEditor(model: longRefusedModel, id: "perso-compte-rendu", height: sheetHeight),
         name: "mode-raccourci-refuse-long", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // La feuille la plus chargée (Prompt : consigne d'origine, modèle, raccourci) sous un bandeau d'erreur.
+    let loadedRefused = ExampleModes()
+    loadedRefused.settings.modes[2].hotKey = keyB
+    let loadedRefusedModel = loadedRefused.makeModel()
+    loadedRefusedModel.record(.standard, for: ModeChip.promptID)
+    try render(
+        ModeEditor(model: loadedRefusedModel, id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-raccourci-refuse-prompt", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // Le bandeau le plus long que l'on sache produire : un refus, puis la phrase du raccourci général que le système ne rétablit pas
+    // après la capture (quatre lignes).
+    let fourLines = ExampleModes(heldByLongName)
+    fourLines.resumeResult = false
+    let fourLinesModel = fourLines.makeModel()
+    fourLinesModel.startRecording(for: "perso-compte-rendu")
+    fourLinesModel.record(keyB, for: "perso-compte-rendu")
+    try render(
+        ModeEditor(model: fourLinesModel, id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-raccourci-refuse-quatre-lignes", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
     // Une consigne de plusieurs milliers de caractères : elle défile dans son champ, la feuille garde sa taille.
     var long = exampleModesSettings()
     long.modes[3].instruction = Array(

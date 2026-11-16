@@ -20,14 +20,15 @@ public struct ModeEditor: View {
     }
 
     /// La feuille a une hauteur fixe, qui tient dans un écran de portable sous la fenêtre de réglages : le formulaire défile.
-    /// `height` ne change que pour rendre toute la feuille en une image.
+    /// `height` ne change que pour rendre toute la feuille en une image. Seul un bandeau d'erreur l'augmente (`bannerRoom`).
     public static let sheetHeight: CGFloat = 640
     /// La place que la feuille prend de plus tant qu'un bandeau d'erreur est affiché. Le bandeau est au-dessus du formulaire, dans
-    /// une feuille de hauteur fixe : sans cette place, il pousse la dernière phrase d'aide (« Le raccourci lance ce mode… ») sous
-    /// la barre des boutons, coupée à mi-ligne. 48 points laissent entrer un bandeau de deux lignes, dont celui d'un refus qui
-    /// nomme un mode au nom de 60 caractères (vu en image) ; un bandeau de trois lignes tiendrait d'après le calcul (non vu).
-    /// Au-delà, le formulaire défile. La feuille reste sous le budget de 700 points.
-    public static let bannerRoom: CGFloat = 48
+    /// une feuille dont la hauteur ne change pas avec le contenu du formulaire : sans cette place, il pousse la dernière phrase
+    /// d'aide (« Le raccourci lance ce mode… ») sous la barre des boutons, coupée à mi-ligne. 60 points, avec les 35 de marge que
+    /// la feuille la plus chargée (Prompt, consigne d'origine, modèle, raccourci) laisse sans bandeau, absorbent un bandeau de
+    /// quatre lignes, le plus long que l'on sache produire (un refus suivi de la phrase du raccourci général non rétabli) ; vu en
+    /// image. 640 + 60 = 700 : le budget que `theSheetHasABoundedHeight…` borne. Au-delà, le formulaire défile.
+    public static let bannerRoom: CGFloat = 60
     /// Le champ de consigne est borné : une consigne plus longue défile dans le champ.
     static let instructionMinHeight: CGFloat = 80
     static let instructionMaxHeight: CGFloat = 120

@@ -424,6 +424,22 @@ import Testing
         #expect(!line.contains("rétabli"))
     }
 
+    /// Le cas du refus au lancement : la combinaison n'a jamais été prise (refusée par le système) et n'a pas de registraire à
+    /// rétablir. Après la capture, l'avis du refus reste tel quel : jamais « rétabli ».
+    @Test func aModeRefusedAtLaunchKeepsItsRefusalAfterTheCaptureAndNeverSaysRestored() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        modeRegistrars.refusing = [Self.keyB]
+        let controller = makeController(Self.settings([Self.report]))
+        controller.launch()
+        #expect(controller.modeHotKeys.active.isEmpty, "le système a refusé la combinaison au lancement")
+        controller.suspendHotKeysForCapture()
+
+        #expect(controller.resumeHotKeys())
+        let line = try #require(hotKeyLines(controller).first)
+        #expect(line.contains("a été refusé par macOS"))
+        #expect(!line.contains("rétabli"))
+    }
+
     /// Un mode actif dont la combinaison change pendant la capture et est refusée à la reprise : la combinaison refusée n'a jamais
     /// été active, la phrase dit « enregistré » ; l'ancienne revient.
     @Test func aChangedHotKeyThatTheSystemRefusesSaysRegisteredNotRestoredAndTheOldOneComesBack() throws {
