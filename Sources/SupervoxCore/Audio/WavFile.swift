@@ -44,7 +44,18 @@ public enum WavFile {
     }
 
     public static func read(_ url: URL) throws -> AudioClip {
-        let d = try Data(contentsOf: url)
+        try decode(Data(contentsOf: url))
+    }
+
+    /// Lit un WAV déjà en mémoire (la réponse d'un fournisseur de voix) ; mêmes erreurs que `read`, qui l'appelle.
+    ///
+    /// Un WAV produit en flux ne connaît pas encore sa longueur quand il écrit son en-tête : la taille du bloc `data` y est
+    /// provisoire, `0xFFFFFFFF` ou 0. Quand elle l'est (et, pour 0, quand des octets suivent), le bloc va jusqu'à la fin
+    /// des octets ; un octet impair final n'est pas un échantillon. Toute autre taille garde le comportement ordinaire :
+    /// un bloc plus long que les octets est `.malformed`. Cas limite : un fichier qui déclarerait 0 octet de données suivi
+    /// d'un autre bloc serait lu comme provisoire (code lu ; aucun écrivain connu ne le produit).
+    public static func decode(_ bytes: Data) throws -> AudioClip {
+        let d = bytes
         func u16(_ o: Int) -> Int { Int(d[d.startIndex + o]) | Int(d[d.startIndex + o + 1]) << 8 }
         func u32(_ o: Int) -> Int { u16(o) | u16(o + 2) << 16 }
         func tag(_ o: Int) -> String { String(decoding: d[(d.startIndex + o)..<(d.startIndex + o + 4)], as: UTF8.self) }
@@ -69,8 +80,9 @@ public enum WavFile {
             case "data":
                 guard let rate = sampleRate else { throw WavFileError.malformed("bloc data avant le bloc fmt") }
                 guard rate > 0 else { throw WavFileError.malformed("fréquence nulle") }
-                guard body + size <= d.count else { throw WavFileError.malformed("bloc data tronqué") }
-                let count = size / 2
+                let provisional = size == 0xFFFF_FFFF || (size == 0 && body < d.count)
+                if !provisional { guard body + size <= d.count else { throw WavFileError.malformed("bloc data tronqué") } }
+                let count = (provisional ? d.count - body : size) / 2
                 let samples = (0..<count).map { i -> Float in
                     Float(Int16(bitPattern: UInt16(u16(body + 2 * i)))) / 32768
                 }
