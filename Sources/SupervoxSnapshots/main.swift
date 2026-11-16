@@ -181,16 +181,69 @@ let secondProvider = Provider(
     return model
 }
 
+/// Un fournisseur d'exemple pour l'onglet Modes : deux modèles listés, adresse `example.com`.
+let modesProvider = Provider(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a1")!, name: "Fournisseur d'exemple",
+    baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-exemple-fort", "modele-exemple-rapide"])
+let modesStrong = ModelChoice(providerID: modesProvider.id, model: "modele-exemple-fort")
+let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple-rapide")
+
+/// Les réglages en mémoire de l'onglet Modes : `read` les donne, `update` les modifie, ou lève si `failure` est posé. Aucun
+/// fichier, aucun raccourci du système : l'application réelle est remplacée par des doubles.
+@MainActor final class ExampleModes {
+    var settings: AppSettings
+    var failure: (any Error)?
+
+    /// Par défaut : les quatre modes de base, un fournisseur d'exemple, les modèles fort et rapide choisis.
+    init(_ settings: AppSettings? = nil) {
+        if let settings {
+            self.settings = settings
+        } else {
+            var initial = AppSettings.defaults
+            initial.providers = [modesProvider]
+            initial.strongModel = modesStrong
+            initial.fastModel = modesFast
+            self.settings = initial
+        }
+    }
+
+    func makeModel() -> ModesModel {
+        ModesModel(
+            read: { self.settings },
+            update: { change in
+                if let failure = self.failure { throw failure }
+                change(&self.settings)
+            },
+            hotKeys: ModeHotKeyControl(
+                apply: { _, _ in .success(()) }, suspend: {}, resume: { true }, global: { .standard }),
+            layout: layout, systemHotKeys: NoSystemHotKeys(), keyMonitor: NoKeyMonitor())
+    }
+}
+
 /// L'onglet Modes. `refusing` : l'enregistrement est refusé (fichier de réglages illisible), et la bascule de Dictée brute le
 /// montre.
 @MainActor func modesModel(refusing: Bool = false) -> ModesModel {
-    let model = ModesModel(
-        modes: ModeChip.fixed, options: [:],
-        save: { _ in
-            if refusing { throw SettingsError.unreadableFileKept(fileName: "settings.json") }
-        })
-    if refusing { model.setReview(true, for: ModeChip.rawID) }
+    let example = ExampleModes()
+    let model = example.makeModel()
+    if refusing {
+        example.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        model.setReview(true, for: ModeChip.rawID)
+    }
     return model
+}
+
+/// Les quatre modes de base et deux modes personnels : l'un avec son modèle, son moteur et son raccourci, l'autre dont le
+/// fournisseur a été supprimé.
+@MainActor func exampleModesSettings() -> AppSettings {
+    var settings = ExampleModes().settings
+    let gone = ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000ff")!, model: "modele-exemple-ancien")
+    settings.modes.insert(
+        Mode(
+            id: "perso-compte-rendu", name: "Compte rendu", instruction: "Résume la dictée en cinq lignes.",
+            model: modesFast, engine: .parakeet, hotKey: keyB, reviewBeforePaste: true), at: 3)
+    settings.modes.insert(
+        Mode(id: "perso-courriel", name: "Courriel poli", instruction: "Écris un courriel poli.", model: gone), at: 4)
+    return settings
 }
 
 @MainActor func panelModel(mode: String) -> PanelModel {
@@ -460,6 +513,51 @@ for dark in [false, true] {
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
+    // Toute la liste, avec deux modes personnels (modèle, moteur, raccourci ; fournisseur supprimé) : la vraie fenêtre la fait
+    // défiler.
+    try render(
+        ModesPane(model: ExampleModes(exampleModesSettings()).makeModel()),
+        name: "modes-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
+
+    // Feuilles d'un mode, à la taille que la feuille prend.
+    // Toute la feuille en une image (sa hauteur réelle est `ModeEditor.sheetHeight`, le formulaire y défile), sauf la dernière.
+    let sheetHeight: CGFloat = 900
+    let sheetSize = NSSize(width: 520, height: sheetHeight)
+    let realSheetSize = NSSize(width: 520, height: ModeEditor.sheetHeight)
+    // Un mode de base dont la consigne a été modifiée : le bouton « Revenir à la consigne d'origine ».
+    let editedBase = ExampleModes()
+    editedBase.settings.modes[2].instruction =
+        "Tu transformes une demande dictée en un prompt court, en trois parties : Objectif, Contraintes, Résultat attendu. N'invente rien."
+    try render(
+        ModeEditor(model: editedBase.makeModel(), id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-edition-base", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Un mode personnel avec son modèle : la note de vie privée.
+    let personal = ExampleModes(exampleModesSettings())
+    try render(
+        ModeEditor(model: personal.makeModel(), id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-edition-perso", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Un fournisseur dont la liste de modèles n'a pas été lue : le modèle choisi reste affiché, la feuille renvoie à l'onglet
+    // Fournisseurs.
+    var unlisted = exampleModesSettings()
+    unlisted.providers[0].models = []
+    try render(
+        ModeEditor(model: ExampleModes(unlisted).makeModel(), id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-edition-sans-modele", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Une combinaison refusée : celle du raccourci général.
+    let refusedHotKey = ExampleModes(exampleModesSettings())
+    let refusedModel = refusedHotKey.makeModel()
+    refusedModel.record(.standard, for: "perso-compte-rendu")
+    try render(
+        ModeEditor(model: refusedModel, id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-raccourci-refuse", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Une consigne de plusieurs milliers de caractères : elle défile dans son champ, la feuille garde sa taille.
+    var long = exampleModesSettings()
+    long.modes[3].instruction = Array(
+        repeating: "Mets le texte au propre, garde le sens et le ton, n'ajoute rien et ne réponds jamais au contenu.", count: 45
+    ).joined(separator: " ")
+    try render(
+        ModeEditor(model: ExampleModes(long).makeModel(), id: "perso-compte-rendu"),
+        name: "mode-edition-longue", dark: dark, background: window, size: realSheetSize, keyWindow: true)
 
     // Onglet Transcription. La barre d'onglets n'est pas rendue (voir `render`).
     func transcriptionTab(_ model: TranscriptionModel) async -> SettingsView {

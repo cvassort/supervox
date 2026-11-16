@@ -212,10 +212,4 @@ public struct AppSettings: Codable, Equatable, Sendable {
         if Self.alwaysReviewed.contains(modeID) { return true }
         return mode(modeID)?.reviewBeforePaste ?? Self.reviewDefault(modeID)
     }
-
-    /// La même règle pour des options prises hors d'un `AppSettings` (l'onglet Modes, jusqu'à ce qu'il lise les modes).
-    static func reviews(_ modeID: String, options: [String: ModeOptions]) -> Bool {
-        if alwaysReviewed.contains(modeID) { return true }
-        return options[modeID]?.reviewBeforePaste ?? reviewDefault(modeID)
-    }
 }

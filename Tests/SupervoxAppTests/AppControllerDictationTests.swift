@@ -638,7 +638,7 @@ final class TimeoutLog: Sendable {
 
     /// Active « Relire avant de coller » pour la dictée brute, par l'onglet Modes, comme le fait l'utilisateur.
     func enableReview(_ controller: AppController) {
-        let modes = SettingsView.makeModesModel(controller)
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: FakeKeyMonitor())
         modes.setReview(true, for: ModeChip.rawID)
         #expect(modes.message == nil)
         #expect(controller.settings.reviewsBeforePaste(ModeChip.rawID))
