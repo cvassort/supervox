@@ -230,11 +230,41 @@ final class MadeModels: Sendable {
         var provider = primary
         provider.baseURL = address
         let made = MadeModels(.never)
-        let (access, _) = secrets([provider.id: Self.apiKey])
+        let (access, store) = secrets([provider.id: Self.apiKey])
         let env = environment(settings(strong: choice(provider), providers: [provider]), secrets: access, made: made)
 
         #expect(await env.rewrite(job()) { _ in } == .failed(.unreachable))
         #expect(made.made.isEmpty)
+        #expect(made.model.requests.isEmpty)
+        #expect(store.readCount == 0, "l'adresse est refusée avant la lecture de la clé : aucune invite du trousseau")
+    }
+
+    @Test func aTaskCancelledWhileTheKeychainAnswersMakesNoClient() async {
+        // Un trousseau qui ne répond pas tant que le test ne le libère pas (l'invite que l'utilisateur n'a pas encore fermée).
+        final class SlowStore: SecretStore {
+            let asked = Mutex(false)
+            let release = DispatchSemaphore(value: 0)
+            func read(account: String) throws -> String? {
+                asked.withLock { $0 = true }
+                release.wait()
+                return "cle-exemple"
+            }
+            func write(_ secret: String, account: String) throws {}
+            func delete(account: String) throws {}
+            func contains(account: String) throws -> Bool { true }
+        }
+        let slow = SlowStore()
+        let made = MadeModels(.never)
+        let env = environment(
+            settings(strong: choice(primary)), secrets: SecretAccess(slow, queue: DispatchQueue(label: "test.slow")), made: made)
+
+        let task = Task { await env.rewrite(job()) { _ in } }
+        #expect(await until { slow.asked.withLock { $0 } })
+        task.cancel()
+        slow.release.signal()
+
+        #expect(await task.value == .cancelled)
+        #expect(made.made.isEmpty, "aucun client n'est fabriqué avec la clé d'une dictée annulée")
         #expect(made.model.requests.isEmpty)
     }
 

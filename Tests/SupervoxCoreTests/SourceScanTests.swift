@@ -196,6 +196,38 @@ import Testing
         }
     }
 
+    /// Une ligne de journal de la couche de mise en forme de l'application n'interpole que la nature d'une panne
+    /// (`kind(of:)`) : jamais la panne elle-même (`\(failure)`, qui porterait le nom du fournisseur), le travail, la consigne ni
+    /// le texte. Toute interpolation d'une ligne `log.` autre que `kind(of:` est refusée.
+    static let forbiddenLogInterpolation = #"\blog\s*\.\s*\w+\s*\(.*\\\((?!\s*kind\s*\(\s*of\s*:)"#
+
+    @Test func theRewritingLayerLogsOnlyTheKindOfAFailure() throws {
+        let pattern = try Regex(Self.forbiddenLogInterpolation)
+        let sources = try Self.sources(under: "Sources/SupervoxApp/Language")
+        let logged = sources.filter { $0.code.contains("log.notice") }
+        #expect(!logged.isEmpty, "le balayage doit voir au moins une ligne de journal")
+        let offending = sources.filter { $0.code.contains(pattern) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        #"log.notice("mise en forme échouée : \(failure)")"#, #"log.notice("\(job.input)")"#, #"log.error("x \(error, privacy: .public)")"#,
+        #"log . notice ( "\(provider.name)" )"#,
+    ])
+    func theLogInterpolationPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenLogInterpolation)))
+    }
+
+    @Test func theLogInterpolationPatternLeavesTheKindAlone() throws {
+        let pattern = try Regex(Self.forbiddenLogInterpolation)
+        for code in [
+            #"log.notice("mise en forme échouée : \(kind(of: failure), privacy: .public)")"#, #"log.notice("fini")"#,
+            #"let kind = String(describing: failure)"#,
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
     /// m11 : les noms de moteur enregistrés (`"whisperkit"`, `"parakeet"`) ne sont écrits qu'à un endroit,
     /// `Settings/TranscriptionSettings.swift` (le type `TranscriptionEngine`) ; le reste de l'application et du programme compare
     /// des cas, jamais des chaînes. Le fichier d'origine doit bien porter `"whisperkit"` (`parakeet` y prend son nom de cas : le

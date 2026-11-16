@@ -1,4 +1,5 @@
 import AppKit
+import SupervoxCore
 import SwiftUI
 import os
 
@@ -172,9 +173,49 @@ public final class AppController {
         if let notice = loaded.notice { log.notice("réglages : \(notice, privacy: .public)") }
     }
 
+    /// L'assemblage de production de la mise en forme : le modèle de langage lit les réglages **en vigueur** de ce contrôleur
+    /// (relais posé juste après la construction, car il n'existe pas encore) et les clés par `secrets`, sur la file commune des
+    /// secrets. Le seul chemin par où l'application obtient son `RewriteEnvironment` ; `makeModel` n'est remplacé que par les
+    /// tests, pour qu'aucune connexion ne s'ouvre.
+    convenience init(
+        settingsStore: SettingsStore,
+        secrets: any SecretStore,
+        hotKeyRegistrar: any HotKeyRegistrar,
+        escapeRegistrar: any HotKeyRegistrar,
+        makeModeHotKeyRegistrar: @escaping @MainActor () -> any HotKeyRegistrar,
+        permissionsProbe: any PermissionsProbe,
+        systemHotKeys: any SystemHotKeys,
+        keyboardLayout: any KeyboardLayout,
+        settingsView: @escaping SettingsViewProvider = AppController.emptySettings,
+        makePanelSurface: @MainActor (AnyView) -> any PanelSurface,
+        clickMonitor: any OutsideClickMonitor,
+        makeSettingsWindow: @escaping SettingsWindowMaker,
+        terminate: @escaping @MainActor () -> Void,
+        dictation: DictationEnvironment = .unavailable,
+        makeModel: @escaping @Sendable (ProviderKind, EndpointConfig) -> any LanguageModel,
+        inserter: TextInserter,
+        holdWatch: HoldWatch = .system,
+        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+    ) {
+        let current = ActionRelay()
+        self.init(
+            settingsStore: settingsStore, secrets: secrets, hotKeyRegistrar: hotKeyRegistrar,
+            escapeRegistrar: escapeRegistrar, makeModeHotKeyRegistrar: makeModeHotKeyRegistrar,
+            permissionsProbe: permissionsProbe, systemHotKeys: systemHotKeys, keyboardLayout: keyboardLayout,
+            settingsView: settingsView, makePanelSurface: makePanelSurface, clickMonitor: clickMonitor,
+            makeSettingsWindow: makeSettingsWindow, terminate: terminate, dictation: dictation,
+            rewriter: LiveRewriter.environment(
+                settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets), makeModel: makeModel),
+            inserter: inserter, holdWatch: holdWatch, terminationWait: terminationWait,
+            reviewHandoverWait: reviewHandoverWait)
+        current.settings = { [weak self] in self?.settings }
+    }
+
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
     /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, que la cible `Supervox` construit
-    /// (`SupervoxApp` ne dépend pas d'eux).
+    /// (`SupervoxApp` ne dépend pas d'eux). Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
+    /// ci-dessus, que les tests exécutent.
     public convenience init(
         settingsView: @escaping SettingsViewProvider = SettingsView.provider,
         dictation: DictationEnvironment = .unavailable,
@@ -182,12 +223,9 @@ public final class AppController {
     ) {
         let file = (try? SettingsStore.defaultFile())
             ?? URL.applicationSupportDirectory.appending(path: "Supervox/settings.json")
-        let secrets = CachedSecretStore(KeychainSecretStore(service: "dev.supervox.app"))
-        // La mise en forme lit les réglages en vigueur de ce contrôleur, qui n'existe pas encore : relais, posé juste après.
-        let current = ActionRelay()
         self.init(
             settingsStore: SettingsStore(file: file),
-            secrets: secrets,
+            secrets: CachedSecretStore(KeychainSecretStore(service: "dev.supervox.app")),
             hotKeyRegistrar: CarbonHotKeyRegistrar(),
             escapeRegistrar: CarbonHotKeyRegistrar(),
             makeModeHotKeyRegistrar: { CarbonHotKeyRegistrar() },
@@ -199,11 +237,7 @@ public final class AppController {
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
-            dictation: dictation,
-            rewriter: LiveRewriter.environment(
-                settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets)),
-            inserter: inserter)
-        current.settings = { [weak self] in self?.settings }
+            dictation: dictation, makeModel: LiveRewriter.client, inserter: inserter)
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,

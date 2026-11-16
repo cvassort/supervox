@@ -256,8 +256,13 @@ final class TimeoutLog: Sendable {
         try controller.updateSettings { $0.modes.removeAll { $0.id == "perso-un" } }
         #expect(controller.panelModel.selectedModeID == ModeChip.rawID)
         hotKeys.press()
-        _ = await record(controller)
+        let session = await record(controller)
         #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+        // Le mode supprimé ne met rien en forme : la dictée brute se colle telle quelle.
+        session.emit(.finished("euh bonjour"))
+        #expect(await until { controller.panelModel.dictation.stage == .idle && !controller.panelModel.isOpen })
+        #expect(rewriter.calls.isEmpty)
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.count == 1)
     }
 
     // MARK: - Quitter pendant un collage (m2)
@@ -720,6 +725,133 @@ final class TimeoutLog: Sendable {
         _ = await record(controller)
         #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
         #expect(engines.sessions.count == 1)
+    }
+
+    // MARK: - Le câblage de production de la mise en forme
+
+    /// Le contrôleur assemblé par le chemin de l'application (relais des réglages, accès au trousseau, `LiveRewriter`), sur des
+    /// doubles : le modèle de langage vient de `made`, les clés de `keys`.
+    func makeWiredController(settings: AppSettings, made: MadeModels, keys: InMemorySecretStore) -> AppController {
+        try? store.save(settings)
+        let controller = AppController(
+            settingsStore: store, secrets: keys, hotKeyRegistrar: hotKeys,
+            escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
+            permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
+            keyboardLayout: HotKeyTests.ansi, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            dictation: engines.environment, makeModel: made.make, inserter: rig.inserter,
+            holdWatch: HoldWatch(
+                anyHeld: { [held] in
+                    held.asked.append($0)
+                    return held.value
+                },
+                wait: { [holdSleeper] in await holdSleeper.wait($0) }),
+            reviewHandoverWait: { [handover] in await handover.wait($0) })
+        controller.launch()
+        return controller
+    }
+
+    static let providerA = Provider(
+        id: UUID(), name: "Fournisseur exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
+        models: ["modele-exemple"])
+    static let providerB = Provider(
+        id: UUID(), name: "Second exemple", baseURL: "https://example.com/api", kind: .anthropic, models: ["autre-modele"])
+
+    /// Des réglages à deux fournisseurs, le modèle fort sur le premier, « perso-un » choisi et relu.
+    func wiredSettings() -> AppSettings {
+        var settings = modesSettings(lastModeID: "perso-un")
+        settings.modes[1].instruction = "Consigne d'origine."
+        settings.modes[1].reviewBeforePaste = true
+        settings.providers = [Self.providerA, Self.providerB]
+        settings.strongModel = ModelChoice(providerID: Self.providerA.id, model: "modele-exemple")
+        return settings
+    }
+
+    func wiredKeys() -> InMemorySecretStore {
+        InMemorySecretStore(secrets: [Self.providerA.id.uuidString: "cle-a", Self.providerB.id.uuidString: "cle-b"])
+    }
+
+    func wiredModel() -> MadeModels {
+        MadeModels(.events([.text("Texte du modèle."), .stop(.complete)]))
+    }
+
+    /// Une dictée de bout en bout jusqu'à la relecture.
+    func dictateToReview(_ controller: AppController, index: Int = 0) async {
+        hotKeys.press()
+        let session = await record(controller, index: index)
+        session.emit(.finalizing)
+        session.emit(.finished("euh bonjour tout le monde"))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+    }
+
+    @Test func aModeEditedAfterTheLaunchIsTheOneTheNextDictationFollows() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let made = wiredModel()
+        let controller = makeWiredController(settings: wiredSettings(), made: made, keys: wiredKeys())
+
+        try controller.updateSettings { $0.modes[1].instruction = "Consigne modifiée après le lancement." }
+        await dictateToReview(controller)
+
+        let request = try #require(made.model.requests.first)
+        #expect(request.instruction.hasPrefix("Consigne modifiée après le lancement."))
+        #expect(!request.instruction.contains("Consigne d'origine."))
+        #expect(controller.panelModel.dictation.draft == "Texte du modèle.", "la réponse du vrai environnement, pas `.unavailable`")
+    }
+
+    @Test func aModeCreatedAfterTheLaunchDictatesInsteadOfSayingItComesLater() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let made = wiredModel()
+        let controller = makeWiredController(settings: wiredSettings(), made: made, keys: wiredKeys())
+
+        try controller.updateSettings {
+            $0.modes.insert(Mode(id: "perso-neuf", name: "Neuf", instruction: "Consigne neuve.", reviewBeforePaste: true), at: 1)
+        }
+        controller.panelModel.select("perso-neuf")
+        await dictateToReview(controller)
+
+        #expect(made.model.requests.first?.instruction.hasPrefix("Consigne neuve.") == true)
+        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+    }
+
+    @Test func aModeEditedDuringTheRecordingDoesNotChangeThatDictation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let made = wiredModel()
+        let controller = makeWiredController(settings: wiredSettings(), made: made, keys: wiredKeys())
+
+        hotKeys.press()
+        let session = await record(controller)
+        try controller.updateSettings { $0.modes[1].instruction = "Consigne changée pendant la prise." }
+        session.emit(.finished("euh bonjour tout le monde"))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+
+        let request = try #require(made.model.requests.first)
+        #expect(request.instruction.hasPrefix("Consigne d'origine."))
+    }
+
+    @Test func theStrongModelChangedAfterTheLaunchIsTheOneThatReceivesTheRequest() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let made = wiredModel()
+        let controller = makeWiredController(settings: wiredSettings(), made: made, keys: wiredKeys())
+
+        try controller.updateSettings {
+            $0.strongModel = ModelChoice(providerID: Self.providerB.id, model: "autre-modele-exemple")
+        }
+        await dictateToReview(controller)
+
+        #expect(made.made == [.init(kind: .anthropic, baseURL: URL(string: "https://example.com/api")!, apiKey: "cle-b")])
+        #expect(made.model.requests.map(\.model) == ["autre-modele-exemple"])
+    }
+
+    @Test func aKeyWrittenAfterTheLaunchInTheAppsKeychainIsTheOneSent() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let made = wiredModel()
+        let keys = InMemorySecretStore()
+        let controller = makeWiredController(settings: wiredSettings(), made: made, keys: keys)
+
+        try keys.write("cle-ecrite-apres", account: Self.providerA.id.uuidString)
+        await dictateToReview(controller)
+
+        #expect(made.made.map(\.apiKey) == ["cle-ecrite-apres"])
     }
 
     @Test func aClickOutsideIsIgnoredDuringADictationAndClosesThePanelOtherwise() async {

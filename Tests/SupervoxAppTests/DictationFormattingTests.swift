@@ -434,6 +434,30 @@ import SupervoxCore
         #expect(h.rewriter.calls.count == 1, "la nouvelle dictée n'a pas encore de texte final")
     }
 
+    @Test("règle 7 : le texte et l'issue d'une mise en forme annulée ne touchent pas la mise en forme de la dictée suivante")
+    func lateResultsDoNotTouchANewFormatting() async {
+        let h = harness()
+        h.rewriter.ignoresCancellation = true
+        let old = await formatting(h)
+        h.controller.escapePressed()
+        await dictate(h, "deuxième dictée", index: 1)
+        #expect(await until { h.controller.view.stage == .formatting })
+        let new = await h.rewriter.call(1)
+        new.onText("Texte de la deuxième")
+        #expect(h.controller.view.liveText == "Texte de la deuxième")
+
+        old.onText("Texte de la première")
+        old.finish(.rewritten("Texte de la première."))
+        await settle()
+        #expect(h.controller.view.liveText == "Texte de la deuxième", "le texte tardif de la première n'est pas montré")
+        #expect(h.controller.view.stage == .formatting)
+        #expect(h.pasted.isEmpty)
+
+        new.finish(.rewritten("Texte de la deuxième."))
+        #expect(await until { h.pasted == ["Texte de la deuxième."] })
+        #expect(h.writtenTexts == 1, "seul le texte de la seconde dictée est collé")
+    }
+
     @Test("règle 7 : un onText appelé après l'issue ne change plus l'écran", arguments: [true, false])
     func anOnTextCalledAfterTheOutcomeIsIgnored(review: Bool) async {
         // Sans relecture, l'insertion reste en route (son attente est retenue) le temps du test.
