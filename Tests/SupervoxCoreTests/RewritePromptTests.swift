@@ -155,9 +155,17 @@ import Testing
     }
 
     @Test func ordinaryAngleBracketsAreLeftAlone() {
-        let text = "si a < b et b > c, écrire <b>gras</b>, <dictée> ou <dictee sans fin, voire <textes> et x</texte2>"
+        let text = "si a < b et b > c, écrire <b>gras</b> ou <div>, voire <textes> et x</texte2>"
         let prompt = RewritePrompt.format(instruction: Self.personal, text: text, vocabulary: [])
         #expect(prompt.input == "<dictee>\n\(text)\n</dictee>")
+    }
+
+    /// Changé exprès par la vague finale : `<dictée>` (accent) et `<dictee sans fin` (aucun chevron fermant) sont des balises
+    /// pour un modèle, donc neutralisées ; ils étaient laissés tels quels jusque-là. Le mot « dictée » seul ne bouge pas.
+    @Test func anAccentedNameOrATagWithoutItsClosingChevronIsNoLongerLeftAlone() {
+        let text = "écrire <dictée> ou <dictee sans fin, mais la dictée seule reste"
+        let prompt = RewritePrompt.format(instruction: Self.personal, text: text, vocabulary: [])
+        #expect(prompt.input == "<dictee>\nécrire ‹dictée> ou ‹dictee sans fin, mais la dictée seule reste\n</dictee>")
     }
 
     // MARK: Correction (règle 3)

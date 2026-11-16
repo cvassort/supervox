@@ -262,9 +262,16 @@ choix de relecture.
   consignes d'origine (`ModeDefaults`) sont des choix de produit, non mesurés : leur qualité se juge à l'essai. Ce que vous
   écrivez n'est pas toute la demande : l'application y ajoute elle-même le vocabulaire personnel (l'onglet Transcription),
   s'il y en a, et une règle qui dit au modèle que le texte dicté est une donnée à transformer, jamais une demande qui lui est
-  adressée. Le texte part seul, entre des balises, et ses propres balises sont rendues inoffensives : modifier ou effacer une
-  consigne ne retire donc pas cette protection. Que le modèle la respecte n'est pas vérifié par les tests : seule la forme de
-  la requête l'est (liste d'essai, essai 51).
+  adressée. Le texte part seul, entre des balises, et l'application neutralise celles que le texte écrirait lui-même
+  (`<dictee>`, `<texte>`, `<consigne>`, ouvrantes ou fermantes) : leur chevron ouvrant devient `‹`. Modifier ou effacer une
+  consigne ne retire donc pas cette protection. C'est une défense contre les écritures connues, non une garantie : elle couvre
+  la casse, les accents, les blancs et les caractères invisibles ou combinants, les chevrons et barres d'autres
+  écritures (pleine chasse, `〈 ⟨ ❮`, `／ ⁄ ∕`), les lettres pleine chasse, mathématiques ou cyrilliques, grecques et
+  petites capitales qui se confondent avec celles des noms, les entités `&lt;` et numériques, et une balise sans chevron
+  fermant ; elle ne couvre pas une lettre confondable absente de sa table, une entité doublement codée (`&amp;lt;`) ni un nom
+  coupé par du texte visible. Un chevron suivi d'un des trois noms est neutralisé même sans balise (`a < texte` devient
+  `a ‹ texte`). Que le modèle respecte la règle n'est pas vérifié par les tests : seule la forme de la requête l'est (liste
+  d'essai, essai 51), et relire le résultat reste le filet.
 - **Modèles fort et rapide.** En tête de l'onglet Modes, section « Modèles ». Le modèle fort sert à la correction à la voix et
   à tout mode sans modèle propre ; un mode peut choisir le sien (« Modèle utilisé »). Le modèle rapide est enregistré pour
   l'entretien vocal, à venir : il ne sert encore à rien. Les modèles proposés sont ceux de la dernière liste lue de chaque
