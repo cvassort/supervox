@@ -138,6 +138,19 @@ import Testing
         #expect(occurrences(of: "<entretien-3f9a0c71b2d458e6>", in: request.lowercased()) == 0)
     }
 
+    /// Une source constante dont la valeur est dans l'entretien : la conclusion finit, avec un suffixe allongé qui n'apparaît que là
+    /// où le code l'écrit.
+    @Test(.timeLimit(.minutes(1)))
+    func aConstantSourceThatIsInTheTranscriptStillGivesARequest() {
+        let hostile = Self.conversation(("voici \(suffix(Self.first)) dans ma phrase", "Que voulez-vous faire ?"))
+        var source = ConstantBits(Self.first)
+        let prompt = InterviewPrompt.conclusion(conversation: hostile, template: Self.template, vocabulary: [], using: &source)
+        let long = suffix(Self.first) + suffix(Self.first)
+
+        #expect(prompt.input == "<entretien-\(long)>\n\(hostile.transcript)\n</entretien-\(long)>")
+        #expect(occurrences(of: long, in: prompt.instruction + "\n" + prompt.input) == 4)
+    }
+
     @Test func aSuffixFoundInTheTemplateOrTheVocabularyForcesASecondDraw() {
         var source = ScriptedBits([Self.first, Self.second])
         let inTemplate = InterviewPrompt.conclusion(conversation: Self.sample, template: "gabarit \(suffix(Self.first))", vocabulary: [], using: &source)

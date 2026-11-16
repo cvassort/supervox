@@ -61,14 +61,30 @@ public enum RewritePrompt {
         return (system, "<texte-\(suffix)>\(text)</texte-\(suffix)>\n<consigne-\(suffix)>\(change)</consigne-\(suffix)>")
     }
 
-    /// Un suffixe de 64 bits, en seize chiffres hexadécimaux minuscules, absent de toutes les chaînes de `data` (la casse n'y
-    /// compte pas : un lecteur qui ignore la casse ne doit pas non plus y retrouver le suffixe). Tant qu'il y figure, on tire
-    /// un autre : la probabilité est négligeable, mais c'est l'invariant, et il ne dépend d'aucune table.
+    /// Combien de suffixes de seize chiffres on tire au plus avant d'allonger : huit (choix, non mesuré). Avec la source du système,
+    /// un suffixe présent dans les données est une coïncidence que le deuxième tirage écarte ; huit n'est atteint que par une
+    /// source qui rejoue la même valeur (un test).
+    static let maxFreshDraws = 8
+
+    /// Un suffixe de 64 bits, en seize chiffres hexadécimaux minuscules (taille choisie au cahier des charges, non mesurée ;
+    /// la probabilité qu'un texte la contienne n'est pas calculée ici : c'est la garde qui porte l'invariant), absent de toutes
+    /// les chaînes de `data` (la casse n'y compte pas : un lecteur qui ignore la casse ne doit pas non plus y retrouver le
+    /// suffixe). Tant qu'il y figure, on tire un autre : la probabilité est négligeable, mais c'est l'invariant, et il ne dépend
+    /// d'aucune table.
+    ///
+    /// La garde est bornée : après `maxFreshDraws` suffixes refusés, chaque tirage suivant s'ajoute au suffixe (seize chiffres de
+    /// plus à chaque fois) au lieu de le remplacer. Les données sont finies : un suffixe plus long qu'elles n'y figure pas, la
+    /// boucle finit donc même avec une source qui rend toujours la même valeur. Le suffixe est alors plus long que seize chiffres,
+    /// ce que les balises et la consigne écrivent tel quel.
     static func freshSuffix(avoiding data: [String], using generator: inout some RandomNumberGenerator) -> String {
         let haystacks = data.map { Array($0.lowercased().utf8) }
+        var suffix = ""
+        var draws = 0
         while true {
             let digits = String(generator.next(), radix: 16)
-            let suffix = String(repeating: "0", count: 16 - digits.count) + digits
+            let piece = String(repeating: "0", count: 16 - digits.count) + digits
+            draws += 1
+            suffix = draws > maxFreshDraws ? suffix + piece : piece
             let needle = Array(suffix.utf8)
             if !haystacks.contains(where: { containsBytes($0, needle) }) { return suffix }
         }

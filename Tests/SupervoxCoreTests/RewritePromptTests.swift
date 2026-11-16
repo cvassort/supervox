@@ -45,6 +45,23 @@ func occurrences(of needle: String, in haystack: String) -> Int {
     return count
 }
 
+/// Une source de hasard qui rend toujours la même valeur : le pire cas de la garde de nouveau tirage (un test qui rejoue une valeur
+/// que les données contiennent déjà).
+struct ConstantBits: RandomNumberGenerator {
+    let value: UInt64
+    private(set) var drawn = 0
+
+    init(_ value: UInt64) { self.value = value }
+
+    /// Comme `ScriptedBits`, elle s'arrête net (plantage du test, jamais une suspension) si on lui demande plus de 64 tirages :
+    /// une garde qui boucle sur elle est un défaut.
+    mutating func next() -> UInt64 {
+        drawn += 1
+        precondition(drawn <= 64, "la source constante est tirée sans fin : la garde ne finit pas")
+        return value
+    }
+}
+
 @Suite struct RewritePromptTests {
     private static let personal = "Mets ce texte en forme de courriel poli, sans rien ajouter."
     private static let first: UInt64 = 0x3F9A_0C71_B2D4_58E6
@@ -75,6 +92,44 @@ func occurrences(of needle: String, in haystack: String) -> Int {
         #expect(RewritePrompt.vocabularyBlock([" ", ""]) == nil)
         #expect(RewritePrompt.vocabularyBlock([" Supervox ", "SwiftPM"])
             == "Vocabulaire personnel (orthographe exacte à respecter quand ces termes apparaissent) : Supervox, SwiftPM.")
+    }
+
+    // MARK: Garde bornée (m-1)
+
+    /// Après huit tirages de seize chiffres tous présents dans les données, le suffixe s'allonge d'un tirage à chaque tour au lieu
+    /// de boucler : une source constante dont la valeur figure dans les données finit (un test qui boucle serait suspendu).
+    @Test(.timeLimit(.minutes(1)))
+    func aConstantSourceWhoseValueIsInTheDataEndsByLengtheningTheSuffix() {
+        let one = suffix(Self.first)
+        var source = ConstantBits(Self.first)
+        let result = RewritePrompt.freshSuffix(avoiding: ["avant \(one) après"], using: &source)
+
+        #expect(source.drawn == 9)   // huit suffixes de seize chiffres refusés, puis un tirage de plus qui s'ajoute
+        #expect(result == one + one)
+        #expect(occurrences(of: result, in: "avant \(one) après") == 0)
+
+        // Des données qui contiennent aussi le suffixe allongé : on allonge jusqu'à ce qu'il en sorte.
+        var again = ConstantBits(Self.first)
+        let longer = RewritePrompt.freshSuffix(avoiding: [one + one + one], using: &again)
+        #expect(longer == String(repeating: one, count: 4) && again.drawn == 11)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aFormatRequestWithAConstantSourceThatIsInTheTextStillEnds() {
+        var source = ConstantBits(Self.first)
+        let text = "voici \(suffix(Self.first)) dans ma phrase"
+        let prompt = RewritePrompt.format(instruction: Self.personal, text: text, vocabulary: [], using: &source)
+        let long = suffix(Self.first) + suffix(Self.first)
+
+        #expect(prompt.input == "<dictee-\(long)>\n\(text)\n</dictee-\(long)>")
+        #expect(prompt.instruction.hasSuffix(RewritePrompt.dataRule(suffix: long)))
+    }
+
+    /// Le cas ordinaire ne change pas : un premier tirage absent des données est gardé tel quel, seize chiffres.
+    @Test func anAbsentFirstDrawIsKeptAsIsOnSixteenDigits() {
+        var source = ConstantBits(Self.first)
+
+        #expect(RewritePrompt.freshSuffix(avoiding: ["rien"], using: &source) == "3f9a0c71b2d458e6" && source.drawn == 1)
     }
 
     // MARK: Délimitation (règle 1)
