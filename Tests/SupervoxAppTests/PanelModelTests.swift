@@ -449,8 +449,8 @@ import Testing
         #expect((started, finished) == (1, 1), "aucun autre appel")
     }
 
-    @Test("règle 8 : pendant la correction on ne peut pas coller, le champ est en lecture seule, « Copier » copie le texte courant")
-    func duringTheCorrectionNothingPastesAndCopyCopiesTheDraft() {
+    @Test("règle 8 (tâche 9) : pendant la correction on ne peut ni coller, ni copier, ni écrire : le champ est en lecture seule")
+    func duringTheCorrectionNothingPastesCopiesOrTypes() {
         for step in [CorrectionStep.preparing, .recording, .transcribing, .rewriting] {
             let model = PanelModel(lastModeID: "dictee-brute")
             model.setDictation(
@@ -471,11 +471,12 @@ import Testing
             #expect(pasted == 0, "\(step)")
             #expect(edits.isEmpty, "\(step)")
             #expect(model.dictation.draft == "Le texte courant.", "\(step)")
-            #expect(copied == ["Le texte courant."], "\(step)")
+            #expect(copied.isEmpty, "\(step) : on ne copie pas un texte que l'écran ne montre pas")
+            #expect(model.copyState == .idle, "\(step)")
             let review = model.dictationDisplay.review
             #expect(review?.canPaste == false, "\(step)")
             #expect(review?.isEditable == false, "\(step)")
-            #expect(review?.canCopy == true, "\(step)")
+            #expect(review?.canCopy == false, "\(step)")
             #expect(review?.hint == nil, "\(step)")
             // La réécriture montre le texte reçu à la place du brouillon ; les autres étapes montrent le brouillon.
             #expect(review?.text == (step == .rewriting ? "Texte reçu en flux." : "Le texte courant."), "\(step)")

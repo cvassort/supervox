@@ -607,13 +607,15 @@ import Testing
     @Test func theFieldKeepsItsLowerBoundForAShortOrEmptyText() {
         // Le champ seul : ni plus bas que la borne, ni plus haut pour une ligne.
         let short = height("Bonjour.")
-        // Un texte non blanc a une ligne de plus que le vide : l'aide de la correction. Le champ, lui, a la même hauteur.
-        let correctionLine = short - height(" ")
-        #expect(correctionLine > 0)
-        #expect(height("") == height(" "))
-        #expect(height("") + correctionLine == short)
         #expect(short == height(lines(2)))
         #expect(short == height(lines(3)))
+        // Un texte vide n'a que l'aide du champ vide : une ligne. Un texte non blanc a de plus l'aide de la correction : UNE ligne
+        // de `caption` (mesurée seule, avec l'espacement de 4 points de la pile d'aides), ni plus ni moins.
+        #expect(height("") == height(" "))
+        let host = NSHostingView(
+            rootView: DetailText(text: DictationText.correctionHint(hotKeyLabel: nil)).frame(width: Self.width))
+        host.layoutSubtreeIfNeeded()
+        #expect(short - height(" ") == host.fittingSize.height + 4, "la ligne d'aide de la correction n'est pas une ligne, ou est dupliquée")
     }
 
     @Test func theViewGrowsWithTheTextThenStopsAtTheUpperBound() {
@@ -1112,7 +1114,7 @@ private struct ReviewProbe: PermissionsProbe {
         }
     }
 
-    @Test("règle 1 : pendant une correction, rien ne se colle ni ne s'écrit ; le champ reste là, sans aide ni ⌘↩")
+    @Test("règle 1 : pendant une correction, rien ne se colle, ne se copie ni ne s'écrit ; le champ reste là, sans aide de relecture ni ⌘↩")
     func whileCorrectingNothingCanBePastedOrTyped() throws {
         for step in Self.steps {
             let shown = display(correcting(step))
@@ -1123,16 +1125,21 @@ private struct ReviewProbe: PermissionsProbe {
             #expect(!review.isPasting, "\(step)")
             #expect(review.isCorrecting && review.correctionStep == step, "\(step)")
             #expect(review.hint == nil, "\(step)")
-            #expect(review.canCopy, "\(step) : « Copier » copie le brouillon")
+            #expect(!review.canCopy, "\(step) : on ne copie pas un texte que l'écran ne montre pas")
             #expect(shown.transcript == nil, "\(step) : la carte « Dernière dictée » ne se superpose pas")
         }
     }
 
-    @Test("règle 1 : hors correction, ni étape ni drapeau de correction")
-    func outsideACorrectionThereIsNoCorrectionStep() throws {
-        for stage in [DictationStage.review, .pasting] {
-            let review = try #require(display(DictationViewState(stage: stage, draft: "a")).review)
-            #expect(!review.isCorrecting && review.correctionStep == nil, "\(stage)")
+    @Test("règle 1 : l'étape de correction de l'écran est celle de l'état, et seulement la sienne")
+    func theCorrectionStepIsTheStatesStep() throws {
+        let stages: [(DictationStage, CorrectionStep?)] = [
+            (.review, nil), (.pasting, nil), (.correcting(.preparing), .preparing), (.correcting(.recording), .recording),
+            (.correcting(.transcribing), .transcribing), (.correcting(.rewriting), .rewriting),
+        ]
+        for (stage, step) in stages {
+            let review = try #require(display(DictationViewState(stage: stage, draft: "a")).review, "\(stage)")
+            #expect(review.correctionStep == step, "\(stage)")
+            #expect(review.isCorrecting == (step != nil), "\(stage)")
         }
     }
 
@@ -1298,15 +1305,22 @@ private struct ReviewProbe: PermissionsProbe {
         }
     }
 
-    @Test("règle 3 : la vue ne montre jamais deux versions : un seul texte, le brouillon, quelles que soient les versions")
-    func onlyOneVersionIsEverShown() throws {
-        let state = DictationViewState(
-            stage: .review, lastTranscript: "Une version plus ancienne.", draft: "La version courante.", canGoBack: true,
-            canGoForward: true)
-        let shown = display(state)
-        #expect(shown.review?.text == "La version courante.")
-        #expect(shown.transcript == nil, "pas de seconde carte avec l'autre texte")
-        #expect(shown.liveText == nil)
+    @Test("règle 3 : la vue ne montre jamais deux versions : un seul des trois textes (champ, carte, texte en direct), à toute étape")
+    func onlyOneVersionIsEverShown() {
+        let stages: [DictationStage] = [
+            .review, .pasting, .correcting(.preparing), .correcting(.recording), .correcting(.transcribing),
+            .correcting(.rewriting),
+        ]
+        for stage in stages {
+            let state = DictationViewState(
+                stage: stage, liveText: "Un texte en flux.", elapsed: 1, lastTranscript: "Une version plus ancienne.",
+                draft: "La version courante.", canGoBack: true, canGoForward: true)
+            let shown = display(state)
+            let texts = [shown.review?.text, shown.transcript?.text, shown.liveText].compactMap { $0 }
+            #expect(texts.count == 1, "\(stage) : \(texts)")
+            #expect(shown.review != nil && shown.transcript == nil && shown.liveText == nil, "\(stage)")
+            #expect(shown.review?.text == (stage == .correcting(.rewriting) ? "Un texte en flux." : "La version courante."), "\(stage)")
+        }
     }
 
     @Test("les libellés des boutons de version et de correction")
@@ -1315,6 +1329,8 @@ private struct ReviewProbe: PermissionsProbe {
         #expect(DictationText.finishCorrectionLabel == "Terminer")
         #expect(DictationText.previousVersionLabel == "Version précédente")
         #expect(DictationText.nextVersionLabel == "Version suivante")
+        #expect(DictationText.pasteLabel == "Coller")
+        #expect(DictationText.pasteLabel == "Coller")
     }
 }
 

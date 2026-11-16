@@ -48,25 +48,7 @@ public struct PanelView: View {
     /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.
     private var dictation: some View {
         DictationView(
-            display: model.dictationDisplay,
-            hotKeyLabel: model.hotKeyLabel,
-            copy: { model.copyTranscript() },
-            // Le texte tel que le champ le donne, sans rien y toucher et sans attendre : `editDraft` le garde et prévient le
-            // contrôleur de dictée.
-            edit: { model.editDraft($0) },
-            paste: { model.paste() },
-            // La pile du champ n'a plus rien à défaire (refaire) : ⌘Z (⇧⌘Z) change de version.
-            history: { command in
-                switch command {
-                case .undo: model.previousVersion()
-                case .redo: model.nextVersion()
-                default: break
-                }
-            },
-            composing: { model.fieldIsComposing = $0 },
-            correct: { model.correct() },
-            previousVersion: { model.previousVersion() },
-            nextVersion: { model.nextVersion() })
+            display: model.dictationDisplay, hotKeyLabel: model.hotKeyLabel, actions: .wired(to: model))
     }
 
     private func welcomeLine(_ text: String) -> some View {
@@ -107,7 +89,7 @@ public struct PanelView: View {
                 ForEach(Array(model.noticeLines.enumerated()), id: \.offset) { _, line in
                     Text(line)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DetailText.systemSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

@@ -31,6 +31,7 @@ public enum DictationText {
     /// Les boutons de la rangée de la relecture. « Terminer » prend la place de « Corriger à la voix » pendant que la consigne se dit.
     public static let correctLabel = "Corriger à la voix"
     public static let finishCorrectionLabel = "Terminer"
+    public static let pasteLabel = "Coller"
     /// Les deux boutons à flèche : sans texte visible (la rangée ne tiendrait pas dans le panneau avec leurs libellés), ils portent
     /// ces libellés pour VoiceOver et en info-bulle.
     public static let previousVersionLabel = "Version précédente"
@@ -44,6 +45,11 @@ public enum DictationText {
         guard let label = hotKeyLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else { return button }
         return "\(label) ou \(button)"
     }
+
+    /// Ce que le panneau dit pendant toute la correction : Échap l'annule seule (session et requête annulées), la relecture
+    /// revient, le texte intact. Espace insécable avant « ; », comme la phrase d'Échap de la mise en forme. Voir
+    /// `CorrectionPromisesTests`, qui relie cette phrase à ce que fait Échap à chacune des quatre étapes.
+    public static let correctionCancelHint = "Échap annule la correction\u{00A0}; le texte ne change pas."
 
     /// Ce que VoiceOver lit pour l'indicateur d'attente d'une étape de la correction ; l'écoute n'en a pas (le point rouge dit
     /// « Enregistrement en cours »).
@@ -202,7 +208,7 @@ public struct DictationDisplay: Equatable, Sendable {
     public var detail: String?
     /// Pendant la mise en forme, tant que rien n'est arrivé : la phrase qui dit que le modèle répond (`liveText` est alors nul).
     public var waitingText: String?
-    /// Pendant la mise en forme : ce qu'Échap fait.
+    /// Pendant la mise en forme et pendant la correction : ce qu'Échap fait.
     public var cancelHint: String?
     /// Pendant la mise en forme et les étapes d'attente de la correction : le libellé d'accessibilité de l'indicateur d'attente.
     public var activityLabel: String?
@@ -331,6 +337,7 @@ public struct DictationDisplay: Equatable, Sendable {
         case .correcting(let step):
             mood = step == .recording ? .recording : .working
             activityLabel = DictationText.correctionActivityLabel(for: step)
+            cancelHint = DictationText.correctionCancelHint
             // La consigne se dit : durée et forme d'onde au-dessus du champ. Son texte en direct ne se montre pas (le champ garde le
             // brouillon).
             if step == .recording {
@@ -346,8 +353,9 @@ public struct DictationDisplay: Equatable, Sendable {
         }
 
         // La relecture : le texte entier, à corriger, coller ou copier. Rien d'autre ne le montre. Pendant une correction, le
-        // texte reste là en lecture seule (ni collage ni aide) : celui que le modèle envoie à mesure, à la place du brouillon, à
-        // l'étape de la réécriture. « Copier » copie le brouillon (voir `PanelModel.copyTranscript`).
+        // texte reste là en lecture seule (ni collage, ni copie, ni aide de relecture) : celui que le modèle envoie à mesure, à la
+        // place du brouillon, à l'étape de la réécriture. On ne copie ni ne colle un texte que l'écran ne montre pas : pendant
+        // toute la correction, « Copier » est inactif (voir `PanelModel.copyTranscript`).
         if stage == .review || stage == .pasting || stage.isCorrecting {
             let usable = stage == .review && Self.nonBlank(state.draft) != nil
             let shown = stage == .correcting(.rewriting) ? Self.nonBlank(state.liveText) ?? state.draft : state.draft
@@ -361,7 +369,7 @@ public struct DictationDisplay: Equatable, Sendable {
             if case .correcting(let step) = stage { correction = step }
             review = Review(
                 text: shown, isEditable: stage == .review, canPaste: usable,
-                canCopy: usable || (stage.isCorrecting && Self.nonBlank(state.draft) != nil),
+                canCopy: usable,
                 isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: shown.isEmpty, canCorrect: usable,
                 correctionStep: correction, canGoBack: stage == .review && state.canGoBack,
                 canGoForward: stage == .review && state.canGoForward)

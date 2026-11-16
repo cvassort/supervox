@@ -1,20 +1,12 @@
 import SwiftUI
 
-/// La dictée dans le panneau : l'état, la durée, la forme d'onde, le texte en direct, le message et le dernier texte à
-/// copier. Elle ne décide de rien : `DictationDisplay` dit quoi montrer, ceci le dessine.
-///
-/// Hauteur naturelle. Le panneau suit son contenu (`PanelController.contentChanged` : la fenêtre, ancrée par le haut, grandit et
-/// rétrécit vers le bas), donc chaque état prend la place qu'il lui faut. Pendant l'enregistrement et la transcription, la
-/// place de quatre lignes de texte en direct est réservée dès le début : la fenêtre ne saute pas à chaque ligne qui s'ajoute.
-/// Tout texte est borné (`DictationText`, `lineLimit`), donc la hauteur l'est aussi.
-struct DictationView: View {
-    let display: DictationDisplay
-    /// Le raccourci, montré sous « Prêt » ; `nil` s'il n'y en a aucun.
-    let hotKeyLabel: String?
-    let copy: @MainActor () -> Void
+/// Ce que les clics de la vue de dictée déclenchent. Tout ce que la vue ne décide pas passe par là.
+struct DictationActions {
+    /// « Copier » : le texte entier, par le modèle du panneau.
+    var copy: @MainActor () -> Void = {}
     /// Le texte en relecture a changé (le texte entier, tel quel) ; sans effet hors relecture.
-    let edit: @MainActor (String) -> Void
-    let paste: @MainActor () -> Void
+    var edit: @MainActor (String) -> Void = { _ in }
+    var paste: @MainActor () -> Void = {}
     /// ⌘Z ou ⇧⌘Z en bout de pile du champ : changer de version.
     var history: @MainActor (EditingCommand) -> Void = { _ in }
     /// Une saisie en attente (texte marqué) commence ou finit dans le champ de relecture.
@@ -24,12 +16,52 @@ struct DictationView: View {
     var previousVersion: @MainActor () -> Void = {}
     var nextVersion: @MainActor () -> Void = {}
 
+    /// Les actions reliées au modèle du panneau : ce que `PanelView` donne à la vue.
+    @MainActor static func wired(to model: PanelModel) -> DictationActions {
+        DictationActions(
+            copy: { model.copyTranscript() },
+            // Le texte tel que le champ le donne, sans rien y toucher et sans attendre : `editDraft` le garde et prévient le
+            // contrôleur de dictée.
+            edit: { model.editDraft($0) },
+            paste: { model.paste() },
+            // La pile du champ n'a plus rien à défaire (refaire) : ⌘Z (⇧⌘Z) change de version.
+            history: { command in
+                switch command {
+                case .undo: model.previousVersion()
+                case .redo: model.nextVersion()
+                default: break
+                }
+            },
+            composing: { model.fieldIsComposing = $0 },
+            correct: { model.correct() },
+            previousVersion: { model.previousVersion() },
+            nextVersion: { model.nextVersion() })
+    }
+}
+
+/// La dictée dans le panneau : l'état, la durée, la forme d'onde, le texte en direct, le message et le dernier texte à
+/// copier. Elle ne décide de rien : `DictationDisplay` dit quoi montrer, ceci le dessine.
+///
+/// Hauteur naturelle. Le panneau suit son contenu (`PanelController.contentChanged` : la fenêtre, ancrée par le haut, grandit et
+/// rétrécit vers le bas), donc chaque état prend la place qu'il lui faut. Pendant l'enregistrement et la transcription, la
+/// place de quatre lignes de texte en direct est réservée dès le début : la fenêtre ne saute pas à chaque ligne qui s'ajoute.
+/// Tout texte est borné (`DictationText`, `lineLimit`), donc la hauteur l'est aussi.
+///
+/// Les clics arrivent par `DictationActions` : une donnée, que `DictationActions.wired(to:)` relie au modèle du panneau et que les
+/// tests interrogent sans fenêtre.
+struct DictationView: View {
+    let display: DictationDisplay
+    /// Le raccourci, montré sous « Prêt » ; `nil` s'il n'y en a aucun.
+    let hotKeyLabel: String?
+    let actions: DictationActions
+
     var body: some View {
         VStack(spacing: 10) {
             if let review = display.review {
                 ReviewView(
-                    display: display, review: review, hotKeyLabel: hotKeyLabel, edit: edit, paste: paste, copy: copy,
-                    history: history, composing: composing, correct: correct, previousVersion: previousVersion, nextVersion: nextVersion)
+                    display: display, review: review, hotKeyLabel: hotKeyLabel, edit: actions.edit, paste: actions.paste,
+                    copy: actions.copy, history: actions.history, composing: actions.composing, correct: actions.correct,
+                    previousVersion: actions.previousVersion, nextVersion: actions.nextVersion)
             } else if display.mood == .ready, display.transcript == nil {
                 ready
                     .frame(maxWidth: .infinity, minHeight: 84)
@@ -46,8 +78,8 @@ struct DictationView: View {
                     liveText(received, dimmed: false, label: display.streamLabel)
                 }
                 if let detail = display.detail { DetailText(text: detail) }
-                if let hint = display.cancelHint { DetailText(text: hint, color: DetailText.systemSecondary) }
-                if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: copy) }
+                if let hint = display.cancelHint { DetailText(text: hint) }
+                if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: actions.copy) }
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
@@ -124,7 +156,7 @@ struct DictationView: View {
 /// Le message sous le titre : quatre lignes au plus en `caption` (`DictationText.detailLimit`).
 struct DetailText: View {
     let text: String
-    var color: Color = .secondary
+    var color: Color = DetailText.systemSecondary
 
     /// Le gris des deux textes qui disent quoi attendre et comment annuler (« En attente… », la phrase d'Échap). Mesuré sur les
     /// images : le style `.secondary` de SwiftUI et `NSColor.secondaryLabelColor` rendent le même gris, à 3,08:1 sur le fond
@@ -237,6 +269,9 @@ struct CopyControls: View {
     let state: CopyState
     let action: @MainActor () -> Void
 
+    /// Le glyphe du bouton : une coche une fois copié.
+    static func symbol(for state: CopyState) -> String { state == .copied ? "checkmark" : "doc.on.doc" }
+
     var body: some View {
         if state == .failed {
             Label(DictationText.copyFailure, systemImage: "exclamationmark.triangle.fill")
@@ -246,7 +281,7 @@ struct CopyControls: View {
         Button {
             action()
         } label: {
-            Label(DictationText.copyLabel(for: state), systemImage: state == .copied ? "checkmark" : "doc.on.doc")
+            Label(DictationText.copyLabel(for: state), systemImage: Self.symbol(for: state))
                 .font(.caption)
         }
         .controlSize(.small)

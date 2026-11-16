@@ -138,10 +138,12 @@ public final class PanelModel {
     }
 
     /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre. En relecture, c'est le brouillon que l'on est en
-    /// train de corriger ; ailleurs, le dernier texte. Un texte blanc ne se copie pas : rien ne change.
+    /// train de corriger ; ailleurs, le dernier texte. Un texte blanc ne se copie pas : rien ne change. Pendant une correction,
+    /// rien ne se copie : l'écran montre tantôt le brouillon, tantôt le texte reçu en flux, et on ne copie pas un texte que
+    /// l'écran ne montre pas.
     public func copyTranscript() {
-        // Pendant une correction aussi, c'est le texte courant (le brouillon), jamais le texte reçu en flux.
-        let text = dictation.stage == .review || dictation.stage.isCorrecting ? dictation.draft : dictation.lastTranscript
+        guard !dictation.stage.isCorrecting else { return }
+        let text = dictation.stage == .review ? dictation.draft : dictation.lastTranscript
         guard let text, !Self.isBlank(text), let onCopy else { return }
         copyState = onCopy(text) ? .copied : .failed
     }
