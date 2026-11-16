@@ -172,7 +172,7 @@ import Testing
     @Test func noPanelMessageCarriesTheRawTextOfAnError() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
         let folders = [
-            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
+            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Speech", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
             "Sources/SupervoxApp/Language",
         ]
         let offending = try folders.flatMap { folder in
