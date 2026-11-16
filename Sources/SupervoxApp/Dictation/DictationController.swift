@@ -77,7 +77,13 @@ public final class DictationController {
     }
     /// Tant que le micro n'écoute pas (préparation, téléchargement, chargement) : un appui ou « Terminer » n'y a aucun effet.
     public static let correctionPreparingNotice =
-        "Patientez un instant : vous pourrez dire ce qu'il faut changer dès que l'écoute commence."
+        "Patientez un instant : vous pourrez dire ce qu'il faut changer dès que l'écoute commencera."
+    /// La même, en maintien (la correction a été commencée par l'appui tenu du raccourci) : le relâchement terminerait la
+    /// consigne, qui serait vide ; la phrase dit de garder la touche.
+    public static func correctionPreparingSentence(hotKeyLabel: String?, hold: Bool) -> String {
+        guard hold else { return correctionPreparingNotice }
+        return "Gardez \(hotKeyLabel ?? "le raccourci") enfoncé : vous pourrez dire ce qu'il faut changer dès que l'écoute commencera."
+    }
     /// La session s'est arrêtée seule pendant la correction.
     public static let correctionInterruptedNotice = "La correction à la voix a été interrompue. Le texte n'a pas changé."
     /// L'autorisation du micro manque au moment de corriger.
@@ -1017,10 +1023,10 @@ public final class DictationController {
     /// chargement des moteurs), puis celui du vocabulaire.
     private func notice(for run: Run, stage: DictationStage) -> String? {
         var lines: [String] = []
-        // La consigne se dit pendant la préparation et l'enregistrement : la phrase dit comment la terminer.
-        // Avant l'écoute, rien ne s'entend et ni un appui ni « Terminer » n'agit : la phrase dit d'attendre.
+        // Avant l'écoute, rien ne s'entend et ni un appui ni « Terminer » n'agit : la phrase dit d'attendre (en maintien, de garder
+        // la touche) ; la phrase qui dit comment terminer ne vient qu'avec l'enregistrement.
         if stage == .correcting(.preparing) {
-            lines.append(Self.correctionPreparingNotice)
+            lines.append(Self.correctionPreparingSentence(hotKeyLabel: hotKeyLabel(), hold: run.startedByHold))
         } else if stage == .correcting(.recording) {
             lines.append(Self.correctionListeningNotice(hotKeyLabel: hotKeyLabel(), hold: run.startedByHold))
         }

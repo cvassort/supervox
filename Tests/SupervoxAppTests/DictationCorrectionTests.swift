@@ -993,16 +993,23 @@ import SupervoxCore
         #expect(field.textView.undoManager?.canUndo == true)
     }
 
-    @Test("règle 6 : pas de réécriture pendant un texte marqué, et la pile reste")
-    func markedTextKeepsTheStackAndTheText() throws {
+    @Test("règle 6 : pendant un texte marqué, le retard du modèle ne réécrit pas le champ (la pile reste) ; un texte nouveau abandonne le marquage et remplace, pile vidée")
+    func markedTextOnlyYieldsToANewText() throws {
         let field = Field(text: "ab")
         field.type("c")
         field.textView.setMarkedText(
             "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
         try #require(field.textView.hasMarkedText())
-        ReviewTextView.update(field.textView, text: "autre", isEditable: true, takesFocus: false)
+        // Le modèle donne le texte d'avant la saisie : un simple retard.
+        ReviewTextView.update(field.textView, text: "abc", isEditable: true, takesFocus: false)
         #expect(field.textView.string == "abc^")
+        #expect(field.textView.hasMarkedText())
         #expect(field.textView.undoManager?.canUndo == true)
+        // Un texte nouveau : le marquage est abandonné, le texte remplacé, la pile vidée.
+        ReviewTextView.update(field.textView, text: "autre", isEditable: true, takesFocus: false)
+        #expect(field.textView.string == "autre")
+        #expect(!field.textView.hasMarkedText())
+        #expect(field.textView.undoManager?.canUndo == false)
     }
 
     @Test("règle 6 : ⌘Z défait la frappe du champ d'abord, et seulement quand la pile est vide prévient le panneau ; de même ⇧⌘Z")

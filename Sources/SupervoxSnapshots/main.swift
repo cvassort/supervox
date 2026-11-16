@@ -584,6 +584,10 @@ for dark in [false, true] {
         ("correction-preparation",
          correctionPanelModel(
             .preparing, draft: exampleFormattedText, notice: DictationController.correctionPreparingNotice), granted),
+        ("correction-preparation-maintien",
+         correctionPanelModel(
+            .preparing, draft: exampleFormattedText,
+            notice: DictationController.correctionPreparingSentence(hotKeyLabel: standardLabel, hold: true)), granted),
         ("correction-ecoute-maintien",
          correctionPanelModel(
             .recording, draft: exampleFormattedText,

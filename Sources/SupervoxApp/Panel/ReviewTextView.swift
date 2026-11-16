@@ -69,23 +69,30 @@ struct ReviewTextView: NSViewRepresentable {
     /// `NSRangeException`. Une frappe, elle, remonte par `textDidChange` : le texte du modèle est alors déjà celui du champ, et
     /// rien n'est remplacé. Le champ et sa pile sont de plus neufs à chaque relecture.
     ///
-    /// Jamais pendant une saisie en attente (touche morte, méthode de saisie : `hasMarkedText()`) : le texte marqué ne remonte
-    /// pas par `textDidChange`, donc `text` a du retard, et la réécriture effacerait la saisie. Deux cas alors. Ou bien `text` est
-    /// le dernier texte sur lequel le champ et le modèle étaient d'accord (`FocusingTextView.agreedText`) : un simple retard, rien
-    /// à faire. Ou bien c'est un texte nouveau (une autre version) : il est gardé en attente (`pendingText`) et s'applique dès
-    /// que la saisie est validée (`Coordinator.textDidChange`), de sorte que le champ et le contrôleur ne divergent jamais.
+    /// Pendant une saisie en attente (touche morte, méthode de saisie : `hasMarkedText()`), le texte marqué ne remonte pas par
+    /// `textDidChange` : `text` a du retard, et le réécrire effacerait la saisie. Deux cas. Ou bien `text` est le dernier texte sur
+    /// lequel le champ et le modèle étaient d'accord (`FocusingTextView.agreedText`) : un simple retard, rien à faire. Ou bien
+    /// c'est un texte nouveau (une autre version, venue du contrôleur) : il est montré tout de suite. La saisie est alors
+    /// abandonnée (`unmarkText()`) puis le texte remplacé, sous `isReplacing`, qui fait ignorer à `Coordinator.textDidChange` ce que
+    /// l'opération annonce (l'abandon du marquage annonce le texte marqué, que `onEdit` écrirait dans la version qu'on vient de
+    /// montrer). Le champ et le brouillon du contrôleur sont ainsi identiques à la sortie ; aucun texte n'attend.
     static func update(_ textView: NSTextView, text: String, isEditable: Bool, takesFocus: Bool) {
         let field = textView as? FocusingTextView
         if textView.string == text {
             field?.agreedText = text
-            field?.pendingText = nil
-        } else if textView.hasMarkedText() {
-            if let field, text != field.agreedText { field.pendingText = text }
+        } else if textView.hasMarkedText(), text == field?.agreedText {
+            // Un retard : la saisie continue.
         } else {
+            field?.isReplacing = true
+            defer { field?.isReplacing = false }
+            if textView.hasMarkedText() {
+                textView.unmarkText()
+                // L'abandon du marquage est une fin de saisie pour le panneau (`PanelModel.fieldIsComposing`).
+                (textView as? FocusingTextView)?.reportComposingIfChanged()
+            }
             textView.string = text
             textView.undoManager?.removeAllActions()
             field?.agreedText = text
-            field?.pendingText = nil
         }
         if textView.isEditable != isEditable { textView.isEditable = isEditable }
         (textView as? FocusingTextView)?.takesFocus = takesFocus
@@ -174,9 +181,8 @@ struct ReviewTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             if let field = textView as? FocusingTextView {
-                // La saisie est validée : le changement de version qui attendait s'applique (le mot tapé avec la saisie est
-                // sacrifié, mais ni le champ ni le contrôleur ne gardent un texte que l'autre ne connaît pas).
-                field.applyPendingText()
+                // Un remplacement venu de l'extérieur (voir `update`) n'est pas une frappe : le modèle a déjà ce texte.
+                if field.isReplacing { return }
                 field.agreedText = textView.string
             }
             onEdit(textView.string)
@@ -204,26 +210,24 @@ final class FocusingTextView: NSTextView {
     /// Le dernier texte sur lequel le champ et le modèle étaient d'accord : posé par `ReviewTextView.update` et par chaque
     /// frappe remontée. Pendant une saisie en attente, un texte du modèle qui lui est égal n'est qu'un retard.
     var agreedText: String?
-    /// Un texte venu de l'extérieur pendant une saisie en attente : il remplace celui du champ dès qu'elle est validée.
-    var pendingText: String?
-
-    /// Remplace le texte par celui qui attendait, si la saisie est validée. La pile d'annulation est vidée, comme à tout
-    /// remplacement venu de l'extérieur.
-    func applyPendingText() {
-        guard let pending = pendingText, !hasMarkedText() else { return }
-        pendingText = nil
-        if string != pending {
-            string = pending
-            undoManager?.removeAllActions()
-        }
-    }
+    /// Vrai pendant un remplacement du texte venu de l'extérieur (`ReviewTextView.update`) : `textDidChange` n'y remonte rien.
+    var isReplacing = false
 
     /// Le panneau sait quand une saisie est en attente (`PanelModel.fieldIsComposing`).
+    func reportComposingIfChanged() { reportComposing() }
+
     private func reportComposing() {
         let composing = hasMarkedText()
         guard composing != wasComposing else { return }
         wasComposing = composing
         onComposingChange?(composing)
+    }
+
+    /// Perdre la frappe peut valider ou garder le marquage : le panneau en est informé dans les deux cas.
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        reportComposing()
+        return resigned
     }
 
     override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {

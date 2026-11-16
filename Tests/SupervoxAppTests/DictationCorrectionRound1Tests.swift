@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import Synchronization
 import SupervoxCore
 
 @testable import SupervoxApp
@@ -44,7 +45,8 @@ import SupervoxCore
             model.onDraftChange = { controller.reviewEdited($0) }
             model.onPreviousVersion = { controller.previousVersion() }
             model.onNextVersion = { controller.nextVersion() }
-            controller.onViewChange = { [unowned self] state in
+            controller.onViewChange = { [weak self] state in
+                guard let self else { return }
                 model.setDictation(state)
                 viewChanges += 1
                 refresh()
@@ -214,64 +216,103 @@ import SupervoxCore
         #expect(w.field.string == Self.original)
     }
 
-    @Test("C1, défense en profondeur : un changement de version venu de l'extérieur pendant le texte marqué attend la fin du marquage, puis s'applique : le champ et le contrôleur ne divergent jamais")
-    func anExternalReplacementDuringMarkedTextIsAppliedAtTheEnd() async throws {
+    /// Une garde de temps : si l'appel qu'elle entoure ne rend pas la main (le gel de N1 tourne à 100 % du processeur sur le fil
+    /// principal, qu'aucune annulation coopérative n'interrompt), le processus s'arrête avec un message au lieu de rester suspendu.
+    static func watched<T>(_ what: String, seconds: Double = 20, _ body: () -> T) -> T {
+        let done = Mutex(false)
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+            if !done.withLock({ $0 }) {
+                FileHandle.standardError.write(Data("GEL : \(what) n'a pas rendu la main en \(seconds) s\n".utf8))
+                _exit(70)
+            }
+        }
+        defer { done.withLock { $0 = true } }
+        return body()
+    }
+
+    /// Une relecture corrigée, puis une touche morte, puis le contrôleur passe à la version précédente SANS passer par les gardes
+    /// du panneau et du champ (un futur chemin qui changerait le texte pendant un marquage) : le défaut que la défense en
+    /// profondeur doit couvrir. À la sortie, le marquage est abandonné et le champ montre l'original.
+    private func replacedDuringMarkedText() async -> Wired {
         let w = Wired()
         await w.review(Self.original)
         await w.correct(to: Self.rewritten)
         w.startDeadKey()
-        try #require(w.field.hasMarkedText())
+        #expect(w.field.hasMarkedText())
+        w.h.controller.previousVersion()
+        return w
+    }
 
-        w.h.controller.previousVersion()                          // contourne la garde du panneau : le contrôleur change de version
-        #expect(w.draft == Self.original)
-        #expect(w.field.hasMarkedText(), "la saisie en attente n'est pas effacée")
-        #expect(w.field.string == Self.rewritten + "^", "pas de réécriture pendant le texte marqué")
-
-        w.commit("ê")
-        #expect(w.field.string == Self.original, "le texte attendu s'applique dès la fin du marquage")
-        #expect(w.draft == Self.original)
+    @Test("N1, défense en profondeur : un changement de version venu de l'extérieur pendant le texte marqué abandonne le marquage puis remplace le texte : le champ et le contrôleur sont identiques tout de suite, sans « ^ »")
+    func anExternalReplacementDuringMarkedTextReplacesAtOnce() async {
+        let w = await replacedDuringMarkedText()
+        #expect(w.field.string == Self.original)
+        #expect(w.draft == Self.original, "le texte marqué n'est pas remonté dans la version montrée")
+        #expect(!w.field.hasMarkedText())
+        #expect(!w.model.fieldIsComposing)
         #expect(w.field.undoManager?.canUndo == false, "un texte remplacé de l'extérieur vide la pile")
         #expect(w.allVersions() == [Self.original, Self.rewritten])
     }
 
-    @Test("C1 : le champ lui-même ne passe pas à une autre version pendant un texte marqué (ni ⌘Z ni ⇧⌘Z ne préviennent le panneau)")
-    func theFieldDoesNotAskForAVersionDuringMarkedText() throws {
-        let field = DictationCorrectionTests.Field(text: "Version A.")
-        field.textView.setMarkedText(
-            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
-        try #require(field.textView.hasMarkedText())
-        field.textView.redoOrNextVersion()
-        field.textView.undoOrPreviousVersion()
-        #expect(field.ends.isEmpty)
-        // Hors saisie en attente, une pile vide prévient le panneau.
-        let plain = DictationCorrectionTests.Field(text: "Version A.")
-        plain.textView.redoOrNextVersion()
-        plain.textView.undoOrPreviousVersion()
-        #expect(plain.ends == [.redo, .undo])
+    @Test("N1 : ⌘Z après le remplacement rend la main (garde de temps) ; le champ et le brouillon restent identiques, aucune version perdue")
+    func commandZAfterAReplacementDoesNotFreeze() async {
+        let w = await replacedDuringMarkedText()
+        Self.watched("⌘Z après un remplacement pendant un texte marqué") { w.field.undoOrPreviousVersion() }
+        #expect(w.field.string == w.draft)
+        #expect(w.allVersions().contains(Self.rewritten))
     }
 
-    @Test("C1 : le retard du modèle pendant un texte marqué (le texte d'avant la saisie) n'est pas un remplacement en attente : la lettre validée reste")
-    func aLateEchoIsNotAPendingReplacement() {
-        let field = DictationCorrectionTests.Field(text: "ab")
-        field.type("c")
-        field.textView.setMarkedText(
-            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
-        // SwiftUI redonne le texte du modèle, d'une frappe en retard sur le champ (le texte marqué n'est pas remonté).
-        ReviewTextView.update(field.textView, text: "abc", isEditable: true, takesFocus: false)
-        #expect(field.textView.pendingText == nil)
-        field.textView.insertText("ê", replacementRange: NSRange(location: NSNotFound, length: 0))
-        #expect(field.textView.string == "abcê")
+    @Test("N1 : une version plus récente n'est pas écrasée par un texte périmé : précédente, suivante, puis la lettre")
+    func aNewerVersionIsNotOverwrittenByAStaleText() async {
+        let w = Wired()
+        await w.review(Self.original)
+        await w.correct(to: Self.rewritten)
+        w.startDeadKey()
+        w.h.controller.previousVersion()
+        w.h.controller.nextVersion()
+        #expect(w.field.string == Self.rewritten)
+        #expect(w.draft == Self.rewritten)
+        w.startDeadKey()
+        w.commit("ê")
+        #expect(w.field.string == w.draft)
+        #expect(w.draft == Self.rewritten + "ê")
+        #expect(w.allVersions() == [Self.original, Self.rewritten + "ê"], "la réécriture n'a pas disparu")
     }
 
-    @Test("C1 : une version qui attend, puis le texte du champ qui lui redevient égal : plus rien n'attend")
-    func aPendingTextIsDroppedWhenTheFieldCatchesUp() async {
+    @Test("N1 : un marquage vidé après le remplacement : « Coller » colle ce que l'écran montre, et la frappe suivante n'est pas avalée")
+    func pastingAfterAReplacementPastesTheScreenAndTypingStillWorks() async {
+        let w = await replacedDuringMarkedText()
+        w.field.setMarkedText(
+            "", selectedRange: NSRange(location: 0, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(w.field.string == w.draft)
+        w.type("x")
+        #expect(w.field.string == Self.original + "x")
+        #expect(w.draft == Self.original + "x", "la frappe n'est pas avalée")
+        let screen = w.field.string
+        w.h.controller.pasteReview()
+        #expect(await until { !w.h.pasted.isEmpty })
+        #expect(w.h.pasted == [screen], "« Coller » colle un texte que l'écran ne montre pas")
+    }
+
+    @Test("N1 : « Coller » avec le marquage encore là colle l'écran (le marquage a été abandonné par le remplacement)")
+    func pastingWhileReplacedPastesTheScreen() async {
+        let w = await replacedDuringMarkedText()
+        let screen = w.field.string
+        w.h.controller.pasteReview()
+        #expect(await until { !w.h.pasted.isEmpty })
+        #expect(w.h.pasted == [screen])
+        #expect(screen == Self.original)
+    }
+
+    @Test("N1 : le retard du modèle (texte d'avant la saisie) pendant un marquage ne remplace rien, et la saisie continue")
+    func aLateEchoDuringMarkedTextReplacesNothing() async {
         let w = Wired()
         await w.review(Self.original)
         w.startDeadKey()
-        ReviewTextView.update(w.field, text: "Autre.", isEditable: true, takesFocus: false)
-        ReviewTextView.update(w.field, text: w.field.string, isEditable: true, takesFocus: false)
+        ReviewTextView.update(w.field, text: Self.original, isEditable: true, takesFocus: false)
+        #expect(w.field.hasMarkedText(), "le simple retard n'efface pas la saisie")
         w.commit("ê")
-        #expect(w.field.string == Self.original + "ê", "le texte en attente périmé ne s'applique pas")
+        #expect(w.field.string == Self.original + "ê")
         #expect(w.draft == w.field.string)
     }
 
@@ -284,7 +325,8 @@ import SupervoxCore
         w.field.undoOrPreviousVersion()
         #expect(w.draft == Self.rewritten)
         #expect(w.h.controller.view.canGoBack)
-        #expect(w.field.string == w.draft || w.field.hasMarkedText())
+        #expect(!w.field.hasMarkedText(), "⌘Z défait la saisie marquée")
+        #expect(w.field.string == w.draft, "le champ et le brouillon restent identiques")
     }
 
     @Test("C1 : PanelModel ne relaie pas « Version précédente » et « Version suivante » pendant une saisie en attente")
@@ -309,6 +351,36 @@ import SupervoxCore
         #expect(!model.fieldIsComposing)
     }
 
+    @Test("a : l'indicateur de saisie en attente suit le champ : remplacement, perte de la frappe, et chaque étape hors relecture le remet à faux",
+        arguments: [DictationStage.idle, .preparing, .recording, .finalizing, .formatting, .pasting, .correcting(.preparing),
+                    .correcting(.recording), .correcting(.transcribing), .correcting(.rewriting), .copied, .cancelled,
+                    .failed(.noSpeech)])
+    func theComposingFlagNeverStaysTrue(stage: DictationStage) {
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        model.setDictation(DictationViewState(stage: .review, draft: "t"))
+        model.fieldIsComposing = true
+        model.setDictation(DictationViewState(stage: stage, draft: "t"))
+        #expect(!model.fieldIsComposing, "\(stage)")
+    }
+
+    @Test("a : le champ rend compte de la saisie à chaque remplacement et à la perte de la frappe : l'indicateur égale hasMarkedText()")
+    func theComposingFlagFollowsTheField() async {
+        let w = Wired()
+        await w.review(Self.original)
+        await w.correct(to: Self.rewritten)
+        w.startDeadKey()
+        #expect(w.model.fieldIsComposing == w.field.hasMarkedText())
+        _ = w.field.resignFirstResponder()
+        #expect(w.model.fieldIsComposing == w.field.hasMarkedText(), "après la perte de la frappe")
+        w.h.controller.previousVersion()
+        #expect(!w.field.hasMarkedText())
+        #expect(!w.model.fieldIsComposing, "après un remplacement qui abandonne la saisie")
+        w.startDeadKey()
+        #expect(w.model.fieldIsComposing, "une nouvelle saisie est signalée de nouveau")
+        w.commit("ê")
+        #expect(!w.model.fieldIsComposing)
+    }
+
     // MARK: - I2 : la préparation et le maintien
 
     private func harness() -> DictationHarness {
@@ -327,7 +399,16 @@ import SupervoxCore
     func theNewSentences() {
         #expect(
             DictationController.correctionPreparingNotice
-                == "Patientez un instant : vous pourrez dire ce qu'il faut changer dès que l'écoute commence.")
+                == "Patientez un instant : vous pourrez dire ce qu'il faut changer dès que l'écoute commencera.")
+        #expect(
+            DictationController.correctionPreparingSentence(hotKeyLabel: "⌃⌥Espace", hold: true)
+                == "Gardez ⌃⌥Espace enfoncé : vous pourrez dire ce qu'il faut changer dès que l'écoute commencera.")
+        #expect(
+            DictationController.correctionPreparingSentence(hotKeyLabel: nil, hold: true)
+                == "Gardez le raccourci enfoncé : vous pourrez dire ce qu'il faut changer dès que l'écoute commencera.")
+        #expect(
+            DictationController.correctionPreparingSentence(hotKeyLabel: "⌃⌥Espace", hold: false)
+                == DictationController.correctionPreparingNotice)
         #expect(
             DictationController.correctionListeningNotice(hotKeyLabel: "⌃⌥Espace", hold: true)
                 == "Dites ce qu'il faut changer, puis relâchez ⌃⌥Espace.")
@@ -412,6 +493,22 @@ import SupervoxCore
         other.emit(.recording)
         #expect(await until { button.controller.view.stage == .correcting(.recording) })
         #expect(button.controller.view.notice == DictationController.correctionListeningNotice(hotKeyLabel: "⌘⇧K"))
+    }
+
+    @Test("n1 : en maintien, la phrase de préparation dit de garder le raccourci enfoncé ; par le bouton ou en bascule, d'attendre")
+    func theHoldPreparationSentenceSaysToKeepTheKeyDown() async {
+        let h = harness()
+        await review(h)
+        h.knobs.behavior = .hold
+        h.controller.hotKeyPressed()
+        #expect(h.controller.view.stage == .correcting(.preparing))
+        #expect(h.controller.view.notice == "Gardez ⌘⇧K enfoncé : vous pourrez dire ce qu'il faut changer dès que l'écoute commencera.")
+
+        let button = harness()
+        await review(button)
+        button.knobs.behavior = .hold
+        button.controller.startCorrection()
+        #expect(button.controller.view.notice == DictationController.correctionPreparingNotice)
     }
 
     // MARK: - I3 : les pannes du modèle fort parlent du modèle fort
