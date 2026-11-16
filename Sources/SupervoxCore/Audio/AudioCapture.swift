@@ -34,8 +34,11 @@ public enum AudioCaptureError: Error, Equatable {
 /// - Une instance sert à plusieurs `start()`/`stop()` successifs : le montage du moteur n'est fait qu'une fois.
 /// - Deux usages : le banc d'essai lit le clip rendu par `stop()` ; la dictée reçoit les tranches au fil de l'eau par
 ///   `start(onChunk:accumulate:)`, avec `accumulate: false` pour ne rien garder en mémoire.
-/// - `start` et `stop` sont sérialisés par un verrou interne (appelables de plusieurs fils, un à la fois) ; le reste de
-///   l'état est derrière des verrous : `@unchecked Sendable`.
+/// - Le même moteur sait aussi **jouer** du son (`play`, `stopPlayback`) : la lecture passe par le nœud connecté avant
+///   l'activation du traitement de la voix, ce qui permet à l'annulation d'écho du système de connaître la voix de
+///   l'outil. Rien ne change pour une capture qui ne joue rien.
+/// - `start`, `stop`, `play` et `stopPlayback` sont sérialisés par un verrou interne (`lifecycle`) ; le reste de l'état est
+///   derrière des verrous (`buffer`, `currentGate`, `inputText`, `playback`) : `@unchecked Sendable`.
 public final class AudioCapture: @unchecked Sendable {
     /// Échantillons et fréquence, partagés entre le fil audio temps réel (qui ajoute) et l'appelant (qui lit).
     /// Seul état capturé par le tap : jamais `self`.
@@ -55,9 +58,11 @@ public final class AudioCapture: @unchecked Sendable {
     private static let tapBufferSeconds = 0.1
 
     private let engine = AVAudioEngine()
-    // Attaché et connecté avant l'activation du voice processing, même s'il ne joue rien : c'est le montage
-    // vérifié pendant le cadrage. Sans nœud de lecture connecté, le démarrage n'a jamais été essayé.
-    private let anchorPlayer = AVAudioPlayerNode()
+    // Attaché et connecté avant l'activation du voice processing : c'est le montage vérifié pendant le cadrage. Sans nœud
+    // de lecture connecté, le démarrage n'a jamais été essayé. Il joue aussi les clips de `play` : même moteur que le micro.
+    private let player = AVAudioPlayerNode()
+    /// Les clips en file : générations, fin rendue une fois, position. Son propre verrou ; jamais tenu pendant un appel au lecteur.
+    let playback = PlaybackTracker()
     private let voiceProcessing: Bool
     private let buffer = OSAllocatedUnfairLock(initialState: Buffer())
     /// Porte de livraison de la prise en cours (une neuve par prise, voir `DeliveryGate`) ; `nil` hors prise.
@@ -67,6 +72,9 @@ public final class AudioCapture: @unchecked Sendable {
     private let lifecycle = NSLock()
     private var wired = false
     private var running = false
+    /// `true` quand le lecteur est attaché au moteur (seulement avec le traitement de la voix) : sans cela, planifier un tampon
+    /// lèverait une exception Objective-C. Protégé par `lifecycle`, comme `wired`.
+    private var playerAttached = false
     private let inputText = OSAllocatedUnfairLock(initialState: "entrée audio non initialisée")
 
     /// - Parameter promptsForAccess: `false` pour une application qui a déjà son propre parcours d'autorisation :
@@ -206,6 +214,8 @@ public final class AudioCapture: @unchecked Sendable {
         defer { lifecycle.unlock() }
         // D'abord : une livraison en cours se termine, aucune autre ne commence.
         currentGate.withLock { $0 }?.close()
+        // Puis la lecture, avant le moteur : chaque clip en file reçoit `.stopped`. Sans clip en file, le lecteur n'est pas touché.
+        stopPlayerLocked()
         if running {
             engine.stop()
             engine.inputNode.removeTap(onBus: 0)
@@ -217,13 +227,105 @@ public final class AudioCapture: @unchecked Sendable {
         }
     }
 
+    // MARK: - Lecture
+
+    /// Joue un clip dans le moteur de la capture, à la suite de ceux déjà en file. `onEnd` est appelé **une fois**, jamais sur le fil
+    /// de l'appelant ni sur le fil principal : `.played` quand le dernier échantillon est sorti du périphérique (`.dataPlayedBack`,
+    /// mesuré : 44 à 51 ms après la durée du tampon), `.stopped` si `stopPlayback()` ou `stop()` l'a coupé avant. Il peut arriver
+    /// juste après le retour de l'appel qui coupe.
+    ///
+    /// - Throws: `notRunning` si le moteur ne tourne pas (`start` pas appelé, ou `stop` passé) ; `engineFailed` pour une capture sans
+    ///   traitement de la voix (pas de lecteur), un clip vide ou illisible, ou un échec du lecteur. Rien n'est joué, `onEnd` n'est pas appelé.
+    public func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws {
+        // La conversion se fait hors verrou : elle peut durer, et `stop()` ne doit pas l'attendre.
+        let format = try lifecycle.withLock { try playerFormat() }
+        guard let buffer = Self.playbackBuffer(clip, format: format) else {
+            throw AudioCaptureError.engineFailed("clip audio vide ou illisible")
+        }
+        try lifecycle.withLock {
+            guard try playerFormat() == buffer.format else { throw AudioCaptureError.engineFailed("format de sortie modifié pendant la conversion") }
+            // Le lecteur démarre d'abord : s'il échoue, rien n'est planifié ni enregistré, aucun `onEnd` n'est dû.
+            try startPlayer()
+            let generation = playback.register(
+                frames: Int64(buffer.frameLength), sampleRate: buffer.format.sampleRate, nowSample: playerSampleTime(), onEnd: onEnd)
+            let tracker = playback
+            // Le gestionnaire ne fait que régler le clip dans le suivi : aucun appel au nœud, aucun verrou de `lifecycle`.
+            player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in tracker.settle(generation) }
+        }
+    }
+
+    /// Coupe tout de suite la lecture et vide la file : chaque clip en file reçoit `.stopped`. Sans effet si rien ne joue. Jamais depuis `onEnd`
+    /// (précondition). Ne touche pas à la capture.
+    public func stopPlayback() {
+        // Avant de prendre `lifecycle` : même ordre que `stop()` depuis `onChunk`.
+        playback.assertNotInEndHandler()
+        lifecycle.withLock { stopPlayerLocked() }
+    }
+
+    /// Secondes déjà jouées du clip en cours (le plus ancien de la file) ; `nil` sans lecture.
+    public var playbackPosition: Double? {
+        playback.position(currentSample: { playerSampleTime() })
+    }
+
+    /// Appelée sous `lifecycle`. Le suivi n'appelle le lecteur que s'il reste des clips ; le lecteur rappelle ses gestionnaires
+    /// de façon synchrone depuis `stop()` (mesuré) : ils ne prennent que le verrou du suivi, que `stopAll` ne tient pas ici.
+    private func stopPlayerLocked() {
+        playback.stopAll { player.stop() }
+    }
+
+    /// Le format de sortie du lecteur, lu à chaque lecture (il n'est jamais supposé) ; lève si rien ne peut être joué.
+    private func playerFormat() throws -> AVAudioFormat {
+        guard running, engine.isRunning else { throw AudioCaptureError.notRunning }
+        guard playerAttached else { throw AudioCaptureError.engineFailed("lecture impossible sans traitement de la voix") }
+        return player.outputFormat(forBus: 0)
+    }
+
+    /// Temps du lecteur en trames de sortie, `nil` tant qu'il ne rend pas.
+    private func playerSampleTime() -> Int64? {
+        guard let nodeTime = player.lastRenderTime, let playerTime = player.playerTime(forNodeTime: nodeTime),
+              playerTime.isSampleTimeValid else { return nil }
+        return playerTime.sampleTime
+    }
+
+    /// `play()` est dépréciée en macOS 27 au profit de `playAudio()`, qui lève une erreur (AVAudioPlayerNode.h). Mesuré sur un
+    /// moteur arrêté : `playAudio()` lève (code −10863), `play()` se tait. Le moteur est donc vérifié ici, pour les deux chemins.
+    private func startPlayer() throws {
+        guard engine.isRunning else { throw AudioCaptureError.notRunning }
+        if #available(macOS 27, *) {
+            do { try player.playAudio() }
+            catch { throw AudioCaptureError.engineFailed("lecture : \(Self.reason(for: error))") }
+        } else {
+            player.play()
+        }
+    }
+
+    /// Un clip mono converti au format du lecteur : fréquence convertie par `AVAudioConverter` (par `Resampler`), le canal recopié sur
+    /// chaque canal du format. `nil` pour un clip vide, ou un format où l'on ne peut pas écrire de flottants non entrelacés. NaN et
+    /// valeurs infinies deviennent 0, avant le filtre du convertisseur (qui les répandrait sur les voisins).
+    static func playbackBuffer(_ clip: AudioClip, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard !clip.samples.isEmpty, clip.sampleRate > 0, format.sampleRate > 0, format.channelCount > 0,
+              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else { return nil }
+        let clean = AudioClip(samples: clip.samples.map { $0.isFinite ? $0 : 0 }, sampleRate: clip.sampleRate)
+        let converted = Resampler.resample(clean, to: format.sampleRate).samples
+        guard !converted.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(converted.count)),
+              let channels = buffer.floatChannelData else { return nil }
+        buffer.frameLength = AVAudioFrameCount(converted.count)
+        converted.withUnsafeBufferPointer { source in
+            for channel in 0..<Int(format.channelCount) {
+                channels[channel].update(from: source.baseAddress!, count: source.count)
+            }
+        }
+        return buffer
+    }
+
     // MARK: - Montage
 
     private func wireIfNeeded() throws {
         guard !wired else { return }
         if voiceProcessing {
-            engine.attach(anchorPlayer)
-            try connectAnchorPlayer()
+            engine.attach(player)
+            try connectPlayer()
+            playerAttached = true
             do { try engine.inputNode.setVoiceProcessingEnabled(true) }
             catch { throw AudioCaptureError.engineFailed("traitement de la voix : \(Self.reason(for: error))") }
             // Ducking au minimum : on ne veut pas baisser le volume des autres applications pendant la dictée.
@@ -236,12 +338,12 @@ public final class AudioCapture: @unchecked Sendable {
     /// `connect(_:to:format:)` est dépréciée en macOS 27 au profit de `connectNode(_:to:format:)` qui lève une erreur
     /// (AVAudioEngine.h : `NS_SWIFT_NAME(connectNode(_:to:format:))`). Le déploiement minimal étant macOS 26,
     /// le compilateur ne signale pas cette dépréciation : on aiguille à la main.
-    private func connectAnchorPlayer() throws {
+    private func connectPlayer() throws {
         if #available(macOS 27, *) {
-            do { try engine.connectNode(anchorPlayer, to: engine.mainMixerNode, format: nil) }
+            do { try engine.connectNode(player, to: engine.mainMixerNode, format: nil) }
             catch { throw AudioCaptureError.engineFailed("connexion du nœud de lecture : \(Self.reason(for: error))") }
         } else {
-            engine.connect(anchorPlayer, to: engine.mainMixerNode, format: nil)
+            engine.connect(player, to: engine.mainMixerNode, format: nil)
         }
     }
 

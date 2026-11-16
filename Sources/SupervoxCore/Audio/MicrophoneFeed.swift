@@ -111,6 +111,16 @@ extension AudioCapture: StreamingCapture {
     }
 }
 
+/// Ce que `LiveAudioIO` demande à l'appareil : la capture de `StreamingCapture` et la lecture dans le même moteur. `AudioCapture`
+/// la satisfait ; les tests la remplacent pour vérifier le câblage (un seul objet reçoit `start` et `play`) sans matériel.
+protocol PlaybackCapture: StreamingCapture {
+    func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws
+    func stopPlayback()
+    var playbackPosition: Double? { get }
+}
+
+extension AudioCapture: PlaybackCapture {}
+
 /// Le vrai micro, vu comme une `MicrophoneFeed` : possède une `AudioCapture` qui ne déclenche jamais l'invite système
 /// (l'application demande l'autorisation par son propre parcours) ; sans autorisation, `start` lève
 /// `AudioCaptureError.microphoneAccessDenied`. Les tranches sont à la fréquence native du micro, premier canal.
