@@ -325,8 +325,9 @@ modifié, en entier, à la place de l'ancien.
 
 - **Déroulé.** « Préparation… » (la phrase dit d'attendre), « Écoute de la consigne » (point rouge, durée, forme d'onde ; le
   bouton devient « Terminer »), « Transcription de la consigne… », « Réécriture… » (le texte du modèle s'écrit à mesure dans le
-  champ), puis « À relire » avec le nouveau texte. Le champ est en lecture seule pendant la correction ; tant qu'elle n'a pas
-  réussi, le texte n'a pas changé. En bascule, un second appui sur le raccourci (ou « Terminer ») termine la consigne ; en
+  champ), puis « À relire » avec le nouveau texte. Le champ est en lecture seule pendant la correction, et « Copier » et « Coller »
+  sont inactifs à chaque étape (⌘↩ ne fait rien : on ne copie ni ne colle un texte que l'écran ne montre pas) ; Échap
+  l'annule. Tant qu'elle n'a pas réussi, le texte n'a pas changé. En bascule, un second appui sur le raccourci (ou « Terminer ») termine la consigne ; en
   maintien, c'est le relâchement. Commencée par le bouton, elle se termine toujours par « Terminer » ou un appui, même en
   réglage « maintien ».
 - **Versions.** Chaque correction réussie empile l'ancien texte : les boutons à flèche « Version précédente » et « Version
