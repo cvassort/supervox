@@ -68,7 +68,8 @@ public final class AudioCapture: @unchecked Sendable {
     /// Porte de livraison de la prise en cours (une neuve par prise, voir `DeliveryGate`) ; `nil` hors prise.
     private let currentGate = OSAllocatedUnfairLock<DeliveryGate?>(initialState: nil)
     let promptsForAccess: Bool
-    /// Sérialise `start` et `stop` : protège `wired` et `running`.
+    /// Sérialise `start`, `stop`, `play` et `stopPlayback` : protège `wired`, `running` et `playerAttached`. Aucun gestionnaire du lecteur
+    /// ni aucun `onEnd` ne le prend : le lecteur les appelle de façon synchrone depuis `stop()`.
     private let lifecycle = NSLock()
     private var wired = false
     private var running = false
@@ -207,6 +208,9 @@ public final class AudioCapture: @unchecked Sendable {
     ///
     /// Si `onChunk` a été fourni : `stop()` attend la fin d'un appel en cours et plus aucun n'arrive après son retour.
     /// Ne pas l'appeler depuis `onChunk` (précondition).
+    ///
+    /// Coupe aussi la lecture, avant le moteur : chaque clip en file reçoit `.stopped` (sur la file des événements : juste après le retour,
+    /// pas avant). Sans clip en file, le lecteur n'est pas touché.
     public func stop() -> AudioClip {
         // Avant de prendre `lifecycle` : un `stop()` venu de `onChunk` doit échouer net, non attendre un autre `stop()`.
         currentGate.withLock { $0 }?.assertNotDelivering()
