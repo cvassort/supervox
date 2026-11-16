@@ -38,6 +38,21 @@ public struct Provider: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+extension Provider {
+    /// Au-delà de ce nombre de caractères, le nom d'un fournisseur est rogné dans les phrases qui le citent.
+    public static let shortNameLimit = 40
+
+    /// Le nom tel qu'une phrase de l'interface le cite : les 40 premiers caractères suivis de « … » s'il est plus long, tel quel
+    /// sinon. Les caractères se comptent comme l'utilisateur les voit. Une seule règle pour toutes les phrases (note de vie
+    /// privée, lignes de mode) : le nom est une saisie libre, et peut être long.
+    public static func shortName(_ name: String) -> String {
+        guard name.count > shortNameLimit else { return name }
+        return String(name.prefix(shortNameLimit)) + "…"
+    }
+
+    public var shortName: String { Self.shortName(name) }
+}
+
 /// Enregistré dans `settings.json` : un nouveau cas exige une nouvelle `AppSettings.current` (voir sa règle
 /// d'évolution).
 public enum HotKeyBehavior: String, Codable, Sendable {
