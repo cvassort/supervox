@@ -510,7 +510,7 @@ final class ProgressBox: Sendable {
     struct LeakyFailure: Error, LocalizedError {
         static let address = "https://exemple.invalid/modele"
         static let path = "/var/exemple/chemin/modele.bin"
-        static let key = "sk-exemple-123"
+        static let key = "cle-exemple-123"
         var errorDescription: String? { "échec de \(Self.address) dans \(Self.path) avec la clé \(Self.key)" }
     }
 

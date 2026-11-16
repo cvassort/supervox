@@ -86,7 +86,9 @@ struct ReviewTextView: NSViewRepresentable {
             field?.isReplacing = true
             defer { field?.isReplacing = false }
             if textView.hasMarkedText() {
-                // Une fin de saisie pour le panneau aussi (`FocusingTextView.unmarkText` le lui dit : `fieldIsComposing`).
+                // Une fin de saisie pour le panneau aussi : `FocusingTextView.unmarkText` le lui dit (`fieldIsComposing`), et
+                // `didChangeText` aussi (la revue finale a retiré l'appel d'`unmarkText` sans que l'indicateur reste coincé : deux
+                // chemins, non un seul, et celui de `didChangeText` n'est pas instrumenté).
                 textView.unmarkText()
             }
             textView.string = text
