@@ -153,4 +153,28 @@ struct RealAudioIOTests {
         io.stop()
         #expect(probe.ends(of: "a").count == 1)
     }
+
+    /// Cas du lecteur resté dans l'état « joue » après une fin naturelle, sans clip en file au moment de `stop()` (inférence de la revue de la
+    /// tâche 2, non vérifiée sur le matériel) : `play` → `.played` → `stop()` → `start()` → `play` doit rendre `.played`. NON EXÉCUTÉ à
+    /// ce jour (aucun essai matériel autorisé) : à lancer par l'utilisateur, avec son accord.
+    @Test(.enabled(if: enabled))
+    func aRestartAfterANaturalEndPlaysAgain() async throws {
+        guard microphoneAuthorized() else { return }
+        let io = LiveAudioIO()
+        let first = Probe()
+        try io.start { _ in first.chunk() }
+        #expect(try await wait { first.chunkCount > 0 })
+        try io.play(quietTone(seconds: 0.3), onEnd: first.onEnd("a"))
+        #expect(try await wait { !first.ends(of: "a").isEmpty })
+        #expect(first.ends(of: "a").first?.end == .played)
+        io.stop()   // aucun clip en file : `stop()` doit tout de même arrêter le lecteur avant le moteur
+
+        let second = Probe()
+        try io.start { _ in second.chunk() }
+        #expect(try await wait { second.chunkCount > 0 })
+        try io.play(quietTone(seconds: 0.3), onEnd: second.onEnd("b"))
+        #expect(try await wait { !second.ends(of: "b").isEmpty }, "le clip joué après le redémarrage ne se termine jamais")
+        #expect(second.ends(of: "b").first?.end == .played)
+        io.stop()
+    }
 }
