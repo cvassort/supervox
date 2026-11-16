@@ -297,7 +297,9 @@ choix de relecture.
   modification (⌃ ou ⌘) au moins, ni réservé par le système, ni pris par le raccourci global, un autre mode ou un raccourci de
   macOS activé. Il choisit le mode dans le panneau (comme un clic sur la pastille, enregistré) et commence la dictée, en
   bascule ou en maintien selon l'onglet Raccourci. Pendant une dictée, seul le raccourci du mode qui l'a commencée la termine ;
-  celui d'un autre mode, ou le global, est ignoré. Pendant une relecture, un raccourci de mode est ignoré. Si deux raccourcis
+  celui d'un autre mode, ou le global, est ignoré. **Exception** : si ce raccourci n'existe plus (mode supprimé, raccourci
+  retiré pendant la dictée), la dictée, en bascule, se termine par n'importe quel autre raccourci, pour ne pas rester sans
+  issue ; en maintien, les autres raccourcis restent ignorés. Pendant une relecture, un raccourci de mode est ignoré. Si deux raccourcis
   portent la même combinaison (possible seulement en éditant `settings.json` à la main), le raccourci global gagne toujours,
   sinon le premier mode de la liste ; l'autre n'est pas enregistré et une ligne du panneau le dit.
 

@@ -1578,6 +1578,25 @@ import SupervoxCore
         #expect(h.knobs.modeID == Self.raw)
     }
 
+    /// L'exception de la dictée orpheline ne vaut qu'en bascule : en maintien, l'appui d'un autre raccourci est ignoré et seul le
+    /// relâchement du propriétaire termine (le README le dit).
+    @Test func aHoldDictationWhoseOwnerHasNoHotKeyAnymoreIgnoresEveryOtherHotKey() async {
+        let h = DictationHarness()
+        h.knobs.behavior = .hold
+        let session = await h.startModeRecording(Self.raw)
+        h.knobs.unbound = [.mode(Self.raw)]
+
+        h.controller.hotKeyPressed()
+        h.controller.modeHotKeyPressed("perso-un")
+        h.controller.hotKeyReleased()
+        h.controller.modeHotKeyReleased("perso-un")
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+
+        h.controller.modeHotKeyReleased(Self.raw)
+        #expect(await until { session.count(of: "finish") == 1 })
+    }
+
     @Test func aDictationWhoseOwnerStillHasItsHotKeyKeepsIgnoringTheOthers() async {
         let h = DictationHarness()
         let session = await h.startModeRecording(Self.raw)

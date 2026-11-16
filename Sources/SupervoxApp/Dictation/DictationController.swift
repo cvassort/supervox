@@ -233,7 +233,9 @@ public final class DictationController {
     ///
     /// Une dictée garde le comportement avec lequel elle a commencé (`Run.startedByHold`), même si le réglage change pendant :
     /// le réglage n'est lu que pour en commencer une nouvelle. Une dictée commencée par le raccourci d'un mode n'écoute que
-    /// celui-là : le raccourci global l'ignore.
+    /// celui-là : le raccourci global l'ignore. **Exception, en bascule seulement** : si le raccourci qui l'a commencée n'est
+    /// plus enregistré (mode supprimé, raccourci retiré pendant la dictée), la dictée est orpheline et n'importe quel autre
+    /// raccourci, global ou de mode, la termine ; en maintien, les autres raccourcis restent ignorés (appui comme relâchement).
     public func hotKeyPressed() {
         press(by: .global)
     }
@@ -246,7 +248,8 @@ public final class DictationController {
     /// Le raccourci propre à un mode. Au repos (aucune dictée, aucune relecture), il choisit ce mode puis agit comme le
     /// raccourci global : la dictée commence, ou, pour un mode qui ne dicte pas encore, le panneau montre la phrase qui le dit.
     /// Pendant une dictée, seul le raccourci du mode qui l'a commencée compte (bascule : il la termine) ; celui d'un autre mode
-    /// est ignoré, et le mode ne change pas. Pendant la relecture et le collage, il est ignoré.
+    /// est ignoré, et le mode ne change pas, sauf pour une dictée orpheline en bascule (voir `hotKeyPressed`) : le raccourci de
+    /// n'importe quel mode la termine alors, sans changer de mode. Pendant la relecture et le collage, il est ignoré.
     public func modeHotKeyPressed(_ modeID: String) {
         press(by: .mode(modeID))
     }
