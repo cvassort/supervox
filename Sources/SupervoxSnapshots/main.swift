@@ -299,15 +299,33 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 /// est la fenêtre clé) ; l'aide en dépend, et l'image est rendue comme dans une fenêtre clé ou non (voir `render`).
 @MainActor func reviewPanelModel(
     _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true,
-    mode: String = ModeChip.rawID
+    mode: String = ModeChip.rawID, canGoBack: Bool = false, canGoForward: Bool = false
 ) -> PanelModel {
     let model = dictationPanelModel(
-        mode: mode, state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
+        mode: mode,
+        state: DictationViewState(
+            stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft, canGoBack: canGoBack,
+            canGoForward: canGoForward))
     model.panelHasKeyboard = keyboard
     if let copy {
         model.onCopy = { _ in copy }
         model.copyTranscript()
     }
+    return model
+}
+
+/// Le panneau pendant une correction à la voix : le brouillon en lecture seule, l'étape, et la phrase que le contrôleur y met.
+/// `streamed` : le texte que le modèle envoie à mesure (la réécriture), montré à la place du brouillon. Le texte de la consigne
+/// en direct (`liveText` pendant l'écoute) n'est jamais montré : l'image n'en pose pas.
+@MainActor func correctionPanelModel(
+    _ step: CorrectionStep, draft: String, streamed: String = "", notice: String? = nil
+) -> PanelModel {
+    let listening = step == .recording
+    let model = dictationPanelModel(
+        state: DictationViewState(
+            stage: .correcting(step), liveText: streamed, levels: listening ? exampleLevels(DictationViewState.levelCount) : [],
+            elapsed: listening ? 4.2 : 0, notice: notice, lastTranscript: exampleShortText, draft: draft))
+    model.panelHasKeyboard = true
     return model
 }
 
@@ -320,6 +338,11 @@ let exampleStreamedText =
 /// Le texte mis en forme d'un mode qui relit avant de coller : des paragraphes et une formule de politesse.
 let exampleFormattedText =
     "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée.\n\nCordialement,"
+
+/// Le début de la réponse du modèle à la consigne « ajoute une formule de politesse plus chaleureuse », coupé en cours de phrase
+/// comme à l'arrivée du flux : le texte reçu garde ses sauts de ligne, il est montré tel quel à la place du brouillon.
+let exampleCorrectedStream =
+    "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée.\n\nBien cordialement et bonne"
 
 /// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
 /// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
@@ -346,7 +369,7 @@ let exampleFormattedText =
 ) throws {
     // La fenêtre de réglages et ses feuilles ont la frappe quand on les regarde : elles sont rendues comme une fenêtre clé (contrôles
     // actifs, interrupteurs à la couleur d'accent). Le panneau, lui, dit lui-même s'il a la frappe (`keyWindow`).
-    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme"].contains { name.hasPrefix($0) }
+    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme", "correction"].contains { name.hasPrefix($0) }
     let keyWindow = requested || !isPanel
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
@@ -544,6 +567,39 @@ for dark in [false, true] {
         ("relecture-apres-mise-en-forme", reviewPanelModel(exampleFormattedText, mode: ModeChip.cleanedID), granted),
     ]
     for (name, model, probe) in formattingCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
+    }
+
+    // La correction à la voix : l'écoute de la consigne (forme d'onde et durée au-dessus du champ, en lecture seule), la
+    // réécriture (le texte reçu à la place du brouillon), puis les deux retours à la relecture, texte intact, avec leur phrase
+    // (seules les phrases publiques du contrôleur sont posées ici). Les versions : un bouton à flèche à gauche de la rangée.
+    let correctionCases: [(name: String, model: PanelModel, probe: any PermissionsProbe)] = [
+        ("correction-ecoute",
+         correctionPanelModel(
+            .recording, draft: exampleFormattedText,
+            notice: DictationController.correctionListeningNotice(hotKeyLabel: standardLabel)), granted),
+        ("correction-reecriture",
+         correctionPanelModel(
+            .rewriting, draft: exampleFormattedText, streamed: exampleCorrectedStream,
+            notice: DictationController.correctionRewritingNotice), granted),
+        ("correction-echec",
+         reviewPanelModel(exampleFormattedText, notice: DictationController.correctionNoModelNotice), granted),
+        ("correction-vide",
+         reviewPanelModel(exampleFormattedText, notice: DictationController.correctionEmptyNotice), granted),
+        ("relecture-avec-version-precedente", reviewPanelModel(exampleFormattedText, canGoBack: true), granted),
+        ("relecture-avec-version-suivante", reviewPanelModel(exampleFormattedText, canGoForward: true), granted),
+        ("relecture-avec-deux-versions-copie-impossible",
+         reviewPanelModel(exampleFormattedText, copy: false, canGoBack: true, canGoForward: true), granted),
+        ("relecture-aide-correction", reviewPanelModel(exampleFormattedText), granted),
+        ("relecture-aide-correction-sans-raccourci", {
+            let model = reviewPanelModel(exampleFormattedText)
+            model.hotKeyLabel = nil
+            return model
+        }(), granted),
+    ]
+    for (name, model, probe) in correctionCases {
         try render(
             PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
             name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)

@@ -33,10 +33,8 @@ struct ReviewView: View {
             if let bars = display.bars { Waveform(bars: bars) }
             field
             // La raison d'un collage qui n'a pas eu lieu, ou d'une correction qui n'a pas changé le texte, sous le texte qu'elle
-            // désigne ; pendant une correction, ce que l'on attend de l'utilisateur.
-            if let detail = display.detail {
-                DetailText(text: detail, color: review.isCorrecting ? DetailText.systemSecondary : .secondary)
-            }
+            // désigne ; pendant une correction, ce que l'on attend de l'utilisateur. Le même gris que les aides dessous.
+            if let detail = display.detail { DetailText(text: detail, color: DetailText.systemSecondary) }
             actions
             hints
         }
@@ -153,7 +151,7 @@ private struct VersionButton: View {
         Button {
             action()
         } label: {
-            Image(systemName: symbol).font(.caption)
+            Label(label, systemImage: symbol).labelStyle(.iconOnly)
         }
         .controlSize(.small)
         .help(label)
