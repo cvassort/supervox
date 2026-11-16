@@ -125,7 +125,7 @@ public final class ModesModel {
     public static let removedProviderMarker = "fournisseur supprimé"
     public static let removedProviderNote = "Fournisseur supprimé : choisissez un autre modèle."
     public static let noStrongModelNote =
-        "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un en haut de cet onglet, ou ici."
+        "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un dans la section « Modèles » de l'onglet Modes, ou choisissez un modèle propre à ce mode."
     public static let noProviderNote = "Aucun fournisseur n'est enregistré : ajoutez-en un dans l'onglet Fournisseurs."
     public static let noTranscriptionEngineTitle = "Moteur de l'onglet Transcription"
     public static let pastedAsIsSummary = "Texte collé tel quel"

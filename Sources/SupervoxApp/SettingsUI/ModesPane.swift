@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Onglet Modes : les modèles fort et rapide, puis une ligne par mode (modifier, dupliquer, déplacer, supprimer), et le bouton
-/// qui en ajoute un. Toute la logique est dans `ModesModel`.
+/// Onglet Modes : une ligne par mode (modifier, dupliquer, déplacer, supprimer), puis les modèles fort et rapide ; le bouton qui
+/// ajoute un mode est au bas de la fenêtre. Toute la logique est dans `ModesModel`.
 public struct ModesPane: View {
     let model: ModesModel
     /// Le mode dont la feuille est ouverte.
@@ -52,6 +52,8 @@ public struct ModesPane: View {
                     ModelSetting(
                         title: ModesModel.fastTitle, note: ModesModel.fastNote, model: model,
                         selection: model.fastModel, onSelect: { model.setFastModel($0) })
+                    // Une seule fois pour les deux sélecteurs : fournisseur sans liste, ou aucun fournisseur.
+                    ModelPickerNotes(content: model.pickerContent(selected: nil))
                 } header: {
                     Text("Modèles")
                 }
@@ -72,7 +74,7 @@ public struct ModesPane: View {
         }
         .sheet(item: $removal) { row in
             DeletionSheet(
-                title: "Supprimer le mode « \(row.title) » ?", message: Self.deletionMessage(for: row),
+                title: Self.deletionTitle(for: row), message: Self.deletionMessage(for: row),
                 cancel: { removal = nil },
                 confirm: {
                     removal = nil
@@ -85,9 +87,11 @@ public struct ModesPane: View {
         .onDisappear { model.cancelRecording() }
     }
 
+    public static func deletionTitle(for row: ModesModel.Row) -> String { "Supprimer le mode « \(row.title) » ?" }
+
     /// Ce qu'une suppression fait perdre. Dictée nettoyée et Prompt se remettent par « Ajouter un mode », avec leur consigne
     /// d'origine.
-    static func deletionMessage(for row: ModesModel.Row) -> String {
+    public static func deletionMessage(for row: ModesModel.Row) -> String {
         if ModeChip.fixed.contains(where: { $0.id == row.id }) {
             return "Le mode, votre consigne et son raccourci seront supprimés. Vous pourrez le remettre avec « Ajouter un mode », avec sa consigne d'origine."
         }

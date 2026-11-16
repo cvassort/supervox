@@ -47,6 +47,7 @@ public struct ModeEditor: View {
                             title: "Modèle utilisé", noneTitle: ModesModel.defaultModelTitle,
                             content: model.pickerContent(selected: draft.model), selection: draft.model,
                             onSelect: { draft.model = $0 })
+                        ModelPickerNotes(content: model.pickerContent(selected: draft.model))
                         if let note = model.modelNote(for: draft) {
                             WarningLine(text: note)
                         }

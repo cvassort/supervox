@@ -519,6 +519,21 @@ for dark in [false, true] {
         ModesPane(model: ExampleModes(exampleModesSettings()).makeModel()),
         name: "modes-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
 
+    // Premier lancement : aucun fournisseur, aucun modèle fort ni rapide. Toute la liste, avec la section Modèles.
+    try render(
+        ModesPane(model: ExampleModes(AppSettings.defaults).makeModel()),
+        name: "modes-premier-lancement", dark: dark, background: window, size: NSSize(width: 600, height: 900))
+
+    // Confirmations de suppression : un mode de base (Prompt), puis un mode personnel.
+    let deletion = ExampleModes(exampleModesSettings()).makeModel()
+    for (name, id) in [("base", ModeChip.promptID), ("perso", "perso-compte-rendu")] {
+        let row = deletion.rows.first { $0.id == id }!
+        try render(
+            DeletionSheet(
+                title: ModesPane.deletionTitle(for: row), message: ModesPane.deletionMessage(for: row), cancel: {}, confirm: {}),
+            name: "mode-suppression-\(name)", dark: dark, background: window)
+    }
+
     // Feuilles d'un mode, à la taille que la feuille prend.
     // Toute la feuille en une image (sa hauteur réelle est `ModeEditor.sheetHeight`, le formulaire y défile), sauf la dernière.
     let sheetHeight: CGFloat = 900
@@ -531,6 +546,14 @@ for dark in [false, true] {
     try render(
         ModeEditor(model: editedBase.makeModel(), id: ModeChip.promptID, height: sheetHeight),
         name: "mode-edition-base", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Premier lancement : Prompt sans fournisseur ni modèle fort (la réserve, et l'explication sous le sélecteur).
+    try render(
+        ModeEditor(model: ExampleModes(AppSettings.defaults).makeModel(), id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-edition-sans-fournisseur", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Entretien : consigne non modifiable, relecture imposée.
+    try render(
+        ModeEditor(model: ExampleModes().makeModel(), id: ModeChip.interviewID, height: sheetHeight),
+        name: "mode-edition-entretien", dark: dark, background: window, size: sheetSize, keyWindow: true)
     // Un mode personnel avec son modèle : la note de vie privée.
     let personal = ExampleModes(exampleModesSettings())
     try render(

@@ -28,7 +28,8 @@ public struct ModelPickerContent: Equatable, Sendable {
 }
 
 /// Un sélecteur de modèle : « aucun choix » (le modèle fort pour un mode, aucun pour les réglages), puis les modèles de chaque
-/// fournisseur. Les explications (fournisseur sans liste, sans fournisseur) sont écrites dessous : un menu fermé ne les montre pas.
+/// fournisseur. Les explications (fournisseur sans liste, sans fournisseur) sont à part (`ModelPickerNotes`) : un menu fermé ne
+/// les montre pas, et elles ne doivent pas être répétées sous chaque sélecteur.
 struct ModelPicker: View {
     let title: String
     let noneTitle: String
@@ -70,19 +71,26 @@ struct ModelPicker: View {
                 }
             }
         }
+    }
+}
+
+/// Les explications qui accompagnent un sélecteur : un fournisseur sans modèle listé renvoie à l'onglet Fournisseurs, et sans
+/// fournisseur il faut en ajouter un. Posées une seule fois par écran (sous le dernier sélecteur), pas sous chacun : elles
+/// valent pour tous.
+struct ModelPickerNotes: View {
+    let content: ModelPickerContent
+
+    var body: some View {
         ForEach(content.groups.filter { $0.emptyNote != nil }) { group in
-            if let note = group.emptyNote {
-                Text(note)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            if let note = group.emptyNote { line(note) }
         }
-        if let note = content.emptyNote {
-            Text(note)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+        if let note = content.emptyNote { line(note) }
+    }
+
+    private func line(_ note: String) -> some View {
+        Text(note)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

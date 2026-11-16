@@ -607,11 +607,14 @@ import Testing
 
     /// Un mode personnel n'a pas d'origine : sa consigne n'est jamais « modifiée ».
     @Test func aPersonalInstructionIsNeverReportedAsModified() throws {
-        let model = Rig(Self.personalSettings()).makeModel()
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
         let draft = model.draft(for: "perso-un")
         #expect(!draft.isInstructionModified)
         #expect(draft.instruction == "Résume.")
         model.resetInstruction("perso-un")
+        #expect(rig.updates == 0, "un mode personnel n'a pas d'origine à remettre")
+        #expect(rig.mode("perso-un")?.instruction == "Résume.")
     }
 
     @Test func saveWritesTheNameTheInstructionTheModelTheEngineAndTheReview() throws {
@@ -774,6 +777,12 @@ import Testing
         var draft = model.draft(for: "perso-deux")  // sans modèle propre
         #expect(model.privacyNote(for: draft) == nil, "aucun modèle fort : aucun fournisseur nommé")
         #expect(model.modelNote(for: draft) == ModesModel.noStrongModelNote)
+        // Les phrases sont épinglées en toutes lettres : la section « Modèles » est sous la liste, pas « en haut ».
+        #expect(
+            ModesModel.noStrongModelNote
+                == "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un dans la section « Modèles » de l'onglet Modes, ou choisissez un modèle propre à ce mode.")
+        #expect(ModesModel.removedProviderNote == "Fournisseur supprimé : choisissez un autre modèle.")
+        #expect(ModesModel.noProviderNote == "Aucun fournisseur n'est enregistré : ajoutez-en un dans l'onglet Fournisseurs.")
         model.setStrongModel(Self.strong)
         draft = model.draft(for: "perso-deux")
         #expect(model.privacyNote(for: draft) == ModesModel.privacyNote(providerName: "Fournisseur d'exemple"))
