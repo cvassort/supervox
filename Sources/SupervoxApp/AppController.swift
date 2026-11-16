@@ -83,6 +83,7 @@ public final class AppController {
         makeSettingsWindow: @escaping SettingsWindowMaker,
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
+        rewriter: RewriteEnvironment,
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
@@ -146,6 +147,9 @@ public final class AppController {
             hold: holdWatch,
             // Lu une fois, à l'appui qui commence la dictée, pour le mode choisi.
             reviewBeforePaste: { relay.settings?()?.reviewsBeforePaste($0) ?? false },
+            // Lu une fois, à l'appui, avec le choix de relecture : le mode tel que les réglages l'ont à cet instant.
+            modes: { ModeRun.from(relay.settings?()?.mode($0)) },
+            rewriter: rewriter,
             wait: reviewHandoverWait)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
@@ -178,9 +182,12 @@ public final class AppController {
     ) {
         let file = (try? SettingsStore.defaultFile())
             ?? URL.applicationSupportDirectory.appending(path: "Supervox/settings.json")
+        let secrets = CachedSecretStore(KeychainSecretStore(service: "dev.supervox.app"))
+        // La mise en forme lit les réglages en vigueur de ce contrôleur, qui n'existe pas encore : relais, posé juste après.
+        let current = ActionRelay()
         self.init(
             settingsStore: SettingsStore(file: file),
-            secrets: CachedSecretStore(KeychainSecretStore(service: "dev.supervox.app")),
+            secrets: secrets,
             hotKeyRegistrar: CarbonHotKeyRegistrar(),
             escapeRegistrar: CarbonHotKeyRegistrar(),
             makeModeHotKeyRegistrar: { CarbonHotKeyRegistrar() },
@@ -192,7 +199,11 @@ public final class AppController {
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
-            dictation: dictation, inserter: inserter)
+            dictation: dictation,
+            rewriter: LiveRewriter.environment(
+                settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets)),
+            inserter: inserter)
+        current.settings = { [weak self] in self?.settings }
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,

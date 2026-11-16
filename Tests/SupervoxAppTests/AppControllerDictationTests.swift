@@ -27,6 +27,8 @@ final class TimeoutLog: Sendable {
     let clicks = FakeClickMonitor()
     let presenter = Presenter()
     let engines = FakeEngines()
+    /// La mise en forme double des modes à consigne (les tests de bout en bout en donnent une vraie, sur un modèle double).
+    let rewriter = FakeRewriter()
     let rig: InsertionRig
     /// L'attente du collage (entre ⌘V et la restauration) : instantanée, sauf quand `blocksInsertion` est vrai, où elle dure
     /// jusqu'à `insertionSleeper.release()`.
@@ -59,7 +61,8 @@ final class TimeoutLog: Sendable {
     }
 
     func makeController(
-        settings: AppSettings = .defaults, terminationWait: (@Sendable (Double) async -> Void)? = nil
+        settings: AppSettings = .defaults, terminationWait: (@Sendable (Double) async -> Void)? = nil,
+        rewriter custom: RewriteEnvironment? = nil
     ) -> AppController {
         try? store.save(settings)
         let controller = AppController(
@@ -68,7 +71,7 @@ final class TimeoutLog: Sendable {
             permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            dictation: engines.environment, inserter: rig.inserter,
+            dictation: engines.environment, rewriter: custom ?? rewriter.environment, inserter: rig.inserter,
             holdWatch: HoldWatch(
                 anyHeld: { [held] in
                     held.asked.append($0)
@@ -563,6 +566,160 @@ final class TimeoutLog: Sendable {
         #expect(!controller.panelModel.isOpen)
         #expect(await until { session.count(of: "cancel") == 1 })
         #expect(controller.panelModel.dictation == DictationViewState())
+    }
+
+    // MARK: - Les modes à consigne (mise en forme par le modèle)
+
+    /// Les réglages d'un mode personnel à consigne, choisi, sans relecture sauf `review`.
+    func rewriteSettings(review: Bool = false) -> AppSettings {
+        var settings = modesSettings(lastModeID: "perso-un")
+        settings.modes[1].reviewBeforePaste = review
+        return settings
+    }
+
+    /// Mène la dictée du mode choisi jusqu'à la mise en forme, dont l'appel double est attendu.
+    func formatting(_ controller: AppController) async -> RewriteCall {
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finalizing)
+        session.emit(.finished("euh bonjour tout le monde"))
+        #expect(await until { controller.panelModel.dictation.stage == .formatting })
+        return await rewriter.call()
+    }
+
+    @Test func aPromptDictationGoesThroughTheModelThenToTheReview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = Provider(
+            id: UUID(), name: "Fournisseur exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
+            models: ["modele-exemple"])
+        var settings = AppSettings.defaults
+        settings.providers = [provider]
+        settings.strongModel = ModelChoice(providerID: provider.id, model: "modele-exemple")
+        settings.lastModeID = ModeChip.promptID
+        let gate = TestGate()
+        defer { gate.open() }
+        let made = MadeModels(
+            .gated(gate, before: [.text("Un prompt")], after: [.text(" structuré."), .stop(.complete)]))
+        let keys = InMemorySecretStore(secrets: [provider.id.uuidString: "cle-exemple"])
+        let live = LiveRewriter.environment(
+            settings: { [store] in store.load().settings }, secrets: SecretAccess(keys), makeModel: made.make)
+        let controller = makeController(settings: settings, rewriter: live)
+
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finalizing)
+        session.emit(.finished("euh bonjour tout le monde"))
+
+        #expect(await until { controller.panelModel.dictation.stage == .formatting })
+        #expect(
+            controller.panelModel.dictation.notice
+                == DictationController.formattingNotice(provider: "Fournisseur exemple"))
+        #expect(await until { controller.panelModel.dictation.liveText == "Un prompt" })
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty, "rien n'est inséré pendant la mise en forme")
+
+        gate.open()
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.draft == "Un prompt structuré.")
+        #expect(controller.dictation.lastTranscript == "Un prompt structuré.")
+        #expect(surface.keyboards.last == .focused)
+        let request = try #require(made.model.requests.first)
+        #expect(request.model == "modele-exemple")
+        #expect(request.instruction.hasPrefix(try #require(ModeDefaults.instruction(for: ModeChip.promptID))))
+        #expect(request.input.contains("euh bonjour tout le monde"))
+        #expect(made.made.map(\.apiKey) == ["cle-exemple"])
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty)
+    }
+
+    @Test func aModeWithoutAKeyBringsTheRawTextBackToTheReviewWithoutAnyRequest() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = Provider(
+            id: UUID(), name: "Fournisseur exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
+            models: ["modele-exemple"])
+        var settings = rewriteSettings()
+        settings.providers = [provider]
+        settings.strongModel = ModelChoice(providerID: provider.id, model: "modele-exemple")
+        let made = MadeModels(.never)
+        let live = LiveRewriter.environment(
+            settings: { [store] in store.load().settings }, secrets: SecretAccess(InMemorySecretStore()), makeModel: made.make)
+        let controller = makeController(settings: settings, rewriter: live)
+
+        hotKeys.press()
+        let session = await record(controller)
+        session.emit(.finished("euh bonjour tout le monde"))
+
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.draft == "euh bonjour tout le monde")
+        #expect(
+            controller.panelModel.dictation.notice
+                == RewriteFailure.noKey(provider: "Fournisseur exemple").message + " " + DictationController.rawTextNotice)
+        #expect(made.made.isEmpty)
+        #expect(made.model.requests.isEmpty)
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty)
+    }
+
+    @Test func escapeDuringTheFormattingCancelsTheRewriteAndClosesThePanel() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: rewriteSettings())
+        let call = await formatting(controller)
+
+        escape.press()
+        #expect(!controller.panelModel.isOpen)
+        #expect(await until { call.sawCancellation })
+        call.onText("tardif")
+        call.finish(.rewritten("Texte tardif."))
+        await settle()
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty)
+        #expect(controller.panelModel.dictation == DictationViewState(lastTranscript: "euh bonjour tout le monde"))
+        #expect(!controller.panelModel.isOpen)
+    }
+
+    @Test(arguments: ["menu", "settings", "quit"])
+    func closingThePanelByAnotherPathDuringTheFormattingCancelsTheRewrite(_ path: String) async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        rewriter.ignoresCancellation = true
+        let controller = makeController(settings: rewriteSettings())
+        let call = await formatting(controller)
+
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        switch path {
+        case "menu": controller.togglePanelFromMenu()
+        case "settings": controller.openSettings()
+        default: controller.quit()
+        }
+        #expect(!controller.panelModel.isOpen)
+        #expect(await until { call.sawCancellation })
+        #expect(controller.panelModel.dictation == DictationViewState(lastTranscript: "euh bonjour tout le monde"))
+
+        call.onText("tardif")
+        call.finish(.rewritten("Texte tardif."))
+        await settle()
+        #expect(controller.panelModel.dictation == DictationViewState(lastTranscript: "euh bonjour tout le monde"))
+        #expect(!controller.panelModel.isOpen)
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty)
+    }
+
+    @Test func aClickOutsideIsIgnoredDuringTheFormatting() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: rewriteSettings())
+        let call = await formatting(controller)
+
+        clicks.clickOutside()
+        #expect(controller.panelModel.isOpen)
+        #expect(controller.panelModel.dictation.stage == .formatting)
+        #expect(!call.sawCancellation)
+    }
+
+    @Test func aModeWithAnInstructionHasItsPillStartARealDictation() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: rewriteSettings())
+        controller.panelModel.select(ModeChip.rawID)
+        controller.panelModel.select("perso-un")
+
+        hotKeys.press()
+        _ = await record(controller)
+        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+        #expect(engines.sessions.count == 1)
     }
 
     @Test func aClickOutsideIsIgnoredDuringADictationAndClosesThePanelOtherwise() async {

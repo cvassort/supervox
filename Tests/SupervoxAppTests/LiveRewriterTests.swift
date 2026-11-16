@@ -12,6 +12,8 @@ final class ScriptedModel: LanguageModel {
         case events([CompletionEvent])
         case fails(any Error)
         case never
+        /// Livre `before`, attend que la porte s'ouvre, puis livre `after` et finit.
+        case gated(TestGate, before: [CompletionEvent], after: [CompletionEvent])
     }
 
     private let script: Script
@@ -33,6 +35,13 @@ final class ScriptedModel: LanguageModel {
                 continuation.finish(throwing: error)
             case .never:
                 break
+            case .gated(let gate, let before, let after):
+                Task {
+                    for event in before { continuation.yield(event) }
+                    await gate.wait()
+                    for event in after { continuation.yield(event) }
+                    continuation.finish()
+                }
             }
         }
     }

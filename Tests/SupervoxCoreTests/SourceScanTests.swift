@@ -173,6 +173,7 @@ import Testing
         let pattern = try Regex(Self.forbiddenErrorText)
         let folders = [
             "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
+            "Sources/SupervoxApp/Language",
         ]
         let offending = try folders.flatMap { folder in
             try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }

@@ -46,7 +46,7 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system, keyboardLayout: HotKeyTests.ansi,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
     }
 
     func hotKeyLines(_ controller: AppController) -> [String] {
@@ -147,10 +147,11 @@ import Testing
         controller.launch()
 
         modeRegistrars.press(Self.keyB)
-        // « Compte rendu » ne dicte pas encore : le panneau l'annonce, ouvert sur ce mode, qui est enregistré.
+        // « Compte rendu » a une consigne : son raccourci lance une vraie dictée, sur ce mode, qui est enregistré.
         #expect(controller.panelModel.selectedModeID == "perso-un")
         #expect(controller.panelModel.isOpen)
-        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(controller.panelModel.dictation.stage == .preparing)
+        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
         #expect(store.load().settings.lastModeID == "perso-un")
     }
 
@@ -437,6 +438,6 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system, keyboardLayout: HotKeyTests.ansi,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
     }
 }

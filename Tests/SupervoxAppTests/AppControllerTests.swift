@@ -37,7 +37,7 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
     }
 
     func corruptTheSettingsFile() throws {
@@ -169,7 +169,7 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
         next.launch()
         #expect(next.panelModel.welcome == nil)
         #expect(!next.panelModel.isOpen)
@@ -205,7 +205,7 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(next.panelModel.welcome == nil)
@@ -324,7 +324,7 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in nextSurface }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(nextSurface.showCount == 0)
