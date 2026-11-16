@@ -10,7 +10,7 @@ struct EndpointRequest: Sendable {
     static let errorBodyReadLimit = 64 * 1024
 
     /// `<base>/v1/<path>`. La base peut avoir un `/` final, se terminer par `/v1` ou porter un préfixe de chemin :
-    /// dans tous les cas on obtient exactement un `/v1`, sans `//`. La requête et le fragment de la base sont ignorés.
+    /// dans tous les cas on obtient exactement un `/v1`, sans `//`. La requête, le fragment et les identifiants de la base sont ignorés.
     func url(path: [String]) throws -> URL {
         guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false),
               let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
@@ -23,6 +23,9 @@ struct EndpointRequest: Sendable {
         components.path = "/" + (segments + ["v1"] + path).joined(separator: "/")
         components.query = nil
         components.fragment = nil
+        // Des identifiants écrits dans l'adresse ne partent jamais : la clé voyage dans son en-tête, comme pour la liste des modèles.
+        components.user = nil
+        components.password = nil
         guard let url = components.url else {
             throw EndpointError.transport("\(EndpointConfig.baseURLVariable) donne une adresse inutilisable")
         }

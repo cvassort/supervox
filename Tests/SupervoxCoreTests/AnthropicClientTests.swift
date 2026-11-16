@@ -62,6 +62,17 @@ struct AnthropicClientTests {
         #expect(request.url?.host == "example.com")
     }
 
+    /// Des identifiants écrits dans l'adresse ne partent pas avec la requête (la liste des modèles les retire déjà) : la clé ne
+    /// voyage que dans l'en-tête prévu.
+    @Test func credentialsInTheBaseURLAreNotSentWithTheCompletion() async throws {
+        let (client, stub) = anthropicStub(.response(status: 200, body: fixtureData("messages-anthropic-text.sse")),
+                                           baseURL: "https://utilisateur:motdepasse@example.com/prefixe")
+        _ = await collectEvents(client.complete(sampleRequest))
+        let url = try #require(stub.lastRequest?.url)
+        #expect(url.user == nil && url.password == nil)
+        #expect(url.absoluteString == "https://example.com/prefixe/v1/messages")
+    }
+
     @Test func headersAndBodyAreExactlyTheAnnouncedOnes() async throws {
         let (client, stub) = anthropicStub(.response(status: 200, body: fixtureData("messages-anthropic-text.sse")),
                                            apiKey: "cle-secrete-0123")
