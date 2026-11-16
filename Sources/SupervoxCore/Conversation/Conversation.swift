@@ -75,7 +75,18 @@ public struct Conversation: Codable, Equatable, Sendable {
 
     /// Un paragraphe par tour, « Vous : » ou « Supervox : » puis le texte, séparés par une ligne vide. C'est ce que lit le
     /// modèle fort pour rédiger le prompt final, et ce que montre la relecture.
+    ///
+    /// Un tour ne peut pas écrire le paragraphe d'un autre : dans un tour, toute ligne vide (ou faite d'espaces, de `\r\n`, de
+    /// séparateurs de ligne ou de paragraphe) est réduite à un simple saut de ligne. Aucun mot n'est perdu, seule la mise en page
+    /// d'un tour change ; la ligne vide n'apparaît donc qu'entre deux tours. Une ligne « Supervox : … » à l'intérieur d'un tour
+    /// reste dans le paragraphe de ce tour.
     public var transcript: String {
-        turns.map { ($0.speaker == .user ? "Vous : " : "Supervox : ") + $0.text }.joined(separator: "\n\n")
+        turns.map { ($0.speaker == .user ? "Vous : " : "Supervox : ") + Self.withoutBlankLines($0.text) }.joined(separator: "\n\n")
+    }
+
+    private static func withoutBlankLines(_ text: String) -> String {
+        text.components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .joined(separator: "\n")
     }
 }
