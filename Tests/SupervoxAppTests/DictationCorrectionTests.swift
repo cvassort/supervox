@@ -775,6 +775,30 @@ import SupervoxCore
         _ = second
     }
 
+    @Test("règle 7 : un modèle sourd à l'annulation rend son texte puis son issue longtemps après Échap ou la fermeture : rien ne bouge, même pendant une nouvelle correction",
+        arguments: ["escape", "closed"], [true, false])
+    func aDeafModelsLateTextAndOutcomeAreIgnored(how: String, startsANewCorrection: Bool) async {
+        let h = harness()
+        h.rewriter.ignoresCancellation = true
+        await review(h)
+        let session = await correcting(h)
+        let call = await speak(h, session)
+        if how == "escape" { h.controller.escapePressed() } else { h.panel.close() }
+        await settle()
+        #expect(call.sawCancellation, "la tâche a bien été annulée, le modèle sourd rend pourtant son issue plus tard")
+        var fresh: FakeSession?
+        if startsANewCorrection, how == "escape" { fresh = await correcting(h, index: 2) }
+        let after = h.controller.view
+
+        call.onText("Texte tardif")
+        call.finish(.rewritten("Texte tardif"))
+        await settle()
+        #expect(h.controller.view == after)
+        #expect(h.controller.view.draft == (how == "escape" ? Self.original : ""))
+        #expect(h.pasted.isEmpty)
+        if fresh != nil { #expect(h.controller.view.stage == .correcting(.recording)) }
+    }
+
     @Test("règle 7 : le texte et l'issue d'une réécriture qui arrivent après la fin de la correction sont ignorés")
     func aLateTextAfterTheOutcomeIsIgnored() async {
         let h = harness()
