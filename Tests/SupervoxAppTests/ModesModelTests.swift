@@ -908,6 +908,76 @@ import Testing
         #expect(model.pickerContent(selected: nil).emptyNote == ModesModel.noProviderNote)
     }
 
+    // MARK: - Trous relevés à la revue
+
+    /// Un mode sans consigne n'envoie rien : un modèle périmé qu'il porte n'ajoute aucune note sur sa ligne.
+    @Test func aModeWithoutInstructionNeverCarriesTheRemovedProviderNote() throws {
+        var settings = Rig.defaultSettings()
+        settings.providers = []
+        settings.modes.append(Mode(id: "perso-vide", name: "Vide", instruction: "", model: Self.strong))
+        let model = Rig(settings).makeModel()
+        #expect(try row(model, "perso-vide").note == nil)
+        #expect(try row(model, "perso-vide").summary == "Texte collé tel quel · Moteur de l'onglet Transcription")
+    }
+
+    /// Remettre un mode de base dont le nom est pris par un autre mode : le nom reste libre.
+    @Test func addBaseKeepsTheNameFreeWhenAnotherModeTookIt() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        model.delete(ModeChip.promptID)
+        var draft = model.draft(for: "perso-deux")
+        draft.name = "Prompt"
+        #expect(model.save(draft))
+
+        model.addBase(ModeChip.promptID)
+        let names = rig.settings.modes.map(\.name)
+        #expect(names.filter { $0.lowercased() == "prompt" }.count == 1, "deux modes ne portent pas le même nom : \(names)")
+        #expect(rig.mode(ModeChip.promptID)?.name == "Prompt 2")
+    }
+
+    /// Les accents comptent, la casse non : « Résumé » et « Resume » sont deux noms, « RÉSUMÉ » est le premier.
+    @Test func accentsMakeTwoNamesDifferentAndCaseDoesNot() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        var draft = model.draft(for: "perso-un")
+        draft.name = "Résumé"
+        #expect(model.save(draft))
+        var other = model.draft(for: "perso-deux")
+        other.name = "Resume"
+        #expect(model.save(other), "sans accent : un autre nom")
+        other.name = "RÉSUMÉ"
+        #expect(!model.save(other))
+        #expect(model.message == ModesModel.nameTakenMessage)
+    }
+
+    @Test func savingAModeThatIsGoneSaysSoAndWritesNothing() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        rig.settings.modes.removeAll { $0.id == "perso-un" }
+        #expect(!model.save(ModeDraft.example(id: "perso-un", name: "Fantôme")))
+        #expect(model.message == ModesModel.unknownModeMessage)
+        #expect(rig.updates == 0)
+    }
+
+    /// Entretien reste relu et sans message après une tentative de bascule ; Prompt, relu par défaut, reste relu quand
+    /// l'enregistrement de son extinction est refusé.
+    @Test func theInterviewStaysReviewedAndAFailedSwitchOffKeepsAReviewedDefault() throws {
+        let rig = Rig()
+        let model = rig.makeModel()
+        model.setReview(false, for: ModeChip.interviewID)
+        #expect(try row(model, ModeChip.interviewID).reviews)
+        #expect(model.message == nil)
+
+        rig.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        model.setReview(false, for: ModeChip.promptID)
+        #expect(try row(model, ModeChip.promptID).reviews, "le défaut vrai n'est pas éteint par un enregistrement refusé")
+        #expect(model.message != nil)
+        rig.failure = nil
+        model.setReview(false, for: ModeChip.promptID)
+        #expect(try row(model, ModeChip.promptID).reviews == false)
+        #expect(model.message == nil)
+    }
+
     // MARK: - Règle 8 : ordre
 
     @Test func moveShiftsByOneStepAndStopsAtTheBounds() {
