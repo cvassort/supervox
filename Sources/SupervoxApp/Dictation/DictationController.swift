@@ -65,10 +65,39 @@ public final class DictationController {
         "Le texte ci-dessus est la transcription brute : corrigez-la, collez-la ou copiez-la."
 
     /// Pendant que la consigne se dit : le raccourci GLOBAL réel (`hotKeyLabel`, celui que le panneau montre) ou le bouton
-    /// terminent. Sans raccourci, seul le bouton.
-    public static func correctionListeningNotice(hotKeyLabel: String?) -> String {
+    /// terminent. Sans raccourci, seul le bouton. En maintien (`hold` : la correction a été commencée par l'appui tenu du
+    /// raccourci), c'est le relâchement qui termine : un appui serait ignoré.
+    public static func correctionListeningNotice(hotKeyLabel: String?, hold: Bool = false) -> String {
+        if hold {
+            guard let hotKeyLabel else { return "Dites ce qu'il faut changer, puis relâchez le raccourci." }
+            return "Dites ce qu'il faut changer, puis relâchez \(hotKeyLabel)."
+        }
         guard let hotKeyLabel else { return "Dites ce qu'il faut changer, puis cliquez sur « Terminer »." }
         return "Dites ce qu'il faut changer, puis appuyez de nouveau sur \(hotKeyLabel) ou cliquez sur « Terminer »."
+    }
+    /// Tant que le micro n'écoute pas (préparation, téléchargement, chargement) : un appui ou « Terminer » n'y a aucun effet.
+    public static let correctionPreparingNotice =
+        "Patientez un instant : vous pourrez dire ce qu'il faut changer dès que l'écoute commence."
+    /// La session s'est arrêtée seule pendant la correction.
+    public static let correctionInterruptedNotice = "La correction à la voix a été interrompue. Le texte n'a pas changé."
+    /// L'autorisation du micro manque au moment de corriger.
+    public static let correctionMicrophoneNotice =
+        "Le micro n'est pas autorisé : autorisez-le dans les Réglages Système pour corriger à la voix."
+    public static let correctionProviderMissingNotice =
+        "Le fournisseur du modèle fort n'existe plus : choisissez un autre modèle fort en tête de Réglages, onglet Modes. Le texte n'a pas changé."
+    public static let correctionNotFoundNotice =
+        "Le serveur ne connaît pas le modèle fort ou cette adresse (HTTP 404) : vérifiez le modèle fort, en tête de Réglages, onglet Modes, et l'adresse du fournisseur. Le texte n'a pas changé."
+
+    /// La phrase d'une panne du modèle pendant une correction : celle du Core (qui parle du modèle « du mode ») sauf pour les
+    /// pannes qui désignent le réglage du modèle, dont la correction a ses propres phrases (le modèle fort, en tête de l'onglet
+    /// Modes), suivie de « Le texte n'a pas changé. ».
+    public static func correctionNotice(for failure: RewriteFailure) -> String {
+        switch failure {
+        case .noModel: correctionNoModelNotice
+        case .providerMissing: correctionProviderMissingNotice
+        case .notFound: correctionNotFoundNotice
+        default: failure.message + " " + correctionKeptSentence
+        }
     }
     public static let correctionRewritingNotice = "Réécriture du texte selon votre consigne…"
     public static let correctionEmptyNotice = "Aucune consigne n'a été entendue : le texte n'a pas changé."
@@ -578,7 +607,8 @@ public final class DictationController {
         guard isLive(run) else { return }
         if run.isCorrection {
             // Une correction n'a pas d'écran d'échec : la relecture revient, le texte intact, avec la phrase de la panne.
-            correctionFailed(run, noSpeech: stage == .failed(.noSpeech), notice: notice)
+            let said = stage == .cancelled ? Self.correctionInterruptedNotice : notice + " " + Self.correctionKeptSentence
+            correctionFailed(run, noSpeech: stage == .failed(.noSpeech), notice: said)
             return
         }
         retire(run)
@@ -769,6 +799,9 @@ public final class DictationController {
         guard microphoneAllowed() else {
             // La ligne des permissions du panneau dit ce qui manque ; la relecture reste telle quelle.
             log.notice("correction refusée : micro non autorisé")
+            var next = view
+            next.notice = Self.correctionMicrophoneNotice
+            setView(next)
             return
         }
         // Les modificateurs du raccourci global, lus ici une seule fois (maintien seulement : le bouton ne tient aucune touche).
@@ -856,15 +889,14 @@ public final class DictationController {
     private func correctionFailed(_ run: Run, failure: RewriteFailure) {
         log.notice("correction échouée")
         retire(run)
-        let notice = failure == .noModel ? Self.correctionNoModelNotice : failure.message + " " + Self.correctionKeptSentence
-        returnToReview(notice: notice)
+        returnToReview(notice: Self.correctionNotice(for: failure))
     }
 
     /// Une autre fin de la correction : consigne blanche (ou « aucune parole »), préparation en échec, session interrompue.
     private func correctionFailed(_ run: Run, noSpeech: Bool, notice: String) {
         log.notice("correction échouée avant la réécriture")
         retire(run)
-        returnToReview(notice: noSpeech ? Self.correctionEmptyNotice : notice + " " + Self.correctionKeptSentence)
+        returnToReview(notice: noSpeech ? Self.correctionEmptyNotice : notice)
     }
 
     /// La correction est finie ou annulée : la relecture revient, éditable, avec ce qu'il y a à dire. Le brouillon n'est jamais
@@ -986,8 +1018,11 @@ public final class DictationController {
     private func notice(for run: Run, stage: DictationStage) -> String? {
         var lines: [String] = []
         // La consigne se dit pendant la préparation et l'enregistrement : la phrase dit comment la terminer.
-        if stage == .correcting(.preparing) || stage == .correcting(.recording) {
-            lines.append(Self.correctionListeningNotice(hotKeyLabel: hotKeyLabel()))
+        // Avant l'écoute, rien ne s'entend et ni un appui ni « Terminer » n'agit : la phrase dit d'attendre.
+        if stage == .correcting(.preparing) {
+            lines.append(Self.correctionPreparingNotice)
+        } else if stage == .correcting(.recording) {
+            lines.append(Self.correctionListeningNotice(hotKeyLabel: hotKeyLabel(), hold: run.startedByHold))
         }
         if stage == .preparing || stage == .correcting(.preparing), let download = run.downloadNotice { lines.append(download) }
         if stage == .preparing || stage == .correcting(.preparing), let loading = run.loadingNotice { lines.append(loading) }

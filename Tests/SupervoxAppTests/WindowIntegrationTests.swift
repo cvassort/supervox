@@ -719,6 +719,46 @@ struct WindowIntegrationTests {
         #expect(await waitUntil { field.string == Self.original })
     }
 
+    /// C1 de la revue, dans la vraie fenêtre : correction réussie, ⌘Z (version précédente), touche morte, ⇧⌘Z, lettre. Le champ et
+    /// le brouillon du contrôleur restent identiques et aucune version ne se perd ; le panneau sait que la saisie est en attente.
+    @Test func aDeadKeyThenShiftCommandZLosesNoVersionInTheRealPanel() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, controller) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(await waitUntil { field.string == Self.original })
+        field.setMarkedText(
+            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try #require(field.hasMarkedText())
+        #expect(await waitUntil { model.fieldIsComposing }, "le panneau n'a pas su qu'une saisie est en attente")
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        model.nextVersion()   // le bouton, lui aussi sans effet
+        await Task.yield()
+        #expect(model.dictation.draft == Self.original, "aucune version ne change pendant le texte marqué")
+        field.insertText("ê", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(await waitUntil { !model.fieldIsComposing })
+        #expect(field.string == model.dictation.draft, "le champ et le brouillon divergent")
+        controller.nextVersion()
+        #expect(await waitUntil { field.string == Self.rewritten }, "la version suivante a disparu")
+    }
+
+    /// I1 de la revue, dans la vraie fenêtre : ⌘Z dans la pile du champ remonte au brouillon du contrôleur.
+    @Test func commandZInTheFieldsStackReachesTheDraft() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, _) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+        field.insertText(" mot", replacementRange: NSRange(location: field.string.utf16.count, length: 0))
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(field.string == Self.rewritten)
+        #expect(model.dictation.draft == Self.rewritten, "« Coller » collerait ce que l'écran ne montre plus")
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        #expect(field.string == Self.rewritten + " mot")
+        #expect(model.dictation.draft == Self.rewritten + " mot")
+    }
+
     /// Le texte remplacé par une nouvelle version vide la pile : le ⌘Z qui suit ne lève pas `NSRangeException` (le cas de la
     /// relecture suivante, `theUndoStackDoesNotPassFromOneReviewToTheNext`, tient pour le champ neuf).
     @Test func aVersionChangeThenCommandZDoesNotRaise() async throws {

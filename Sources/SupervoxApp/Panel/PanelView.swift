@@ -63,6 +63,7 @@ public struct PanelView: View {
                 default: break
                 }
             },
+            composing: { model.fieldIsComposing = $0 },
             correct: { model.correct() },
             previousVersion: { model.previousVersion() },
             nextVersion: { model.nextVersion() })

@@ -78,6 +78,10 @@ public final class PanelModel {
     /// la clé : un clic dans une autre application la lui prend, un clic dans le panneau la lui rend) ; l'aide de la relecture
     /// n'annonce ⌘↩ que s'il est vrai. Faux panneau fermé.
     public var panelHasKeyboard = false
+    /// Le champ de relecture a une saisie en attente (touche morte, méthode de saisie : texte marqué). `ReviewTextView` le
+    /// remonte. Tant qu'il est vrai, changer de version est sans effet : le champ ne remplacerait pas son texte, et le texte
+    /// que le contrôleur croit montrer ne serait plus celui de l'écran.
+    public var fieldIsComposing = false
     /// Avis à montrer à l'utilisateur, un par origine.
     public private(set) var notices: [NoticeOrigin: String] = [:]
 
@@ -128,6 +132,8 @@ public final class PanelModel {
     public func setDictation(_ state: DictationViewState) {
         let textChanged = state.lastTranscript != dictation.lastTranscript || state.draft != dictation.draft
         dictation = state
+        // Hors relecture le champ n'est plus là : une saisie en attente ne reste pas comptée.
+        if state.stage != .review { fieldIsComposing = false }
         if textChanged || state.stage.isActive { copyState = .idle }
     }
 
@@ -176,13 +182,13 @@ public final class PanelModel {
 
     /// « Version précédente » : sans effet s'il n'y en a pas (`DictationViewState.canGoBack`).
     public func previousVersion() {
-        guard dictation.canGoBack else { return }
+        guard dictation.canGoBack, !fieldIsComposing else { return }
         onPreviousVersion?()
     }
 
     /// La version suivante : sans effet s'il n'y en a pas.
     public func nextVersion() {
-        guard dictation.canGoForward else { return }
+        guard dictation.canGoForward, !fieldIsComposing else { return }
         onNextVersion?()
     }
 

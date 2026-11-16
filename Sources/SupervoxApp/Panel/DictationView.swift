@@ -17,6 +17,8 @@ struct DictationView: View {
     let paste: @MainActor () -> Void
     /// ⌘Z ou ⇧⌘Z en bout de pile du champ : changer de version.
     var history: @MainActor (EditingCommand) -> Void = { _ in }
+    /// Une saisie en attente (texte marqué) commence ou finit dans le champ de relecture.
+    var composing: @MainActor (Bool) -> Void = { _ in }
     /// « Corriger à la voix » ou, pendant l'écoute, « Terminer » ; « Version précédente » ; « Version suivante ».
     var correct: @MainActor () -> Void = {}
     var previousVersion: @MainActor () -> Void = {}
@@ -27,7 +29,7 @@ struct DictationView: View {
             if let review = display.review {
                 ReviewView(
                     display: display, review: review, hotKeyLabel: hotKeyLabel, edit: edit, paste: paste, copy: copy,
-                    history: history, correct: correct, previousVersion: previousVersion, nextVersion: nextVersion)
+                    history: history, composing: composing, correct: correct, previousVersion: previousVersion, nextVersion: nextVersion)
             } else if display.mood == .ready, display.transcript == nil {
                 ready
                     .frame(maxWidth: .infinity, minHeight: 84)

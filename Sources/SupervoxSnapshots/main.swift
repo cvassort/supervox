@@ -580,12 +580,23 @@ for dark in [false, true] {
          correctionPanelModel(
             .recording, draft: exampleFormattedText,
             notice: DictationController.correctionListeningNotice(hotKeyLabel: standardLabel)), granted),
+        // Tant que le micro ne s'ouvre pas, la phrase dit d'attendre ; en maintien, d'écouter jusqu'au relâchement.
+        ("correction-preparation",
+         correctionPanelModel(
+            .preparing, draft: exampleFormattedText, notice: DictationController.correctionPreparingNotice), granted),
+        ("correction-ecoute-maintien",
+         correctionPanelModel(
+            .recording, draft: exampleFormattedText,
+            notice: DictationController.correctionListeningNotice(hotKeyLabel: standardLabel, hold: true)), granted),
         ("correction-reecriture",
          correctionPanelModel(
             .rewriting, draft: exampleFormattedText, streamed: exampleCorrectedStream,
             notice: DictationController.correctionRewritingNotice), granted),
         ("correction-echec",
          reviewPanelModel(exampleFormattedText, notice: DictationController.correctionNoModelNotice), granted),
+        ("correction-echec-fournisseur",
+         reviewPanelModel(
+            exampleFormattedText, notice: DictationController.correctionNotice(for: .providerMissing)), granted),
         ("correction-vide",
          reviewPanelModel(exampleFormattedText, notice: DictationController.correctionEmptyNotice), granted),
         ("relecture-avec-version-precedente", reviewPanelModel(exampleFormattedText, canGoBack: true), granted),

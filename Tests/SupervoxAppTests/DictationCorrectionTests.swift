@@ -112,7 +112,7 @@ import SupervoxCore
         h.controller.startCorrection()
         #expect(h.controller.view.stage == .correcting(.preparing))
         #expect(h.controller.view.draft == Self.original)
-        #expect(h.controller.view.notice == DictationController.correctionListeningNotice(hotKeyLabel: "⌘⇧K"))
+        #expect(h.controller.view.notice == DictationController.correctionPreparingNotice)
         #expect(h.controller.isBusy)
         let session = await driveToRecording(h)
         #expect(h.controller.view.draft == Self.original)
@@ -220,7 +220,9 @@ import SupervoxCore
         let before = h.controller.view
         h.controller.startCorrection()
         await settle()
-        #expect(h.controller.view == before)
+        var expected = before
+        expected.notice = DictationController.correctionMicrophoneNotice
+        #expect(h.controller.view == expected, "seul l'avis change : la phrase du micro")
         #expect(h.engines.sessions.count == 1)
     }
 
@@ -577,7 +579,7 @@ import SupervoxCore
         session.emit(.cancelled)
         #expect(await until { other.controller.view.stage == .review })
         #expect(other.controller.view.draft == Self.original)
-        #expect(other.controller.view.notice == DictationController.interruptedNotice + " " + Self.kept)
+        #expect(other.controller.view.notice == DictationController.correctionInterruptedNotice)
         #expect(!other.controller.isBusy)
     }
 
