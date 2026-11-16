@@ -115,11 +115,12 @@ private func tempWavURL() -> URL {
 
 // MARK: - decode (octets en mémoire, pour une réponse de fournisseur)
 
-private func wavBytes(sampleRate: UInt32 = 8000, dataSize: UInt32, pcm: [Int16], trailingOddByte: Bool = false) -> Data {
+private func wavBytes(sampleRate: UInt32 = 8000, riffSize: UInt32 = 0xFFFF_FFFF, dataSize: UInt32, pcm: [Int16],
+                      trailingOddByte: Bool = false) -> Data {
     var d = Data()
     func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
     func u16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
-    d.append(Data("RIFF".utf8)); u32(0xFFFF_FFFF); d.append(Data("WAVE".utf8))
+    d.append(Data("RIFF".utf8)); u32(riffSize); d.append(Data("WAVE".utf8))
     d.append(Data("fmt ".utf8)); u32(16); u16(1); u16(1); u32(sampleRate); u32(sampleRate * 2); u16(2); u16(16)
     d.append(Data("data".utf8)); u32(dataSize)
     for s in pcm { u16(UInt16(bitPattern: s)) }
@@ -127,23 +128,31 @@ private func wavBytes(sampleRate: UInt32 = 8000, dataSize: UInt32, pcm: [Int16],
     return d
 }
 
-/// `decode` rend, pour des octets, ce que `read` rend pour le fichier qui les contient : même clip sur le fichier enregistré
-/// par un fournisseur, sur un fichier écrit par `write` et sur un fichier à bloc `LIST` (les fichiers ordinaires ne changent pas).
-@Test func wavDecodeGivesWhatReadGivesOnOrdinaryFiles() throws {
-    let written = tempWavURL()
-    defer { try? FileManager.default.removeItem(at: written) }
-    try WavFile.write(AudioClip(samples: (0..<800).map { Float(sin(Double($0) * 0.1)) * 0.4 }, sampleRate: 16000), to: written)
+/// Des échantillons attendus, écrits dans le test : un WAV ordinaire (tailles exactes) donne exactement ces valeurs, ni plus ni moins.
+@Test func wavDecodeGivesTheExpectedSamplesOfAnOrdinaryFile() throws {
+    let pcm: [Int16] = [0, 16384, -16384, 8192, 32767, -32768]
+    let bytes = wavBytes(sampleRate: 16000, riffSize: 36 + 12, dataSize: 12, pcm: pcm)
+    let clip = try WavFile.decode(bytes)
+    #expect(clip.sampleRate == 16000)
+    #expect(clip.samples == [0, 0.5, -0.5, 0.25, Float(32767) / 32768, -1])
+}
 
-    let recorded = tempWavURL()
-    defer { try? FileManager.default.removeItem(at: recorded) }
-    try fixtureData("speech-200.wav").write(to: recorded)
+/// Le fichier de réponse enregistré : fréquence, nombre d'échantillons et dix premiers échantillons relus à la main dans les octets
+/// (`xxd`, à partir du décalage 44 : -1, -1, 0, 0, 0, 0, -1, -1, 0, -1, en entiers 16 bits).
+@Test func wavDecodeGivesTheExpectedSamplesOfTheRecordedFixture() throws {
+    let clip = try WavFile.decode(fixtureData("speech-200.wav"))
+    #expect(clip.sampleRate == 24000)
+    #expect(clip.samples.count == 106_200)
+    #expect(Array(clip.samples.prefix(10)) == [-1, -1, 0, 0, 0, 0, -1, -1, 0, -1].map { Float($0) / 32768 })
+}
 
-    for url in [written, recorded] {
-        let bytes = try Data(contentsOf: url)
-        let decoded = try WavFile.decode(bytes)
-        #expect(decoded == (try WavFile.read(url)))
-        #expect(!decoded.samples.isEmpty)
-    }
+/// `read` rend ce que rend `decode` sur les mêmes octets, vérifié contre les mêmes valeurs écrites en dur.
+@Test func wavReadOfAFileGivesTheExpectedSamples() throws {
+    let url = tempWavURL()
+    defer { try? FileManager.default.removeItem(at: url) }
+    try wavBytes(sampleRate: 16000, riffSize: 36 + 8, dataSize: 8, pcm: [16384, -16384, 8192, 0]).write(to: url)
+    let clip = try WavFile.read(url)
+    #expect(clip.sampleRate == 16000 && clip.samples == [0.5, -0.5, 0.25, 0])
 }
 
 @Test func wavDecodeRejectsTruncatedBytesAsMalformed() throws {
@@ -168,6 +177,25 @@ func wavDecodeReadsUntilTheEndWhenTheDataSizeIsProvisional(dataSize: UInt32) thr
     let clip = try WavFile.decode(wavBytes(dataSize: dataSize, pcm: pcm, trailingOddByte: true))
     #expect(clip.sampleRate == 8000)
     #expect(clip.samples == pcm.map { Float($0) / 32768 })
+}
+
+/// Taille de données 0 : provisoire seulement si la taille du `RIFF` l'est aussi (0 ou `0xFFFFFFFF`, ce que font les écrivains en flux).
+/// Un fichier ordinaire (taille `RIFF` exacte) qui déclare 0 octet de données suivi d'un autre bloc est un clip vide, pas du bruit.
+@Test func wavDecodeReadsAnEmptyDataChunkFollowedByAnotherChunkAsAnEmptyClip() throws {
+    var d = wavBytes(sampleRate: 8000, riffSize: 0, dataSize: 0, pcm: [])
+    d.append(Data("LIST".utf8)); d.append(contentsOf: [4, 0, 0, 0]); d.append(Data("abcd".utf8))
+    var riff = UInt32(d.count - 8).littleEndian
+    d.replaceSubrange(4..<8, with: Data(bytes: &riff, count: 4))
+    let clip = try WavFile.decode(d)
+    #expect(clip.samples.isEmpty && clip.sampleRate == 8000)
+}
+
+/// Les deux écritures provisoires de la taille `RIFF` (0 et `0xFFFFFFFF`) suffisent à lire une taille de données de 0 jusqu'au bout.
+@Test(arguments: [UInt32(0), UInt32(0xFFFF_FFFF)])
+func wavDecodeReadsADataSizeOfZeroToTheEndWhenTheRiffSizeIsProvisional(riffSize: UInt32) throws {
+    let pcm: [Int16] = [16384, -16384, 8192]
+    let clip = try WavFile.decode(wavBytes(riffSize: riffSize, dataSize: 0, pcm: pcm))
+    #expect(clip.samples == [0.5, -0.5, 0.25])
 }
 
 /// Un fichier sans données et de taille nulle reste un clip vide (pas de taille provisoire à deviner) ; et une taille

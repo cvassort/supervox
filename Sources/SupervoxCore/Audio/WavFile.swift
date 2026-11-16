@@ -50,10 +50,10 @@ public enum WavFile {
     /// Lit un WAV déjà en mémoire (la réponse d'un fournisseur de voix) ; mêmes erreurs que `read`, qui l'appelle.
     ///
     /// Un WAV produit en flux ne connaît pas encore sa longueur quand il écrit son en-tête : la taille du bloc `data` y est
-    /// provisoire, `0xFFFFFFFF` ou 0. Quand elle l'est (et, pour 0, quand des octets suivent), le bloc va jusqu'à la fin
-    /// des octets ; un octet impair final n'est pas un échantillon. Toute autre taille garde le comportement ordinaire :
-    /// un bloc plus long que les octets est `.malformed`. Cas limite : un fichier qui déclarerait 0 octet de données suivi
-    /// d'un autre bloc serait lu comme provisoire (code lu ; aucun écrivain connu ne le produit).
+    /// provisoire, `0xFFFFFFFF` (ou 0 quand la taille du `RIFF` l'est aussi, 0 ou `0xFFFFFFFF`, et que des octets suivent). Le
+    /// bloc va alors jusqu'à la fin des octets ; un octet impair final n'est pas un échantillon. Toute autre taille garde le
+    /// comportement ordinaire : un bloc plus long que les octets est `.malformed`, et une taille de 0 dans un fichier à taille
+    /// `RIFF` exacte est un clip vide, même si un autre bloc suit.
     public static func decode(_ bytes: Data) throws -> AudioClip {
         let d = bytes
         func u16(_ o: Int) -> Int { Int(d[d.startIndex + o]) | Int(d[d.startIndex + o + 1]) << 8 }
@@ -62,6 +62,8 @@ public enum WavFile {
 
         guard d.count >= 12, tag(0) == "RIFF", tag(8) == "WAVE" else { throw WavFileError.notAWavFile }
 
+        // Un écrivain en flux met provisoire aussi la taille du RIFF ; un fichier ordinaire la donne exacte.
+        let riffSizeIsProvisional = u32(4) == 0 || u32(4) == 0xFFFF_FFFF
         var sampleRate: Int?
         var offset = 12
         // On parcourt les blocs : un bloc LIST ou autre peut précéder `data`. Chaque bloc est aligné sur un nombre pair d'octets.
@@ -80,7 +82,7 @@ public enum WavFile {
             case "data":
                 guard let rate = sampleRate else { throw WavFileError.malformed("bloc data avant le bloc fmt") }
                 guard rate > 0 else { throw WavFileError.malformed("fréquence nulle") }
-                let provisional = size == 0xFFFF_FFFF || (size == 0 && body < d.count)
+                let provisional = size == 0xFFFF_FFFF || (size == 0 && body < d.count && riffSizeIsProvisional)
                 if !provisional { guard body + size <= d.count else { throw WavFileError.malformed("bloc data tronqué") } }
                 let count = (provisional ? d.count - body : size) / 2
                 let samples = (0..<count).map { i -> Float in
