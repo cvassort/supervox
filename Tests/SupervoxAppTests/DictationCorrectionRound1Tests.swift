@@ -234,6 +234,22 @@ import SupervoxCore
         #expect(w.allVersions() == [Self.original, Self.rewritten])
     }
 
+    @Test("C1 : le champ lui-même ne passe pas à une autre version pendant un texte marqué (ni ⌘Z ni ⇧⌘Z ne préviennent le panneau)")
+    func theFieldDoesNotAskForAVersionDuringMarkedText() throws {
+        let field = DictationCorrectionTests.Field(text: "Version A.")
+        field.textView.setMarkedText(
+            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try #require(field.textView.hasMarkedText())
+        field.textView.redoOrNextVersion()
+        field.textView.undoOrPreviousVersion()
+        #expect(field.ends.isEmpty)
+        // Hors saisie en attente, une pile vide prévient le panneau.
+        let plain = DictationCorrectionTests.Field(text: "Version A.")
+        plain.textView.redoOrNextVersion()
+        plain.textView.undoOrPreviousVersion()
+        #expect(plain.ends == [.redo, .undo])
+    }
+
     @Test("C1 : le retard du modèle pendant un texte marqué (le texte d'avant la saisie) n'est pas un remplacement en attente : la lettre validée reste")
     func aLateEchoIsNotAPendingReplacement() {
         let field = DictationCorrectionTests.Field(text: "ab")

@@ -244,7 +244,7 @@ public struct DictationDisplay: Equatable, Sendable {
         /// Le bouton de la correction existe : pas pendant le collage (« Copier » et « Coller » y sont déjà inactifs).
         public var showsCorrectButton: Bool { !isPasting }
 
-        /// « Terminer » pendant que la consigne se prépare et se dit (la phrase du contrôleur le nomme dès la préparation) ;
+        /// « Terminer » pendant que la consigne se prépare (inactif : la phrase du contrôleur dit d'attendre) et se dit ;
         /// « Corriger à la voix » sinon, y compris inactif pendant la transcription et la réécriture.
         public var correctTitle: String {
             finishesCorrection ? DictationText.finishCorrectionLabel : DictationText.correctLabel
