@@ -261,17 +261,25 @@ public final class AudioCapture: @unchecked Sendable {
     /// mesuré : 44 à 51 ms après la durée du tampon), `.stopped` si `stopPlayback()` ou `stop()` l'a coupé avant. Il peut arriver
     /// juste après le retour de l'appel qui coupe.
     ///
+    /// Un clip vide, ou réduit à moins d'une trame par la conversion, n'a rien à jouer : `.played` est rendu sans toucher au lecteur (par la
+    /// file des événements, une fois, dans l'ordre de la file).
+    ///
     /// - Throws: `notRunning` si le moteur ne tourne pas (`start` pas appelé, ou `stop` passé) ; `engineFailed` pour une capture sans
-    ///   traitement de la voix (pas de lecteur), un clip vide ou illisible, ou un échec du lecteur. Rien n'est joué, `onEnd` n'est pas appelé.
-    ///   Jamais depuis `onChunk` (précondition).
+    ///   traitement de la voix (pas de lecteur), un format de sortie qu'on ne sait pas remplir, un clip sans fréquence, ou un échec du
+    ///   lecteur. Rien n'est joué, `onEnd` n'est pas appelé. Jamais depuis `onChunk` (précondition).
     public func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws {
         // La conversion se fait hors verrou : elle peut durer, et `stop()` ne doit pas l'attendre.
         currentGate.withLock { $0 }?.assertNotDelivering(calling: "play()")
         let format = try lifecycle.withLock { try playerFormat() }
-        guard let buffer = Self.playbackBuffer(clip, format: format) else {
-            throw AudioCaptureError.engineFailed("clip audio vide ou illisible")
-        }
+        let plan = Self.playbackPlan(clip, format: format)
+        if case .refused(let error) = plan { throw error }
         try lifecycle.withLock {
+            guard case .play(let buffer) = plan else {
+                // Rien à jouer : le moteur doit tourner quand même (même refus que pour un vrai clip).
+                _ = try playerFormat()
+                playback.registerSilent(onEnd: onEnd)
+                return
+            }
             guard try playerFormat() == buffer.format else { throw AudioCaptureError.engineFailed("format de sortie modifié pendant la conversion") }
             // Le lecteur démarre d'abord : s'il échoue, rien n'est planifié ni enregistré, aucun `onEnd` n'est dû.
             try startPlayer()
@@ -335,12 +343,41 @@ public final class AudioCapture: @unchecked Sendable {
         }
     }
 
+    /// Ce que `play()` fait d'un clip : le jouer, constater qu'il n'y a rien à jouer, ou refuser.
+    enum PlaybackPlan: Equatable {
+        case play(AVAudioPCMBuffer)
+        /// Clip vide, ou réduit à moins d'une trame par la conversion (mesuré par la revue : 1 à 5 échantillons à 96 kHz vers 8 kHz).
+        case nothingToPlay
+        case refused(AudioCaptureError)
+
+        static func == (lhs: PlaybackPlan, rhs: PlaybackPlan) -> Bool {
+            switch (lhs, rhs) {
+            case (.play(let a), .play(let b)): return a === b
+            case (.nothingToPlay, .nothingToPlay): return true
+            case (.refused(let a), .refused(let b)): return a == b
+            default: return false
+            }
+        }
+    }
+
+    /// Un format où `playbackBuffer` sait écrire : flottants 32 bits non entrelacés.
+    private static func canFill(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate > 0 && format.channelCount > 0 && format.commonFormat == .pcmFormatFloat32 && !format.isInterleaved
+    }
+
+    static func playbackPlan(_ clip: AudioClip, format: AVAudioFormat) -> PlaybackPlan {
+        guard canFill(format) else { return .refused(.engineFailed("format de sortie non géré")) }
+        if clip.samples.isEmpty { return .nothingToPlay }
+        guard clip.sampleRate > 0 else { return .refused(.engineFailed("clip audio illisible")) }
+        guard let buffer = playbackBuffer(clip, format: format) else { return .nothingToPlay }
+        return .play(buffer)
+    }
+
     /// Un clip mono converti au format du lecteur : fréquence convertie par `AVAudioConverter` (par `Resampler`), le canal recopié sur
     /// chaque canal du format. `nil` pour un clip vide, ou un format où l'on ne peut pas écrire de flottants non entrelacés. NaN et
     /// valeurs infinies deviennent 0, avant le filtre du convertisseur (qui les répandrait sur les voisins).
     static func playbackBuffer(_ clip: AudioClip, format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        guard !clip.samples.isEmpty, clip.sampleRate > 0, format.sampleRate > 0, format.channelCount > 0,
-              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else { return nil }
+        guard !clip.samples.isEmpty, clip.sampleRate > 0, canFill(format) else { return nil }
         let clean = AudioClip(samples: clip.samples.map { $0.isFinite ? $0 : 0 }, sampleRate: clip.sampleRate)
         let converted = Resampler.resample(clean, to: format.sampleRate).samples
         guard !converted.isEmpty, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(converted.count)),

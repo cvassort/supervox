@@ -219,3 +219,81 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     }
     #expect(String(decoding: result.standardErrorContent, as: UTF8.self).contains("erreur de programmation"))
 }
+
+// MARK: - Clip vide dans le suivi : `.played` sans lecteur, dans l'ordre de la file
+
+private func registerSilent(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends) {
+    tracker.registerSilent(onEnd: ends.recorder(name))
+}
+
+@Test func aSilentClipWithNothingQueuedIsPlayedAtOnceWithoutBeingQueued() {
+    let (tracker, flush) = makeTracker()
+    let ends = Ends()
+    registerSilent(tracker, "e", ends)
+    #expect(!tracker.hasPending)
+    flush()
+    #expect(ends.all == ["e:played"])
+}
+
+@Test func aSilentClipWaitsForTheClipsAheadAndEndsRightAfterTheLastOfThem() {
+    let (tracker, flush) = makeTracker()
+    let ends = Ends()
+    let a = register(tracker, "a", ends)
+    let b = register(tracker, "b", ends)
+    registerSilent(tracker, "e", ends)
+    tracker.settle(a)
+    flush()
+    #expect(ends.all == ["a:played"], "le clip vide attend aussi « b »")
+    tracker.settle(b)
+    flush()
+    #expect(ends.all == ["a:played", "b:played", "e:played"])
+    #expect(!tracker.hasPending)
+}
+
+@Test func aSilentClipBetweenTwoClipsEndsBetweenThem() {
+    let (tracker, flush) = makeTracker()
+    let ends = Ends()
+    let a = register(tracker, "a", ends)
+    registerSilent(tracker, "e", ends)
+    let b = register(tracker, "b", ends)
+    tracker.settle(a)
+    flush()
+    #expect(ends.all == ["a:played", "e:played"])
+    tracker.settle(b)
+    flush()
+    #expect(ends.all == ["a:played", "e:played", "b:played"])
+}
+
+@Test func stopAllStopsASilentClipQueuedBehindAPlayingOne() {
+    let (tracker, flush) = makeTracker()
+    let ends = Ends()
+    _ = register(tracker, "a", ends)
+    registerSilent(tracker, "e", ends)
+    tracker.stopAll(force: false) {}
+    flush()
+    #expect(ends.all == ["a:stopped", "e:stopped"])
+}
+
+@Test func theCurrentClipForThePositionIsNeverTheSilentOne() {
+    let (tracker, _) = makeTracker()
+    let ends = Ends()
+    _ = register(tracker, "a", ends, frames: 200, now: 0)
+    registerSilent(tracker, "e", ends)
+    #expect(tracker.position(currentSample: { 100 }) == 1)
+}
+
+// MARK: - m5 : la précondition « depuis onEnd » vise la capture qui livre, pas toutes les captures
+
+@Test func anOnEndOfOneCaptureMayStopThePlaybackOfAnotherCapture() async {
+    await #expect(processExitsWith: .success) {
+        let first = AudioCapture()
+        let second = AudioCapture()
+        await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+            let generation = first.playback.register(frames: 10, sampleRate: 10, nowSample: 0) { _ in
+                second.stopPlayback()   // une autre capture : permis
+                finished.resume()
+            }
+            first.playback.settle(generation)
+        }
+    }
+}

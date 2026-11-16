@@ -13,8 +13,11 @@ public enum PlaybackEnd: Equatable, Sendable {
 /// d'écho du système ne connaît que la voix qui passe par lui).
 ///
 /// Contrat de `onEnd` (en plus de celui de `onChunk`, voir `MicrophoneFeed`) :
-/// - appelé **une seule fois** par clip, **hors du fil principal** : `.played` quand le dernier échantillon est sorti du
-///   périphérique, `.stopped` si `stopPlayback()` ou `stop()` l'a coupé avant ;
+/// - appelé **une seule fois** par clip, **hors du fil principal**, **après** le retour de l'appel qui le provoque (`play()` compris,
+///   jamais à l'intérieur) : `.played` quand le dernier échantillon est sorti du périphérique, `.stopped` si `stopPlayback()` ou
+///   `stop()` l'a coupé avant. Les fins arrivent dans l'ordre de la file ;
+/// - un clip **vide**, ou réduit à moins d'une trame par la conversion, n'a rien à jouer : `.played` après les clips devant lui (ou tout
+///   de suite s'il n'y en a pas), sans que `play()` lève ;
 /// - `stopPlayback()` et `stop()` **n'attendent pas** les `onEnd` : `.stopped` peut arriver juste après leur retour ;
 /// - `onEnd` ne doit **jamais** appeler `stopPlayback()` (précondition, comme `stop()` depuis `onChunk`) ; il peut appeler `play()` ;
 /// - `onChunk` ne rappelle **jamais** l'`AudioIO` : ni `play()`, ni `stopPlayback()`, ni `stop()` (précondition, dans le vrai comme dans le
@@ -69,16 +72,17 @@ public final class LiveAudioIO: AudioIO {
 /// Un son scripté, pour les tests, l'outil d'images et le banc : le micro est alimenté par `push`, la lecture se termine comme le
 /// dit `completion`. Aucun son n'est joué.
 ///
-/// Différence avec le vrai son : les `onEnd` sont rendus **sur le fil de l'appelant** (`stopPlayback()`, `stop()`,
-/// `finishPlayback`, et `play()` en mode `.immediate`), comme `ScriptedMicrophoneFeed` livre sur le fil qui l'appelle, pour que les
-/// tests soient déterministes ; en mode `.afterDuration`, sur une tâche. Aucun `onEnd` n'est jamais rendu sous le verrou du double.
+/// Comme le vrai son, les `onEnd` sont livrés **en différé**, sur une file série dédiée : jamais à l'intérieur de `play()`,
+/// `stopPlayback()`, `stop()` ni `finishPlayback()`, toujours dans l'ordre. Un test attend la livraison avec `flushEnds()` (jamais
+/// par un sommeil). Un clip vide rend `.played` sans rien jouer, comme le vrai. Seule la tranche du micro est livrée en ligne : `push`
+/// livre `onChunk` sur le fil de l'appelant (comme `ScriptedMicrophoneFeed`), sous la porte de livraison.
 ///
-/// `Sendable` simple, sans `@unchecked` : tout l'état variable est dans `state`, derrière un verrou.
+/// `Sendable` simple, sans `@unchecked` : tout l'état variable est dans `state`, derrière un verrou ; aucun `onEnd` n'est appelé sous ce verrou.
 public final class ScriptedAudioIO: AudioIO {
     public enum Completion: Sendable {
         /// Rien ne se termine avant `finishPlayback`.
         case manual
-        /// `play` rend `.played` tout de suite, dans l'ordre des appels (le clip n'est jamais en file).
+        /// `play` rend `.played` tout de suite (en différé, après son retour), dans l'ordre des appels : le clip n'est jamais en file.
         case immediate
         /// Chaque clip attend la fin du précédent, puis l'attente reçoit sa durée (secondes) ; `.played` à son retour.
         case afterDuration(@Sendable (Double) async -> Void)
@@ -87,6 +91,8 @@ public final class ScriptedAudioIO: AudioIO {
     private struct Queued {
         let id: Int
         let clip: AudioClip
+        /// Clip vide : jamais en tête de file, il finit juste après le clip devant lui et partage son sort.
+        let silent: Bool
         let onEnd: @Sendable (PlaybackEnd) -> Void
     }
 
@@ -107,11 +113,21 @@ public final class ScriptedAudioIO: AudioIO {
     private let startError: AudioCaptureError?
     private let completion: Completion
     private let state = OSAllocatedUnfairLock(initialState: State())
+    private let delivery: EndDelivery
 
-    public init(startError: AudioCaptureError? = nil, completion: Completion = .manual) {
+    public convenience init(startError: AudioCaptureError? = nil, completion: Completion = .manual) {
+        self.init(startError: startError, completion: completion, events: DispatchQueue(label: "dev.supervox.scripted-events"))
+    }
+
+    /// Pour les tests : la file des événements est celle du test, qu'il peut suspendre pour voir ce qui n'est pas livré en ligne.
+    init(startError: AudioCaptureError? = nil, completion: Completion = .manual, events: DispatchQueue) {
         self.startError = startError
         self.completion = completion
+        delivery = EndDelivery(queue: events)
     }
+
+    /// Rend la main quand tous les `onEnd` dus à cet instant ont été livrés. Jamais depuis un `onEnd`.
+    public func flushEnds() { delivery.flush() }
 
     // MARK: Observation
 
@@ -153,35 +169,42 @@ public final class ScriptedAudioIO: AudioIO {
         // Hors du verrou du double : `close()` attend une livraison en cours, dont `onChunk` peut prendre ce verrou.
         let gate = state.withLock { $0.gate }
         gate?.close()
-        let queued = state.withLock { state -> [Queued] in
+        state.withLock { state in
             state.log.append("stop")
             state.running = false
             state.gate = nil
             state.onChunk = nil
             state.tail = nil
-            defer { state.queue = [] }
-            return state.queue
+            emitAll(&state, .stopped)
         }
-        for entry in queued { entry.onEnd(.stopped) }
     }
 
     // MARK: Lecture
 
     public func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws {
         state.withLock { $0.gate }?.assertNotDelivering(calling: "play()")
-        let immediate = try state.withLock { state -> Bool in
+        try state.withLock { state in
             guard state.running else { throw AudioCaptureError.notRunning }
             state.log.append("play")
             state.played.append(clip)
             let id = state.nextID
             state.nextID += 1
+            if clip.samples.isEmpty {
+                // Rien à jouer, dans tous les modes : `.played` après les clips devant lui, sans attente ni durée.
+                if state.queue.isEmpty {
+                    delivery.deliver { onEnd(.played) }
+                } else {
+                    state.queue.append(Queued(id: id, clip: clip, silent: true, onEnd: onEnd))
+                }
+                return
+            }
             switch completion {
             case .immediate:
-                return true
+                delivery.deliver { onEnd(.played) }
             case .manual:
-                state.queue.append(Queued(id: id, clip: clip, onEnd: onEnd))
+                state.queue.append(Queued(id: id, clip: clip, silent: false, onEnd: onEnd))
             case .afterDuration(let wait):
-                state.queue.append(Queued(id: id, clip: clip, onEnd: onEnd))
+                state.queue.append(Queued(id: id, clip: clip, silent: false, onEnd: onEnd))
                 let previous = state.tail
                 let duration = clip.duration
                 state.tail = Task { [self] in
@@ -190,42 +213,64 @@ public final class ScriptedAudioIO: AudioIO {
                     finish(id: id, .played)
                 }
             }
-            return false
         }
-        if immediate { onEnd(.played) }
     }
 
-    /// Mode `.manual` (et tout mode) : termine le clip en tête de file par `end`. `false` s'il n'y en a aucun.
+    /// Mode `.manual` (et tout mode) : termine le clip en tête de file par `end` (les clips vides qui le suivent finissent avec lui).
+    /// `false` s'il n'y en a aucun.
     @discardableResult
     public func finishPlayback(_ end: PlaybackEnd) -> Bool {
-        let head = state.withLock { state in state.queue.isEmpty ? nil : state.queue.removeFirst() }
-        guard let head else { return false }
-        head.onEnd(end)
-        return true
+        state.withLock { state in
+            guard !state.queue.isEmpty else { return false }
+            emitHead(&state, end)
+            return true
+        }
     }
 
     public func stopPlayback() {
         state.withLock { $0.gate }?.assertNotDelivering(calling: "stopPlayback()")
-        let queued = state.withLock { state -> [Queued] in
+        delivery.assertNotInside(calling: "stopPlayback()")
+        state.withLock { state in
             state.log.append("stopPlayback")
             state.stopPlaybackCount += 1
             state.tail = nil
-            defer { state.queue = [] }
-            return state.queue
+            emitAll(&state, .stopped)
         }
-        for entry in queued { entry.onEnd(.stopped) }
     }
 
     public var playbackPosition: Double? {
-        state.withLock { $0.queue.isEmpty ? nil : $0.scriptedPosition }
+        state.withLock { state in state.queue.contains { !$0.silent } ? state.scriptedPosition : nil }
     }
 
     /// Fin d'une attente : sans effet si le clip a déjà été rendu (arrêt, `finishPlayback`).
     private func finish(id: Int, _ end: PlaybackEnd) {
-        let entry = state.withLock { state -> Queued? in
-            guard let index = state.queue.firstIndex(where: { $0.id == id }) else { return nil }
-            return state.queue.remove(at: index)
+        state.withLock { state in
+            guard let index = state.queue.firstIndex(where: { $0.id == id }) else { return }
+            let entry = state.queue.remove(at: index)
+            delivery.deliver { entry.onEnd(end) }
+            flushSilentHead(&state, end)
         }
-        entry?.onEnd(end)
+    }
+
+    // Les trois aides ci-dessous s'appellent sous le verrou `state` ; elles ne font qu'envoyer à la file des événements.
+
+    private func emitHead(_ state: inout State, _ end: PlaybackEnd) {
+        let head = state.queue.removeFirst()
+        delivery.deliver { head.onEnd(end) }
+        flushSilentHead(&state, end)
+    }
+
+    /// Les clips vides qui n'attendaient que le clip qui vient de finir finissent avec lui.
+    private func flushSilentHead(_ state: inout State, _ end: PlaybackEnd) {
+        while let head = state.queue.first, head.silent {
+            state.queue.removeFirst()
+            delivery.deliver { head.onEnd(end) }
+        }
+    }
+
+    private func emitAll(_ state: inout State, _ end: PlaybackEnd) {
+        let queued = state.queue
+        state.queue = []
+        for entry in queued { delivery.deliver { entry.onEnd(end) } }
     }
 }

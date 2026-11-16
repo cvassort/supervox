@@ -279,8 +279,10 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
     try io.play(clip(seconds: 2), onEnd: sink.onEnd("b"))
     #expect(sink.all.isEmpty)
     #expect(io.finishPlayback(.played))
+    io.flushEnds()
     #expect(sink.all == ["a:played"])   // le clip en tête de file
     #expect(io.finishPlayback(.stopped))
+    io.flushEnds()
     #expect(sink.all == ["a:played", "b:stopped"])
     #expect(!io.finishPlayback(.played), "plus aucun clip en file")
 }
@@ -291,6 +293,7 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
     try io.start { _ in }
     try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
     try io.play(clip(seconds: 1), onEnd: sink.onEnd("b"))
+    io.flushEnds()
     #expect(sink.all == ["a:played", "b:played"])
     #expect(io.played.count == 2)
 }
@@ -324,9 +327,11 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
     try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
     for await _ in entered.stream { break }   // l'attente est en cours
     io.stopPlayback()
+    io.flushEnds()
     #expect(sink.all == ["a:stopped"])
     release.continuation.yield()
     try await Task.sleep(for: .milliseconds(50))   // attente d'un événement qui ne doit PAS arriver : ne peut produire qu'un faux succès
+    io.flushEnds()
     #expect(sink.all == ["a:stopped"])
 }
 
@@ -337,6 +342,7 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
     try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
     try io.play(clip(seconds: 1), onEnd: sink.onEnd("b"))
     io.stopPlayback()
+    io.flushEnds()
     #expect(sink.all == ["a:stopped", "b:stopped"])
     #expect(io.stopPlaybackCount == 1)
     #expect(io.isRunning, "stopPlayback ne touche pas la capture")
@@ -350,6 +356,7 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
     try io.start { _ in }
     try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
     io.stop()
+    io.flushEnds()
     #expect(sink.all == ["a:stopped"])
     #expect(!io.isRunning)
 }
@@ -435,7 +442,9 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
         try? io.play(clip(seconds: 1), onEnd: sink.onEnd("b"))
     }
     io.finishPlayback(.played)
+    io.flushEnds()   // `onEnd` de « a » rappelle `play()` sur la file des événements ; « b » est alors en file
     #expect(io.finishPlayback(.played))
+    io.flushEnds()
     #expect(sink.all == ["a:played", "b:played"])
 }
 
@@ -513,4 +522,157 @@ private func expectProgrammingError(_ stderr: [UInt8], mentioning call: String) 
     io.stop()
     let capture = AudioCapture()
     capture.stopPlayback()
+}
+
+// MARK: - ScriptedAudioIO : `onEnd` en différé, comme le vrai ; clip vide
+
+/// Un double dont la file des événements est suspendue : rien n'est livré tant que le test ne la reprend pas. Rend le double et une
+/// fonction qui reprend la file (la première fois) puis attend la livraison de tout ce qui est dû.
+private func suspendedDouble(completion: ScriptedAudioIO.Completion = .manual) -> (io: ScriptedAudioIO, deliver: () -> Void) {
+    let queue = DispatchQueue(label: "test.scripted-events")
+    let io = ScriptedAudioIO(completion: completion, events: queue)
+    queue.suspend()
+    let suspended = OSAllocatedUnfairLock(initialState: true)
+    return (io, {
+        // Reprendre une file déjà reprise est une erreur du système : on ne reprend qu'une fois, les appels suivants ne font qu'attendre.
+        if suspended.withLock({ let was = $0; $0 = false; return was }) { queue.resume() }
+        io.flushEnds()
+    })
+}
+
+/// `onEnd` n'est jamais appelé à l'intérieur de `play()`, `stopPlayback()`, `stop()` ni `finishPlayback()` : file suspendue, rien n'est
+/// livré au retour (le vrai ne livre jamais en ligne non plus : un moteur qui change d'état après `play()` verrait sinon la fin avant le début).
+@Test func immediateModeDeliversAfterPlayReturnsNeverInsideIt() throws {
+    let (io, deliver) = suspendedDouble(completion: .immediate)
+    let sink = Sink()
+    try io.start { _ in }
+    try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
+    #expect(sink.all.isEmpty, "onEnd appelé à l'intérieur de play()")
+    deliver()
+    #expect(sink.all == ["a:played"])
+}
+
+@Test func stopPlaybackAndStopDeliverStoppedAfterTheyReturn() throws {
+    let (io, deliver) = suspendedDouble()
+    let sink = Sink()
+    try io.start { _ in }
+    try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
+    try io.play(clip(seconds: 1), onEnd: sink.onEnd("b"))
+    io.stopPlayback()
+    #expect(sink.all.isEmpty, "onEnd appelé à l'intérieur de stopPlayback()")
+    try io.play(clip(seconds: 1), onEnd: sink.onEnd("c"))
+    io.stop()
+    #expect(sink.all.isEmpty, "onEnd appelé à l'intérieur de stop()")
+    deliver()
+    #expect(sink.all == ["a:stopped", "b:stopped", "c:stopped"])
+}
+
+@Test func finishPlaybackDeliversAfterItReturnsAndInTheOrderOfTheCalls() throws {
+    let (io, deliver) = suspendedDouble()
+    let sink = Sink()
+    try io.start { _ in }
+    try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
+    try io.play(clip(seconds: 1), onEnd: sink.onEnd("b"))
+    io.finishPlayback(.played)
+    #expect(sink.all.isEmpty, "onEnd appelé à l'intérieur de finishPlayback()")
+    io.finishPlayback(.played)
+    deliver()
+    #expect(sink.all == ["a:played", "b:played"])
+}
+
+/// Comme le vrai : jamais `stopPlayback()` depuis `onEnd`.
+@Test func scriptedStopPlaybackFromOnEndIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let io = ScriptedAudioIO(completion: .immediate)
+        try io.start { _ in }
+        await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+            try? io.play(AudioClip(samples: [0.1], sampleRate: 16_000)) { _ in
+                io.stopPlayback()
+                finished.resume()
+            }
+        }
+    }
+    expectProgrammingError(result.standardErrorContent, mentioning: "stopPlayback()")
+}
+
+// MARK: - Clip vide : `.played` sans rien jouer, en différé, une seule fois (règle I4)
+
+@Test func anEmptyClipInTheDoubleIsPlayedOnceAndAfterTheCallReturns() throws {
+    let (io, deliver) = suspendedDouble()
+    let sink = Sink()
+    let empty = AudioClip(samples: [], sampleRate: 22_050)
+    try io.start { _ in }
+    try io.play(empty, onEnd: sink.onEnd("e"))
+    #expect(sink.all.isEmpty)
+    #expect(!io.finishPlayback(.played), "un clip vide n'est jamais en tête de file : rien à terminer")
+    deliver()
+    #expect(sink.all == ["e:played"])
+    #expect(io.played == [empty], "le clip est accepté (journal : play)")
+    #expect(io.log == ["start", "play"])
+}
+
+/// Derrière un clip qui joue, le clip vide ne double pas la file : il attend la fin du précédent, et partage son sort.
+@Test func anEmptyClipQueuedBehindAClipEndsAfterItAndSharesItsEnd() throws {
+    let empty = AudioClip(samples: [], sampleRate: 22_050)
+    do {
+        let (io, deliver) = suspendedDouble()
+        let sink = Sink()
+        try io.start { _ in }
+        try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
+        try io.play(empty, onEnd: sink.onEnd("e"))
+        deliver()
+        #expect(sink.all.isEmpty, "le clip vide ne peut pas finir avant celui qui joue")
+        io.finishPlayback(.played)
+        deliver()
+        #expect(sink.all == ["a:played", "e:played"])
+    }
+    do {
+        let (io, deliver) = suspendedDouble()
+        let sink = Sink()
+        try io.start { _ in }
+        try io.play(clip(seconds: 1), onEnd: sink.onEnd("a"))
+        try io.play(empty, onEnd: sink.onEnd("e"))
+        io.stopPlayback()
+        deliver()
+        #expect(sink.all == ["a:stopped", "e:stopped"])
+    }
+}
+
+@Test func anEmptyClipBeforeStartIsRefusedLikeAnyOther() {
+    let io = ScriptedAudioIO()
+    #expect(throws: AudioCaptureError.notRunning) { try io.play(AudioClip(samples: [], sampleRate: 22_050)) { _ in } }
+}
+
+// MARK: - Plan de lecture du vrai : jouer, rien à jouer (`.played` sans son), ou refus
+
+@Test func aPlayablePlanCarriesTheConvertedBuffer() throws {
+    guard case .play(let buffer) = AudioCapture.playbackPlan(tone(), format: format(rate: 44_100, channels: 2)) else {
+        Issue.record("un clip ordinaire doit se jouer")
+        return
+    }
+    #expect(buffer.format.channelCount == 2)
+}
+
+@Test func anEmptyClipHasNothingToPlay() {
+    let plan = AudioCapture.playbackPlan(AudioClip(samples: [], sampleRate: 22_050), format: format(rate: 48_000, channels: 2))
+    #expect(plan == .nothingToPlay)
+}
+
+/// Mesuré par la revue : 1 à 5 échantillons à 96 kHz vers 8 kHz ne donnent aucune trame. Ce n'est pas une panne audio.
+@Test func aClipReducedToLessThanOneFrameByTheConversionHasNothingToPlay() {
+    let plan = AudioCapture.playbackPlan(AudioClip(samples: [0.1, 0.2, 0.3], sampleRate: 96_000), format: format(rate: 8_000, channels: 1))
+    #expect(plan == .nothingToPlay)
+}
+
+/// Un format où l'on ne peut pas écrire des flottants non entrelacés est une vraie panne, distincte d'un clip vide.
+@Test func anUnfillableOutputFormatIsRefusedNotTakenForAnEmptyClip() {
+    let interleaved = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 2, interleaved: true)!
+    #expect(AudioCapture.playbackPlan(tone(), format: interleaved) == .refused(.engineFailed("format de sortie non géré")))
+    #expect(AudioCapture.playbackPlan(AudioClip(samples: [], sampleRate: 22_050), format: interleaved)
+        == .refused(.engineFailed("format de sortie non géré")))
+}
+
+@Test func aClipWithNoSampleRateIsRefused() {
+    let plan = AudioCapture.playbackPlan(AudioClip(samples: [0.1], sampleRate: 0), format: format(rate: 44_100, channels: 1))
+    #expect(plan == .refused(.engineFailed("clip audio illisible")))
 }
