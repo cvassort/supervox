@@ -82,7 +82,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     let ends = Ends()
     let a = register(tracker, "a", ends)
     let b = register(tracker, "b", ends)
-    tracker.stopAll { tracker.settle(a); tracker.settle(b) }
+    tracker.stopAll(force: false) { tracker.settle(a); tracker.settle(b) }
     flush()
     #expect(ends.all == ["a:stopped", "b:stopped"])
     #expect(!tracker.hasPending)
@@ -95,7 +95,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     _ = register(tracker, "a", ends)
     let b = register(tracker, "b", ends)
     _ = register(tracker, "c", ends)
-    tracker.stopAll { tracker.settle(b) }   // seul le deuxième est rappelé
+    tracker.stopAll(force: false) { tracker.settle(b) }   // seul le deuxième est rappelé
     flush()
     #expect(ends.all == ["b:stopped", "a:stopped", "c:stopped"])
 }
@@ -104,7 +104,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     let (tracker, flush) = makeTracker()
     let ends = Ends()
     let a = register(tracker, "a", ends)
-    tracker.stopAll {}
+    tracker.stopAll(force: false) {}
     tracker.settle(a)
     flush()
     #expect(ends.all == ["a:stopped"])
@@ -114,7 +114,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     let (tracker, flush) = makeTracker()
     let ends = Ends()
     let a = register(tracker, "a", ends)
-    tracker.stopAll {}
+    tracker.stopAll(force: false) {}
     let b = register(tracker, "b", ends)
     tracker.settle(a)
     tracker.settle(b)
@@ -125,7 +125,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
 @Test func stopAllWithNothingQueuedDoesNotCallThePlayer() {
     let (tracker, _) = makeTracker()
     let stopped = OSAllocatedUnfairLock(initialState: 0)
-    tracker.stopAll { stopped.withLock { $0 += 1 } }
+    tracker.stopAll(force: false) { stopped.withLock { $0 += 1 } }
     #expect(stopped.withLock { $0 } == 0)
 }
 
@@ -137,7 +137,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     let ends = Ends()
     _ = register(tracker, "a", ends)
     queue.suspend()
-    tracker.stopAll {}
+    tracker.stopAll(force: false) {}
     #expect(ends.all.isEmpty)
     queue.resume()
     queue.sync {}
@@ -153,7 +153,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
         let tracker = PlaybackTracker(events: queue)
         let a = tracker.register(frames: 10, sampleRate: 10, nowSample: 0) { _ in }
         let b = tracker.register(frames: 10, sampleRate: 10, nowSample: 0) { _ in }
-        tracker.stopAll { tracker.settle(a); tracker.settle(b) }
+        tracker.stopAll(force: false) { tracker.settle(a); tracker.settle(b) }
         queue.sync {}
         if tracker.hasPending { exit(2) }
     }
@@ -197,7 +197,7 @@ private func register(_ tracker: PlaybackTracker, _ name: String, _ ends: Ends, 
     let (tracker, _) = makeTracker()
     let ends = Ends()
     _ = register(tracker, "a", ends, frames: 10_000, now: 0)
-    tracker.stopAll {}
+    tracker.stopAll(force: false) {}
     // `stop()` du lecteur remet son temps à 0 : le clip suivant commence à 0 et non à la fin du clip arrêté.
     _ = register(tracker, "b", ends, frames: 100, now: nil)
     #expect(tracker.position(currentSample: { 50 }) == 0.5)

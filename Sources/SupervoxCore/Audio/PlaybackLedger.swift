@@ -99,15 +99,19 @@ final class PlaybackTracker: Sendable {
     }
 
     /// Coupe tout : marque l'arrêt, appelle `stopPlayer` (l'arrêt du lecteur, qui peut rappeler `settle` en synchrone depuis
-    /// ici), puis rend `.stopped` aux clips que le lecteur n'a pas rappelés. Sans clip en file, `stopPlayer` n'est pas appelé :
-    /// un lecteur qui n'a rien joué n'est pas touché.
-    func stopAll(stopPlayer: () -> Void) {
+    /// ici), puis rend `.stopped` aux clips que le lecteur n'a pas rappelés. Sans clip en file, `stopPlayer` n'est pas appelé,
+    /// sauf `force` (le lecteur a joué et doit quitter son état « joue » avant l'arrêt du moteur) : un lecteur qui n'a rien joué n'est
+    /// pas touché.
+    func stopAll(force: Bool, stopPlayer: () -> Void) {
         let queued = state.withLock { state -> [Int] in
             guard !state.pending.isEmpty else { return [] }
             state.ledger.stopAll()
             return state.pending.keys.sorted()
         }
-        guard !queued.isEmpty else { return }
+        guard !queued.isEmpty else {
+            if force { stopPlayer() }
+            return
+        }
         stopPlayer()   // sans verrou : voir la note de la classe
         for generation in queued { settle(generation) }
     }

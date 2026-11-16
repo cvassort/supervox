@@ -76,14 +76,26 @@ public final class AudioCapture: @unchecked Sendable {
     /// `true` quand le lecteur est attaché au moteur (seulement avec le traitement de la voix) : sans cela, planifier un tampon
     /// lèverait une exception Objective-C. Protégé par `lifecycle`, comme `wired`.
     private var playerAttached = false
+    /// `true` entre un `startPlayer()` réussi et le prochain arrêt du lecteur. Protégé par `lifecycle`. Sert à `stop()` : un lecteur qui a
+    /// joué reste dans l'état « joue » après une fin naturelle (seul `player.stop()` le quitte) ; le moteur arrêté dans cet état ne
+    /// rejoue plus au redémarrage (constaté sur la panne F2c, matériel). Une dictée ne démarre jamais le lecteur : `false`, rien ne change.
+    /// Interne pour les tests, qui le posent sans moteur.
+    var playerStarted = false
+    /// Pour les tests : remplace `player.stop()`, que rien ne peut observer sans moteur. `nil` en production.
+    private let playerStop: (@Sendable () -> Void)?
     private let inputText = OSAllocatedUnfairLock(initialState: "entrée audio non initialisée")
 
     /// - Parameter promptsForAccess: `false` pour une application qui a déjà son propre parcours d'autorisation :
     ///   un statut « non déterminé » lève alors `microphoneAccessDenied` au lieu d'afficher l'invite système et d'attendre
     ///   la réponse (ce qui bloquerait l'appelant).
-    public init(voiceProcessing: Bool = true, promptsForAccess: Bool = true) {
+    public convenience init(voiceProcessing: Bool = true, promptsForAccess: Bool = true) {
+        self.init(voiceProcessing: voiceProcessing, promptsForAccess: promptsForAccess, playerStop: nil)
+    }
+
+    init(voiceProcessing: Bool = true, promptsForAccess: Bool = true, playerStop: (@Sendable () -> Void)?) {
         self.voiceProcessing = voiceProcessing
         self.promptsForAccess = promptsForAccess
+        self.playerStop = playerStop
     }
 
     /// La raison d'une panne du moteur audio, telle qu'elle peut être montrée dans le panneau : le code d'erreur du système, et
@@ -216,19 +228,30 @@ public final class AudioCapture: @unchecked Sendable {
         currentGate.withLock { $0 }?.assertNotDelivering()
         lifecycle.lock()
         defer { lifecycle.unlock() }
-        // D'abord : une livraison en cours se termine, aucune autre ne commence.
-        currentGate.withLock { $0 }?.close()
-        // Puis la lecture, avant le moteur : chaque clip en file reçoit `.stopped`. Sans clip en file, le lecteur n'est pas touché.
-        stopPlayerLocked()
-        if running {
-            engine.stop()
-            engine.inputNode.removeTap(onBus: 0)
-            running = false
-        }
+        Self.stopSequence(
+            closeDeliveries: { currentGate.withLock { $0 }?.close() },
+            stopPlayback: { stopPlayerLocked(engineStop: true) },
+            stopEngine: {
+                if running {
+                    engine.stop()
+                    engine.inputNode.removeTap(onBus: 0)
+                    running = false
+                }
+            })
         return buffer.withLock {
             $0.accepting = false
             return AudioClip(samples: $0.samples, sampleRate: $0.sampleRate)
         }
+    }
+
+    /// L'ordre de l'arrêt, séparé pour être vérifié sans moteur : d'abord les livraisons du micro (une livraison en cours se termine, aucune
+    /// autre ne commence), puis la lecture (le registre marque l'arrêt, le lecteur s'arrête : chaque clip en file reçoit `.stopped`), puis
+    /// le moteur. `engine.stop()` seul rappelle le gestionnaire du lecteur sans que le registre sache qu'il y a eu arrêt (mesuré, panne F2c
+    /// de la tâche 2) : la lecture doit passer avant.
+    static func stopSequence(closeDeliveries: () -> Void, stopPlayback: () -> Void, stopEngine: () -> Void) {
+        closeDeliveries()
+        stopPlayback()
+        stopEngine()
     }
 
     // MARK: - Lecture
@@ -250,11 +273,13 @@ public final class AudioCapture: @unchecked Sendable {
             guard try playerFormat() == buffer.format else { throw AudioCaptureError.engineFailed("format de sortie modifié pendant la conversion") }
             // Le lecteur démarre d'abord : s'il échoue, rien n'est planifié ni enregistré, aucun `onEnd` n'est dû.
             try startPlayer()
+            playerStarted = true
             let generation = playback.register(
                 frames: Int64(buffer.frameLength), sampleRate: buffer.format.sampleRate, nowSample: playerSampleTime(), onEnd: onEnd)
             let tracker = playback
             // Le gestionnaire ne fait que régler le clip dans le suivi : aucun appel au nœud, aucun verrou de `lifecycle`.
             player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { _ in tracker.settle(generation) }
+
         }
     }
 
@@ -263,7 +288,7 @@ public final class AudioCapture: @unchecked Sendable {
     public func stopPlayback() {
         // Avant de prendre `lifecycle` : même ordre que `stop()` depuis `onChunk`.
         playback.assertNotInEndHandler()
-        lifecycle.withLock { stopPlayerLocked() }
+        lifecycle.withLock { stopPlayerLocked(engineStop: false) }
     }
 
     /// Secondes déjà jouées du clip en cours (le plus ancien de la file) ; `nil` sans lecture.
@@ -271,10 +296,14 @@ public final class AudioCapture: @unchecked Sendable {
         playback.position(currentSample: { playerSampleTime() })
     }
 
-    /// Appelée sous `lifecycle`. Le suivi n'appelle le lecteur que s'il reste des clips ; le lecteur rappelle ses gestionnaires
-    /// de façon synchrone depuis `stop()` (mesuré) : ils ne prennent que le verrou du suivi, que `stopAll` ne tient pas ici.
-    private func stopPlayerLocked() {
-        playback.stopAll { player.stop() }
+    /// Appelée sous `lifecycle`. Le lecteur est appelé s'il reste des clips en file, ou, pour l'arrêt du moteur (`engineStop`), s'il a
+    /// joué (`playerStarted`) ; sinon il n'est pas touché. Il rappelle ses gestionnaires de façon synchrone depuis `stop()` (mesuré) : ils
+    /// ne prennent que le verrou du suivi, que `stopAll` ne tient pas ici.
+    private func stopPlayerLocked(engineStop: Bool) {
+        playback.stopAll(force: engineStop && playerStarted) {
+            if let playerStop { playerStop() } else { player.stop() }
+            playerStarted = false
+        }
     }
 
     /// Le format de sortie du lecteur, lu à chaque lecture (il n'est jamais supposé) ; lève si rien ne peut être joué.
@@ -329,12 +358,14 @@ public final class AudioCapture: @unchecked Sendable {
         if voiceProcessing {
             engine.attach(player)
             try connectPlayer()
-            playerAttached = true
             do { try engine.inputNode.setVoiceProcessingEnabled(true) }
             catch { throw AudioCaptureError.engineFailed("traitement de la voix : \(Self.reason(for: error))") }
             // Ducking au minimum : on ne veut pas baisser le volume des autres applications pendant la dictée.
             engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
                 AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+            // Seulement une fois tout le montage réussi : après un échec, `wired` et `playerAttached` restent faux, `play()` refuse, et le
+            // `start()` suivant refait le montage.
+            playerAttached = true
         }
         wired = true
     }
