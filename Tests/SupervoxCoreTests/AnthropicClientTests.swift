@@ -100,17 +100,19 @@ struct AnthropicClientTests {
         let (client, stub) = anthropicStub(.response(status: 200, body: fixtureData("messages-anthropic-text.sse")))
         let request = CompletionRequest(
             model: "modele-exemple", instruction: "Consigne.", input: "Dernier message.", maxTokens: 50,
-            history: [CompletionTurn(role: .assistant, text: "Première question ?"),
-                      CompletionTurn(role: .user, text: "Première réponse."),
-                      CompletionTurn(role: .assistant, text: "Seconde question ?")])
+            history: [CompletionTurn(role: .user, text: "Première réponse."),
+                      CompletionTurn(role: .assistant, text: "Seconde question ?"),
+                      CompletionTurn(role: .user, text: "Seconde réponse."),
+                      CompletionTurn(role: .assistant, text: "Troisième question ?")])
         _ = await collectEvents(client.complete(request))
 
         let object = try #require(try JSONSerialization.jsonObject(with: stub.lastBody) as? [String: Any])
         let expected: NSDictionary = [
             "model": "modele-exemple", "max_tokens": 50, "system": "Consigne.",
-            "messages": [["role": "assistant", "content": "Première question ?"],
-                         ["role": "user", "content": "Première réponse."],
+            "messages": [["role": "user", "content": "Première réponse."],
                          ["role": "assistant", "content": "Seconde question ?"],
+                         ["role": "user", "content": "Seconde réponse."],
+                         ["role": "assistant", "content": "Troisième question ?"],
                          ["role": "user", "content": "Dernier message."]],
             "stream": true,
         ]

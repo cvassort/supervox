@@ -21,6 +21,10 @@ public struct ConversationTurn: Codable, Equatable, Sendable {
 public struct Conversation: Codable, Equatable, Sendable {
     public private(set) var turns: [ConversationTurn]
 
+    /// Le message de la personne placé devant l'historique quand l'intervieweur a parlé le premier : les API de messages
+    /// attendent un premier message de la personne.
+    public static let openingUserMessage = "Commence l'entretien."
+
     public init(turns: [ConversationTurn] = []) {
         self.turns = turns
     }
@@ -45,13 +49,28 @@ public struct Conversation: Codable, Equatable, Sendable {
     public var hasUserTurn: Bool { turns.contains { $0.speaker == .user } }
 
     /// Ce que reçoit le modèle : le dernier tour de la personne en `input`, tout ce qui précède en historique (`user` pour la
-    /// personne, `assistant` pour l'intervieweur). `nil` si le dernier tour n'est pas celui de la personne (rien à répondre).
+    /// personne, `assistant` pour l'intervieweur). Les API de messages demandent une alternance stricte qui commence par la
+    /// personne ; ce qui part est donc **normalisé** (les tours restent tels quels dans `turns` et dans `transcript`, c'est la
+    /// seule requête qui change) : un texte vide une fois rogné est écarté, deux tours de même rôle de suite sont fusionnés
+    /// (séparés par une ligne vide), et si l'intervieweur a parlé le premier, `openingUserMessage` est placé devant. Aucun
+    /// texte n'est perdu. `nil` si le dernier tour n'est pas celui de la personne (rien à répondre), ou s'il n'y a aucun tour.
     public func completion() -> (history: [CompletionTurn], input: String)? {
-        guard let last = turns.last, last.speaker == .user else { return nil }
-        let history = turns.dropLast().map { turn in
-            CompletionTurn(role: turn.speaker == .user ? .user : .assistant, text: turn.text)
+        var messages: [CompletionTurn] = []
+        for turn in turns {
+            let text = turn.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let role: CompletionRole = turn.speaker == .user ? .user : .assistant
+            if let last = messages.indices.last, messages[last].role == role {
+                messages[last].text += "\n\n" + text
+            } else {
+                messages.append(CompletionTurn(role: role, text: text))
+            }
         }
-        return (history, last.text)
+        guard let last = messages.popLast(), last.role == .user else { return nil }
+        if messages.first?.role == .assistant {
+            messages.insert(CompletionTurn(role: .user, text: Self.openingUserMessage), at: 0)
+        }
+        return (messages, last.text)
     }
 
     /// Un paragraphe par tour, « Vous : » ou « Supervox : » puis le texte, séparés par une ligne vide. C'est ce que lit le

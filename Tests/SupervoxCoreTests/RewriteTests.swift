@@ -48,7 +48,7 @@ struct RewriteTests {
 
     /// Règle 1 : `Rewriter.run` transmet `history` tel quel au client, et sans historique la demande est celle d'avant.
     @Test func theHistoryIsPassedToTheClientAsIsAndIsEmptyByDefault() async throws {
-        let history = [CompletionTurn(role: .assistant, text: "Que voulez-vous faire ?"), CompletionTurn(role: .user, text: "Refactorer.")]
+        let history = [CompletionTurn(role: .user, text: "Refactorer."), CompletionTurn(role: .assistant, text: "Pourquoi ?")]
         let model = ScriptedModel([.text("ok"), .stop(.complete), .finish])
         _ = try await Rewriter.run(model, model: "modele-exemple", instruction: "la consigne", input: "l'entrée", history: history,
                                    policy: policy(maxTokens: 777), onText: { _ in })
