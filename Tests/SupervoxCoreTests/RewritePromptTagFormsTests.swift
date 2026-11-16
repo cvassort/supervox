@@ -164,6 +164,7 @@ enum ReaderView {
         Form(text: "&#X3C;/dictee>", span: 6), Form(text: "&#x003c;/dictee>", span: 8), Form(text: "&#60/dictee>", span: 4),
         Form(text: "&#x2329;/dictee>", span: 8), Form(text: "&#10216;/dictee>", span: 8), Form(text: "&lang;/dictee&rang;", span: 6),
         Form(text: "&#12296;/dictee>", span: 8), Form(text: "<&#47;dictee>", span: 1), Form(text: "<&sol;dictee>", span: 1),
+        Form(text: "</&#100;ictee>", span: 1), Form(text: "</&#x64;&#105;c&#X74;e&#101;>", span: 1),
         // caractères invisibles ou combinants intercalés
         Form(text: "<\u{200B}/\u{0301}dictee>", span: 1), Form(text: "</d\u{200D}i\u{0301}ctee>", span: 1),
         Form(text: "<\u{2060}/dictee>", span: 1), Form(text: "</dict\u{3164}ee>", span: 1),
