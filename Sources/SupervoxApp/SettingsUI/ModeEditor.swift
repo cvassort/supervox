@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// La feuille d'un mode : nom, consigne, modèle, moteur, relecture, raccourci. Rien n'est écrit avant « Enregistrer », sauf le
-/// raccourci (sa capture l'enregistre) et « Revenir à la consigne d'origine », qui sont des gestes à part.
+/// raccourci (sa capture l'enregistre) ; « Revenir à la consigne d'origine » ne change que le brouillon, « Annuler » le défait.
 ///
 /// La feuille a une taille bornée : une consigne de plusieurs milliers de caractères défile dans son champ, elle n'agrandit pas
 /// la feuille hors de l'écran.
@@ -146,7 +146,7 @@ public struct ModeEditor: View {
                 if let origin, draft.instruction != origin {
                     HStack {
                         Spacer()
-                        Button("Revenir à la consigne d'origine") { resetInstruction(to: origin) }
+                        Button("Revenir à la consigne d'origine") { draft.resetInstructionToOrigin() }
                     }
                 }
             } else {
@@ -164,13 +164,6 @@ public struct ModeEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-    }
-
-    /// Remet la consigne d'origine dans les réglages, puis dans le champ ; si l'enregistrement est refusé, le champ garde ce que
-    /// l'utilisateur a écrit et le message le dit.
-    private func resetInstruction(to origin: String) {
-        model.resetInstruction(draft.id)
-        if !model.draft(for: draft.id).isInstructionModified { draft.instruction = origin }
     }
 }
 

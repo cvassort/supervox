@@ -607,6 +607,37 @@ import Testing
         #expect(rig.updates == 1)
     }
 
+    /// « Revenir à la consigne d'origine » ne change que le brouillon de la feuille : rien n'est écrit avant « Enregistrer », et
+    /// abandonner la feuille laisse la consigne personnelle des réglages.
+    @Test func resettingTheInstructionInTheSheetOnlyChangesTheDraftUntilItIsSaved() {
+        let rig = Rig()
+        rig.settings.modes[2].instruction = "Ma consigne personnelle, longue."
+        let model = rig.makeModel()
+        var draft = model.draft(for: ModeChip.promptID)
+        #expect(draft.isInstructionModified)
+
+        draft.resetInstructionToOrigin()
+        #expect(draft.instruction == ModeDefaults.prompt)
+        #expect(!draft.isInstructionModified)
+        // « Annuler » : le brouillon est jeté.
+        #expect(rig.updates == 0)
+        #expect(rig.mode(ModeChip.promptID)?.instruction == "Ma consigne personnelle, longue.")
+        #expect(model.draft(for: ModeChip.promptID).instruction == "Ma consigne personnelle, longue.")
+
+        // « Enregistrer » : l'origine est écrite comme `nil`.
+        model.save(draft)
+        #expect(rig.updates == 1)
+        #expect(rig.mode(ModeChip.promptID)?.instruction == nil)
+    }
+
+    @Test func resettingTheInstructionOfAModeWithoutAnOriginChangesNothing() {
+        let model = Rig(Self.personalSettings()).makeModel()
+        var draft = model.draft(for: "perso-un")
+        draft.instruction = "Modifiée dans la feuille."
+        draft.resetInstructionToOrigin()
+        #expect(draft.instruction == "Modifiée dans la feuille.")
+    }
+
     /// Un mode personnel n'a pas d'origine : sa consigne n'est jamais « modifiée ».
     @Test func aPersonalInstructionIsNeverReportedAsModified() throws {
         let rig = Rig(Self.personalSettings())

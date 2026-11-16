@@ -58,6 +58,18 @@ public struct ModeDraft: Equatable, Sendable {
         self.reviews = reviews
         self.hotKeyLabel = hotKeyLabel
     }
+
+    /// La consigne d'origine d'un mode de base, `nil` pour un mode qui n'en a pas.
+    public var originalInstruction: String? { ModeDefaults.instruction(for: id) }
+
+    /// « Revenir à la consigne d'origine » : ne change que ce brouillon. Rien n'est écrit avant `ModesModel.save`, qui enregistre
+    /// `nil` quand la consigne égale l'origine ; abandonner la feuille laisse la consigne des réglages. Sans effet pour un mode
+    /// qui n'a pas d'origine.
+    public mutating func resetInstructionToOrigin() {
+        guard let origin = originalInstruction else { return }
+        instruction = origin
+        isInstructionModified = false
+    }
 }
 
 /// L'onglet Modes : la liste des modes (créer, modifier, dupliquer, déplacer, supprimer), leur consigne, leur modèle, leur
@@ -467,7 +479,8 @@ public final class ModesModel {
         }
     }
 
-    /// Remet la consigne d'origine d'un mode de base. Sans effet pour un mode qui n'en a pas ou qui l'a déjà.
+    /// Remet tout de suite la consigne d'origine d'un mode de base dans les réglages. Sans effet pour un mode qui n'en a pas ou qui
+    /// l'a déjà. La feuille d'édition ne s'en sert pas : elle passe par le brouillon (`ModeDraft.resetInstructionToOrigin`).
     public func resetInstruction(_ id: String) {
         guard let mode = current(id), ModeDefaults.instruction(for: id) != nil, mode.instruction != nil else { return }
         commit { settings in
