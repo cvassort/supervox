@@ -908,6 +908,54 @@ import Testing
         #expect(model.pickerContent(selected: nil).emptyNote == ModesModel.noProviderNote)
     }
 
+    // MARK: - Longueur du nom
+
+    @Test func aNameOfMoreThanSixtyCharactersIsRefusedWithoutAnyWrite() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        #expect(ModesModel.nameLimit == 60)
+        #expect(ModesModel.nameTooLongMessage == "Le nom d'un mode ne peut pas dépasser 60 caractères.")
+        var draft = model.draft(for: "perso-un")
+        draft.name = String(repeating: "x", count: 61)
+        #expect(!model.save(draft))
+        #expect(model.message == ModesModel.nameTooLongMessage)
+        #expect(rig.updates == 0)
+        // Le blanc autour ne compte pas ; soixante caractères exactement sont acceptés.
+        draft.name = "  " + String(repeating: "x", count: 60) + "  "
+        #expect(model.save(draft))
+        #expect(rig.mode("perso-un")?.name.count == 60)
+    }
+
+    /// Un nom déjà plus long (fichier écrit à la main) ne bloque pas l'enregistrement d'un mode dont on ne change pas le nom.
+    @Test func aModeThatAlreadyHasALongNameCanBeSavedWithoutRenamingIt() {
+        let rig = Rig(Self.personalSettings())
+        let long = String(repeating: "y", count: 90)
+        rig.settings.modes[3].name = long
+        let model = rig.makeModel()
+        var draft = model.draft(for: "perso-un")
+        draft.instruction = "Nouvelle consigne."
+        #expect(model.save(draft))
+        #expect(rig.mode("perso-un")?.name == long)
+    }
+
+    /// Les copies restent dans la limite, et une copie de copie ne s'empile pas : « X (copie) » donne « X (copie 2) ».
+    @Test func copiesStayWithinTheLimitAndDoNotStack() {
+        let rig = Rig(Self.personalSettings())
+        let model = rig.makeModel()
+        rig.settings.modes[3].name = String(repeating: "z", count: 60)
+        let long = model.duplicate("perso-un")
+        #expect(rig.mode(long)?.name.count == 60)
+        #expect(rig.mode(long)?.name.hasSuffix(" (copie)") == true)
+        let again = model.duplicate("perso-un")
+        #expect(rig.mode(again)?.name.count == 60)
+        #expect(rig.mode(again)?.name.hasSuffix(" (copie 2)") == true)
+
+        let first = model.duplicate("perso-deux")
+        #expect(rig.mode(first)?.name == "Courriel (copie)")
+        let ofCopy = model.duplicate(first)
+        #expect(rig.mode(ofCopy)?.name == "Courriel (copie 2)", "pas « Courriel (copie) (copie) »")
+    }
+
     // MARK: - Trous relevés à la revue
 
     /// Un mode sans consigne n'envoie rien : un modèle périmé qu'il porte n'ajoute aucune note sur sa ligne.

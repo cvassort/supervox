@@ -148,6 +148,9 @@ public final class ModesModel {
     public static let saveFailure = "Ce changement n'a pas pu être enregistré : les modes gardent leur état précédent."
     public static let unknownModeMessage = "Ce mode n'existe plus : la liste vient d'être relue."
     public static let blankNameMessage = "Donnez un nom au mode."
+    /// Le plus long nom qu'un mode peut porter (en caractères, blancs de bord retirés).
+    public static let nameLimit = 60
+    public static let nameTooLongMessage = "Le nom d'un mode ne peut pas dépasser 60 caractères."
     public static let nameTakenMessage = "Un autre mode porte déjà ce nom : choisissez-en un autre."
     public static let noActiveHotKeyNote = "Aucun raccourci n'est actif pour ce mode."
 
@@ -383,7 +386,7 @@ public final class ModesModel {
     public func add() -> String {
         settings = read()
         let mode = Mode(
-            id: Mode.newID(), name: freeName("Nouveau mode", suffix: { " \($0)" }), instruction: "", reviewBeforePaste: true)
+            id: Mode.newID(), name: freeName("Nouveau mode", numbered: { " \($0)" }), instruction: "", reviewBeforePaste: true)
         commit { $0.modes.append(mode) }
         return mode.id
     }
@@ -396,7 +399,7 @@ public final class ModesModel {
         guard let original = current(id) else { return Mode.newID() }
         var copy = original
         copy.id = Mode.newID()
-        copy.name = freeName("\(original.name) (copie)", suffix: { " (copie \($0))" }, countedFrom: 2, stripping: " (copie)")
+        copy.name = freeName(Self.strippedOfCopyMark(original.name), first: " (copie)", numbered: { " (copie \($0))" })
         copy.instruction = original.effectiveInstruction
         copy.hotKey = nil
         copy.reviewBeforePaste = settings.reviewsBeforePaste(id)
@@ -414,7 +417,7 @@ public final class ModesModel {
         settings = read()
         guard let base = Mode.base.first(where: { $0.id == id && $0.canDelete }), settings.mode(id) == nil else { return }
         var mode = base
-        mode.name = freeName(base.name, suffix: { " \($0)" })
+        mode.name = freeName(base.name, numbered: { " \($0)" })
         let restored = mode
         commit { settings in
             guard !settings.modes.contains(where: { $0.id == restored.id }) else { return }
@@ -459,6 +462,11 @@ public final class ModesModel {
             message = Self.blankNameMessage
             return false
         }
+        // Un nom déjà plus long (fichier écrit à la main) reste enregistrable tant qu'on ne le change pas.
+        guard name.count <= Self.nameLimit || name == settings.mode(draft.id)?.name else {
+            message = Self.nameTooLongMessage
+            return false
+        }
         guard !settings.modes.contains(where: { $0.id != draft.id && Self.sameName($0.name, name) }) else {
             message = Self.nameTakenMessage
             return false
@@ -501,18 +509,24 @@ public final class ModesModel {
         commit { $0.fastModel = choice }
     }
 
-    /// Le premier nom libre : `base`, puis `base` suivi de `suffix(2)`, `suffix(3)`… (sans tenir compte de la casse). Pour une
-    /// copie, `base` est « Nom (copie) » et le suivant « Nom (copie 2) » : `stripping` retire « (copie) » avant d'y ajouter.
-    private func freeName(
-        _ base: String, suffix: (Int) -> String, countedFrom first: Int = 2, stripping tail: String? = nil
-    ) -> String {
+    /// Le premier nom libre construit sur `stem` : `stem + first`, puis `stem + numbered(2)`, `stem + numbered(3)`… (sans tenir
+    /// compte de la casse). Chaque nom reste dans la limite de `nameLimit` caractères : c'est le début de `stem` qui est rogné, pas
+    /// la fin (« (copie 2) »).
+    private func freeName(_ stem: String, first: String = "", numbered: (Int) -> String) -> String {
         func taken(_ name: String) -> Bool { settings.modes.contains { Self.sameName($0.name, name) } }
-        guard taken(base) else { return base }
-        var stem = base
-        if let tail, stem.hasSuffix(tail) { stem.removeLast(tail.count) }
-        var number = first
-        while taken(stem + suffix(number)) { number += 1 }
-        return stem + suffix(number)
+        func candidate(_ tail: String) -> String {
+            String(stem.prefix(max(1, Self.nameLimit - tail.count))) + tail
+        }
+        if !taken(candidate(first)) { return candidate(first) }
+        var number = 2
+        while taken(candidate(numbered(number))) { number += 1 }
+        return candidate(numbered(number))
+    }
+
+    /// Le nom d'une copie sans sa marque « (copie) » ou « (copie 2) » : la copie d'une copie ne les empile pas.
+    private static func strippedOfCopyMark(_ name: String) -> String {
+        guard let range = name.range(of: #"\s\(copie( \d+)?\)$"#, options: .regularExpression) else { return name }
+        return String(name[..<range.lowerBound])
     }
 
     private static func sameName(_ lhs: String, _ rhs: String) -> Bool {
