@@ -104,6 +104,7 @@ public enum DictationText {
         case .preparing: "Préparation…"
         case .recording: "Enregistrement"
         case .finalizing: "Transcription…"
+        case .formatting: "Mise en forme…"
         case .review: "À relire"
         case .pasting: "Collage…"
         case .copied: "Texte copié"
@@ -216,6 +217,9 @@ public struct DictationDisplay: Equatable, Sendable {
         case .finalizing:
             mood = .working
             duration = DictationText.duration(state.elapsed)
+            liveText = live
+        case .formatting:
+            mood = .working
             liveText = live
         case .review:
             mood = .review

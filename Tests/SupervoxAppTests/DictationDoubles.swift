@@ -211,6 +211,94 @@ final class FakeEngines: Sendable {
     }
 }
 
+/// Un appel de mise en forme en cours : le test livre du texte (`deliver`) et rend l'issue (`finish`) quand il veut. Sans
+/// durée réelle. `ignoresCancellation` : l'appel ne rend pas la main à l'annulation de la tâche (un modèle sourd) ; sinon il
+/// rend `.cancelled`, comme le vrai.
+final class RewriteCall: Sendable {
+    private struct State {
+        var continuation: CheckedContinuation<RewriteOutcome, Never>?
+        var result: RewriteOutcome?
+        var sawCancellation = false
+    }
+
+    let job: RewriteJob
+    let onText: @MainActor (String) -> Void
+    private let ignoresCancellation: Bool
+    private let state = Mutex(State())
+
+    init(job: RewriteJob, onText: @escaping @MainActor (String) -> Void, ignoresCancellation: Bool) {
+        self.job = job
+        self.onText = onText
+        self.ignoresCancellation = ignoresCancellation
+    }
+
+    /// La tâche qui attendait l'issue a vu son annulation.
+    var sawCancellation: Bool { state.withLock { $0.sawCancellation } }
+
+    func wait() async -> RewriteOutcome {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<RewriteOutcome, Never>) in
+                let ready = state.withLock { state -> RewriteOutcome? in
+                    if let result = state.result { return result }
+                    state.continuation = continuation
+                    return nil
+                }
+                if let ready { continuation.resume(returning: ready) }
+            }
+        } onCancel: {
+            let waiting = state.withLock { state -> CheckedContinuation<RewriteOutcome, Never>? in
+                state.sawCancellation = true
+                guard !ignoresCancellation, state.result == nil else { return nil }
+                state.result = .cancelled
+                defer { state.continuation = nil }
+                return state.continuation
+            }
+            waiting?.resume(returning: .cancelled)
+        }
+    }
+
+    func finish(_ outcome: RewriteOutcome) {
+        let waiting = state.withLock { state -> CheckedContinuation<RewriteOutcome, Never>? in
+            guard state.result == nil else { return nil }
+            state.result = outcome
+            defer { state.continuation = nil }
+            return state.continuation
+        }
+        waiting?.resume(returning: outcome)
+    }
+}
+
+/// La mise en forme double : garde chaque travail reçu, et ne rend rien tant que le test ne l'a pas décidé.
+@MainActor final class FakeRewriter {
+    private(set) var calls: [RewriteCall] = []
+    /// Les modèles dont `providerName` a été demandé, dans l'ordre.
+    private(set) var nameAsks: [ModelChoice?] = []
+    var providerName: String? = "Fournisseur exemple"
+    var ignoresCancellation = false
+
+    var jobs: [RewriteJob] { calls.map(\.job) }
+
+    var environment: RewriteEnvironment {
+        RewriteEnvironment(
+            rewrite: { [self] job, onText in
+                let call = RewriteCall(job: job, onText: onText, ignoresCancellation: ignoresCancellation)
+                calls.append(call)
+                return await call.wait()
+            },
+            providerName: { [self] choice in
+                nameAsks.append(choice)
+                return providerName
+            })
+    }
+
+    /// L'appel n° `index`, attendu.
+    func call(_ index: Int = 0) async -> RewriteCall {
+        let found = await until { calls.count > index }
+        #expect(found)
+        return found ? calls[index] : RewriteCall(job: RewriteJob(instruction: "", input: "", model: nil), onText: { _ in }, ignoresCancellation: false)
+    }
+}
+
 /// Un lieu où le test change ce que les fermetures du contrôleur lisent.
 @MainActor final class DictationKnobs {
     var settings = TranscriptionSettings.defaults
@@ -236,6 +324,9 @@ final class FakeEngines: Sendable {
     /// Les modes dont le réglage « relire avant de coller » est actif, et chaque lecture que le contrôleur en a faite.
     var reviewing: Set<String> = []
     var reviewReads: [String] = []
+    /// Le déroulé de chaque mode (`ModeRun.legacy` pour un mode absent), et chaque lecture que le contrôleur en a faite.
+    var modeRuns: [String: ModeRun] = [:]
+    var modeReads: [String] = []
 }
 
 /// L'attente du contrôleur entre le retrait de la frappe et l'insertion : elle journalise sa durée, n'attend rien, sauf si le
@@ -277,6 +368,7 @@ final class FakeEngines: Sendable {
     let holdSleeper = SleepingWait(log: CallLog())
     /// L'attente de la relecture avant l'insertion (voir `HandoverWait`).
     let handover: HandoverWait
+    let rewriter = FakeRewriter()
     let controller: DictationController
     /// Le contenu du presse-papiers double à chaque ⌘V posté : les textes réellement collés, dans l'ordre.
     private(set) var pasted: [String] = []
@@ -294,6 +386,7 @@ final class FakeEngines: Sendable {
         let handover = HandoverWait(log: log)
         self.handover = handover
         panel.log = log
+        let rewriter = rewriter
         controller = DictationController(
             environment: engines.environment, inserter: rig.inserter,
             settings: { knobs.settings }, behavior: { knobs.behavior }, modeID: { knobs.modeID },
@@ -322,6 +415,11 @@ final class FakeEngines: Sendable {
                 knobs.reviewReads.append(mode)
                 return knobs.reviewing.contains(mode)
             },
+            modes: { mode in
+                knobs.modeReads.append(mode)
+                return knobs.modeRuns[mode] ?? ModeRun.legacy(mode)
+            },
+            rewriter: rewriter.environment,
             wait: { await handover.wait($0) })
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
@@ -388,7 +486,7 @@ extension DictationStage {
     var isTerminal: Bool {
         switch self {
         case .copied, .cancelled, .failed: true
-        case .idle, .preparing, .recording, .finalizing, .review, .pasting: false
+        case .idle, .preparing, .recording, .finalizing, .formatting, .review, .pasting: false
         }
     }
 }

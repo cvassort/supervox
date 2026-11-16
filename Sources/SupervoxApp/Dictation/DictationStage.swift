@@ -8,6 +8,8 @@ public enum DictationStage: Equatable, Sendable {
     case preparing
     case recording
     case finalizing
+    /// Le texte dicté est au modèle de langage, qui le met en forme.
+    case formatting
     /// Le texte attend d'être relu avant d'être collé.
     case review
     /// Le texte est en cours de collage.
@@ -20,7 +22,7 @@ public enum DictationStage: Equatable, Sendable {
     /// Une dictée est en cours : le micro se prépare, écoute, ou le texte se finalise.
     public var isActive: Bool {
         switch self {
-        case .preparing, .recording, .finalizing: true
+        case .preparing, .recording, .finalizing, .formatting: true
         case .idle, .review, .pasting, .copied, .cancelled, .failed: false
         }
     }
@@ -29,7 +31,7 @@ public enum DictationStage: Equatable, Sendable {
     public var holdsPanel: Bool {
         switch self {
         case .review, .pasting: true
-        case .preparing, .recording, .finalizing, .idle, .copied, .cancelled, .failed: isActive
+        case .preparing, .recording, .finalizing, .formatting, .idle, .copied, .cancelled, .failed: isActive
         }
     }
 }

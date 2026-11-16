@@ -25,8 +25,6 @@ import os
 ///   mémoire seulement, jamais dans un fichier.
 @MainActor @Observable
 public final class DictationController {
-    /// Le seul mode dont la dictée est mise en œuvre à cette étape.
-    static let rawModeID = ModeChip.rawID
     // Les phrases que le panneau montre, publiques pour que l'outil de rendu des écrans montre celles de l'application.
     public static let laterModeNotice = "Ce mode arrive à une étape suivante."
     public static let downloadNotice = "Téléchargement du modèle…"
@@ -46,6 +44,14 @@ public final class DictationController {
     /// Ce que le panneau dit quand le presse-papiers refuse le texte de la relecture. Le texte reste dans le champ.
     public static let reviewClipboardNotice =
         "Le presse-papiers a refusé le texte : il n'a été ni collé ni copié. Il est toujours ci-dessus : réessayez « Coller » ou « Copier »."
+    /// Ce que le panneau dit pendant la mise en forme : où part le texte. `provider` est le nom du fournisseur, rogné à 40
+    /// caractères par la règle commune (`Provider.shortName`).
+    public static func formattingNotice(provider: String) -> String {
+        "Le texte est envoyé à « \(Provider.shortName(provider)) » pour être mis en forme."
+    }
+    /// Ce que le panneau ajoute à la phrase d'une panne du modèle : le texte en relecture est la transcription brute.
+    public static let rawTextNotice =
+        "Le texte ci-dessus est la transcription brute : corrigez-la, collez-la ou copiez-la."
 
     /// Ce que la vue du panneau montre.
     public private(set) var view = DictationViewState()
@@ -71,6 +77,8 @@ public final class DictationController {
     @ObservationIgnored private let ownerIsBound: @MainActor (HotKeyOwner) -> Bool
     @ObservationIgnored private let hold: HoldWatch
     @ObservationIgnored private let reviewBeforePaste: @MainActor (String) -> Bool
+    @ObservationIgnored private let modes: @MainActor (String) -> ModeRun
+    @ObservationIgnored private let rewriter: RewriteEnvironment
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
@@ -103,6 +111,9 @@ public final class DictationController {
     ///     supprimé, raccourci retiré pendant la dictée) peut être terminée par n'importe quel autre raccourci.
     ///   - hold: la surveillance des modificateurs, qui rattrape un relâchement perdu (jamais interrogée en bascule).
     ///   - reviewBeforePaste: vrai si le texte de ce mode passe par la relecture ; lu une fois, à l'appui qui commence la dictée.
+    ///   - modes: ce que fait la dictée de ce mode (`ModeRun`) ; lu une fois, à l'appui qui commence la dictée. Par défaut, seule
+    ///     la dictée brute dicte (`ModeRun.legacy`).
+    ///   - rewriter: la mise en forme par le modèle de langage, pour les modes à consigne. Par défaut, aucun modèle : elle échoue.
     ///   - wait: attend ce nombre de secondes (`focusHandoverDelay`) ; injectée pour qu'aucun test n'attende une durée réelle.
     public init(
         environment: DictationEnvironment, inserter: TextInserter,
@@ -117,6 +128,8 @@ public final class DictationController {
         ownerIsBound: @escaping @MainActor (HotKeyOwner) -> Bool = { _ in true },
         hold: HoldWatch,
         reviewBeforePaste: @escaping @MainActor (String) -> Bool = { _ in false },
+        modes: @escaping @MainActor (String) -> ModeRun = ModeRun.legacy,
+        rewriter: RewriteEnvironment = .unavailable,
         wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
         self.environment = environment
@@ -132,6 +145,8 @@ public final class DictationController {
         self.ownerIsBound = ownerIsBound
         self.hold = hold
         self.reviewBeforePaste = reviewBeforePaste
+        self.modes = modes
+        self.rewriter = rewriter
         self.wait = wait
     }
 
@@ -212,7 +227,9 @@ public final class DictationController {
 
     private func begin(hold: Bool, owner: HotKeyOwner, modeChanged: Bool) {
         let mode = modeID()
-        guard mode == Self.rawModeID else {
+        // Lu ici, une seule fois, avec le réglage de relecture : modifier ou supprimer le mode pendant la dictée ne la change pas.
+        let plan = modes(mode)
+        guard plan != .later else {
             // Rien à dicter dans ce mode : l'appui ouvre le panneau, ou le ferme s'il est déjà ouvert. Le raccourci d'un mode
             // qui vient de le choisir ne ferme pas : le panneau, déjà ouvert sur un autre mode, montre la phrase.
             if panel.isOpen, !modeChanged {
@@ -242,13 +259,15 @@ public final class DictationController {
             watched = []
         }
         let run = Run(
-            startedByHold: hold, owner: owner, modifiers: watched, reviewsBeforePaste: reviewBeforePaste(mode))
+            startedByHold: hold, owner: owner, modifiers: watched, reviewsBeforePaste: reviewBeforePaste(mode), plan: plan)
         self.run = run
         // Posé tout de suite : un appui qui arrive avant la première session est déjà ignoré.
         setView(DictationViewState(stage: .preparing))
         if !panel.isOpen { panel.open() }
         // Relus à chaque dictée : un changement de moteur, de modèle, de langue ou de vocabulaire vaut dès la suivante.
-        let current = settings()
+        var current = settings()
+        // Le moteur du mode remplace celui de l'onglet Transcription pour cette dictée seulement.
+        if let engine = plan.engine { current.engine = engine }
         log.notice("dictée commencée ; maintien : \(hold, privacy: .public) ; moteur : \(current.engine.rawValue, privacy: .public)")
         run.task = Task { await self.execute(run, settings: current) }
         if hold { run.watch = Task { await self.watchModifiers(run) } }
@@ -343,6 +362,8 @@ public final class DictationController {
             refreshNotice(run)
         }
 
+        // Ce que la mise en forme enverra avec la consigne : le vocabulaire que cette dictée a réellement reçu.
+        run.vocabulary = effective.vocabulary
         let session: any DictationSessioning
         do {
             session = try await environment.makeSession(effective)
@@ -413,8 +434,18 @@ public final class DictationController {
             return
         }
         lastTranscript = text
+        switch run.plan {
+        case .rewrite(let instruction, let model, _):
+            startFormatting(text, instruction: instruction, model: model, run)
+        case .raw, .later:
+            deliver(text, run)
+        }
+    }
+
+    /// Le texte final est prêt : il passe en relecture, ou s'insère. `previous` : le texte d'avant la mise en forme.
+    private func deliver(_ text: String, _ run: Run, previous: String? = nil) {
         if run.reviewsBeforePaste {
-            startReview(text, after: run)
+            startReview(text, notice: notice(for: run, stage: .review), previous: previous, after: run)
             return
         }
         // Le panneau garde « Copier » à jour dès que le texte existe, sans attendre la fin de l'insertion.
@@ -434,6 +465,10 @@ public final class DictationController {
         run.insertion = task
         insertionTail = task
     }
+
+    /// Le texte que la relecture remplace : la transcription brute d'un texte mis en forme, `nil` sinon. La relecture le rend
+    /// comme « version précédente ».
+    var reviewPreviousText: String? { review?.previous }
 
     /// Vrai tant qu'une insertion est en route : le texte est (peut-être) dans le presse-papiers, le ⌘V est (peut-être) posté,
     /// et le contenu d'origine n'est pas encore rendu. Quitter à ce moment le perdrait.
@@ -484,15 +519,72 @@ public final class DictationController {
         setView(next)
     }
 
+    // MARK: - Mise en forme
+
+    /// Le texte brut part au modèle du mode. La dictée reste vivante (`isBusy` : le modèle sert) mais ne reçoit plus rien d'une
+    /// session : seuls le texte et l'issue de cette mise en forme comptent, tant que `run` est la dictée courante et qu'elle
+    /// attend encore sa réponse (`Run.rewriting`). Annulée (Échap, fermeture du panneau), ce qui arrive ensuite est ignoré.
+    private func startFormatting(_ text: String, instruction: String, model: ModelChoice?, _ run: Run) {
+        log.notice("dictée terminée ; mise en forme")
+        let prompt = RewritePrompt.format(instruction: instruction, text: text, vocabulary: run.vocabulary)
+        let job = RewriteJob(instruction: prompt.instruction, input: prompt.input, model: model)
+        run.rewriting = true
+        var next = view
+        next.stage = .formatting
+        next.liveText = ""
+        next.notice = rewriter.providerName(model).map(Self.formattingNotice(provider:))
+        setView(next)
+        let environment = rewriter
+        run.rewrite = Task { [weak self] in
+            let outcome = await environment.rewrite(job) { [weak self] partial in self?.formattingText(partial, run) }
+            self?.formattingFinished(outcome, raw: text, run)
+        }
+    }
+
+    private func formattingText(_ text: String, _ run: Run) {
+        guard isLive(run), run.rewriting, view.stage == .formatting else { return }
+        var next = view
+        next.liveText = text
+        setView(next)
+    }
+
+    private func formattingFinished(_ outcome: RewriteOutcome, raw: String, _ run: Run) {
+        guard isLive(run), run.rewriting else { return }
+        run.rewriting = false
+        run.rewrite = nil
+        switch outcome {
+        case .rewritten(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+            log.notice("mise en forme terminée")
+            lastTranscript = text
+            var next = view
+            next.liveText = text
+            setView(next)
+            deliver(text, run, previous: raw)
+        case .rewritten:
+            formattingFailed(.empty, raw: raw, run)
+        case .failed(let failure):
+            formattingFailed(failure, raw: raw, run)
+        case .cancelled:
+            // Seule l'annulation de la dictée annule la tâche, et elle la retire d'abord : une dictée vivante n'a pas demandé cette fin.
+            formattingFailed(.interrupted, raw: raw, run)
+        }
+    }
+
+    /// Le modèle a échoué : la transcription brute revient en relecture, avec la phrase de la panne, que le mode relise ou non.
+    /// Rien n'est inséré : le texte brut n'est pas celui que l'utilisateur attendait.
+    private func formattingFailed(_ failure: RewriteFailure, raw: String, _ run: Run) {
+        log.notice("mise en forme échouée ; relecture du texte brut")
+        startReview(raw, notice: failure.message + " " + Self.rawTextNotice, after: run)
+    }
+
     // MARK: - Relecture
 
     /// Le texte final n'est pas inséré : la dictée est finie, le texte attend dans `draft` et le panneau prend la frappe.
-    private func startReview(_ text: String, after run: Run) {
+    private func startReview(_ text: String, notice: String?, previous: String? = nil, after run: Run) {
         log.notice("dictée terminée ; relecture")
-        let carried = notice(for: run, stage: .review)
         retire(run)
-        review = Review()
-        setView(DictationViewState(stage: .review, notice: carried, draft: text))
+        review = Review(previous: previous)
+        setView(DictationViewState(stage: .review, notice: notice, draft: text))
         if !panel.isOpen { panel.open() }
         panel.setKeyboard(.focused)
     }
@@ -606,6 +698,8 @@ public final class DictationController {
         run.task?.cancel()
         run.watch?.cancel()
         run.insertion?.cancel()
+        run.rewrite?.cancel()
+        run.rewriting = false
         if let session = run.session {
             // Sans attendre : un moteur peut ignorer l'annulation et rendre son résultat plus tard.
             Task { await session.cancel() }
@@ -700,6 +794,13 @@ private final class Run {
     let modifiers: Modifiers
     /// Le réglage « relire avant de coller » du mode, tel qu'il était à l'appui.
     let reviewsBeforePaste: Bool
+    /// Ce que le mode fait du texte, tel qu'il était à l'appui.
+    let plan: ModeRun
+    /// Le vocabulaire que la session a reçu (celui de la mise en forme).
+    var vocabulary: [String] = []
+    /// La mise en forme attend sa réponse : tant que c'est vrai, son texte et son issue comptent.
+    var rewriting = false
+    var rewrite: Task<Void, Never>?
     var session: (any DictationSessioning)?
     /// La dernière phase vue dans les instantanés de la session.
     var sessionPhase: DictationPhase = .idle
@@ -714,11 +815,12 @@ private final class Run {
     var loadingNotice: String?
     var vocabularyNotice: String?
 
-    init(startedByHold: Bool, owner: HotKeyOwner, modifiers: Modifiers, reviewsBeforePaste: Bool) {
+    init(startedByHold: Bool, owner: HotKeyOwner, modifiers: Modifiers, reviewsBeforePaste: Bool, plan: ModeRun) {
         self.startedByHold = startedByHold
         self.owner = owner
         self.modifiers = modifiers
         self.reviewsBeforePaste = reviewsBeforePaste
+        self.plan = plan
     }
 }
 
@@ -730,4 +832,8 @@ private final class Review {
     /// La tâche de collage lancée par `pasteReview()` ; `nil` tant que le texte n'a pas été collé, et de nouveau `nil` si
     /// le collage a laissé le texte en relecture.
     var pasting: Task<Void, Never>?
+    /// Le texte d'avant la mise en forme (la transcription brute), `nil` si le texte n'a pas été mis en forme.
+    let previous: String?
+
+    init(previous: String? = nil) { self.previous = previous }
 }
