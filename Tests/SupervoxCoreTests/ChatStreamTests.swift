@@ -93,6 +93,16 @@ struct ChatStreamTests {
         #expect(sent == [["role": "system", "content": "Réponds en français."], ["role": "user", "content": "Compte \"jusqu'à\" cinq."]])
     }
 
+    /// Des identifiants écrits dans l'adresse ne partent pas avec la requête (la liste des modèles les retire déjà).
+    @Test func credentialsInTheBaseURLAreNotSentWithTheChatRequest() async throws {
+        let client = stubbedClient(status: 200, fixture: "chat-stream-content.sse", baseURL: "https://utilisateur:motdepasse@exemple.test/prefixe")
+        for try await _ in client.chatStream(model: "modele-x", messages: [ChatMessage(role: "user", content: "Bonjour")], maxTokens: 5) {}
+
+        let url = try #require(StubURLProtocol.lastRequest(of: client)?.url)
+        #expect(url.user == nil && url.password == nil)
+        #expect(url.absoluteString == "https://exemple.test/prefixe/v1/chat/completions")
+    }
+
     // MARK: Lecture du flux
 
     /// Le réseau coupe où il veut : au milieu d'une ligne, d'un `\r\n`, d'un caractère. Le résultat ne change pas.

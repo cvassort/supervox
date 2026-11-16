@@ -3,10 +3,11 @@
 [![Tests](https://github.com/cvassort/supervox/actions/workflows/tests.yml/badge.svg)](https://github.com/cvassort/supervox/actions/workflows/tests.yml)
 
 supervox sera une application macOS de dictée et d'entretien vocal. Elle est en cours de construction.
-Ce dépôt contient l'application telle qu'elle est (le socle, la dictée brute et sa relecture, voir « Application »,
-« Dictée » et « Relecture ») et
+Ce dépôt contient l'application telle qu'elle est (le socle, la dictée, sa relecture, les modes à consigne et la correction
+à la voix, voir « Application », « Dictée », « Relecture », « Modes » et « Corriger à la voix ») et
 le banc d'essai : `supervox-bench`, un outil en ligne de commande qui mesure la qualité de transcription de plusieurs
-moteurs, le délai de réponse de bout en bout et la dictée en direct.
+moteurs, le délai de réponse de bout en bout et la dictée en direct. L'entretien vocal et la voix de réponse sont à venir :
+ils n'existent pas encore.
 
 ## Prérequis
 
@@ -37,9 +38,12 @@ Ils ne tournent pas dans le pipeline.
 ## Application
 
 Supervox est une application de barre de menus : pas d'icône dans le Dock, une icône d'onde dans la barre de menus.
-L'application tient le panneau, la dictée brute (voir « Dictée »), les fournisseurs, le raccourci et les permissions.
-Les trois autres modes du panneau (dictée nettoyée, prompt, entretien) ne sont pas encore faits : le panneau le dit. Leur
-réglage de relecture existe déjà (Réglages, onglet Modes) et vaudra dès qu'ils seront là.
+L'application tient le panneau, la dictée (voir « Dictée »), la relecture, les modes (voir « Modes »), la correction à la
+voix, les fournisseurs, le raccourci et les permissions. Trois modes dictent : la dictée brute (le texte tel quel), la
+dictée nettoyée et le prompt (le texte est mis en forme par un modèle de langage, chez le fournisseur que vous avez
+réglé). Le quatrième, l'entretien, n'est pas encore fait : le panneau le dit. Avec la dictée brute, rien ne quitte
+l'ordinateur sauf le téléchargement des modèles de transcription ; avec un mode à consigne, le texte dicté (jamais
+l'audio) part chez votre fournisseur : voir « Modes ».
 
 ### Construire
 
@@ -75,9 +79,9 @@ open build/Supervox.app
   quelle application ; selon le réglage, un second appui la termine (bascule) ou le relâcher la termine (maintien).
   Le raccourci ne ferme pas le panneau : un appui, panneau ouvert et sans dictée en cours, relance une dictée. Le panneau
   se ferme par Échap, par un clic dans une autre application (sauf pendant une dictée ou une relecture), par le menu de
-  l'icône, par « Réglages… » et « Quitter Supervox », ou après un collage réussi. Seule exception : dans un mode autre que
-  la dictée brute, un second appui, panneau ouvert, le ferme. Pendant une relecture (voir « Relecture »), le raccourci ne
-  fait rien.
+  l'icône, par « Réglages… » et « Quitter Supervox », ou après un collage réussi. Seule exception : dans un mode qui ne
+  dicte pas (l'entretien), un second appui, panneau ouvert, le ferme. Pendant une relecture (voir « Relecture »), le
+  raccourci ne lance pas de dictée : il commence une correction à la voix (voir « Corriger à la voix »).
 - Au premier lancement (aucun fichier de réglages), le panneau s'ouvre seul : il dit à quoi sert le raccourci et où
   sont les réglages, et propose d'autoriser le micro puis l'Accessibilité. Rien n'est demandé avant ce clic.
 - Relancer l'application déjà ouverte (`open build/Supervox.app`) ouvre le panneau, sans second exemplaire. Vérifié
@@ -93,19 +97,24 @@ open build/Supervox.app
 
 ### Ce qui est stocké, et où
 
-- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode, réglages de transcription, choix de relecture par
-  mode) : `~/Library/Application Support/Supervox/settings.json`.
+- Les réglages (fournisseurs sans leur clé, raccourci, dernier mode, réglages de transcription, les modes avec leur
+  consigne, leur modèle, leur moteur, leur raccourci et leur choix de relecture, les modèles fort et rapide) :
+  `~/Library/Application Support/Supervox/settings.json`. Le fichier est en **version 2** depuis l'étape 5 : un fichier de
+  l'étape 4 se lit sans rien mettre de côté, garde son entrée `modeOptions` telle quelle et passe en version 2 à son premier
+  enregistrement ; l'application de l'étape 4 qui le relit dit qu'il vient d'une version plus récente et n'y écrit rien.
+  Les consignes de vos modes sont dans ce fichier, en clair : n'y mettez rien de confidentiel.
   Un fichier au contenu illisible est mis de côté dans le même dossier (`settings.json.illisible-<date>`), jamais
   écrasé ; un fichier qui ne peut pas être lu (droits, disque) reste en place et rien n'y est écrit jusqu'à la fin de
   la session, même s'il redevient lisible ; un fichier écrit par une version plus récente de Supervox est gardé tel
   quel et n'est pas réécrit.
 - Le texte dicté n'est écrit dans aucun fichier ni journal ; le panneau n'en garde que le dernier, en mémoire (le texte
-  corrigé en relecture compris : quitter l'application le perd). Le bouton « Copier » le met dans le presse-papiers comme
+  corrigé en relecture compris, et les versions d'une correction à la voix : quitter l'application les perd). Le bouton « Copier » le met dans le presse-papiers comme
   une copie ordinaire : un gestionnaire d'historique du presse-papiers peut alors le garder (le collage d'une dictée sans
   relecture, lui, marque sa copie comme provisoire et confidentielle pour qu'ils l'ignorent ; le « Coller » de la
   relecture laisse, après coup, une copie ordinaire : voir « Relecture »).
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
-  identifiant). Jamais dans un fichier. Elles ne sont lues qu'au moment d'une requête qui en a besoin.
+  identifiant). Jamais dans un fichier, ni dans les modes. Elles ne sont lues qu'au moment d'une requête qui en a besoin
+  (la liste des modèles, la mise en forme, la correction).
 - Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et
   ne suivent aucune redirection vers une autre origine.
 
@@ -118,8 +127,15 @@ swift run supervox-snapshots /chemin/vers/un/dossier
 `supervox-snapshots` écrit les écrans du panneau et des réglages en PNG, en clair et en sombre : pour la dictée, la
 préparation (avec « Téléchargement du modèle… », puis avec « Chargement du modèle… »), l'enregistrement (sans texte, avec
 un texte long), la transcription, « rien à transcrire », l'échec de préparation, le texte copié faute d'Accessibilité, le
-texte refusé par le presse-papiers, un message long sous un dernier texte long, le dernier texte (avec « Copié » et « Copie impossible »), un mode non disponible, et la relecture (texte court, texte plus long que le champ, texte vide, collage en cours, panneau sans la frappe, texte copié faute d'Accessibilité, texte refusé par le presse-papiers, « Copié », « Copie impossible ») ; pour
-les réglages, l'onglet Modes (par défaut, puis avec un enregistrement refusé). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
+texte refusé par le presse-papiers, un message long sous un dernier texte long, le dernier texte (avec « Copié » et « Copie impossible »), un mode non disponible, et la relecture (texte court, texte plus long que le champ, texte vide, collage en cours, panneau sans la frappe, texte copié faute d'Accessibilité, texte refusé par le presse-papiers, « Copié », « Copie impossible »), le panneau à douze pastilles, la mise en forme
+(attente, texte reçu à mesure, échec faute de clé avec un nom de fournisseur long, échec au délai, application changée
+pendant la mise en forme, relecture du texte mis en forme) et la correction à la voix (préparation, écoute, écoute en
+maintien, réécriture, échec faute de modèle fort, échec faute de fournisseur, consigne vide, relecture avec une version
+précédente, suivante ou les deux, aide de la correction avec et sans raccourci) ; pour les réglages, les onglets
+Fournisseurs, Raccourci, Permissions et Transcription (avec leurs feuilles et confirmations), et l'onglet Modes : par
+défaut, avec un enregistrement refusé, toute la liste, au premier lancement, les confirmations de suppression, et la
+feuille d'un mode (consigne modifiée, Prompt d'origine, sans fournisseur, Entretien, mode personnel, sans liste de modèles,
+raccourci refusé, consigne longue). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
 d'exemple (`example.com`, textes inventés) : aucun accès au trousseau, au réseau, au presse-papiers ni aux réglages
 réels. Les onglets des réglages sont rendus sans la barre d'onglets, que la copie d'écran hors écran ne restitue pas
 fidèlement.
@@ -179,17 +195,17 @@ premier plan.
 ### Relecture
 
 À la fin d'une dictée, le texte peut s'afficher dans le panneau au lieu d'être collé tout de suite : on le corrige au
-clavier, puis on choisit « Coller » ou « Copier ». Rien n'est collé sans ce geste. À cette étape, seule la dictée brute
-dicte. Cette section dit ce que le code fait ; ce qu'aucun test automatique ne peut voir est à essayer à la main (étape 4
-de `docs/essai-final.md`).
+clavier, puis on choisit « Coller » ou « Copier ». Rien n'est collé sans ce geste. Tous les modes qui dictent peuvent
+passer par la relecture (voir « Modes »). Cette section dit ce que le code fait ; ce qu'aucun test automatique ne peut voir
+est à essayer à la main (étapes 4 et 5 de `docs/essai-final.md`).
 
 - **Où se règle la relecture.** Réglages, onglet Modes : un interrupteur « Relire avant de coller » par mode. Sans choix
   enregistré : éteint pour la dictée brute et la dictée nettoyée, allumé pour Prompt ; Entretien est toujours relu (sa ligne
-  n'a pas d'interrupteur). Le réglage des modes qui ne dictent pas encore est déjà enregistré. Le choix est lu à l'appui qui
-  commence la dictée : le changer pendant une dictée ne vaut qu'à la suivante. Il est écrit dans `settings.json`, sans
-  nouveau numéro de version du fichier : un fichier d'avant la relecture se lit sans rien mettre de côté, et reçoit une
-  entrée `modeOptions` à son premier enregistrement. Si l'enregistrement est refusé (fichier devenu illisible ou plus
-  récent), l'onglet le dit et l'interrupteur revient à sa valeur enregistrée.
+  n'a pas d'interrupteur). Le choix est lu à l'appui qui commence la dictée : le changer pendant une dictée ne vaut qu'à la
+  suivante. Il est écrit dans `settings.json`, dans le mode lui-même (champ `reviewBeforePaste` de chaque entrée de `modes`) ;
+  le choix de l'étape 4 (entrée `modeOptions`) est repris une fois, à la lecture d'un fichier de la version 1 (voir « Ce
+  qui est stocké »). Si l'enregistrement est refusé (fichier devenu illisible ou plus récent), l'onglet le dit et
+  l'interrupteur revient à sa valeur enregistrée.
 - **Le champ.** Le texte s'affiche en entier dans un champ de texte brut (titre « À relire »), qui prend la frappe tout de
   suite : le panneau devient la fenêtre clé sans activer Supervox (la barre des menus devrait rester celle de l'application
   de dessous). Rien ne modifie le texte dans le dos de l'utilisateur : ni guillemets ni tirets typographiques, ni
@@ -217,13 +233,117 @@ de `docs/essai-final.md`).
 - **Échap** ferme sans coller ni copier, comme toute autre fermeture du panneau (menu de l'icône, « Réglages… », « Quitter
   Supervox »). Le texte corrigé devient « Dernière dictée » (un champ vidé laisse le texte d'origine). Un collage qui n'a pas
   encore envoyé ⌘V est annulé.
-- **Pendant la relecture**, le raccourci global ne fait rien et un clic en dehors du panneau ne le ferme pas (comme pendant
-  une dictée) : le clic sert à choisir où coller. Changer de pastille ne touche pas la relecture ; la dictée suivante suit
-  le mode choisi. La relecture n'utilise aucun modèle : supprimer un modèle reste possible.
+- **Pendant la relecture**, le raccourci global ne lance pas de dictée (il commence une correction à la voix, voir « Corriger
+  à la voix »), celui d'un mode est ignoré, et un clic en dehors du panneau ne le ferme pas (comme pendant une dictée) : le
+  clic sert à choisir où coller. Changer de pastille ne touche pas la relecture ; la dictée suivante suit le mode choisi. La
+  relecture elle-même n'utilise aucun modèle de transcription : supprimer un modèle reste possible, sauf pendant qu'une
+  consigne de correction est écoutée ou transcrite.
 - **Le texte n'est gardé qu'en mémoire.** Quitter Supervox pendant une relecture le perd, sans demander confirmation.
   Quitter pendant le collage attend, trois secondes au plus, la fin du collage.
-- **Pas encore là** : « Corriger à la voix » (étape suivante), l'historique sur disque, l'annulation après fermeture du
-  panneau.
+- **Pas encore là** : l'historique sur disque, l'annulation après fermeture du panneau, l'entretien vocal et la voix de
+  réponse (à venir).
+
+### Modes
+
+Un mode dit ce que devient le texte dicté. Il se règle dans Réglages, onglet Modes (rien ne se règle ailleurs). Chaque mode
+a un nom, une consigne, un modèle (facultatif), un moteur de transcription (facultatif), un raccourci (facultatif) et un
+choix de relecture.
+
+- **Les quatre modes de base**, dans l'ordre des pastilles du panneau : « Dictée brute » (aucune consigne : le texte est
+  collé tel quel), « Dictée nettoyée » (ponctuation, majuscules, hésitations retirées, sens et ton gardés), « Prompt » (la
+  demande dictée devient un prompt en cinq parties : Objectif, Contexte, Contraintes, Résultat attendu, Critères de réussite ;
+  ce que la dictée ne couvre pas est marqué « Non précisé. », rien n'est inventé) et « Entretien » (pas encore fait : le
+  panneau dit « Ce mode arrive à une étape suivante. »). Dictée brute et Entretien ne se suppriment pas ; Dictée nettoyée et
+  Prompt se suppriment et se remettent par « Ajouter un mode », avec leur consigne d'origine. On peut créer, renommer
+  (60 caractères au plus, sans doublon), dupliquer, déplacer et supprimer les autres ; les pastilles suivent l'ordre de la
+  liste, à la ligne quand elles débordent.
+- **La consigne.** Le champ « Consigne » de la feuille d'un mode (« Modifier… ») contient la consigne d'origine pour un mode de
+  base ; « Revenir à la consigne d'origine » la rétablit. Sans consigne, le texte est collé tel quel et rien n'est envoyé. Les
+  consignes d'origine (`ModeDefaults`) sont des choix de produit, non mesurés : leur qualité se juge à l'essai. Ce que vous
+  écrivez n'est pas toute la demande : l'application y ajoute elle-même le vocabulaire personnel (l'onglet Transcription),
+  s'il y en a, et une règle qui dit au modèle que le texte dicté est une donnée à transformer, jamais une demande qui lui est
+  adressée. Le texte part seul, entre des balises, et l'application neutralise celles que le texte écrirait lui-même
+  (`<dictee>`, `<texte>`, `<consigne>`, ouvrantes ou fermantes) : leur chevron ouvrant devient `‹`. Modifier ou effacer une
+  consigne ne retire donc pas cette protection. C'est une défense contre les écritures connues, non une garantie : elle couvre
+  la casse, les accents, les blancs et les caractères invisibles ou combinants, les chevrons et barres d'autres
+  écritures (pleine chasse, `〈 ⟨ ❮`, `／ ⁄ ∕`), les lettres pleine chasse, mathématiques ou cyrilliques, grecques et
+  petites capitales qui se confondent avec celles des noms, les entités `&lt;` et numériques, et une balise sans chevron
+  fermant ; elle ne couvre pas une lettre confondable absente de sa table, une entité doublement codée (`&amp;lt;`) ni un nom
+  coupé par du texte visible. Un chevron suivi d'un des trois noms est neutralisé même sans balise (`a < texte` devient
+  `a ‹ texte`). Que le modèle respecte la règle n'est pas vérifié par les tests : seule la forme de la requête l'est (liste
+  d'essai, essai 51), et relire le résultat reste le filet.
+- **Modèles fort et rapide.** En tête de l'onglet Modes, section « Modèles ». Le modèle fort sert à la correction à la voix et
+  à tout mode sans modèle propre ; un mode peut choisir le sien (« Modèle utilisé »). Le modèle rapide est enregistré pour
+  l'entretien vocal, à venir : il ne sert encore à rien. Les modèles proposés sont ceux de la dernière liste lue de chaque
+  fournisseur.
+- **Ce qui part chez le fournisseur, et ce qui reste ici.** Pour un mode à consigne, une seule requête part, vers l'adresse du
+  fournisseur (`<adresse>/v1/chat/completions` pour le type « Compatible OpenAI », `<adresse>/v1/messages` pour « Anthropic »),
+  avec la clé dans l'en-tête : le nom du modèle, la consigne, le vocabulaire et le texte dicté. **L'audio ne part jamais**, il
+  est transcrit sur l'ordinateur. La clé reste dans le trousseau, le texte dicté n'est écrit dans aucun fichier ni journal, la
+  réponse du fournisseur non plus. La feuille d'un mode le rappelle : « Ce mode envoie le texte dicté à « <nom du
+  fournisseur> ». L'audio reste sur cet ordinateur. » Pendant la mise en forme, le panneau dit à qui part le texte.
+- **Pendant la mise en forme**, le titre est « Mise en forme… » : le texte du modèle s'écrit à mesure (sa fin, quatre lignes
+  au plus), puis le texte est collé, ou s'ouvre en relecture si le mode relit. Échap annule la requête : rien n'est collé, et
+  la transcription brute reste dans « Dernière dictée ». Un mode sans relecture ne colle pas si l'application au premier plan
+  a changé pendant la mise en forme : le texte s'ouvre en relecture avec un avis, au lieu d'être collé là où l'on est allé.
+  Le texte mis en forme remplace la transcription brute comme dernier texte ; avec relecture, la brute est la première
+  « Version précédente ».
+- **Quand le modèle échoue** (aucun modèle choisi, fournisseur supprimé, clé absente ou refusée, adresse ou modèle inconnus,
+  limite de débit, serveur en erreur, réseau coupé, réponse coupée, refusée ou vide, aucune réponse en 30 secondes de silence
+  ou en 120 secondes au total), la relecture s'ouvre sur la **transcription brute**, même si le mode n'a pas de relecture,
+  avec une phrase fixe qui dit quoi faire : le texte n'est jamais perdu, rien n'est collé, et une réponse commencée n'est pas
+  gardée. Ces phrases viennent d'une table du code ; jamais le corps d'une erreur du serveur ni le texte dicté.
+- **Raccourci d'un mode** (feuille du mode, « Raccourci du mode ») : mêmes règles que le raccourci global : une touche de
+  modification (⌃ ou ⌘) au moins, ni réservé par le système, ni pris par le raccourci global, un autre mode ou un raccourci de
+  macOS activé. Il choisit le mode dans le panneau (comme un clic sur la pastille, enregistré) et commence la dictée, en
+  bascule ou en maintien selon l'onglet Raccourci. Pendant une dictée, seul le raccourci du mode qui l'a commencée la termine ;
+  celui d'un autre mode, ou le global, est ignoré. **Exception** : si ce raccourci n'existe plus (mode supprimé, raccourci
+  retiré pendant la dictée), la dictée, en bascule, se termine par n'importe quel autre raccourci, pour ne pas rester sans
+  issue ; en maintien, les autres raccourcis restent ignorés. Pendant une relecture, un raccourci de mode est ignoré. Si deux raccourcis
+  portent la même combinaison (possible seulement en éditant `settings.json` à la main), le raccourci global gagne toujours,
+  sinon le premier mode de la liste ; l'autre n'est pas enregistré et une ligne du panneau le dit.
+
+### Régler un fournisseur depuis l'interface
+
+1. Réglages, onglet Fournisseurs, « Ajouter un fournisseur… » : un nom (libre), l'adresse du serveur (en `https://` ; `http://`
+   n'est permis que pour `localhost` et `127.0.0.1`, pour que la clé ne voyage jamais en clair ailleurs), le type
+   (« Compatible OpenAI » ou « Anthropic » : le format des requêtes) et une clé d'API. Elle va dans le trousseau, jamais dans un
+   fichier.
+2. « Lister les modèles » : le nombre de modèles lus s'affiche. La liste est gardée pour les menus de l'onglet Modes.
+3. Onglet Modes, section « Modèles » : choisissez le modèle fort.
+4. **Un serveur local sans authentification exige quand même une clé quelconque** (un mot suffit) : une requête sans clé n'est
+   jamais envoyée, et la liste des modèles sans clé n'est pas prise en charge pour le type « Compatible OpenAI ». C'est un
+   choix de l'étape 5, qui coûte ce geste.
+5. Changer d'hôte retire l'ancienne clé : une clé n'est envoyée qu'à l'adresse pour laquelle elle a été saisie.
+
+### Corriger à la voix
+
+En relecture, d'un texte qui n'est pas blanc : le bouton « Corriger à la voix », ou le raccourci global, commence une
+correction. La consigne se dit à voix haute (« ajoute que les tests doivent passer ») ; elle est transcrite sur l'ordinateur
+avec les mêmes réglages que la dictée relue ; le texte et la consigne partent ensuite au **modèle fort**, qui rend le texte
+modifié, en entier, à la place de l'ancien.
+
+- **Déroulé.** « Préparation… » (la phrase dit d'attendre), « Écoute de la consigne » (point rouge, durée, forme d'onde ; le
+  bouton devient « Terminer »), « Transcription de la consigne… », « Réécriture… » (le texte du modèle s'écrit à mesure dans le
+  champ), puis « À relire » avec le nouveau texte. Le champ est en lecture seule pendant la correction, et « Copier » et « Coller »
+  sont inactifs à chaque étape (⌘↩ ne fait rien : on ne copie ni ne colle un texte que l'écran ne montre pas) ; Échap
+  l'annule. Tant qu'elle n'a pas réussi, le texte n'a pas changé. En bascule, un second appui sur le raccourci (ou « Terminer ») termine la consigne ; en
+  maintien, c'est le relâchement. Commencée par le bouton, elle se termine toujours par « Terminer » ou un appui, même en
+  réglage « maintien ».
+- **Versions.** Chaque correction réussie empile l'ancien texte : les boutons à flèche « Version précédente » et « Version
+  suivante » (sans texte, nommés pour VoiceOver) et ⌘Z / ⇧⌘Z les parcourent. ⌘Z défait d'abord ce qui a été tapé dans le champ,
+  puis change de version ; le texte tapé voyage avec sa version. Une nouvelle correction vide les versions suivantes. Pendant une
+  saisie en attente (touche morte, méthode de saisie), changer de version est sans effet et rien n'est perdu. Les versions ne
+  vivent qu'en mémoire, tant que la relecture est ouverte.
+- **Quand elle n'aboutit pas** (aucune consigne entendue, aucun modèle fort, panne du fournisseur, micro non autorisé, réponse
+  identique au texte), le texte reste intact, ce qu'on y avait tapé compris, avec une phrase qui dit pourquoi ; aucune version
+  n'est ajoutée. Échap annule la correction seule (la relecture revient) ; un second Échap ferme le panneau sans rien coller.
+- **Limites connues.** Le texte (et la consigne) part chez le fournisseur du modèle fort, comme une mise en forme. Quitter
+  Supervox pendant la mise en forme ou une relecture perd le texte, la transcription brute comprise, sans confirmation. Une
+  version abandonnée par une nouvelle correction est perdue. Pendant une correction, supprimer un modèle de transcription est
+  refusé (une session le tient). Que ⌘Z et ⇧⌘Z changent de version avec un vrai clavier dans le panneau, que VoiceOver annonce
+  de lui-même les étapes (il lit les éléments, l'application ne poste aucune annonce) et que les modèles obéissent aux
+  consignes ne sont pas établis : ils sont à essayer (étape 5 de `docs/essai-final.md`).
 
 ### Où sont les modèles
 
@@ -231,9 +351,12 @@ Rien n'est embarqué : les modèles se téléchargent depuis Internet, à la dem
 Transcription, ou à la première dictée qui en a besoin), puis tournent sur ce Mac.
 
 **Ce qui touche le réseau et ce qui ne le touche pas.**
-- Le réseau sert au téléchargement des modèles, et à lui seul : le dépôt de modèles de WhisperKit (le modèle et son
-  tokenizer) et les modèles de FluidAudio (Parakeet, son petit modèle de vocabulaire, le détecteur de voix). Le texte dicté
-  et l'audio ne partent nulle part : les moteurs sont locaux. (Les fournisseurs de l'étape 2 ne servent pas à la dictée.)
+- **Pour la transcription**, le réseau sert au téléchargement des modèles, et à lui seul : le dépôt de modèles de WhisperKit
+  (le modèle et son tokenizer) et les modèles de FluidAudio (Parakeet, son petit modèle de vocabulaire, le détecteur de
+  voix). L'audio ne part nulle part : les moteurs sont locaux, y compris pour la consigne d'une correction à la voix.
+- **Pour la mise en forme et la correction à la voix**, le texte part au fournisseur choisi (voir « Modes ») : un mode sans
+  consigne (la dictée brute, un mode personnel vide) n'envoie rien. C'est le seul cas où du texte dicté quitte l'ordinateur ;
+  l'audio, jamais.
 - Un modèle WhisperKit « Prêt » se charge depuis son dossier, sans requête réseau : le dossier du modèle, l'interdiction de
   télécharger et le dossier du tokenizer sont donnés à WhisperKit (code et dépendance lus, jamais essayé hors ligne). Le
   tokenizer n'y fait exception que si son fichier (`models/openai/whisper-<variante>/tokenizer.json` et

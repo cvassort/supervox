@@ -13,6 +13,7 @@ import Testing
     let secrets = RecordingSecretStore()
     let registrar = HotKeyTests.FakeRegistrar()
     let escape = HotKeyTests.FakeRegistrar()
+    let modeRegistrars = ModeRegistrars()
     let surface = FakePanelSurface()
     let clicks = FakeClickMonitor()
     let presenter = Presenter()
@@ -34,17 +35,18 @@ import Testing
         if !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
         return AppController(
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
-            escapeRegistrar: escape,
+            escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
             permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
             systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi, settingsView: settingsView,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
     }
 
     /// Les modèles que la fenêtre de test a reçus, pour agir comme l'utilisateur.
     @MainActor final class Built {
         var hotKey: HotKeySettingsModel?
+        var modes: ModesModel?
     }
 
     /// La vraie composition de la fenêtre (`SettingsView.content`), avec disposition et moniteur de touches doubles.
@@ -52,13 +54,39 @@ import Testing
         { [monitor] controller in
             let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
             built.hotKey = hotKey
+            let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+            built.modes = modes
             return SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
-                modes: SettingsView.makeModesModel(controller),
+                modes: modes,
                 permissions: controller.permissions, openSystemSettings: { _ in })
         }
+    }
+
+    /// Une combinaison tenue par un mode est refusée au raccourci global, avec le nom du mode, sans solliciter le système ; et la
+    /// capture rend aussi les raccourcis des modes.
+    @Test func theGlobalCaptureRefusesAModesCombinationAndSuspendsTheModesHotKeys() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes[1].hotKey = HotKeyTests.keyB
+        settings.modes[1].name = "Compte rendu"
+        try store.save(settings)
+        let controller = makeController()
+        controller.launch()
+        let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
+        #expect(modeRegistrars.registered == [HotKeyTests.keyB])
+
+        hotKey.startRecording()
+        #expect(modeRegistrars.registered.isEmpty, "la capture rend les raccourcis des modes au système")
+        let calls = registrar.registerCalls
+        hotKey.record(HotKeyTests.keyB)
+        #expect(hotKey.message?.contains("Compte rendu") == true)
+        #expect(registrar.registerCalls == calls + 1, "seul le rétablissement de la capture : ⌃⌥B n'est pas proposé au système")
+        #expect(controller.settings.hotKey == .standard)
+        #expect(registrar.registered == .standard)
+        #expect(modeRegistrars.registered == [HotKeyTests.keyB], "la capture finie, le raccourci du mode est rétabli")
     }
 
     /// N1 : fenêtre fermée, quittée ou application passée en arrière-plan pendant une capture : la capture prend fin,
@@ -140,13 +168,13 @@ import Testing
             controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit)
         #expect(transcription.settings == .defaults)
 
-        transcription.setEngine("parakeet")
+        transcription.setEngine(.parakeet)
         transcription.setLanguage("en")
         controller.panelModel.select("prompt")
         await transcription.setVocabulary(text: "Docker")
 
         let onDisk = store.load().settings
-        #expect(onDisk.transcription.engine == "parakeet")
+        #expect(onDisk.transcription.engine == .parakeet)
         #expect(onDisk.transcription.language == "en")
         #expect(onDisk.transcription.vocabulary == ["Docker"])
         #expect(onDisk.lastModeID == "prompt")
@@ -157,13 +185,13 @@ import Testing
     @Test func reviewChoicesAreSavedThroughTheController() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        let modes = SettingsView.makeModesModel(controller)
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
         #expect(!controller.settings.reviewsBeforePaste(ModeChip.rawID))
 
         modes.setReview(true, for: ModeChip.rawID)
 
         let onDisk = store.load().settings
-        #expect(onDisk.modeOptions[ModeChip.rawID] == ModeOptions(reviewBeforePaste: true))
+        #expect(onDisk.mode(ModeChip.rawID)?.reviewBeforePaste == true)
         #expect(onDisk.reviewsBeforePaste(ModeChip.rawID))
         #expect(controller.settings == onDisk)
         #expect(controller.settings.reviewsBeforePaste(ModeChip.rawID))
@@ -171,14 +199,110 @@ import Testing
         #expect(modes.message == nil)
 
         // Un modèle construit plus tard part des choix enregistrés.
-        let reopened = SettingsView.makeModesModel(controller)
+        let reopened = SettingsView.makeModesModel(controller, keyMonitor: monitor)
         #expect(reopened.rows.map(\.reviews) == [true, false, true, true])
+    }
+
+    /// Règle 9 : renommer un mode par l'onglet écrit `settings.json` et change la pastille du panneau.
+    @Test func renamingAModeWritesTheFileAndChangesTheChipOfThePanel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        controller.launch()
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+        #expect(controller.panelModel.modes.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"])
+
+        var draft = modes.draft(for: ModeChip.cleanedID)
+        draft.name = "Mise au propre"
+        #expect(modes.save(draft))
+
+        #expect(store.load().settings.mode(ModeChip.cleanedID)?.name == "Mise au propre")
+        #expect(controller.settings == store.load().settings)
+        #expect(controller.panelModel.modes.map(\.title) == ["Dictée brute", "Mise au propre", "Prompt", "Entretien"])
+        #expect(modes.rows.map(\.title) == controller.panelModel.modes.map(\.title))
+    }
+
+    /// Créer, dupliquer, déplacer, supprimer : le panneau suit, et le fichier aussi.
+    @Test func creatingDuplicatingMovingAndDeletingModesFollowsInThePanelAndTheFile() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        controller.launch()
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+
+        let created = modes.add()
+        let copy = modes.duplicate(ModeChip.promptID)
+        modes.move(created, by: -2)
+        // Avant le déplacement : Dictée brute, Dictée nettoyée, Prompt, la copie, Entretien, le mode créé (à la fin).
+        let onDisk = store.load().settings
+        #expect(onDisk.modes.map(\.id) == controller.panelModel.modes.map(\.id))
+        #expect(onDisk.modes.map(\.id) == [ModeChip.rawID, ModeChip.cleanedID, ModeChip.promptID, created, copy, ModeChip.interviewID])
+        #expect(onDisk.mode(copy)?.instruction == ModeDefaults.prompt)
+
+        modes.delete(created)
+        #expect(!store.load().settings.modes.contains { $0.id == created })
+        #expect(!controller.panelModel.modes.contains { $0.id == created })
+        #expect(modes.rows.map(\.id) == controller.panelModel.modes.map(\.id))
+    }
+
+    /// Un mode que l'onglet écrit ne défait rien de ce que le fichier porte d'autre : champs inconnus, consigne, moteur, raccourci
+    /// d'un autre mode ; et une écriture faite ailleurs entre la création du modèle et le geste est gardée.
+    @Test func theModesTabOnlyWritesWhatItTouchesAndKeepsWhatWasWrittenElsewhere() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data(
+            #"""
+            {"version": 2, "lastModeID": "perso-1", "futur": {"a": 1},
+             "modes": [
+               {"id": "dictee-brute", "name": "Dictée brute", "futur-mode": [true]},
+               {"id": "dictee-nettoyee", "name": "Dictée nettoyée", "instruction": "Ma consigne.", "engine": "parakeet"},
+               {"id": "perso-1", "name": "Courriel", "instruction": "Écris.", "reviewBeforePaste": false,
+                "hotKey": {"keyCode": 12, "modifiers": 6144}, "futur-mode": null},
+               {"id": "entretien", "name": "Entretien"}]}
+            """#.utf8
+        ).write(to: store.file)
+        let before = store.load().settings
+        let controller = makeController()
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+
+        // Après la création du modèle : le panneau change de mode, un autre onglet ajoute un fournisseur.
+        let provider = Provider(
+            id: UUID(), name: "Ajouté après", baseURL: "https://api.example.com/v1", kind: .openAICompatible, models: [])
+        try controller.updateSettings {
+            $0.lastModeID = ModeChip.promptID
+            $0.providers = [provider]
+        }
+
+        modes.setReview(true, for: ModeChip.rawID)
+        modes.setReview(true, for: ModeChip.cleanedID)
+
+        let onDisk = store.load().settings
+        #expect(controller.settings == onDisk)
+        #expect(onDisk.providers == [provider])
+        var expected = before
+        expected.lastModeID = ModeChip.promptID
+        expected.providers = [provider]
+        expected.modes[0].reviewBeforePaste = true
+        expected.modes[1].reviewBeforePaste = true
+        #expect(onDisk == expected)
+        #expect(onDisk.mode(ModeChip.cleanedID)?.instruction == "Ma consigne.")
+        #expect(onDisk.mode(ModeChip.cleanedID)?.engine == .parakeet)
+        #expect(onDisk.mode("perso-1")?.reviewBeforePaste == false)
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+        #expect((written["futur"] as? NSDictionary)?.isEqual(to: ["a": 1]) == true)
+        let writtenModes = try #require(written["modes"] as? [[String: Any]])
+        #expect(writtenModes[0]["futur-mode"] != nil)
+        #expect(writtenModes[2]["futur-mode"] is NSNull)
+
+        // Un mode dupliqué garde aussi les champs inconnus de l'original, et rien d'autre ne change.
+        let copy = modes.duplicate("perso-1")
+        let afterCopy = store.load().settings
+        #expect(afterCopy.mode(copy)?.hotKey == nil)
+        #expect(afterCopy.mode("perso-1") == onDisk.mode("perso-1"))
+        #expect(afterCopy.lastModeID == ModeChip.promptID)
     }
 
     @Test func aRefusedSaveLeavesTheReviewChoiceAsItWas() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        let modes = SettingsView.makeModesModel(controller)
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
         try Data("pas du json".utf8).write(to: store.file)
 
         modes.setReview(true, for: ModeChip.rawID)
@@ -188,6 +312,138 @@ import Testing
         #expect(modes.message?.contains("settings.json") == true)
     }
 
+    /// La suppression du mode choisi dans le panneau : le fichier garde Dictée brute comme dernier mode (une seule écriture, par
+    /// `updateSettings`), le panneau y revient, et le raccourci du mode est rendu au système.
+    @Test func deletingTheModeChosenInThePanelBringsBackTheRawModeAndFreesItsHotKey() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes.insert(Mode(id: "perso-un", name: "Compte rendu", instruction: "Résume.", hotKey: HotKeyTests.keyB), at: 1)
+        settings.lastModeID = "perso-un"
+        try store.save(settings)
+        let controller = makeController()
+        controller.launch()
+        #expect(controller.panelModel.selectedModeID == "perso-un")
+        #expect(modeRegistrars.registered == [HotKeyTests.keyB])
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+
+        modes.delete("perso-un")
+
+        let onDisk = store.load().settings
+        #expect(!onDisk.modes.contains { $0.id == "perso-un" })
+        #expect(onDisk.lastModeID == ModeChip.rawID, "dans la même écriture, pas à une prochaine sélection")
+        #expect(controller.settings == onDisk)
+        #expect(controller.panelModel.selectedModeID == ModeChip.rawID)
+        #expect(modeRegistrars.registered.isEmpty)
+        #expect(controller.modeHotKeys.active.isEmpty)
+    }
+
+    /// Le raccourci d'un mode, de la capture à l'enregistrement : le système le prend, le fichier le garde ; un refus du système
+    /// garde l'ancien.
+    @Test func aModesHotKeyIsCapturedRegisteredAndSavedAndASystemRefusalKeepsTheOldOne() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes.insert(Mode(id: "perso-un", name: "Compte rendu", instruction: "Résume.", hotKey: HotKeyTests.keyB), at: 1)
+        try store.save(settings)
+        let controller = makeController()
+        controller.launch()
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+        let keyC = HotKey(keyCode: 0x08, modifiers: [.control, .option])
+
+        modes.startRecording(for: "perso-un")
+        #expect(monitor.isActive)
+        #expect(modeRegistrars.registered.isEmpty, "la capture rend les raccourcis des modes au système")
+        monitor.send(keyCode: 0x08, flags: [.control, .option])
+
+        #expect(store.load().settings.mode("perso-un")?.hotKey == keyC)
+        #expect(modeRegistrars.registered == [keyC])
+        #expect(registrar.registered == .standard, "le raccourci général revient")
+        #expect(!monitor.isActive)
+        #expect(modes.message == nil)
+
+        // Le système refuse la combinaison suivante : l'ancienne reste, dans le système comme dans le fichier.
+        for modeRegistrar in modeRegistrars.made { modeRegistrar.refused = [HotKeyTests.keyA] }
+        modes.startRecording(for: "perso-un")
+        monitor.send(keyCode: 0x00, flags: [.control, .option])
+        #expect(modes.message?.contains("refusé par macOS") == true)
+        #expect(store.load().settings.mode("perso-un")?.hotKey == keyC)
+        #expect(modeRegistrars.registered == [keyC])
+
+        // Une combinaison que le raccourci général tient est refusée avant le système.
+        modes.startRecording(for: "perso-un")
+        monitor.send(keyCode: UInt16(HotKey.standard.keyCode), flags: [.control, .option])
+        #expect(modes.message?.contains("raccourci global") == true)
+        #expect(store.load().settings.mode("perso-un")?.hotKey == keyC)
+    }
+
+    /// Un mode supprimé pendant que la feuille est ouverte : la capture est refusée par le contrôleur, rien n'est enregistré.
+    @Test func theControllerRefusesAHotKeyForAModeThatIsNoLongerInTheSettings() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        controller.launch()
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+        let id = modes.add()
+        try controller.updateSettings { $0.modes.removeAll { $0.id == id } }
+
+        modes.startRecording(for: id)
+        #expect(modes.message == ModesModel.unknownModeMessage)
+        #expect(!monitor.isActive)
+        #expect(modeRegistrars.registered.isEmpty)
+        #expect(controller.modeHotKeys.active.isEmpty)
+    }
+
+    /// Règle 9 : la fenêtre gardée d'une ouverture à l'autre relit les réglages (`reload` à la présentation).
+    @Test func aKeptSettingsWindowRereadsTheSettingsOnEachPresentation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+
+        controller.openSettings()
+        await controller.settingsPresentation?.value
+        let modes = try #require(built.modes)
+        #expect(modes.rows.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"])
+
+        // Fermée, la fenêtre est gardée ; pendant ce temps, un autre chemin change les réglages.
+        try controller.updateSettings {
+            $0.modes[1].name = "Écrit ailleurs"
+            $0.modes.append(Mode(id: "perso-ailleurs", name: "Autre mode", instruction: "x"))
+            $0.providers = [Provider(id: UUID(), name: "Ajouté ailleurs", baseURL: "https://example.com", kind: .anthropic, models: ["m"])]
+        }
+        #expect(modes.rows.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"], "pas encore relu")
+
+        controller.openSettings()
+        await controller.settingsPresentation?.value
+        #expect(built.modes === modes, "la fenêtre et son modèle sont gardés")
+        #expect(modes.rows.map(\.title) == ["Dictée brute", "Écrit ailleurs", "Prompt", "Entretien", "Autre mode"])
+        #expect(modes.modelOptions.map(\.providerName) == ["Ajouté ailleurs"])
+    }
+
+    /// Fermer la fenêtre pendant une capture de raccourci de mode rend les raccourcis.
+    @Test func leavingTheWindowEndsAModeHotKeyCapture() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes.insert(Mode(id: "perso-un", name: "Compte rendu", instruction: "Résume.", hotKey: HotKeyTests.keyB), at: 1)
+        try store.save(settings)
+        let controller = makeController()
+        controller.launch()
+        let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
+        let content = SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: modes, permissions: controller.permissions, openSystemSettings: { _ in })
+
+        modes.startRecording(for: "perso-un")
+        #expect(modeRegistrars.registered.isEmpty)
+        content.onLeave()
+        #expect(modes.recordingModeID == nil)
+        #expect(!monitor.isActive)
+        #expect(modeRegistrars.registered == [HotKeyTests.keyB])
+        #expect(registrar.registered == .standard)
+    }
+
     @Test func aRefusedSaveRestoresTheDisplayedTranscriptionSetting() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
@@ -195,10 +451,10 @@ import Testing
             controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit)
         try Data("pas du json".utf8).write(to: store.file)
 
-        transcription.setEngine("parakeet")
+        transcription.setEngine(.parakeet)
 
-        #expect(transcription.settings.engine == "whisperkit")
-        #expect(controller.settings.transcription.engine == "whisperkit")
+        #expect(transcription.settings.engine == .whisperKit)
+        #expect(controller.settings.transcription.engine == .whisperKit)
         #expect(transcription.message?.contains("settings.json") == true)
     }
 

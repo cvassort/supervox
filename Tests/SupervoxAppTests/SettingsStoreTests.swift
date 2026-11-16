@@ -59,7 +59,15 @@ private func sampleSettings() -> AppSettings {
         ],
         hotKey: HotKey(keyCode: 40, modifiers: [.command, .shift]),
         hotKeyBehavior: .hold,
-        lastModeID: "reformulation")
+        lastModeID: "reformulation",
+        modes: Mode.base + [
+            Mode(
+                id: "perso-1", name: "Courriel", instruction: "Écris un courriel.",
+                model: ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, model: "modele-exemple"),
+                engine: .parakeet, hotKey: HotKey(keyCode: 12, modifiers: [.control, .option]), reviewBeforePaste: true)
+        ],
+        strongModel: ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, model: "modele-exemple"),
+        fastModel: ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, model: "modele-rapide"))
 }
 
 @Suite struct SettingsStoreTests {
@@ -89,8 +97,8 @@ private func sampleSettings() -> AppSettings {
 
     @Test func defaultsMatchTheSpecification() {
         let defaults = AppSettings.defaults
-        #expect(defaults.version == 1)
-        #expect(AppSettings.current == 1)
+        #expect(defaults.version == 2)
+        #expect(AppSettings.current == 2)
         #expect(defaults.providers.isEmpty)
         #expect(defaults.hotKey == HotKey(keyCode: 49, modifiers: [.control, .option]))
         #expect(defaults.hotKeyBehavior == .toggle)
@@ -207,7 +215,7 @@ private func sampleSettings() -> AppSettings {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        let original = Data(#"{"version": 2, "providers": "une autre forme"}"#.utf8)
+        let original = Data(#"{"version": 3, "providers": "une autre forme"}"#.utf8)
         try original.write(to: file)
         let store = SettingsStore(file: file, now: fixedClock)
 
@@ -216,7 +224,7 @@ private func sampleSettings() -> AppSettings {
         let notice = try #require(result.notice)
         #expect(notice.contains("plus récente"))
         #expect(try names(in: directory) == ["settings.json"])
-        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 2)) {
+        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 3)) {
             try store.save(sampleSettings())
         }
         #expect(try Data(contentsOf: file) == original)
@@ -275,7 +283,7 @@ private func sampleSettings() -> AppSettings {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        let original = Data(#"{"version": 2, "hotKeyBehavior": "comportementDuFutur", "lastModeID": "mode-du-futur"}"#.utf8)
+        let original = Data(#"{"version": 3, "hotKeyBehavior": "comportementDuFutur", "lastModeID": "mode-du-futur"}"#.utf8)
         try original.write(to: file)
         let store = SettingsStore(file: file, now: fixedClock)
 
@@ -286,24 +294,75 @@ private func sampleSettings() -> AppSettings {
         #expect(try Data(contentsOf: file) == original)
     }
 
-    /// Un champ inconnu (écrit par une version future qui a gardé le même numéro, ou à la main) est ignoré.
-    @Test func unknownFieldsAreIgnoredAndTheFileIsKept() throws {
+    /// M7 : un champ inconnu du premier niveau (écrit par une version future qui a gardé le même numéro, ou à la main) est lu,
+    /// gardé, et réécrit à l'identique ; le fichier n'est pas mis de côté. Pour un fournisseur, le champ inconnu est perdu :
+    /// voir la fin du test.
+    @Test func unknownFieldsAreKeptAndWrittenBack() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
         let id = UUID()
         try Data(#"""
-        {"version": 1, "providers": [{"id": "\#(id.uuidString)", "name": "Local", "baseURL": "http://localhost:1",
+        {"version": 2, "providers": [{"id": "\#(id.uuidString)", "name": "Local", "baseURL": "http://localhost:1",
           "kind": "anthropic", "models": ["m"], "couleur": "bleu"}],
          "hotKey": {"keyCode": 49, "modifiers": 6144}, "hotKeyBehavior": "toggle", "lastModeID": "prompt",
          "langue": "fr", "moteur": {"nom": "x"}}
         """#.utf8).write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
 
-        let result = SettingsStore(file: file, now: fixedClock).load()
+        let result = store.load()
         #expect(result.notice == nil)
         #expect(result.settings.lastModeID == "prompt")
         #expect(result.settings.providers.map(\.models) == [["m"]])
         #expect(try names(in: directory) == ["settings.json"])
+
+        try store.save(result.settings)
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(written["langue"] as? String == "fr")
+        #expect((written["moteur"] as? NSDictionary)?.isEqual(to: ["nom": "x"]) == true)
+
+        // Limite connue, fixée ici pour qu'elle reste visible (I2) : seuls `AppSettings` et `Mode` gardent leurs champs
+        // inconnus. Ceux d'un fournisseur (`couleur`), de `HotKey`, de `TranscriptionSettings` et de `ModelChoice` sont perdus
+        // à la réécriture ; ajouter un champ à l'un de ces types exige donc d'augmenter `AppSettings.current`, ou d'étendre la
+        // garde (`UnknownFields`) à ce type. Si ce test tombe parce que la garde a été étendue, mettre le commentaire de
+        // `AppSettings` à jour avec elle.
+        let providers = try #require(written["providers"] as? [[String: Any]])
+        #expect(providers.count == 1)
+        #expect(providers[0]["couleur"] == nil)
+        #expect(providers[0]["name"] as? String == "Local")
+    }
+
+    /// I1 : un moteur que cette version ne connaît pas se lit `whisperkit` (règle 6), et l'enregistrement suivant l'écrit
+    /// ainsi, sans avis, dans l'onglet Transcription comme dans chaque mode qui l'avait choisi (où il devient un choix explicite
+    /// de WhisperKit). Un nouveau moteur exige donc d'augmenter `AppSettings.current` : à la version suivante, un fichier plus
+    /// ancien que l'application qui l'écrit est protégé (gardé intact, non enregistrable) au lieu d'être réécrit. Ce test fixe la
+    /// conséquence de ne pas le faire.
+    @Test func anUnknownEngineInAVersionTwoFileIsRewrittenAsWhisperKitOnTheNextSave() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(
+            #"""
+            {"version": 2, "lastModeID": "dictee-brute", "transcription": {"engine": "moteur-futur", "language": "en"},
+             "modes": [{"id": "dictee-brute", "name": "Dictée brute"},
+                       {"id": "perso-1", "name": "Courriel", "instruction": "Écris.", "engine": "moteur-futur"},
+                       {"id": "entretien", "name": "Entretien"}]}
+            """#.utf8
+        ).write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        var settings = store.load().settings
+        #expect(settings.transcription.engine == .whisperKit)
+        #expect(settings.mode("perso-1")?.engine == .whisperKit)
+        settings.lastModeID = ModeChip.promptID
+        try store.save(settings)
+
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect((written["transcription"] as? [String: Any])?["engine"] as? String == "whisperkit")
+        #expect((written["transcription"] as? [String: Any])?["language"] as? String == "en")
+        let modes = try #require(written["modes"] as? [[String: Any]])
+        #expect(modes[1]["engine"] as? String == "whisperkit")
+        #expect(modes[0]["engine"] == nil)
     }
 
     /// m1 : une erreur de lecture (ici un fichier sans droit de lecture) n'est pas un fichier abîmé : il reste à
@@ -475,94 +534,294 @@ private func sampleSettings() -> AppSettings {
         #expect(file.pathComponents.suffix(3) == ["Application Support", "Supervox", "settings.json"])
     }
 
-    // MARK: - Migration : un fichier d'avant « relire avant de coller »
+    // MARK: - Migration : un fichier de l'étape 4 (version 1, `modeOptions`)
 
-    /// Un fichier au format de cette version avant l'ajout de `modeOptions`, tous les autres champs remplis (clés triées,
-    /// comme l'écrit le magasin).
-    private static let formerFile = #"""
+    /// Un fichier au format de l'étape 4, tous champs remplis. PAS tapé à la main : produit par l'encodeur de l'étape 4
+    /// (`SettingsStore.save` d'un `AppSettings` de l'étape 4 construit avec chacun de ces champs), avant la modification
+    /// d'`AppSettings`, et collé tel quel (y compris l'entrée `mode-inconnu`, que l'encodeur produit aussi).
+    private static let stepFourFile = #"""
     {
-      "hotKey": {"keyCode": 49, "modifiers": 6144},
-      "hotKeyBehavior": "hold",
-      "lastModeID": "prompt",
-      "providers": [
-        {"baseURL": "https://api.example.com/v1", "id": "00000000-0000-0000-0000-0000000000A1",
-         "kind": "openAICompatible", "models": ["modele-a", "modele-b"], "name": "Exemple"}
+      "hotKey" : {
+        "keyCode" : 49,
+        "modifiers" : 6144
+      },
+      "hotKeyBehavior" : "hold",
+      "lastModeID" : "prompt",
+      "modeOptions" : {
+        "dictee-brute" : {
+          "reviewBeforePaste" : true
+        },
+        "entretien" : {
+          "reviewBeforePaste" : false
+        },
+        "mode-inconnu" : {
+          "reviewBeforePaste" : true
+        },
+        "prompt" : {
+          "reviewBeforePaste" : false
+        }
+      },
+      "providers" : [
+        {
+          "baseURL" : "https:\/\/api.example.com\/v1",
+          "id" : "00000000-0000-0000-0000-0000000000A1",
+          "kind" : "openAICompatible",
+          "models" : [
+            "modele-exemple",
+            "modele-b"
+          ],
+          "name" : "Exemple"
+        }
       ],
-      "systemConflictShown": {"keyCode": 40, "modifiers": 768},
-      "transcription": {"engine": "parakeet", "language": "en", "vocabulary": ["Kubernetes", "Docker"],
-                        "whisperModel": "small"},
-      "version": 1
+      "systemConflictShown" : {
+        "keyCode" : 40,
+        "modifiers" : 768
+      },
+      "transcription" : {
+        "engine" : "parakeet",
+        "language" : "en",
+        "vocabulary" : [
+          "Kubernetes",
+          "Docker"
+        ],
+        "whisperModel" : "small"
+      },
+      "version" : 1
     }
     """#
 
-    private static let formerSettings = AppSettings(
-        version: 1,
-        providers: [
-            Provider(
-                id: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, name: "Exemple",
-                baseURL: "https://api.example.com/v1", kind: .openAICompatible, models: ["modele-a", "modele-b"])
-        ],
-        hotKey: .standard, hotKeyBehavior: .hold, lastModeID: "prompt",
-        systemConflictShown: HotKey(keyCode: 40, modifiers: [.command, .shift]),
-        transcription: TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["Kubernetes", "Docker"]),
-        modeOptions: [:])
+    /// Ce que la migration doit rendre : les quatre modes de base, avec le choix de relecture repris de `modeOptions` (`true`
+    /// pour Dictée brute, rien pour Dictée nettoyée, `false` pour Prompt, `false` gardé pour Entretien sans effet).
+    private static var migratedModes: [Mode] {
+        var modes = Mode.base
+        modes[0].reviewBeforePaste = true
+        modes[2].reviewBeforePaste = false
+        modes[3].reviewBeforePaste = false
+        return modes
+    }
 
-    @Test func aFileWrittenBeforeModeOptionsDecodesWithEveryFieldAndNoChoice() throws {
-        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(Self.formerFile.utf8))
-        #expect(decoded.version == 1)
-        #expect(decoded.providers.map(\.name) == ["Exemple"])
-        #expect(decoded.providers.first?.baseURL == "https://api.example.com/v1")
-        #expect(decoded.providers.first?.models == ["modele-a", "modele-b"])
+    private static let providerID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
+
+    @Test func aStepFourFileIsMigratedToTheBaseModesWithTheChoicesTaken() throws {
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: Data(Self.stepFourFile.utf8))
+        #expect(decoded.providers == [
+            Provider(
+                id: Self.providerID, name: "Exemple", baseURL: "https://api.example.com/v1", kind: .openAICompatible,
+                models: ["modele-exemple", "modele-b"])
+        ])
         #expect(decoded.hotKey == .standard)
         #expect(decoded.hotKeyBehavior == .hold)
         #expect(decoded.lastModeID == "prompt")
         #expect(decoded.systemConflictShown == HotKey(keyCode: 40, modifiers: [.command, .shift]))
-        #expect(decoded.transcription.engine == "parakeet")
-        #expect(decoded.transcription.whisperModel == "small")
-        #expect(decoded.transcription.language == "en")
-        #expect(decoded.transcription.vocabulary == ["Kubernetes", "Docker"])
-        #expect(decoded.modeOptions == [:])
-        #expect(decoded == Self.formerSettings)
+        #expect(decoded.transcription == TranscriptionSettings(
+            engine: .parakeet, whisperModel: "small", language: "en", vocabulary: ["Kubernetes", "Docker"]))
+        #expect(decoded.modes == Self.migratedModes)
+        #expect(decoded.modes.map(\.reviewBeforePaste) == [true, nil, false, false])
+        #expect(decoded.reviewsBeforePaste(ModeChip.rawID))
+        #expect(!decoded.reviewsBeforePaste(ModeChip.cleanedID))
+        #expect(!decoded.reviewsBeforePaste(ModeChip.promptID))
+        // Entretien : `false` est gardé dans le mode, sans effet.
+        #expect(decoded.reviewsBeforePaste(ModeChip.interviewID))
+        #expect(decoded.strongModel == nil)
+        #expect(decoded.fastModel == nil)
     }
 
-    @Test func theStoreReadsAFormerFileWithoutANoticeOrASetAsideCopy() throws {
+    @Test func theStoreReadsAStepFourFileWithoutANoticeOrASetAsideCopy() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        try Data(Self.formerFile.utf8).write(to: file)
+        try Data(Self.stepFourFile.utf8).write(to: file)
 
         let result = SettingsStore(file: file, now: fixedClock).load()
         #expect(result.notice == nil)
         #expect(result.saveRefusal == nil)
         #expect(!result.isFirstLaunch)
-        #expect(result.settings == Self.formerSettings)
-        #expect(result.settings.modeOptions == [:])
+        #expect(result.settings.modes == Self.migratedModes)
+        #expect(result.settings.transcription.engine == .parakeet)
+        #expect(result.settings.providers.map(\.name) == ["Exemple"])
+        #expect(result.settings.version == AppSettings.current)
+        #expect(result.settings.strongModel == nil)
+        #expect(result.settings.fastModel == nil)
         #expect(try names(in: directory) == ["settings.json"])
-        #expect(try Data(contentsOf: file) == Data(Self.formerFile.utf8))
+        #expect(try Data(contentsOf: file) == Data(Self.stepFourFile.utf8))
     }
 
-    /// Enregistré puis relu : égal ; et le JSON écrit garde toutes les clés d'origine avec leurs valeurs (`modeOptions` mis à
-    /// part, que le fichier d'origine n'avait pas).
-    @Test func aFormerFileSurvivesASaveWithAllItsKeysAndValues() throws {
+    /// Enregistré puis relu : égal ; et le JSON écrit est en version 2, garde toutes les clés d'origine avec leurs valeurs
+    /// (`modeOptions` compris, avec son entrée `mode-inconnu`) et ajoute `modes`.
+    @Test func aStepFourFileSurvivesASaveWithAllItsKeysAndValues() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
         let store = SettingsStore(file: file, now: fixedClock)
-        try Data(Self.formerFile.utf8).write(to: file)
+        try Data(Self.stepFourFile.utf8).write(to: file)
 
         let loaded = store.load().settings
         try store.save(loaded)
-        #expect(store.load().settings == loaded)
-        #expect(store.load().notice == nil)
+        let reloaded = store.load()
+        #expect(reloaded.settings == loaded)
+        #expect(reloaded.notice == nil)
         #expect(try names(in: directory) == ["settings.json"])
 
         let original = try #require(
-            try JSONSerialization.jsonObject(with: Data(Self.formerFile.utf8)) as? [String: Any])
+            try JSONSerialization.jsonObject(with: Data(Self.stepFourFile.utf8)) as? [String: Any])
         var written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-        #expect(written["modeOptions"] != nil)
-        written["modeOptions"] = nil
-        #expect(Set(written.keys) == Set(original.keys))
-        #expect((written as NSDictionary).isEqual(to: original), "\(written) \(original)")
+        #expect(written["version"] as? Int == 2)
+        let modes = try #require(written["modes"] as? [[String: Any]])
+        #expect(modes.compactMap { $0["id"] as? String } == ModeChip.fixed.map(\.id))
+        written["modes"] = nil
+        written["version"] = nil
+        var expected = original
+        expected["version"] = nil
+        #expect(Set(written.keys) == Set(expected.keys))
+        #expect((written as NSDictionary).isEqual(to: expected), "\(written) \(expected)")
+        let modeOptions = try #require(written["modeOptions"] as? [String: Any])
+        #expect(Set(modeOptions.keys) == ["dictee-brute", "entretien", "mode-inconnu", "prompt"])
+    }
+
+    /// Le `modeOptions` d'origine reste dans le fichier pour toujours : il ne sert qu'une fois. Un choix fait depuis ne doit pas
+    /// être défait, au chargement suivant, par ce reste.
+    @Test func aChoiceMadeAfterTheMigrationIsNotUndoneByTheLeftoverModeOptions() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        try Data(Self.stepFourFile.utf8).write(to: file)
+
+        var settings = store.load().settings
+        #expect(settings.reviewsBeforePaste(ModeChip.rawID))
+        let index = try #require(settings.modes.firstIndex { $0.id == ModeChip.rawID })
+        settings.modes[index].reviewBeforePaste = false
+        try store.save(settings)
+
+        let reloaded = store.load().settings
+        #expect(!reloaded.reviewsBeforePaste(ModeChip.rawID))
+        #expect(reloaded.mode(ModeChip.rawID)?.reviewBeforePaste == false)
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let leftover = try #require(written["modeOptions"] as? [String: [String: Bool]])
+        #expect(leftover["dictee-brute"] == ["reviewBeforePaste": true])
+    }
+
+    @Test func savingStampsTheCurrentVersionOnAnOlderSettingsValue() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        var older = AppSettings.defaults
+        older.version = 1
+        try SettingsStore(file: file).save(older)
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(written["version"] as? Int == AppSettings.current)
+    }
+
+    // MARK: - Champs inconnus gardés et réécrits (M7, m6)
+
+    /// Un fichier de la version courante avec des champs inconnus de toute forme, au premier niveau et dans un mode.
+    private static let futureFields = #"""
+    {"version": 2,
+     "hotKey": {"keyCode": 49, "modifiers": 6144}, "hotKeyBehavior": "toggle", "lastModeID": "dictee-brute",
+     "futur-objet": {"a": [1, {"b": null}], "c": "d"}, "futur-tableau": [1, "deux", false, null],
+     "futur-nombre": 2.5, "futur-entier": 6144, "futur-booleen": true, "futur-faux": false, "futur-nul": null,
+     "modes": [
+       {"id": "dictee-brute", "name": "Dictée brute", "futur-objet": {"x": [1, 2]}, "futur-tableau": ["a", true],
+        "futur-nombre": -0.5, "futur-booleen": true, "futur-nul": null},
+       {"id": "perso-1", "name": "Courriel", "instruction": "Écris.", "futur-texte": "t", "futur-faux": false},
+       {"id": "entretien", "name": "Entretien"}]}
+    """#
+
+    /// Une modification quelconque (`lastModeID`) réécrit tout ce que cette version ne connaît pas, tel quel.
+    @Test func unknownFieldsOfTheFileAndOfAModeAreWrittenBackAfterAnyChange() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        try Data(Self.futureFields.utf8).write(to: file)
+
+        var settings = store.load().settings
+        settings.lastModeID = ModeChip.promptID
+        try store.save(settings)
+
+        let original = try #require(
+            try JSONSerialization.jsonObject(with: Data(Self.futureFields.utf8)) as? [String: Any])
+        let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(written["lastModeID"] as? String == ModeChip.promptID)
+        // Chaque champ inconnu du premier niveau, avec sa valeur.
+        for key in original.keys where key.hasPrefix("futur-") {
+            #expect((written[key] as? NSObject)?.isEqual(original[key]) == true || (written[key] is NSNull && original[key] is NSNull), "\(key)")
+        }
+        #expect(written["futur-nul"] is NSNull)
+        #expect(written["futur-booleen"] as? Bool == true)
+        #expect(written["futur-faux"] as? Bool == false)
+        #expect(written["futur-entier"] as? Int == 6144)
+        // Et dans les modes.
+        let originalModes = try #require(original["modes"] as? [[String: Any]])
+        let writtenModes = try #require(written["modes"] as? [[String: Any]])
+        #expect(writtenModes.count == originalModes.count)
+        #expect((writtenModes as NSArray).isEqual(to: originalModes), "\(writtenModes) \(originalModes)")
+        #expect(writtenModes[0]["futur-nul"] is NSNull)
+        // Un second tour ne change plus rien.
+        let again = store.load().settings
+        #expect(again == settings)
+    }
+
+    // MARK: - Version (règle 3)
+
+    @Test func aVersionTwoFileWithoutModesReadsWithTheBaseModes() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(#"{"version": 2, "lastModeID": "prompt"}"#.utf8).write(to: file)
+
+        let result = SettingsStore(file: file, now: fixedClock).load()
+        #expect(result.notice == nil)
+        #expect(result.saveRefusal == nil)
+        #expect(result.settings.modes == Mode.base)
+        #expect(result.settings.lastModeID == "prompt")
+        #expect(try names(in: directory) == ["settings.json"])
+    }
+
+    /// Un fichier en version 3 : lu autant que possible, gardé intact et non enregistrable.
+    @Test func aVersionThreeFileStaysIntactAndUnsavable() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let original = Data(#"{"version": 3, "lastModeID": "prompt", "modes": [{"id": "dictee-brute", "name": "B", "futur": 1}]}"#.utf8)
+        try original.write(to: file)
+        let store = SettingsStore(file: file, now: fixedClock)
+
+        let result = store.load()
+        #expect(result.saveRefusal == .newerVersionKept(fileName: "settings.json", version: 3))
+        #expect(result.notice?.contains("plus récente") == true)
+        #expect(result.settings.lastModeID == "prompt")
+        #expect(result.settings.version == AppSettings.current)
+        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 3)) {
+            try store.save(result.settings)
+        }
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try names(in: directory) == ["settings.json"])
+    }
+
+    // MARK: - Modes illisibles et modes toujours présents
+
+    /// Un mode sans `name` rend le fichier illisible : politique existante, il est mis de côté, intact.
+    @Test func aModeWithoutANameSetsTheFileAside() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let json = #"{"version": 2, "modes": [{"id": "perso-1"}]}"#
+        try Data(json.utf8).write(to: file)
+
+        let result = SettingsStore(file: file, now: fixedClock).load()
+        #expect(result.settings == .defaults)
+        #expect(result.notice?.contains("mis de côté") == true)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(try Data(contentsOf: directory.appendingPathComponent(asideStem)) == Data(json.utf8))
+    }
+
+    @Test func savedModesComeBackWithRawAndInterviewEvenIfTheFileLostThem() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Data(#"{"version": 2, "modes": [{"id": "prompt", "name": "Prompt"}]}"#.utf8).write(to: file)
+        let result = SettingsStore(file: file, now: fixedClock).load()
+        #expect(result.settings.modes.map(\.id) == [ModeChip.rawID, ModeChip.promptID, ModeChip.interviewID])
     }
 }

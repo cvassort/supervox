@@ -64,7 +64,7 @@ public struct SettingsView: View {
                 providers: makeProvidersModel(controller),
                 hotKey: makeHotKeyModel(controller, keyMonitor: LocalKeyDownMonitor()),
                 transcription: makeTranscriptionModel(controller, catalog: catalog, promptTokenLimit: promptTokenLimit),
-                modes: makeModesModel(controller),
+                modes: makeModesModel(controller, keyMonitor: LocalKeyDownMonitor()),
                 permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
         }
     }
@@ -81,10 +81,18 @@ public struct SettingsView: View {
                     providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
                     permissions: permissions, openSystemSettings: openSystemSettings)),
             onPresent: {
+                // La fenêtre gardée d'une ouverture à l'autre relit les réglages : un mode ou un fournisseur changé entre-temps
+                // (le panneau, un autre onglet, le fichier) s'y voit. Avant les attentes ci-dessous : la fenêtre ne s'affiche pas
+                // un instant avec l'ancien état.
+                modes.reload()
+                modes.clearMessage()
                 await providers.checkKeys()
                 await transcription.refresh()
             },
-            onLeave: { hotKey.cancelRecording() })
+            onLeave: {
+                hotKey.cancelRecording()
+                modes.cancelRecording()
+            })
     }
 
     /// Les réglages de transcription s'enregistrent par `AppController.updateSettings`, comme tous les autres.
@@ -99,11 +107,19 @@ public struct SettingsView: View {
             })
     }
 
-    /// Les choix de relecture s'enregistrent par `AppController.updateSettings`, comme tous les autres.
-    static func makeModesModel(_ controller: AppController) -> ModesModel {
+    /// L'onglet Modes lit les réglages en vigueur à chaque geste et les écrit par `AppController.updateSettings`, comme tous les
+    /// autres : il ne garde aucune copie des modes à réécrire. Les raccourcis des modes passent par le contrôleur, qui les prend
+    /// auprès du système.
+    static func makeModesModel(_ controller: AppController, keyMonitor: any KeyEventMonitor) -> ModesModel {
         ModesModel(
-            modes: controller.panelModel.modes, options: controller.settings.modeOptions,
-            save: { [weak controller] options in try controller?.updateSettings { $0.modeOptions = options } })
+            read: { [weak controller] in controller?.settings ?? .defaults },
+            update: { [weak controller] change in try controller?.updateSettings(change) },
+            hotKeys: ModeHotKeyControl(
+                apply: { [weak controller] in controller?.changeModeHotKey($0, for: $1) ?? .failure(.refused) },
+                suspend: { [weak controller] in controller?.suspendHotKeysForCapture() },
+                resume: { [weak controller] in controller?.resumeHotKeys() ?? false },
+                global: { [weak controller] in controller?.settings.hotKey }),
+            layout: controller.keyboardLayout, systemHotKeys: controller.systemHotKeys, keyMonitor: keyMonitor)
     }
 
     /// Construit sans appeler le magasin de secrets.
@@ -125,7 +141,8 @@ public struct SettingsView: View {
                 apply: { [weak controller] in controller?.changeHotKey($0) ?? .failure(.refused) },
                 suspend: { [weak controller] in controller?.suspendHotKeysForCapture() },
                 resume: { [weak controller] in controller?.resumeHotKeys() ?? false },
-                clear: { [weak controller] in controller?.clearHotKey() }),
+                clear: { [weak controller] in controller?.clearHotKey() },
+                taken: { [weak controller] in controller?.modeHolding($0) }),
             save: { [weak controller] hotKey, behavior in
                 try controller?.updateSettings {
                     $0.hotKey = hotKey
@@ -147,7 +164,10 @@ public struct SettingsView: View {
             Tab("Modes", systemImage: "square.stack", value: .modes) { ModesPane(model: modes) }
         }
         // Une capture ne survit pas à un changement d'onglet (en plus de `onDisappear` de l'onglet Raccourci).
-        .onChange(of: tab) { hotKey.cancelRecording() }
+        .onChange(of: tab) {
+            hotKey.cancelRecording()
+            modes.cancelRecording()
+        }
         .frame(width: 600, height: 460)
     }
 }

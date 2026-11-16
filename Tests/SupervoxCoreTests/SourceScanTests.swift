@@ -166,12 +166,15 @@ import Testing
 
     /// Un message montré dans le panneau ne passe jamais par le texte brut d'une erreur quelconque (`String(describing:)`,
     /// interpolation de l'erreur) : une erreur système y met une adresse de service, un chemin ou une clé. Les chemins qui
-    /// fabriquent ces messages : la capture audio, la session de dictée et le contrôleur de dictée.
+    /// fabriquent ces messages : la capture audio, la session de dictée, la réécriture par le modèle et le contrôleur de dictée.
     static let forbiddenErrorText = #"String\s*\(\s*describing\s*:\s*error\s*\)|\\\(\s*error\s*\)|\\\(\s*String\s*\(\s*describing\s*:\s*error"#
 
     @Test func noPanelMessageCarriesTheRawTextOfAnError() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
-        let folders = ["Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Dictation", "Sources/SupervoxApp/Dictation"]
+        let folders = [
+            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
+            "Sources/SupervoxApp/Language",
+        ]
         let offending = try folders.flatMap { folder in
             try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
         }
@@ -191,6 +194,70 @@ import Testing
         for code in ["catch { fail(.engine(Self.describe(error))) }", "\"le moteur audio a échoué (\\(message))\"", "error as? AudioCaptureError"] {
             #expect(!code.contains(pattern), "\(code)")
         }
+    }
+
+    /// Une ligne de journal de la couche de mise en forme de l'application n'interpole que la nature d'une panne
+    /// (`kind(of:)`) : jamais la panne elle-même (`\(failure)`, qui porterait le nom du fournisseur), le travail, la consigne ni
+    /// le texte. Toute interpolation d'une ligne `log.` autre que `kind(of:` est refusée.
+    static let forbiddenLogInterpolation = #"\blog\s*\.\s*\w+\s*\(.*\\\((?!\s*kind\s*\(\s*of\s*:)"#
+
+    @Test func theRewritingLayerLogsOnlyTheKindOfAFailure() throws {
+        let pattern = try Regex(Self.forbiddenLogInterpolation)
+        let sources = try Self.sources(under: "Sources/SupervoxApp/Language")
+        let logged = sources.filter { $0.code.contains("log.notice") }
+        #expect(!logged.isEmpty, "le balayage doit voir au moins une ligne de journal")
+        let offending = sources.filter { $0.code.contains(pattern) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        #"log.notice("mise en forme échouée : \(failure)")"#, #"log.notice("\(job.input)")"#, #"log.error("x \(error, privacy: .public)")"#,
+        #"log . notice ( "\(provider.name)" )"#,
+    ])
+    func theLogInterpolationPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenLogInterpolation)))
+    }
+
+    @Test func theLogInterpolationPatternLeavesTheKindAlone() throws {
+        let pattern = try Regex(Self.forbiddenLogInterpolation)
+        for code in [
+            #"log.notice("mise en forme échouée : \(kind(of: failure), privacy: .public)")"#, #"log.notice("fini")"#,
+            #"let kind = String(describing: failure)"#,
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
+    /// m11 : les noms de moteur enregistrés (`"whisperkit"`, `"parakeet"`) ne sont écrits qu'à un endroit,
+    /// `Settings/TranscriptionSettings.swift` (le type `TranscriptionEngine`) ; le reste de l'application et du programme compare
+    /// des cas, jamais des chaînes. Le fichier d'origine doit bien porter `"whisperkit"` (`parakeet` y prend son nom de cas : le
+    /// littéral n'y figure pas), sans quoi le balayage ne vérifierait rien.
+    static let engineNames = ["\"whisperkit\"", "\"parakeet\""]
+
+    @Test func engineNamesAreSpelledOnlyInTranscriptionSettings() throws {
+        let home = "SupervoxApp/Settings/TranscriptionSettings.swift"
+        let app = try Self.sources(under: "Sources/SupervoxApp").map { (place: "SupervoxApp/" + $0.place, code: $0.code) }
+        let program = try Self.sources(under: "Sources/Supervox").map { (place: "Supervox/" + $0.place, code: $0.code) }
+        let all = app + program
+        let origin = try #require(all.first { $0.place == home })
+        #expect(origin.code.contains("\"whisperkit\""), "\"whisperkit\" absent de \(home)")
+        let offending = all.filter { $0.place != home }
+            .flatMap { source in Self.engineNames.filter { source.code.contains($0) }.map { "\(source.place) : \($0)" } }
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    /// m5 : le texte brut d'une erreur (`localizedDescription`) peut porter une adresse, un chemin ou une clé ; il n'est jamais
+    /// montré par le modèle de l'onglet Transcription ni construit par la couche de langage. Un contrôle qui ne lirait rien ne
+    /// vérifierait rien : le fichier est bien là.
+    @Test func noRawErrorTextInTheTranscriptionModelNorTheLanguageLayer() throws {
+        let app = try Self.sources(under: "Sources/SupervoxApp")
+        let model = try #require(app.first { $0.place == "SettingsUI/TranscriptionModel.swift" })
+        #expect(!model.code.contains("localizedDescription"), "SettingsUI/TranscriptionModel.swift")
+        let language = try Self.sources(under: "Sources/SupervoxCore/Language")
+            + Self.sources(under: "Sources/SupervoxApp/Language").map { (place: "SupervoxApp/Language/" + $0.place, code: $0.code) }
+        #expect(!language.isEmpty)
+        let offending = language.filter { $0.code.contains("localizedDescription") }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
     }
 
     /// Les identifiants de mode fixes (`ModeChip.rawID`, `cleanedID`, `interviewID`) ne sont écrits qu'à un endroit, dans

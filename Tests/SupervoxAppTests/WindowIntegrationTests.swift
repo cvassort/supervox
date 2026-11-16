@@ -67,7 +67,7 @@ struct WindowIntegrationTests {
         let slot: FieldSlot
         var body: some View {
             if slot.present {
-                ReviewTextView(text: slot.text, isEditable: true, takesFocus: true, onEdit: { slot.text = $0 })
+                ReviewTextView(text: slot.text, isEditable: true, takesFocus: true, onEdit: { slot.text = $0 }, onHistoryEnd: { _ in })
                     .frame(width: 300, height: 80)
             } else {
                 Color.clear.frame(width: 300, height: 80)
@@ -602,6 +602,178 @@ struct WindowIntegrationTests {
         // Le texte effacé : retour à la borne basse.
         field.insertText("", replacementRange: NSRange(location: 0, length: field.string.utf16.count))
         #expect(await waitUntil { (surface.contentHeight() ?? .infinity) <= before + 1 }, "la hauteur n'est pas redescendue")
+    }
+
+    // MARK: - Correction à la voix : ⌘Z, ⇧⌘Z et les versions (étape 5, tâche 8, règle 6)
+
+    static let original = "Bonjour à tous, voici la dictée."
+    static let rewritten = "Bonjour à toutes et à tous, voici la dictée."
+
+    /// La vraie surface avec le vrai panneau (`PanelView`), reliée à un vrai contrôleur de dictée (sessions, réécriture et
+    /// presse-papiers doubles) : une dictée relue, puis corrigée à la voix (`rewritten`, l'original en version précédente). Le
+    /// champ de relecture est premier répondeur, éditable, au texte `rewritten`.
+    private func correctedReview(
+        _ keep: inout [AnyObject]
+    ) async throws -> (surface: FloatingPanelSurface, field: NSTextView, model: PanelModel, controller: DictationController) {
+        _ = NSApplication.shared
+        let harness = DictationHarness()
+        harness.knobs.reviewing = [ModeChip.rawID]
+        let controller = harness.controller
+        let model = PanelModel(lastModeID: ModeChip.rawID)
+        // Le câblage de `AppController`, sans l'application : le modèle du panneau relaie le contrôleur de dictée.
+        controller.onViewChange = { [model] in model.setDictation($0) }
+        model.onDraftChange = { [controller] in controller.reviewEdited($0) }
+        model.onPreviousVersion = { [controller] in controller.previousVersion() }
+        model.onNextVersion = { [controller] in controller.nextVersion() }
+        let surface = FloatingPanelSurface(
+            content: PanelView(model: model, permissions: PermissionsModel(probe: WindowProbe()), openSettings: {}, quit: {}))
+        surface.panel.setFrame(NSRect(x: -20_000, y: -20_000, width: 520, height: 400), display: false)
+        surface.panel.orderFrontRegardless()
+        keep.append(harness)
+
+        // Une dictée relue.
+        let dictation = await harness.startRecording()
+        dictation.emit(.finished(Self.original))
+        #expect(await until { model.dictation.stage == .review })
+        surface.setKeyboard(.focused)
+        try #require(surface.panel.isKeyWindow, "le panneau n'est pas devenu clé")
+        #expect(await waitUntil { reviewField(in: surface.panel) != nil }, "SwiftUI n'a pas posé le champ")
+        let field = try #require(reviewField(in: surface.panel))
+        #expect(await waitUntil { surface.panel.firstResponder === field })
+
+        // La correction : le champ passe en lecture seule, puis revient au texte réécrit.
+        controller.startCorrection()
+        let session = await harness.session(1)
+        #expect(await until { session.calls.contains("start") })
+        session.emit(.preparing)
+        session.emit(.recording)
+        #expect(await until { model.dictation.stage == .correcting(.recording) })
+        controller.finishCorrection()
+        session.emit(.finalizing)
+        session.emit(.finished("Mets le début au féminin."))
+        let call = await harness.rewriter.call()
+        #expect(await waitUntil { !field.isEditable }, "le champ n'est pas en lecture seule pendant la correction")
+        call.finish(.rewritten(Self.rewritten))
+        #expect(await until { model.dictation.stage == .review })
+        #expect(await waitUntil { field.string == Self.rewritten && field.isEditable })
+        #expect(await waitUntil { surface.panel.firstResponder === field }, "la frappe n'est pas revenue au champ")
+        #expect(model.dictation.canGoBack)
+        return (surface, field, model, controller)
+    }
+
+    /// (a) Réécriture, frappe d'un mot, ⌘Z rend la réécriture sans le mot, ⌘Z de nouveau rend la version précédente, ⇧⌘Z rend la
+    /// réécriture **sans** le mot : sa frappe défaite ne se refait plus. Les événements sont fabriqués et passés à la fenêtre :
+    /// rien n'est posté au système.
+    @Test func commandZUndoesTheTypingThenGoesToThePreviousVersionAndShiftCommandZDoesNotRedoTheUndoneWord() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, _) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        field.insertText(" mot", replacementRange: NSRange(location: field.string.utf16.count, length: 0))
+        #expect(field.string == Self.rewritten + " mot")
+        #expect(model.dictation.draft == Self.rewritten + " mot", "la frappe remonte au contrôleur")
+
+        // ⌘Z : la pile du champ d'abord.
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(field.string == Self.rewritten)
+        #expect(model.dictation.draft == Self.rewritten, "l'annulation de la frappe remonte aussi au contrôleur")
+        #expect(model.dictation.canGoBack)
+
+        // ⌘Z de nouveau : la pile est vide, la version précédente revient.
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(await waitUntil { field.string == Self.original }, "la version précédente n'est pas revenue")
+        #expect(model.dictation.draft == Self.original)
+        #expect(model.dictation.canGoForward)
+        #expect(field.undoManager?.canUndo == false)
+        #expect(field.undoManager?.canRedo == false, "changer de version vide aussi ce que le champ aurait pu refaire")
+
+        // ⇧⌘Z : la réécriture, sans le mot dont la frappe a été défaite.
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        #expect(await waitUntil { field.string == Self.rewritten }, "la version suivante n'est pas revenue")
+        #expect(model.dictation.draft == Self.rewritten)
+        #expect(!model.dictation.canGoForward)
+    }
+
+    /// (b) Réécriture, frappe d'un mot, « Version précédente », puis ⇧⌘Z rend la réécriture **avec** le mot : ce qui est tapé et
+    /// non défait voyage avec sa version.
+    @Test func theTypedWordTravelsWithItsVersionAndShiftCommandZBringsItBack() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, _) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        field.insertText(" mot", replacementRange: NSRange(location: field.string.utf16.count, length: 0))
+        #expect(model.dictation.draft == Self.rewritten + " mot")
+
+        model.previousVersion()   // le bouton « Version précédente »
+        #expect(await waitUntil { field.string == Self.original }, "la version précédente n'est pas revenue")
+        #expect(field.undoManager?.canUndo == false, "la frappe n'est plus dans la pile du champ")
+
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        #expect(await waitUntil { field.string == Self.rewritten + " mot" }, "le mot tapé n'est pas revenu avec sa version")
+        #expect(model.dictation.draft == Self.rewritten + " mot")
+        #expect(!model.dictation.canGoForward)
+        // La pile du champ est neuve : ⌘Z passe tout de suite à la version précédente.
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(await waitUntil { field.string == Self.original })
+    }
+
+    /// C1 de la revue, dans la vraie fenêtre : correction réussie, ⌘Z (version précédente), touche morte, ⇧⌘Z, lettre. Le champ et
+    /// le brouillon du contrôleur restent identiques et aucune version ne se perd ; le panneau sait que la saisie est en attente.
+    @Test func aDeadKeyThenShiftCommandZLosesNoVersionInTheRealPanel() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, controller) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(await waitUntil { field.string == Self.original })
+        field.setMarkedText(
+            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try #require(field.hasMarkedText())
+        #expect(await waitUntil { model.fieldIsComposing }, "le panneau n'a pas su qu'une saisie est en attente")
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        model.nextVersion()   // le bouton, lui aussi sans effet
+        await Task.yield()
+        #expect(model.dictation.draft == Self.original, "aucune version ne change pendant le texte marqué")
+        field.insertText("ê", replacementRange: NSRange(location: NSNotFound, length: 0))
+        #expect(await waitUntil { !model.fieldIsComposing })
+        #expect(field.string == model.dictation.draft, "le champ et le brouillon divergent")
+        controller.nextVersion()
+        #expect(await waitUntil { field.string == Self.rewritten }, "la version suivante a disparu")
+    }
+
+    /// I1 de la revue, dans la vraie fenêtre : ⌘Z dans la pile du champ remonte au brouillon du contrôleur.
+    @Test func commandZInTheFieldsStackReachesTheDraft() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, _) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+        field.insertText(" mot", replacementRange: NSRange(location: field.string.utf16.count, length: 0))
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(field.string == Self.rewritten)
+        #expect(model.dictation.draft == Self.rewritten, "« Coller » collerait ce que l'écran ne montre plus")
+        #expect(try panel.performKeyEquivalent(with: keyEvent("Z", [.command, .shift], in: panel, keyCode: 6)))
+        #expect(field.string == Self.rewritten + " mot")
+        #expect(model.dictation.draft == Self.rewritten + " mot")
+    }
+
+    /// Le texte remplacé par une nouvelle version vide la pile : le ⌘Z qui suit ne lève pas `NSRangeException` (le cas de la
+    /// relecture suivante, `theUndoStackDoesNotPassFromOneReviewToTheNext`, tient pour le champ neuf).
+    @Test func aVersionChangeThenCommandZDoesNotRaise() async throws {
+        var keep: [AnyObject] = []
+        let (surface, field, model, _) = try await correctedReview(&keep)
+        defer { surface.panel.orderOut(nil) }
+        let panel = surface.panel
+
+        // Un long mot tapé, puis une version plus courte : sans pile vidée, le ⌘Z viserait des plages qui n'existent plus.
+        field.insertText(
+            " une très longue suite de mots", replacementRange: NSRange(location: field.string.utf16.count, length: 0))
+        model.previousVersion()
+        #expect(await waitUntil { field.string == Self.original })
+        #expect(try panel.performKeyEquivalent(with: keyEvent("z", .command, in: panel, keyCode: 6)))
+        #expect(model.dictation.stage == .review)
     }
 }
 

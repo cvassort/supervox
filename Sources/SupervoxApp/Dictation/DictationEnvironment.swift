@@ -97,10 +97,16 @@ public struct DictationViewState: Equatable, Sendable {
     /// Le texte en relecture, tel que l'utilisateur le corrige ; `""` hors relecture (étapes `review` et `pasting`). Donnée
     /// privée, en mémoire seulement.
     public var draft: String
+    /// Une version précédente du texte en relecture existe (« Version précédente », ⌘Z). Posée par le contrôleur ; vraie
+    /// seulement à l'étape `review`.
+    public var canGoBack: Bool
+    /// Une version suivante existe (⇧⌘Z). Même nature.
+    public var canGoForward: Bool
 
     public init(
         stage: DictationStage = .idle, liveText: String = "", levels: [Float] = [], elapsed: Double = 0,
-        notice: String? = nil, lastTranscript: String? = nil, draft: String = ""
+        notice: String? = nil, lastTranscript: String? = nil, draft: String = "", canGoBack: Bool = false,
+        canGoForward: Bool = false
     ) {
         self.stage = stage
         self.liveText = liveText
@@ -109,6 +115,8 @@ public struct DictationViewState: Equatable, Sendable {
         self.notice = notice
         self.lastTranscript = lastTranscript
         self.draft = draft
+        self.canGoBack = canGoBack
+        self.canGoForward = canGoForward
     }
 
     /// Nombre de niveaux gardés.

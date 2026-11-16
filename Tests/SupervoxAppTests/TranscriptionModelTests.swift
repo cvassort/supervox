@@ -223,13 +223,13 @@ final class ProgressBox: Sendable {
 
     @Test func everyChangeIsSavedWithTheWholeSettings() async {
         let model = makeModel()
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         model.setWhisperModel("small")
         model.setLanguage("en")
         await model.setVocabulary(text: "Docker")
         #expect(saver.saved.count == 4)
         #expect(saver.saved.last == TranscriptionSettings(
-            engine: "parakeet", whisperModel: "small", language: "en", vocabulary: ["Docker"]))
+            engine: .parakeet, whisperModel: "small", language: "en", vocabulary: ["Docker"]))
         #expect(model.settings == saver.saved.last)
     }
 
@@ -237,9 +237,9 @@ final class ProgressBox: Sendable {
         let model = makeModel()
         saver.failure = SaveFailure()
 
-        model.setEngine("parakeet")
-        #expect(model.settings.engine == "whisperkit")
-        #expect(model.message?.contains("disque plein") == true)
+        model.setEngine(.parakeet)
+        #expect(model.settings.engine == .whisperKit)
+        #expect(model.message == TranscriptionModel.saveFailure)
 
         model.setWhisperModel("small")
         #expect(model.settings.whisperModel == TranscriptionSettings.defaults.whisperModel)
@@ -250,24 +250,23 @@ final class ProgressBox: Sendable {
         await model.setVocabulary(text: "Docker")
         #expect(model.settings.vocabulary == [])
         #expect(model.vocabularyText == "")
-        #expect(model.message?.contains("disque plein") == true)
+        #expect(model.message == TranscriptionModel.saveFailure)
         #expect(saver.saved.isEmpty)
     }
 
     @Test func aSuccessfulChangeClearsThePreviousMessage() {
         let model = makeModel()
         saver.failure = SaveFailure()
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         #expect(model.message != nil)
         saver.failure = nil
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         #expect(model.message == nil)
-        #expect(model.settings.engine == "parakeet")
+        #expect(model.settings.engine == .parakeet)
     }
 
-    @Test func anUnknownEngineOrLanguageIsIgnored() {
+    @Test func aBlankLanguageIsIgnored() {
         let model = makeModel()
-        model.setEngine("moteur-inconnu")
         model.setLanguage("  ")
         #expect(model.settings == .defaults)
         #expect(saver.saved.isEmpty)
@@ -287,7 +286,7 @@ final class ProgressBox: Sendable {
 
     @Test func vocabularyBeyondThePromptLimitIsRefusedAndTheOldOneKept() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Ancien"]))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: ["Ancien"]))
         catalog.setTokenCount(Self.limit + 1)
         await model.setVocabulary(text: "un\ndeux")
         #expect(model.settings.vocabulary == ["Ancien"])
@@ -320,7 +319,7 @@ final class ProgressBox: Sendable {
 
     @Test func clearingTheVocabularyNeedsNoCountAndIsSaved() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
         await model.setVocabulary(text: " \n ")
         #expect(model.settings.vocabulary == [])
         #expect(saver.saved.count == 1)
@@ -347,7 +346,7 @@ final class ProgressBox: Sendable {
 
     @Test func anUnchangedVocabularyIsNotSavedAgain() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: ["Docker"]))
         await model.setVocabulary(text: "Docker\n")
         #expect(saver.saved.isEmpty)
         #expect(catalog.countRequests.isEmpty)
@@ -383,7 +382,7 @@ final class ProgressBox: Sendable {
             Issue.record("état attendu : failed, reçu \(String(describing: Self.state(model, id)))")
             return
         }
-        #expect(reason.contains("disque plein"))
+        #expect(reason == TranscriptionModel.downloadFailure)
 
         catalog.setDownload { _, _ in }
         await model.download(id)
@@ -492,15 +491,165 @@ final class ProgressBox: Sendable {
         #expect(!(model.message ?? "").contains("dictée est en cours"))
     }
 
-    @Test func aRefusalFromTheCatalogIsShownAsIs() async {
+    /// m5 : même un refus qui porte sa propre phrase (le catalogue réel en a une pour « en cours de téléchargement ») ne
+    /// passe pas : la phrase fixe de la suppression prend sa place.
+    @Test func aRefusalFromTheCatalogShowsTheFixedDeletionSentence() async {
         struct Busy: LocalizedError { var errorDescription: String? { "« Whisper small » est en cours de téléchargement." } }
         let model = makeModel()
         await model.refresh()
         catalog.setDeleteFailure(Busy())
 
         await model.delete(FakeModelCatalog.small.id)
-        #expect(model.message?.contains("est en cours de téléchargement") == true)
+        #expect(model.message == TranscriptionModel.deletionFailure)
         #expect(model.messageKind == .error)
+    }
+
+    // MARK: - m5 : jamais le texte brut d'une erreur
+
+    /// Une erreur d'ailleurs qui porte une adresse, un chemin et une clé dans sa description.
+    struct LeakyFailure: Error, LocalizedError {
+        static let address = "https://exemple.invalid/modele"
+        static let path = "/var/exemple/chemin/modele.bin"
+        static let key = "cle-exemple-123"
+        var errorDescription: String? { "échec de \(Self.address) dans \(Self.path) avec la clé \(Self.key)" }
+    }
+
+    private func leaks(_ text: String?) -> Bool {
+        guard let text else { return false }
+        return [LeakyFailure.address, LeakyFailure.path, LeakyFailure.key, "exemple.invalid", "/var/exemple"]
+            .contains { text.contains($0) }
+    }
+
+    @Test func aFailedSaveDoesNotShowTheTextOfTheError() async {
+        let model = makeModel()
+        saver.failure = LeakyFailure()
+        model.setEngine(.parakeet)
+        #expect(model.message != nil)
+        #expect(!leaks(model.message))
+        model.setLanguage("en")
+        #expect(!leaks(model.message))
+        #expect(await model.setVocabulary(text: "Docker") == .notSaved)
+        #expect(model.message != nil)
+        #expect(!leaks(model.message))
+    }
+
+    @Test func aFailedDownloadDoesNotShowTheTextOfTheError() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDownload { _, _ in throw LeakyFailure() }
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let reason)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(!reason.isEmpty)
+        #expect(!leaks(reason))
+        #expect(!leaks(TranscriptionModel.stateLabel(.failed(reason))))
+        #expect(!leaks(model.message))
+    }
+
+    @Test func aFailedDeletionDoesNotShowTheTextOfTheError() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(LeakyFailure())
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message != nil)
+        #expect(!leaks(model.message))
+        #expect(model.messageKind == .error)
+    }
+
+    /// Les trois phrases se distinguent : on sait de quoi l'échec parle.
+    @Test func eachFailureHasItsOwnFixedSentence() async {
+        let model = makeModel()
+        await model.refresh()
+        saver.failure = LeakyFailure()
+        model.setLanguage("en")
+        let saving = model.message
+        catalog.setDeleteFailure(LeakyFailure())
+        await model.delete(FakeModelCatalog.turbo.id)
+        let deleting = model.message
+        catalog.setDownload { _, _ in throw LeakyFailure() }
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let downloading)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(Set([saving, deleting, downloading].compactMap { $0 }).count == 3)
+        #expect(downloading.contains("téléchargement"))
+        #expect(deleting?.contains("suppression") == true)
+    }
+
+    /// Une `SettingsError` garde sa phrase : elle nomme le fichier de réglages, jamais une adresse.
+    @Test func aSettingsErrorKeepsItsOwnSentence() {
+        let model = makeModel()
+        saver.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        model.setLanguage("en")
+        #expect(model.message?.contains("settings.json") == true)
+        #expect(model.message?.contains(SettingsError.unreadableFileKept(fileName: "settings.json").errorDescription ?? "?") == true)
+        #expect(model.settings.language == "fr")
+    }
+
+    /// Min-9 : un refus typé du catalogue (modèle occupé par un téléchargement) garde une phrase qui dit quoi faire ; ce n'est
+    /// pas le texte de l'erreur qui paraît, c'est une phrase fixe du modèle de l'onglet.
+    @Test func aBusyRefusalOnDeletionSaysToWaitForTheDownload() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(ModelCatalogRefusal.busyDownloading)
+
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message == "Ce modèle est en cours de téléchargement : attendez la fin du téléchargement pour le supprimer.")
+        #expect(model.message == TranscriptionModel.deletionBusy)
+        #expect(model.messageKind == .error)
+        // Le modèle reste en place.
+        #expect(Self.state(model, FakeModelCatalog.turbo.id) == .ready)
+    }
+
+    @Test func aBusyRefusalOnDownloadSaysTheDownloadIsAlreadyRunning() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDownload { _, _ in throw ModelCatalogRefusal.busyDownloading }
+
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let reason)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(reason == "Ce modèle est déjà en cours de téléchargement.")
+        #expect(reason == TranscriptionModel.downloadBusy)
+        #expect(!reason.contains("connexion"))
+    }
+
+    /// Toute autre erreur garde la phrase fixe générale, jamais son texte ; les deux phrases du refus ne sont pas celles-là.
+    @Test func anyOtherErrorKeepsTheGeneralSentenceAndNoRawText() async {
+        let model = makeModel()
+        await model.refresh()
+        catalog.setDeleteFailure(LeakyFailure())
+        await model.delete(FakeModelCatalog.turbo.id)
+        #expect(model.message == TranscriptionModel.deletionFailure)
+        #expect(!leaks(model.message))
+
+        catalog.setDownload { _, _ in throw LeakyFailure() }
+        await model.download(LocalModelID.parakeet)
+        guard case .failed(let reason)? = Self.state(model, LocalModelID.parakeet) else {
+            Issue.record("échec attendu")
+            return
+        }
+        #expect(reason == TranscriptionModel.downloadFailure)
+        #expect(!leaks(reason))
+        #expect(Set([
+            TranscriptionModel.deletionBusy, TranscriptionModel.downloadBusy, TranscriptionModel.deletionFailure,
+            TranscriptionModel.downloadFailure,
+        ]).count == 4)
+    }
+
+    /// Une `SettingsError` garde sa phrase seule, sans préfixe ni majuscule après un deux-points (min-10).
+    @Test func aSettingsErrorIsShownAloneWithItsOwnSentence() {
+        let model = makeModel()
+        let error = SettingsError.unreadableFileKept(fileName: "settings.json")
+        saver.failure = error
+        model.setLanguage("en")
+        #expect(model.message == error.errorDescription)
+        #expect(model.message?.contains(": Le ") == false)
     }
 
     @Test func aModelNoteIsPassedThroughToTheList() async {
@@ -516,7 +665,7 @@ final class ProgressBox: Sendable {
 
     @Test func deletingAnAbsentModelOfTheChosenEngineDoesNotWarn() async {
         let model = makeModel(
-            TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: []))
+            TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: []))
         await model.refresh()  // « small » est absent : rien à retélécharger
         await model.delete(FakeModelCatalog.small.id)
         #expect(model.message == nil)
@@ -534,7 +683,7 @@ final class ProgressBox: Sendable {
         await model.refresh()
         catalog.setDeleteFailure(SaveFailure())
         await model.delete(FakeModelCatalog.turbo.id)
-        #expect(model.message?.contains("disque plein") == true)
+        #expect(model.message == TranscriptionModel.deletionFailure)
         #expect(model.messageKind == .error)
         #expect(Self.state(model, FakeModelCatalog.turbo.id) == .ready)
     }

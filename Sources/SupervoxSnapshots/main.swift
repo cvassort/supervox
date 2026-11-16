@@ -145,6 +145,25 @@ let exampleTerms = [
     "Arles", "Nîmes", "Brest", "Reims", "Rouen", "Troyes", "Vichy",
 ]
 
+
+/// Une fenêtre qui se dit clé et principale, pour les images d'une fenêtre qui a la frappe (réglages, feuilles). Une fenêtre hors
+/// écran n'est jamais clé (l'outil ne peut pas activer l'application) ; sans cela, et sans `ActiveApplication`, AppKit dessine les
+/// contrôles AppKit (interrupteurs, menus) dans leur style inactif : un interrupteur activé paraît éteint (piste grise).
+final class ActiveLookingWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+/// L'outil tourne sans pouvoir activer l'application (aucune session active : `NSApp.isActive` reste faux). Or AppKit dessine un
+/// interrupteur activé en gris tant que l'application n'est pas active, même dans une fenêtre clé : cause des interrupteurs
+/// « éteints » des premières images. Une fenêtre qui n'est pas clé (`keyWindow: false`) garde son style inactif.
+final class ActiveApplication: NSApplication {
+    override var isActive: Bool { true }
+}
+
+
 let layout = ExampleLayout()
 let granted = ExamplePermissions(microphoneState: .granted, accessibilityState: .granted)
 let missing = ExamplePermissions(microphoneState: .notDetermined, accessibilityState: .denied)
@@ -175,22 +194,77 @@ let secondProvider = Provider(
         hotKey: .standard, active: .standard, behavior: .toggle, layout: layout, systemHotKeys: NoSystemHotKeys(),
         keyMonitor: NoKeyMonitor(),
         control: GlobalHotKeyControl(
-            apply: { _ in refusing ? .failure(.refused) : .success(()) }, suspend: {}, resume: { true }, clear: {}),
+            apply: { _ in refusing ? .failure(.refused) : .success(()) }, suspend: {}, resume: { true }, clear: {}, taken: { _ in nil }),
         save: { _, _ in })
     if refusing { model.record(keyB) }
     return model
 }
 
+/// Un fournisseur d'exemple pour l'onglet Modes : deux modèles listés, adresse `example.com`.
+let modesProvider = Provider(
+    id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a1")!, name: "Fournisseur d'exemple",
+    baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-exemple-fort", "modele-exemple-rapide"])
+let modesStrong = ModelChoice(providerID: modesProvider.id, model: "modele-exemple-fort")
+let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple-rapide")
+
+/// Les réglages en mémoire de l'onglet Modes : `read` les donne, `update` les modifie, ou lève si `failure` est posé. Aucun
+/// fichier, aucun raccourci du système : l'application réelle est remplacée par des doubles.
+@MainActor final class ExampleModes {
+    var settings: AppSettings
+    var failure: (any Error)?
+    /// Le système rétablit-il le raccourci général après une capture ? Faux : la phrase qui le dit s'ajoute au refus.
+    var resumeResult = true
+
+    /// Par défaut : les quatre modes de base, un fournisseur d'exemple, les modèles fort et rapide choisis.
+    init(_ settings: AppSettings? = nil) {
+        if let settings {
+            self.settings = settings
+        } else {
+            var initial = AppSettings.defaults
+            initial.providers = [modesProvider]
+            initial.strongModel = modesStrong
+            initial.fastModel = modesFast
+            self.settings = initial
+        }
+    }
+
+    func makeModel() -> ModesModel {
+        ModesModel(
+            read: { self.settings },
+            update: { change in
+                if let failure = self.failure { throw failure }
+                change(&self.settings)
+            },
+            hotKeys: ModeHotKeyControl(
+                apply: { _, _ in .success(()) }, suspend: {}, resume: { self.resumeResult }, global: { .standard }),
+            layout: layout, systemHotKeys: NoSystemHotKeys(), keyMonitor: NoKeyMonitor())
+    }
+}
+
 /// L'onglet Modes. `refusing` : l'enregistrement est refusé (fichier de réglages illisible), et la bascule de Dictée brute le
 /// montre.
 @MainActor func modesModel(refusing: Bool = false) -> ModesModel {
-    let model = ModesModel(
-        modes: ModeChip.fixed, options: [:],
-        save: { _ in
-            if refusing { throw SettingsError.unreadableFileKept(fileName: "settings.json") }
-        })
-    if refusing { model.setReview(true, for: ModeChip.rawID) }
+    let example = ExampleModes()
+    let model = example.makeModel()
+    if refusing {
+        example.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        model.setReview(true, for: ModeChip.rawID)
+    }
     return model
+}
+
+/// Les quatre modes de base et deux modes personnels : l'un avec son modèle, son moteur et son raccourci, l'autre dont le
+/// fournisseur a été supprimé.
+@MainActor func exampleModesSettings() -> AppSettings {
+    var settings = ExampleModes().settings
+    let gone = ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000ff")!, model: "modele-exemple-ancien")
+    settings.modes.insert(
+        Mode(
+            id: "perso-compte-rendu", name: "Compte rendu", instruction: "Résume la dictée en cinq lignes.",
+            model: modesFast, engine: .parakeet, hotKey: keyB, reviewBeforePaste: true), at: 3)
+    settings.modes.insert(
+        Mode(id: "perso-courriel", name: "Courriel poli", instruction: "Écris un courriel poli.", model: gone), at: 4)
+    return settings
 }
 
 @MainActor func panelModel(mode: String) -> PanelModel {
@@ -226,10 +300,14 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 /// refait un clic sur « Copier » dont le presse-papiers accepte ou refuse le texte. `keyboard` : le panneau a la frappe (il
 /// est la fenêtre clé) ; l'aide en dépend, et l'image est rendue comme dans une fenêtre clé ou non (voir `render`).
 @MainActor func reviewPanelModel(
-    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true
+    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true,
+    mode: String = ModeChip.rawID, canGoBack: Bool = false, canGoForward: Bool = false
 ) -> PanelModel {
     let model = dictationPanelModel(
-        state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
+        mode: mode,
+        state: DictationViewState(
+            stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft, canGoBack: canGoBack,
+            canGoForward: canGoForward))
     model.panelHasKeyboard = keyboard
     if let copy {
         model.onCopy = { _ in copy }
@@ -237,6 +315,36 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
     }
     return model
 }
+
+/// Le panneau pendant une correction à la voix : le brouillon en lecture seule, l'étape, et la phrase que le contrôleur y met.
+/// `streamed` : le texte que le modèle envoie à mesure (la réécriture), montré à la place du brouillon. Le texte de la consigne
+/// en direct (`liveText` pendant l'écoute) n'est jamais montré : l'image n'en pose pas.
+@MainActor func correctionPanelModel(
+    _ step: CorrectionStep, draft: String, streamed: String = "", notice: String? = nil
+) -> PanelModel {
+    let listening = step == .recording
+    let model = dictationPanelModel(
+        state: DictationViewState(
+            stage: .correcting(step), liveText: streamed, levels: listening ? exampleLevels(DictationViewState.levelCount) : [],
+            elapsed: listening ? 4.2 : 0, notice: notice, lastTranscript: exampleShortText, draft: draft))
+    model.panelHasKeyboard = true
+    return model
+}
+
+/// Le nom du fournisseur des images de la mise en forme : fictif, comme les doubles.
+let exampleProvider = "Fournisseur d'exemple"
+/// Le début d'une réponse du modèle, coupé en cours de phrase comme à l'arrivée du flux : des paragraphes et des puces, comme une
+/// vraie mise en forme. L'écran les aplatit pour montrer la fin du texte reçu.
+let exampleStreamedText =
+    "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de :\n- commencer la livraison la semaine prochaine ;\n- vérifier les accès de chaque équipe ;\n- renvoyer le calendrier mis à jour avant la fin de la journée.\n\nMerci d'avance pour votre relecture.\n\nNous reviendrons vers vous avec"
+/// Le texte mis en forme d'un mode qui relit avant de coller : des paragraphes et une formule de politesse.
+let exampleFormattedText =
+    "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée.\n\nCordialement,"
+
+/// Le début de la réponse du modèle à la consigne « ajoute une formule de politesse plus chaleureuse », coupé en cours de phrase
+/// comme à l'arrivée du flux : le texte reçu garde ses sauts de ligne, il est montré tel quel à la place du brouillon.
+let exampleCorrectedStream =
+    "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée.\n\nBien cordialement et bonne"
 
 /// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
 /// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
@@ -259,21 +367,25 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 /// écran ne l'est jamais, et un bouton principal y sort gris, comme dans une fenêtre inactive. À dire pour chaque image de
 /// relecture, selon que le panneau a la frappe dans cet état ou non.
 @MainActor func render(
-    _ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil, keyWindow: Bool = false
+    _ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil, keyWindow requested: Bool = false
 ) throws {
+    // La fenêtre de réglages et ses feuilles ont la frappe quand on les regarde : elles sont rendues comme une fenêtre clé (contrôles
+    // actifs, interrupteurs à la couleur d'accent). Le panneau, lui, dit lui-même s'il a la frappe (`keyWindow`).
+    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme", "correction"].contains { name.hasPrefix($0) }
+    let keyWindow = requested || !isPanel
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
         rootView: AnyView(
             view.background(Color(nsColor: background)).environment(\.colorScheme, dark ? .dark : .light)
                 .environment(\.controlActiveState, keyWindow ? .key : .inactive)))
     host.appearance = appearance
-    let window = NSWindow(
+    let window = (keyWindow ? ActiveLookingWindow.self : NSWindow.self).init(
         contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: size ?? host.fittingSize),
         styleMask: [.titled], backing: .buffered, defer: false)
     window.appearance = appearance
     window.backgroundColor = background
     window.contentView = host
-    window.orderFrontRegardless()
+    if keyWindow { window.makeKeyAndOrderFront(nil) } else { window.orderFrontRegardless() }
     let target: NSView = host
     target.layoutSubtreeIfNeeded()
     // Laisse SwiftUI terminer sa mise en page et ses tâches (`checkKeys` est déjà fait).
@@ -289,7 +401,7 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
     window.orderOut(nil)
 }
 
-let application = NSApplication.shared
+let application = ActiveApplication.shared
 application.setActivationPolicy(.accessory)
 
 /// La taille de la vraie fenêtre (`SettingsView`).
@@ -303,6 +415,18 @@ for dark in [false, true] {
         PanelView(model: panelModel(mode: ModeChip.rawID), permissions: PermissionsModel(probe: granted),
                   openSettings: {}, quit: {}),
         name: "panneau-pret", dark: dark, background: panelBackground)
+
+    // Douze modes aux noms longs, inventés : les pastilles passent à la ligne, rien n'est coupé, le panneau grandit.
+    let manyChips = [
+        "Dictée brute", "Compte rendu de réunion", "Message court et poli", "Résumé en trois points",
+        "Note de suivi pour l'équipe", "Réponse détaillée à un courriel", "Liste de tâches du jour",
+        "Texte corrigé sans changer le ton", "Idée à creuser plus tard", "Prompt", "Traduction en anglais soigné", "Entretien",
+    ].enumerated().map { ModeChip(id: "exemple-\($0.offset)", title: $0.element) }
+    let crowded = PanelModel(lastModeID: "exemple-5", modes: manyChips)
+    crowded.hotKeyLabel = standardLabel
+    try render(
+        PanelView(model: crowded, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {}),
+        name: "panneau-pastilles-nombreuses", dark: dark, background: panelBackground)
 
     // Panneau du premier lancement : accueil et permissions manquantes.
     let first = panelModel(mode: ModeChip.rawID)
@@ -409,6 +533,95 @@ for dark in [false, true] {
             name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
     }
 
+    // La mise en forme : l'attente, le flux de la réponse, puis la relecture. Une panne ramène la transcription brute, avec la
+    // phrase de la panne et celle de `rawTextNotice` ; l'application changée garde le texte mis en forme (le panneau n'a alors pas
+    // la frappe : `.available`).
+    let sending = DictationController.formattingNotice(provider: exampleProvider)
+    let rawNotice = { (failure: RewriteFailure) in failure.message + " " + DictationController.rawTextNotice }
+    let formattingCases: [(name: String, model: PanelModel, probe: any PermissionsProbe)] = [
+        ("mise-en-forme-attente",
+         dictationPanelModel(
+            mode: ModeChip.cleanedID,
+            state: DictationViewState(stage: .formatting, notice: sending, lastTranscript: exampleLongText)), granted),
+        ("mise-en-forme-flux",
+         dictationPanelModel(
+            mode: ModeChip.cleanedID,
+            state: DictationViewState(
+                stage: .formatting, liveText: exampleStreamedText, notice: sending, lastTranscript: exampleLongText)),
+         granted),
+        ("mise-en-forme-echec-cle",
+         reviewPanelModel(
+            exampleLongText, notice: rawNotice(.noKey(provider: exampleProvider)), mode: ModeChip.cleanedID), granted),
+        // Le cas le plus long : un nom de fournisseur de 60 caractères, rogné à 40 par `Provider.shortName`.
+        ("mise-en-forme-echec-cle-nom-long",
+         reviewPanelModel(
+            exampleLongText,
+            notice: rawNotice(.noKey(provider: Provider.shortName(String(repeating: "Fournisseur ", count: 5)))),
+            mode: ModeChip.cleanedID), granted),
+        ("mise-en-forme-echec-delai",
+         reviewPanelModel(
+            exampleLongText, notice: rawNotice(.timedOut(Int(RewritePolicy.standard.timeout.rounded()))),
+            mode: ModeChip.cleanedID), granted),
+        ("mise-en-forme-application-changee",
+         reviewPanelModel(
+            exampleFormattedText, notice: DictationController.frontApplicationChangedNotice, keyboard: false,
+            mode: ModeChip.cleanedID), granted),
+        ("relecture-apres-mise-en-forme", reviewPanelModel(exampleFormattedText, mode: ModeChip.cleanedID), granted),
+    ]
+    for (name, model, probe) in formattingCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
+    }
+
+    // La correction à la voix : l'écoute de la consigne (forme d'onde et durée au-dessus du champ, en lecture seule), la
+    // réécriture (le texte reçu à la place du brouillon), puis les deux retours à la relecture, texte intact, avec leur phrase
+    // (seules les phrases publiques du contrôleur sont posées ici). Les versions : un bouton à flèche à gauche de la rangée.
+    let correctionCases: [(name: String, model: PanelModel, probe: any PermissionsProbe)] = [
+        ("correction-ecoute",
+         correctionPanelModel(
+            .recording, draft: exampleFormattedText,
+            notice: DictationController.correctionListeningNotice(hotKeyLabel: standardLabel)), granted),
+        // Tant que le micro ne s'ouvre pas, la phrase dit d'attendre ; en maintien, d'écouter jusqu'au relâchement.
+        ("correction-preparation",
+         correctionPanelModel(
+            .preparing, draft: exampleFormattedText, notice: DictationController.correctionPreparingNotice), granted),
+        ("correction-preparation-maintien",
+         correctionPanelModel(
+            .preparing, draft: exampleFormattedText,
+            notice: DictationController.correctionPreparingSentence(hotKeyLabel: standardLabel, hold: true)), granted),
+        ("correction-ecoute-maintien",
+         correctionPanelModel(
+            .recording, draft: exampleFormattedText,
+            notice: DictationController.correctionListeningNotice(hotKeyLabel: standardLabel, hold: true)), granted),
+        ("correction-reecriture",
+         correctionPanelModel(
+            .rewriting, draft: exampleFormattedText, streamed: exampleCorrectedStream,
+            notice: DictationController.correctionRewritingNotice), granted),
+        ("correction-echec",
+         reviewPanelModel(exampleFormattedText, notice: DictationController.correctionNoModelNotice), granted),
+        ("correction-echec-fournisseur",
+         reviewPanelModel(
+            exampleFormattedText, notice: DictationController.correctionNotice(for: .providerMissing)), granted),
+        ("correction-vide",
+         reviewPanelModel(exampleFormattedText, notice: DictationController.correctionEmptyNotice), granted),
+        ("relecture-avec-version-precedente", reviewPanelModel(exampleFormattedText, canGoBack: true), granted),
+        ("relecture-avec-version-suivante", reviewPanelModel(exampleFormattedText, canGoForward: true), granted),
+        ("relecture-avec-deux-versions-copie-impossible",
+         reviewPanelModel(exampleFormattedText, copy: false, canGoBack: true, canGoForward: true), granted),
+        ("relecture-aide-correction", reviewPanelModel(exampleFormattedText), granted),
+        ("relecture-aide-correction-sans-raccourci", {
+            let model = reviewPanelModel(exampleFormattedText)
+            model.hotKeyLabel = nil
+            return model
+        }(), granted),
+    ]
+    for (name, model, probe) in correctionCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
+    }
+
     // Réglages : vides, puis deux fournisseurs.
     for (name, list) in [("reglages-vide", [Provider]()), ("reglages-fournisseurs", [firstProvider, secondProvider])] {
         try render(
@@ -448,6 +661,111 @@ for dark in [false, true] {
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
+    // Toute la liste, avec deux modes personnels (modèle, moteur, raccourci ; fournisseur supprimé) : la vraie fenêtre la fait
+    // défiler.
+    try render(
+        ModesPane(model: ExampleModes(exampleModesSettings()).makeModel()),
+        name: "modes-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
+
+    // Premier lancement : aucun fournisseur, aucun modèle fort ni rapide. Toute la liste, avec la section Modèles.
+    try render(
+        ModesPane(model: ExampleModes(AppSettings.defaults).makeModel()),
+        name: "modes-premier-lancement", dark: dark, background: window, size: NSSize(width: 600, height: 900))
+
+    // Confirmations de suppression : un mode de base (Prompt), puis un mode personnel.
+    let deletion = ExampleModes(exampleModesSettings()).makeModel()
+    for (name, id) in [("base", ModeChip.promptID), ("perso", "perso-compte-rendu")] {
+        let row = deletion.rows.first { $0.id == id }!
+        try render(
+            DeletionSheet(
+                title: ModesPane.deletionTitle(for: row), message: ModesPane.deletionMessage(for: row, chosenInPanel: id != ModeChip.promptID), cancel: {}, confirm: {}),
+            name: "mode-suppression-\(name)", dark: dark, background: window)
+    }
+
+    // Feuilles d'un mode, à la taille que la feuille prend.
+    // La vraie taille de la feuille : ce que l'utilisateur voit sans faire défiler.
+    let sheetHeight = ModeEditor.sheetHeight
+    let sheetSize = NSSize(width: 520, height: sheetHeight)
+    let realSheetSize = sheetSize
+    // Un mode de base dont la consigne a été modifiée : le bouton « Revenir à la consigne d'origine ».
+    let editedBase = ExampleModes()
+    editedBase.settings.modes[2].instruction =
+        "Tu transformes une demande dictée en un prompt court, en trois parties : Objectif, Contraintes, Résultat attendu. N'invente rien."
+    try render(
+        ModeEditor(model: editedBase.makeModel(), id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-edition-base", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Le cas le plus chargé : Prompt avec sa consigne d'origine (longue), son modèle et un raccourci. Toute la feuille tient, y
+    // compris « Raccourci du mode », sans faire défiler.
+    let loadedPrompt = ExampleModes()
+    loadedPrompt.settings.modes[2].hotKey = keyB
+    try render(
+        ModeEditor(model: loadedPrompt.makeModel(), id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-edition-prompt-origine", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Premier lancement : Prompt sans fournisseur ni modèle fort (la réserve, et l'explication sous le sélecteur).
+    try render(
+        ModeEditor(model: ExampleModes(AppSettings.defaults).makeModel(), id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-edition-sans-fournisseur", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Entretien : consigne non modifiable, relecture imposée.
+    try render(
+        ModeEditor(model: ExampleModes().makeModel(), id: ModeChip.interviewID, height: sheetHeight),
+        name: "mode-edition-entretien", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Un mode personnel avec son modèle : la note de vie privée.
+    let personal = ExampleModes(exampleModesSettings())
+    try render(
+        ModeEditor(model: personal.makeModel(), id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-edition-perso", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Un fournisseur dont la liste de modèles n'a pas été lue : le modèle choisi reste affiché, la feuille renvoie à l'onglet
+    // Fournisseurs.
+    var unlisted = exampleModesSettings()
+    unlisted.providers[0].models = []
+    try render(
+        ModeEditor(model: ExampleModes(unlisted).makeModel(), id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-edition-sans-modele", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Une combinaison refusée : celle du raccourci général. Le bandeau d'erreur est au-dessus du formulaire : la feuille grandit de
+    // sa place (`bannerRoom`), pour que la dernière phrase d'aide (« Le raccourci lance ce mode… ») ne passe pas sous les boutons.
+    let bannerSheetSize = NSSize(width: 520, height: sheetHeight + ModeEditor.bannerRoom)
+    let refusedHotKey = ExampleModes(exampleModesSettings())
+    let refusedModel = refusedHotKey.makeModel()
+    refusedModel.record(.standard, for: "perso-compte-rendu")
+    try render(
+        ModeEditor(model: refusedModel, id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-raccourci-refuse", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // Un refus qui nomme un mode au nom de 60 caractères : deux lignes pleines.
+    var heldByLongName = exampleModesSettings()
+    heldByLongName.modes[3].hotKey = nil
+    heldByLongName.modes[4].name = "Compte rendu détaillé de la réunion hebdomadaire de l'équipe"
+    heldByLongName.modes[4].hotKey = keyB
+    let longRefusedModel = ExampleModes(heldByLongName).makeModel()
+    longRefusedModel.record(keyB, for: "perso-compte-rendu")
+    try render(
+        ModeEditor(model: longRefusedModel, id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-raccourci-refuse-long", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // La feuille la plus chargée (Prompt : consigne d'origine, modèle, raccourci) sous un bandeau d'erreur.
+    let loadedRefused = ExampleModes()
+    loadedRefused.settings.modes[2].hotKey = keyB
+    let loadedRefusedModel = loadedRefused.makeModel()
+    loadedRefusedModel.record(.standard, for: ModeChip.promptID)
+    try render(
+        ModeEditor(model: loadedRefusedModel, id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-raccourci-refuse-prompt", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // Le bandeau le plus long que l'on sache produire : un refus, puis la phrase du raccourci général que le système ne rétablit pas
+    // après la capture (quatre lignes).
+    let fourLines = ExampleModes(heldByLongName)
+    fourLines.resumeResult = false
+    let fourLinesModel = fourLines.makeModel()
+    fourLinesModel.startRecording(for: "perso-compte-rendu")
+    fourLinesModel.record(keyB, for: "perso-compte-rendu")
+    try render(
+        ModeEditor(model: fourLinesModel, id: "perso-compte-rendu", height: sheetHeight),
+        name: "mode-raccourci-refuse-quatre-lignes", dark: dark, background: window, size: bannerSheetSize, keyWindow: true)
+    // Une consigne de plusieurs milliers de caractères : elle défile dans son champ, la feuille garde sa taille.
+    var long = exampleModesSettings()
+    long.modes[3].instruction = Array(
+        repeating: "Mets le texte au propre, garde le sens et le ton, n'ajoute rien et ne réponds jamais au contenu.", count: 45
+    ).joined(separator: " ")
+    try render(
+        ModeEditor(model: ExampleModes(long).makeModel(), id: "perso-compte-rendu"),
+        name: "mode-edition-longue", dark: dark, background: window, size: realSheetSize, keyWindow: true)
 
     // Onglet Transcription. La barre d'onglets n'est pas rendue (voir `render`).
     func transcriptionTab(_ model: TranscriptionModel) async -> SettingsView {
@@ -459,7 +777,7 @@ for dark in [false, true] {
     let allReadyModels = exampleModels(parakeet: .ready, turbo: .ready, small: .absent, base: .absent, voice: .ready)
     let tallSize = NSSize(width: 600, height: 1_260)
     let whisperChosen = TranscriptionSettings(
-        engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+        engine: .whisperKit, whisperModel: "large-v3-v20240930_turbo", language: "fr",
         vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"])
 
     // Tous les états d'une ligne : en cours sans fraction (Parakeet : deux téléchargements enchaînés, aucune fraction
@@ -492,7 +810,7 @@ for dark in [false, true] {
             model: await transcriptionModel(
                 ExampleCatalog(listed: allReadyModels),
                 settings: TranscriptionSettings(
-                    engine: "parakeet", whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
+                    engine: .parakeet, whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: []))),
         name: "transcription-parakeet", dark: dark, background: window, size: tallSize)
     // Vocabulaire refusé : 40 termes d'exemple, trop longs pour Whisper. Le compte (136 pour une limite de 111) est une
     // valeur d'exemple fixée par le double du catalogue : elle n'a pas été mesurée avec le tokenizer sur cette liste. Le champ
@@ -500,7 +818,7 @@ for dark in [false, true] {
     let refused = await transcriptionModel(
         ExampleCatalog(listed: allReadyModels, tokenCount: 136),
         settings: TranscriptionSettings(
-            engine: "whisperkit", whisperModel: "large-v3-v20240930_turbo", language: "fr",
+            engine: .whisperKit, whisperModel: "large-v3-v20240930_turbo", language: "fr",
             vocabulary: Array(exampleTerms.prefix(30))),
         act: { _ = await $0.setVocabulary(text: exampleTerms.joined(separator: "\n")) })
     try render(

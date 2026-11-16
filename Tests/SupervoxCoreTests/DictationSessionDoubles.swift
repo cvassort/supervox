@@ -378,24 +378,28 @@ func makeRig(chunks: [AudioChunk] = [], startError: AudioCaptureError? = nil, ev
              preview: ScriptedTranscriber? = nil, config: DictationConfig = DictationConfig(language: "fr", padding: 0),
              clock: TestClock = TestClock(),
              watchdog: MicrophoneWatchdog? = nil,
+             sleep: (@Sendable (Double) async throws -> Void)? = nil,
              makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) -> Rig {
     let feed = TestFeed(chunks: chunks, startError: startError)
     let detector = ScriptedDetector(blockSize: blockSize, events: events)
     let session = makeSession(feed: feed, detector: detector, preview: preview, final: final, config: config,
-                              clock: clock, watchdog: watchdog, makeResampler: makeResampler)
+                              clock: clock, watchdog: watchdog, sleep: sleep, makeResampler: makeResampler)
     return Rig(session: session, feed: feed, detector: detector, final: final, preview: preview, clock: clock,
                log: SnapshotLog(session.snapshots))
 }
 
 func makeSession(feed: TestFeed, detector: ScriptedDetector, preview: ScriptedTranscriber?, final: ScriptedTranscriber,
                  config: DictationConfig, clock: TestClock, watchdog: MicrophoneWatchdog? = nil,
+                 sleep: (@Sendable (Double) async throws -> Void)? = nil,
                  makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) -> DictationSession {
+    // Sans attente injectée, la limite de la transcription finale ne rend jamais : aucun test ne dépend d'une durée réelle.
+    let sleep = sleep ?? { _ in try await Task.sleep(for: .seconds(1_000_000)) }
     if let makeResampler {
         return DictationSession(feed: feed, detector: detector, preview: preview, final: final, config: config,
-                                now: clock.reader, watchdog: watchdog, makeResampler: makeResampler)
+                                now: clock.reader, watchdog: watchdog, sleep: sleep, makeResampler: makeResampler)
     }
     return DictationSession(feed: feed, detector: detector, preview: preview, final: final, config: config,
-                            now: clock.reader, watchdog: watchdog)
+                            now: clock.reader, watchdog: watchdog, sleep: sleep)
 }
 
 /// Attente injectée du chien de garde : chaque `sleep` dure jusqu'à `tick()`, et lève `CancellationError` si la tâche est

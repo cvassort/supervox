@@ -55,6 +55,7 @@ import Testing
     #expect(config.previewWindow == 15)
     #expect(config.padding == 0.3)
     #expect(config.maxDuration == 300)
+    #expect(config.finalTimeout == 120)
 }
 
 // MARK: - Session : prise, fin, annulation
@@ -696,5 +697,119 @@ struct DictationPreviewTests {
             return
         }
         #expect(rig.feed.stops == 1)
+    }
+}
+
+// MARK: - m10 : la transcription finale est bornée
+
+/// Le moteur final qui ne rend jamais est abandonné au bout de `finalTimeout` secondes : la phase passe en échec avec une phrase
+/// qui le dit, au lieu de rester « finalizing » pour toujours. L'attente est un `TickSleeper` : aucune durée réelle.
+@Suite(.timeLimit(.minutes(1)))
+struct DictationFinalTimeoutTests {
+    private static let reason = "le moteur n'a pas rendu de texte en 120 secondes"
+
+    /// Attend la fin de `finish()` ; si le test est annulé (limite de temps dépassée), annule aussi `finish()` : une session sans
+    /// limite pour son moteur fait échouer le test au lieu de le suspendre.
+    private static func join(_ finishing: Task<Void, Never>) async {
+        await withTaskCancellationHandler { await finishing.value } onCancel: { finishing.cancel() }
+    }
+
+    /// Un moteur qui retient tous ses appels, et la session en `finalizing` sur lui.
+    private func finalizingRig(
+        sleeper: TickSleeper, honorsCancellation: Bool = true, config: DictationConfig = DictationConfig(language: "fr", padding: 0)
+    ) async -> (rig: Rig, final: ScriptedTranscriber, finishing: Task<Void, Never>) {
+        let final = ScriptedTranscriber(honorsCancellation: honorsCancellation, reply: { _ in .hold })
+        let rig = makeRig(chunks: tenBlocks, events: [3: .speechStart(sample: 3000)], final: final, config: config,
+                          sleep: { try await sleeper.sleep($0) })
+        await rig.session.start()
+        let finishing = Task { await rig.session.finish() }
+        await final.waitForCalls(1)
+        await sleeper.waitForSleeps(1)
+        return (rig, final, finishing)
+    }
+
+    @Test func anEngineThatNeverReturnsFailsTheTakeWithASentenceAndItsTaskIsCancelled() async {
+        let sleeper = TickSleeper()
+        let (rig, final, finishing) = await finalizingRig(sleeper: sleeper)
+        #expect(await rig.session.phase == .finalizing)
+
+        sleeper.tick()
+        await Self.join(finishing)
+
+        #expect(await rig.outcome() == .failed(.engine(Self.reason)))
+        #expect(DictationFailure.engine(Self.reason).message == "La transcription a échoué : le moteur n'a pas rendu de texte en 120 secondes.")
+        await final.cancellation(of: 0).wait()   // la tâche du moteur a vu son annulation
+        #expect(sleeper.requested == [120])
+        #expect(rig.log.phases == [.idle, .preparing, .recording, .finalizing, .failed(.engine(Self.reason))])
+    }
+
+    @Test func theDelayIsTheOneOfTheConfiguration() async {
+        let sleeper = TickSleeper()
+        let config = DictationConfig(language: "fr", padding: 0, finalTimeout: 45)
+        let (rig, _, finishing) = await finalizingRig(sleeper: sleeper, config: config)
+
+        sleeper.tick()
+        await Self.join(finishing)
+
+        #expect(sleeper.requested == [45])
+        #expect(await rig.outcome() == .failed(.engine("le moteur n'a pas rendu de texte en 45 secondes")))
+    }
+
+    /// Un moteur sourd à l'annulation rend son résultat quand il veut : le résultat tardif ne change plus rien.
+    @Test func aLateResultAfterTheTimeoutChangesNothing() async {
+        let sleeper = TickSleeper()
+        let (rig, final, finishing) = await finalizingRig(sleeper: sleeper, honorsCancellation: false)
+
+        sleeper.tick()
+        await Self.join(finishing)   // `finish()` ne reste pas pendu à un moteur qui n'écoute pas l'annulation
+        #expect(await rig.outcome() == .failed(.engine(Self.reason)))
+        let seen = rig.log.items
+
+        final.release(call: 0, text: "arrivé trop tard")
+        for _ in 0..<100 { await Task.yield() }
+
+        #expect(await rig.session.phase == .failed(.engine(Self.reason)))
+        #expect(rig.log.items == seen)   // aucun instantané de plus
+    }
+
+    @Test func anEngineThatReturnsBeforeTheDelayIsNotTouchedByIt() async {
+        let sleeper = TickSleeper()
+        let rig = makeRig(chunks: tenBlocks, events: [3: .speechStart(sample: 3000)], final: ScriptedTranscriber(text: "Bonjour"),
+                          sleep: { try await sleeper.sleep($0) })
+        await rig.session.start()
+        await rig.session.finish()
+
+        #expect(await rig.outcome() == .finished("Bonjour"))
+        sleeper.tick()   // le délai rend après la fin : trop tard
+        for _ in 0..<100 { await Task.yield() }
+        #expect(await rig.session.phase == .finished("Bonjour"))
+        #expect(sleeper.requested == [120])
+        #expect(await eventually { sleeper.cancelled == 1 })   // la minuterie est abandonnée avec le résultat
+    }
+
+    @Test func cancelWhileWaitingForTheEngineIsCancelledAndTheEngineAndTheTimerAreCancelled() async {
+        let sleeper = TickSleeper()
+        let (rig, final, finishing) = await finalizingRig(sleeper: sleeper)
+
+        await rig.session.cancel()
+        await Self.join(finishing)
+
+        #expect(await rig.outcome() == .cancelled)
+        await final.cancellation(of: 0).wait()
+        #expect(await eventually { sleeper.cancelled == 1 })
+        sleeper.tick()
+        #expect(await rig.session.phase == .cancelled)
+    }
+
+    /// `finish()` rend la main à l'annulation même si le moteur n'écoute pas l'annulation de sa tâche.
+    @Test func cancelDoesNotWaitForAnEngineThatIgnoresCancellation() async {
+        let sleeper = TickSleeper()
+        let (rig, final, finishing) = await finalizingRig(sleeper: sleeper, honorsCancellation: false)
+
+        await rig.session.cancel()
+        await Self.join(finishing)
+
+        #expect(await rig.session.phase == .cancelled)
+        final.release(call: 0, text: "tard")
     }
 }

@@ -108,7 +108,7 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
         let panel = panel
         controller = DictationController(
             environment: engines.environment, inserter: inserter,
-            settings: { TranscriptionSettings(engine: "whisperkit", whisperModel: "small", language: "fr", vocabulary: []) },
+            settings: { TranscriptionSettings(engine: .whisperKit, whisperModel: "small", language: "fr", vocabulary: []) },
             behavior: { behavior }, modeID: { "dictee-brute" }, microphoneAllowed: { true }, panel: panel,
             hotKeyModifiers: { [.control, .option] },
             // Une attente qui ne rend la main qu'à l'annulation : aucun sondage réel du clavier.

@@ -28,7 +28,8 @@ import Testing
     /// Modèle branché sur un vrai `HotKeyCenter` (enregistreur double), comme dans l'application.
     func makeModel(
         hotKey: HotKey = keyA, behavior: HotKeyBehavior = .toggle,
-        layout: any KeyboardLayout = HotKeyTests.ansi, registerFirst: Bool = true
+        layout: any KeyboardLayout = HotKeyTests.ansi, registerFirst: Bool = true,
+        taken: @escaping @MainActor (HotKey) -> String? = { _ in nil }
     ) -> HotKeySettingsModel {
         if registerFirst { _ = center.apply(hotKey, onPress: {}) }
         let center = center
@@ -38,7 +39,7 @@ import Testing
             keyMonitor: monitor,
             control: GlobalHotKeyControl(
                 apply: { center.apply($0, onPress: {}) }, suspend: { center.suspend() },
-                resume: { center.resume() }, clear: { center.clear() }),
+                resume: { center.resume() }, clear: { center.clear() }, taken: taken),
             save: { hotKey, behavior in
                 if let failure = saves.failure { throw failure }
                 saves.values.append((hotKey, behavior))
@@ -68,6 +69,28 @@ import Testing
         #expect(saved.isEmpty)
         #expect(model.message?.contains("refusé par macOS") == true)
         #expect(model.message?.contains("⌃⌥B") == true)
+    }
+
+    // MARK: - Raccourcis de mode
+
+    @Test func aCombinationHeldByAModeIsRefusedAndNamesIt() {
+        let model = makeModel(taken: { $0 == Self.keyB ? "Compte rendu" : nil })
+        let callsBefore = registrar.registerCalls
+        model.record(Self.keyB)
+
+        #expect(registrar.registerCalls == callsBefore, "le système n'est pas sollicité")
+        #expect(registrar.registered == Self.keyA)
+        #expect(model.hotKey == Self.keyA)
+        #expect(saved.isEmpty)
+        #expect(model.message?.contains("Compte rendu") == true)
+        #expect(model.message?.contains("⌃⌥B") == true)
+    }
+
+    @Test func aCombinationNoModeHoldsIsStillAccepted() {
+        let model = makeModel(taken: { $0 == Self.keyB ? "Compte rendu" : nil })
+        model.record(HotKey(keyCode: 0x08, modifiers: [.control, .option]))
+        #expect(model.message == nil)
+        #expect(saved.count == 1)
     }
 
     // MARK: - Raccourcis du système

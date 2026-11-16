@@ -12,12 +12,24 @@ struct ReviewTextView: NSViewRepresentable {
     /// Le champ prend la frappe dès qu'il est dans une fenêtre clé.
     var takesFocus: Bool
     var onEdit: @MainActor (String) -> Void
+    /// ⌘Z (`.undo`) ou ⇧⌘Z (`.redo`) quand la pile d'annulation du champ n'a plus rien à défaire (ou refaire) : le panneau
+    /// change alors de version du texte.
+    var onHistoryEnd: @MainActor (EditingCommand) -> Void
+    /// Une saisie en attente (texte marqué : touche morte, méthode de saisie) commence ou finit : tant qu'elle dure, le panneau ne
+    /// change pas de version (voir `PanelModel.fieldIsComposing`).
+    var onComposingChange: @MainActor (Bool) -> Void
 
-    init(text: String, isEditable: Bool, takesFocus: Bool, onEdit: @escaping @MainActor (String) -> Void) {
+    init(
+        text: String, isEditable: Bool, takesFocus: Bool, onEdit: @escaping @MainActor (String) -> Void,
+        onHistoryEnd: @escaping @MainActor (EditingCommand) -> Void,
+        onComposingChange: @escaping @MainActor (Bool) -> Void = { _ in }
+    ) {
         self.text = text
         self.isEditable = isEditable
         self.takesFocus = takesFocus
         self.onEdit = onEdit
+        self.onHistoryEnd = onHistoryEnd
+        self.onComposingChange = onComposingChange
     }
 
     /// Le champ, configuré. Un `FocusingTextView` : voir `takesFocus`.
@@ -52,12 +64,37 @@ struct ReviewTextView: NSViewRepresentable {
     }
 
     /// Met le champ à jour. La chaîne n'est remplacée que si elle diffère de celle du champ : la remplacer par la même
-    /// renverrait le curseur à la fin. Remplacer la chaîne ne vide pas la pile d'annulation : le champ et sa pile sont neufs à
-    /// chaque relecture, c'est ce qui l'empêche de viser un texte disparu. Et jamais pendant une saisie en attente (touche morte,
-    /// méthode de saisie : `hasMarkedText()`) : le texte marqué ne remonte pas par `textDidChange`, donc `text` a du retard, et
-    /// la réécriture effacerait la saisie. La saisie validée, `textDidChange` remet le modèle d'accord avec le champ.
+    /// renverrait le curseur à la fin. Un texte remplacé de l'extérieur (une autre version, le texte reçu du modèle) vide la pile
+    /// d'annulation du champ : ses actions visent des plages de l'ancien texte, et un ⌘Z sur un texte plus court lève
+    /// `NSRangeException`. Une frappe, elle, remonte par `textDidChange` : le texte du modèle est alors déjà celui du champ, et
+    /// rien n'est remplacé. Le champ et sa pile sont de plus neufs à chaque relecture.
+    ///
+    /// Pendant une saisie en attente (touche morte, méthode de saisie : `hasMarkedText()`), le texte marqué ne remonte pas par
+    /// `textDidChange` : `text` a du retard, et le réécrire effacerait la saisie. Deux cas. Ou bien `text` est le dernier texte sur
+    /// lequel le champ et le modèle étaient d'accord (`FocusingTextView.agreedText`) : un simple retard, rien à faire. Ou bien
+    /// c'est un texte nouveau (une autre version, venue du contrôleur) : il est montré tout de suite. La saisie est alors
+    /// abandonnée (`unmarkText()`) puis le texte remplacé, sous `isReplacing`, qui fait ignorer à `Coordinator.textDidChange` ce que
+    /// l'opération annonce (l'abandon du marquage annonce le texte marqué, que `onEdit` écrirait dans la version qu'on vient de
+    /// montrer). Le champ et le brouillon du contrôleur sont ainsi identiques à la sortie ; aucun texte n'attend.
     static func update(_ textView: NSTextView, text: String, isEditable: Bool, takesFocus: Bool) {
-        if textView.string != text, !textView.hasMarkedText() { textView.string = text }
+        let field = textView as? FocusingTextView
+        if textView.string == text {
+            field?.agreedText = text
+        } else if textView.hasMarkedText(), text == field?.agreedText {
+            // Un retard : la saisie continue.
+        } else {
+            field?.isReplacing = true
+            defer { field?.isReplacing = false }
+            if textView.hasMarkedText() {
+                // Une fin de saisie pour le panneau aussi : `FocusingTextView.unmarkText` le lui dit (`fieldIsComposing`), et
+                // `didChangeText` aussi (la revue finale a retiré l'appel d'`unmarkText` sans que l'indicateur reste coincé : deux
+                // chemins, non un seul, et celui de `didChangeText` n'est pas instrumenté).
+                textView.unmarkText()
+            }
+            textView.string = text
+            textView.undoManager?.removeAllActions()
+            field?.agreedText = text
+        }
         if textView.isEditable != isEditable { textView.isEditable = isEditable }
         (textView as? FocusingTextView)?.takesFocus = takesFocus
     }
@@ -111,6 +148,8 @@ struct ReviewTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let textView = Self.makeTextView()
         textView.delegate = context.coordinator
+        (textView as? FocusingTextView)?.onHistoryEnd = onHistoryEnd
+        (textView as? FocusingTextView)?.onComposingChange = onComposingChange
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
@@ -124,6 +163,8 @@ struct ReviewTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.onEdit = onEdit
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        (textView as? FocusingTextView)?.onHistoryEnd = onHistoryEnd
+        (textView as? FocusingTextView)?.onComposingChange = onComposingChange
         Self.update(textView, text: text, isEditable: isEditable, takesFocus: takesFocus)
     }
 
@@ -140,6 +181,11 @@ struct ReviewTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
+            if let field = textView as? FocusingTextView {
+                // Un remplacement venu de l'extérieur (voir `update`) n'est pas une frappe : le modèle a déjà ce texte.
+                if field.isReplacing { return }
+                field.agreedText = textView.string
+            }
             onEdit(textView.string)
         }
     }
@@ -153,6 +199,95 @@ final class FocusingTextView: NSTextView {
         // Seulement au passage de faux à vrai : SwiftUI répète la valeur à chaque mise à jour, et l'utilisateur qui est allé
         // sur un bouton ne doit pas être ramené au champ.
         didSet { if takesFocus && !oldValue { focusIfPossible() } }
+    }
+
+    /// Appelé quand une saisie en attente (texte marqué) commence ou finit.
+    var onComposingChange: (@MainActor (Bool) -> Void)?
+    private var wasComposing = false
+
+    /// Appelé quand ⌘Z (⇧⌘Z) n'a rien à défaire (refaire) dans la pile de ce champ.
+    var onHistoryEnd: (@MainActor (EditingCommand) -> Void)?
+
+    /// Le dernier texte sur lequel le champ et le modèle étaient d'accord : posé par `ReviewTextView.update` et par chaque
+    /// frappe remontée. Pendant une saisie en attente, un texte du modèle qui lui est égal n'est qu'un retard.
+    var agreedText: String?
+    /// Vrai pendant un remplacement du texte venu de l'extérieur (`ReviewTextView.update`) : `textDidChange` n'y remonte rien.
+    var isReplacing = false
+
+    /// Le panneau sait quand une saisie est en attente (`PanelModel.fieldIsComposing`).
+    private func reportComposing() {
+        let composing = hasMarkedText()
+        guard composing != wasComposing else { return }
+        wasComposing = composing
+        onComposingChange?(composing)
+    }
+
+    /// Perdre la frappe peut valider ou garder le marquage : le panneau en est informé dans les deux cas.
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        reportComposing()
+        return resigned
+    }
+
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        reportComposing()
+    }
+
+    override func unmarkText() {
+        super.unmarkText()
+        reportComposing()
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+        reportComposing()
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        reportComposing()
+    }
+
+    /// ⌘Z : la pile de ce champ d'abord (la frappe faite après une réécriture se défait la première), puis, quand elle est vide,
+    /// la version précédente du texte. Rien ne se défait ni ne se change dans un champ en lecture seule (pendant une
+    /// correction, le texte est celui que le modèle reçoit), et aucune version ne change pendant une saisie en attente : le champ
+    /// ne remplacerait pas son texte, que le contrôleur croirait pourtant changé.
+    func undoOrPreviousVersion() {
+        guard isEditable else { return }
+        if let manager = undoManager, manager.canUndo {
+            manager.undo()
+            // L'annulation ne prévient personne par elle-même : le brouillon du contrôleur reste le texte affiché.
+            didChangeText()
+        } else if !hasMarkedText() {
+            onHistoryEnd?(.undo)
+        }
+    }
+
+    /// ⇧⌘Z : de même, avec la version suivante.
+    func redoOrNextVersion() {
+        guard isEditable else { return }
+        if let manager = undoManager, manager.canRedo {
+            manager.redo()
+            didChangeText()
+        } else if !hasMarkedText() {
+            onHistoryEnd?(.redo)
+        }
+    }
+
+    /// `undo:` et `redo:`, tels que le panneau les envoie (`FloatingPanel.performKeyEquivalent`), passent par les deux méthodes
+    /// ci-dessus. Interceptés ici plutôt que déclarés `@objc` : une méthode de ce sélecteur ferait avertir de `#selector` le
+    /// test qui lit le menu Édition par `Selector(("undo:"))`.
+    override func tryToPerform(_ action: Selector, with object: Any?) -> Bool {
+        if action == NSSelectorFromString("undo:") {
+            undoOrPreviousVersion()
+            return true
+        }
+        if action == NSSelectorFromString("redo:") {
+            redoOrNextVersion()
+            return true
+        }
+        return super.tryToPerform(action, with: object)
     }
 
     override func viewDidMoveToWindow() {

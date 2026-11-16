@@ -1,4 +1,5 @@
 import AppKit
+import SupervoxCore
 import SwiftUI
 import os
 
@@ -26,6 +27,8 @@ public final class AppController {
     /// Construit sans rien lire ; partagé par toute l'application.
     public let secrets: any SecretStore
     public let hotKeys: HotKeyCenter
+    /// Le raccourci propre à chaque mode (`Mode.hotKey`), un registraire par mode.
+    public let modeHotKeys: ModeHotKeys
     public let panelModel: PanelModel
     public let permissions: PermissionsModel
     /// La dictée : le raccourci, Échap et la fermeture du panneau y mènent.
@@ -61,12 +64,19 @@ public final class AppController {
     /// La dernière demande faite à la présentation de la fenêtre ; les tests l'attendent.
     private(set) var settingsPresentation: Task<Void, Never>?
     private let log = Logger(subsystem: "dev.supervox.app", category: "app")
+    /// L'avis `.hotKey` du panneau a une seule place : la part du raccourci global et celle de chaque mode refusé s'y composent
+    /// (`publishHotKeyNotice`), sans que l'une efface l'autre.
+    private var globalHotKeyNotice: String?
+    private var modeHotKeyNotices: [String: String] = [:]
+    /// Les combinaisons des modes actives quand la capture en cours a commencé (vide hors capture).
+    private var modeHotKeysBeforeCapture: [String: HotKey] = [:]
 
     public init(
         settingsStore: SettingsStore,
         secrets: any SecretStore,
         hotKeyRegistrar: any HotKeyRegistrar,
         escapeRegistrar: any HotKeyRegistrar,
+        makeModeHotKeyRegistrar: @escaping @MainActor () -> any HotKeyRegistrar,
         permissionsProbe: any PermissionsProbe,
         systemHotKeys: any SystemHotKeys,
         keyboardLayout: any KeyboardLayout,
@@ -76,6 +86,8 @@ public final class AppController {
         makeSettingsWindow: @escaping SettingsWindowMaker,
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
+        rewriter: RewriteEnvironment,
+        frontApplication: @escaping @MainActor () -> Int32? = { nil },
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
@@ -91,6 +103,7 @@ public final class AppController {
         self.systemHotKeys = systemHotKeys
         self.keyboardLayout = keyboardLayout
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar, layout: keyboardLayout)
+        modeHotKeys = ModeHotKeys(makeRegistrar: makeModeHotKeyRegistrar, layout: keyboardLayout)
 
         let loaded = settingsStore.load()
         settings = loaded.settings
@@ -98,7 +111,7 @@ public final class AppController {
         hasLoadNotice = loaded.notice != nil
         saveRefusal = loaded.saveRefusal
 
-        let panelModel = PanelModel(lastModeID: loaded.settings.lastModeID)
+        let panelModel = PanelModel(lastModeID: loaded.settings.lastModeID, modes: loaded.settings.modes.map(\.chip))
         panelModel.setNotice(loaded.notice, for: .settingsLoad)
         self.panelModel = panelModel
         permissions = PermissionsModel(probe: permissionsProbe)
@@ -124,9 +137,26 @@ public final class AppController {
             },
             panel: panel,
             hotKeyModifiers: { relay.settings?()?.hotKey.modifiers ?? [] },
+            // Le choix du mode passe par le panneau : il l'enregistre, comme un clic sur sa pastille.
+            // Le raccourci réellement enregistré, pas celui des réglages : un changement que le système a refusé laisse l'ancien
+            // actif, et c'est lui que l'on tient.
+            modeHotKeyModifiers: { [modeHotKeys] in modeHotKeys.active[$0]?.modifiers ?? [] },
+            selectMode: { [panelModel] in panelModel.select($0) },
+            ownerIsBound: { [hotKeys, modeHotKeys] owner in
+                switch owner {
+                case .global: hotKeys.active != nil
+                case .mode(let id): modeHotKeys.active[id] != nil
+                }
+            },
             hold: holdWatch,
             // Lu une fois, à l'appui qui commence la dictée, pour le mode choisi.
             reviewBeforePaste: { relay.settings?()?.reviewsBeforePaste($0) ?? false },
+            // Lu une fois, à l'appui, avec le choix de relecture : le mode tel que les réglages l'ont à cet instant.
+            modes: { ModeRun.from(relay.settings?()?.mode($0)) },
+            rewriter: rewriter,
+            frontApplication: frontApplication,
+            // Le libellé du raccourci global réellement enregistré, celui que le reste du panneau montre.
+            hotKeyLabel: { [panelModel] in panelModel.hotKeyLabel },
             wait: reviewHandoverWait)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
@@ -137,6 +167,10 @@ public final class AppController {
         panelModel.onCopy = { [inserter] in inserter.copy($0) }
         panelModel.onDraftChange = { [dictationController] in dictationController.reviewEdited($0) }
         panelModel.onPaste = { [dictationController] in dictationController.pasteReview() }
+        panelModel.onCorrect = { [dictationController] in dictationController.startCorrection() }
+        panelModel.onFinishCorrection = { [dictationController] in dictationController.finishCorrection() }
+        panelModel.onPreviousVersion = { [dictationController] in dictationController.previousVersion() }
+        panelModel.onNextVersion = { [dictationController] in dictationController.nextVersion() }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }
@@ -149,9 +183,50 @@ public final class AppController {
         if let notice = loaded.notice { log.notice("réglages : \(notice, privacy: .public)") }
     }
 
+    /// L'assemblage de production de la mise en forme : le modèle de langage lit les réglages **en vigueur** de ce contrôleur
+    /// (relais posé juste après la construction, car il n'existe pas encore) et les clés par `secrets`, sur la file commune des
+    /// secrets. Le seul chemin par où l'application obtient son `RewriteEnvironment` ; `makeModel` n'est remplacé que par les
+    /// tests, pour qu'aucune connexion ne s'ouvre.
+    convenience init(
+        settingsStore: SettingsStore,
+        secrets: any SecretStore,
+        hotKeyRegistrar: any HotKeyRegistrar,
+        escapeRegistrar: any HotKeyRegistrar,
+        makeModeHotKeyRegistrar: @escaping @MainActor () -> any HotKeyRegistrar,
+        permissionsProbe: any PermissionsProbe,
+        systemHotKeys: any SystemHotKeys,
+        keyboardLayout: any KeyboardLayout,
+        settingsView: @escaping SettingsViewProvider = AppController.emptySettings,
+        makePanelSurface: @MainActor (AnyView) -> any PanelSurface,
+        clickMonitor: any OutsideClickMonitor,
+        makeSettingsWindow: @escaping SettingsWindowMaker,
+        terminate: @escaping @MainActor () -> Void,
+        dictation: DictationEnvironment = .unavailable,
+        makeModel: @escaping @Sendable (ProviderKind, EndpointConfig) -> any LanguageModel,
+        frontApplication: @escaping @MainActor () -> Int32? = { nil },
+        inserter: TextInserter,
+        holdWatch: HoldWatch = .system,
+        terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+    ) {
+        let current = ActionRelay()
+        self.init(
+            settingsStore: settingsStore, secrets: secrets, hotKeyRegistrar: hotKeyRegistrar,
+            escapeRegistrar: escapeRegistrar, makeModeHotKeyRegistrar: makeModeHotKeyRegistrar,
+            permissionsProbe: permissionsProbe, systemHotKeys: systemHotKeys, keyboardLayout: keyboardLayout,
+            settingsView: settingsView, makePanelSurface: makePanelSurface, clickMonitor: clickMonitor,
+            makeSettingsWindow: makeSettingsWindow, terminate: terminate, dictation: dictation,
+            rewriter: LiveRewriter.environment(
+                settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets), makeModel: makeModel),
+            frontApplication: frontApplication, inserter: inserter, holdWatch: holdWatch, terminationWait: terminationWait,
+            reviewHandoverWait: reviewHandoverWait)
+        current.settings = { [weak self] in self?.settings }
+    }
+
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
     /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, que la cible `Supervox` construit
-    /// (`SupervoxApp` ne dépend pas d'eux).
+    /// (`SupervoxApp` ne dépend pas d'eux). Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
+    /// ci-dessus, que les tests exécutent.
     public convenience init(
         settingsView: @escaping SettingsViewProvider = SettingsView.provider,
         dictation: DictationEnvironment = .unavailable,
@@ -164,6 +239,7 @@ public final class AppController {
             secrets: CachedSecretStore(KeychainSecretStore(service: "dev.supervox.app")),
             hotKeyRegistrar: CarbonHotKeyRegistrar(),
             escapeRegistrar: CarbonHotKeyRegistrar(),
+            makeModeHotKeyRegistrar: { CarbonHotKeyRegistrar() },
             permissionsProbe: SystemPermissions(),
             systemHotKeys: SymbolicHotKeys(),
             keyboardLayout: SystemKeyboardLayout(),
@@ -172,7 +248,8 @@ public final class AppController {
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
-            dictation: dictation, inserter: inserter)
+            dictation: dictation, makeModel: LiveRewriter.client, frontApplication: FrontApplication.system,
+            inserter: inserter)
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,
@@ -196,6 +273,7 @@ public final class AppController {
     /// l'affichage.
     func launch() {
         let hotKeyNeedsPanel = applyHotKey()
+        applyModeHotKeys()
         if isFirstLaunch {
             panelModel.welcome = Self.welcome(hotKeyLabel: panelModel.hotKeyLabel)
             do {
@@ -249,12 +327,12 @@ public final class AppController {
             panelModel.hotKeyLabel = label
             log.notice("raccourci enregistré : \(label, privacy: .public) ; rappels d'appui et de relâchement posés")
             guard systemHotKeys.enabled().contains(hotKey) else {
-                panelModel.setNotice(nil, for: .hotKey)
+                setGlobalHotKeyNotice(nil)
                 return false
             }
             let message =
                 "Le raccourci \(label) est aussi un raccourci de macOS activé sur ce Mac : il peut ne pas ouvrir le panneau. Choisissez-en un autre dans Réglages, ou désactivez celui de macOS (Réglages Système, Clavier, Raccourcis clavier)."
-            panelModel.setNotice(message, for: .hotKey)
+            setGlobalHotKeyNotice(message)
             log.notice("raccourci de macOS : \(label, privacy: .public)")
             guard settings.systemConflictShown != hotKey else { return false }
             recordShownSystemConflict(hotKey)
@@ -262,7 +340,7 @@ public final class AppController {
         case .failure(let error):
             panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
             let message = Self.message(for: error, label: hotKey.label(layout: keyboardLayout))
-            panelModel.setNotice(message, for: .hotKey)
+            setGlobalHotKeyNotice(message)
             log.notice("raccourci refusé : \(message, privacy: .public)")
             return true
         }
@@ -304,6 +382,10 @@ public final class AppController {
         panelModel.setNotice(nil, for: .save)
         // Le fichier mis de côté au lancement est remplacé par des réglages lisibles : l'avis n'a plus d'objet.
         panelModel.setNotice(nil, for: .settingsLoad)
+        // Les pastilles et les raccourcis suivent les modes enregistrés ; le panneau ouvert est redimensionné.
+        panelModel.setModes(updated.modes.map(\.chip))
+        panel.contentChanged()
+        applyModeHotKeys()
     }
 
     /// Enregistre `hotKey` comme raccourci global, avec le même effet que celui du lancement, et met à
@@ -313,27 +395,146 @@ public final class AppController {
             hotKey, onPress: { [weak self] in self?.hotKeyPressed() },
             onRelease: { [weak self] in self?.hotKeyReleased() })
         panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
-        if case .success = result { panelModel.setNotice(nil, for: .hotKey) }
+        if case .success = result { setGlobalHotKeyNotice(nil) }
         return result
+    }
+
+    /// Donne ce raccourci à ce mode, ou le lui retire avec `nil`, avec le même effet que l'application des réglages : s'il est
+    /// accepté, l'avis qui nommait ce mode s'efface. N'enregistre pas les réglages. En cas de refus, l'ancien reste actif.
+    ///
+    /// Un identifiant que les réglages ne portent pas (le mode a été supprimé pendant ce temps) est refusé : rien n'est
+    /// enregistré auprès du système, aucun registraire n'est fabriqué. La réponse est `.refused` ; l'onglet Modes, qui vérifie
+    /// l'existence du mode avant d'appeler, dit alors une phrase fixe.
+    public func changeModeHotKey(_ hotKey: HotKey?, for modeID: String) -> Result<Void, HotKeyError> {
+        guard settings.mode(modeID) != nil else { return .failure(.refused) }
+        let result = modeHotKeys.set(hotKey, for: modeID)
+        if case .success = result {
+            modeHotKeyNotices[modeID] = nil
+            publishHotKeyNotice()
+        }
+        return result
+    }
+
+    /// La phrase qui refuse cette combinaison pour ce détenteur, ou `nil` si elle est libre. Compare aux raccourcis attribués
+    /// dans les réglages (celui d'un mode que le système a refusé au lancement garde sa combinaison), et aux raccourcis de macOS
+    /// activés à cet instant.
+    public func hotKeyRefusal(for candidate: HotKey, owner: HotKeyOwner) -> String? {
+        var bindings: [String: HotKey] = [:]
+        var names: [String: String] = [:]
+        for mode in settings.modes {
+            names[mode.id] = mode.name
+            if let hotKey = mode.hotKey { bindings[mode.id] = hotKey }
+        }
+        return HotKeyConflicts.refusal(
+            for: candidate, owner: owner, global: settings.hotKey, modes: bindings, names: names,
+            systemEnabled: systemHotKeys.enabled(), layout: keyboardLayout)
+    }
+
+    /// Met les raccourcis des modes d'accord avec les réglages en vigueur, et dit dans le panneau lesquels ne le sont pas (une
+    /// ligne par mode). Une combinaison déjà active n'est pas touchée.
+    ///
+    /// Une combinaison déjà utilisée n'est pas laissée au système : le raccourci global gagne toujours, puis, entre modes, le
+    /// premier dans l'ordre des réglages. Le perdant n'est pas enregistré, et son avis nomme le détenteur. Un mode refusé
+    /// n'ouvre pas le panneau : l'avis attend sa prochaine ouverture.
+    private func applyModeHotKeys() {
+        var bindings: [String: HotKey] = [:]
+        var holders: [(hotKey: HotKey, name: String)] = []
+        var notices: [String: String] = [:]
+        for mode in settings.modes {
+            guard let hotKey = mode.hotKey else { continue }
+            let label = hotKey.label(layout: keyboardLayout)
+            if hotKey == settings.hotKey {
+                notices[mode.id] = Self.inactiveMessage(label: label, modeName: mode.name, holder: nil)
+            } else if let holder = holders.first(where: { $0.hotKey == hotKey }) {
+                notices[mode.id] = Self.inactiveMessage(label: label, modeName: mode.name, holder: holder.name)
+            } else {
+                bindings[mode.id] = hotKey
+                holders.append((hotKey, mode.name))
+            }
+        }
+        let refused = modeHotKeys.apply(
+            bindings, onPress: { [weak self] in self?.dictation.modeHotKeyPressed($0) },
+            onRelease: { [weak self] in self?.dictation.modeHotKeyReleased($0) })
+        for mode in settings.modes {
+            guard let error = refused[mode.id], let hotKey = mode.hotKey else { continue }
+            notices[mode.id] = Self.message(
+                for: error, label: hotKey.label(layout: keyboardLayout), modeName: mode.name)
+        }
+        // Un refus qui dure n'est journalisé qu'une fois : l'avis est recomposé à chaque enregistrement des réglages.
+        for (id, notice) in notices where modeHotKeyNotices[id] != notice { log.notice("raccourci de mode non actif") }
+        modeHotKeyNotices = notices
+        publishHotKeyNotice()
+    }
+
+    private static func inactiveMessage(label: String, modeName: String, holder: String?) -> String {
+        let user = holder.map { "le mode « \($0) »" } ?? "le raccourci général"
+        return "Le raccourci \(label) du mode « \(modeName) » n'est pas actif : il est déjà utilisé par \(user). Changez-le dans Réglages, onglet Modes."
+    }
+
+    private func setGlobalHotKeyNotice(_ text: String?) {
+        globalHotKeyNotice = text
+        publishHotKeyNotice()
+    }
+
+    /// L'avis `.hotKey` : la ligne du raccourci global, puis une ligne par mode refusé, dans l'ordre des modes.
+    private func publishHotKeyNotice() {
+        var lines = [globalHotKeyNotice].compactMap { $0 }
+        lines += settings.modes.compactMap { modeHotKeyNotices[$0.id] }
+        panelModel.setNotice(lines.isEmpty ? nil : lines.joined(separator: "\n"), for: .hotKey)
+    }
+
+    private static func message(for error: HotKeyError, label: String, modeName: String) -> String {
+        switch error {
+        case .refused:
+            "Le raccourci \(label) du mode « \(modeName) » a été refusé par macOS : choisissez-en un autre dans Réglages, onglet Modes."
+        case .invalid:
+            "Le raccourci \(label) du mode « \(modeName) » n'est pas valide : choisissez-en un autre dans Réglages, onglet Modes."
+        }
     }
 
     /// Le temps d'une capture de raccourci : panneau fermé (Échap rendu) et raccourci global rendu au système.
     func suspendHotKeysForCapture() {
         panel.close()
+        // Ce qui était actif avant : à la reprise, un refus ne dit « rétabli » que pour une combinaison qui l'était.
+        if !modeHotKeys.isSuspended { modeHotKeysBeforeCapture = modeHotKeys.active }
         hotKeys.suspend()
+        modeHotKeys.suspend()
     }
 
-    /// Fin de capture : le raccourci suspendu est réenregistré, s'il l'est encore. Rend faux si le système le refuse.
+    /// Fin de capture : le raccourci global et ceux des modes, suspendus, sont réenregistrés s'ils le sont encore. Rend faux si
+    /// le système refuse le raccourci global (la réponse ne parle que de lui) ; un mode refusé le dit dans le panneau.
     func resumeHotKeys() -> Bool {
         let restored = hotKeys.resume()
         panelModel.hotKeyLabel = hotKeys.active?.label(layout: keyboardLayout)
         if !restored {
-            panelModel.setNotice(
-                "Le raccourci \(settings.hotKey.label(layout: keyboardLayout)) n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages.",
-                for: .hotKey)
+            globalHotKeyNotice =
+                "Le raccourci \(settings.hotKey.label(layout: keyboardLayout)) n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages."
             log.notice("raccourci non rétabli après la capture")
         }
+        let activeBefore = modeHotKeysBeforeCapture
+        modeHotKeysBeforeCapture = [:]
+        for id in modeHotKeys.resume() {
+            guard let mode = settings.mode(id), let hotKey = mode.hotKey else { continue }
+            let label = hotKey.label(layout: keyboardLayout)
+            // « Rétabli » est vrai seulement d'une combinaison qui était active avant la capture : celle qu'on a donnée pendant,
+            // ou qu'un refus du lancement avait écartée, n'a jamais été prise ; elle n'a pas pu être enregistrée.
+            if activeBefore[id] == hotKey {
+                modeHotKeyNotices[id] =
+                    "Le raccourci \(label) du mode « \(mode.name) » n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages, onglet Modes."
+                log.notice("raccourci de mode non rétabli après la capture")
+            } else {
+                modeHotKeyNotices[id] =
+                    "Le raccourci \(label) du mode « \(mode.name) » n'a pas pu être enregistré après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages, onglet Modes."
+                log.notice("raccourci de mode non enregistré après la capture")
+            }
+        }
+        publishHotKeyNotice()
         return restored
+    }
+
+    /// Le nom du mode qui tient déjà cette combinaison comme raccourci dans les réglages, `nil` si aucun ne la tient.
+    func modeHolding(_ hotKey: HotKey) -> String? {
+        settings.modes.first { $0.hotKey == hotKey }?.name
     }
 
     /// Plus aucun raccourci global.

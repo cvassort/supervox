@@ -84,15 +84,20 @@ public struct DictationConfig: Sendable {
     public var padding: Double
     /// Durée de prise, en secondes, à laquelle la session se termine d'elle-même. 300 s (5 minutes) : choix du plan.
     public var maxDuration: Double
+    /// Secondes accordées au moteur final pour rendre le texte, de l'envoi de la parole à sa réponse : passé ce délai, la prise
+    /// échoue et le moteur est annulé (un moteur qui ne rend jamais ne laisse pas la dictée en « finalizing »). 120 s : choix
+    /// de conception, non mesuré.
+    public var finalTimeout: Double
 
     public init(language: String, vocabulary: [String] = [], previewInterval: Double = 0.5, previewWindow: Double = 15,
-                padding: Double = 0.3, maxDuration: Double = 300) {
+                padding: Double = 0.3, maxDuration: Double = 300, finalTimeout: Double = 120) {
         self.language = language
         self.vocabulary = vocabulary
         self.previewInterval = previewInterval
         self.previewWindow = previewWindow
         self.padding = padding
         self.maxDuration = maxDuration
+        self.finalTimeout = finalTimeout
     }
 }
 

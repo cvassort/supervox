@@ -1,0 +1,24 @@
+data: {"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0,"logprobs":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk","prompt_text":null,"prompt_token_ids":null}
+
+data: {"choices":[{"delta":{"reasoning":"Je"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"' réfléchis"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":" d'abord"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"\n\n1. Reprendre"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"reasoning":"\n2. Répondre"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":"Bonjour"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":", tout"},"finish_reason":null,"index":0,"logprobs":null,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[{"delta":{"content":" le monde."},"finish_reason":"stop","index":0,"logprobs":null,"stop_reason":106,"token_ids":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk"}
+
+data: {"choices":[],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk","usage":{"completion_tokens":14,"prompt_tokens":31,"total_tokens":45}}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop","index":0,"logprobs":null}],"created":1794495100,"id":"requete-exemple","model":"modele-exemple","object":"chat.completion.chunk","usage":{"completion_tokens":14,"prompt_tokens":31,"total_tokens":45}}
+
+data: [DONE]
+

@@ -13,6 +13,7 @@ import Testing
     let store: SettingsStore
     let hotKeys = HotKeyTests.FakeRegistrar()
     let escape = HotKeyTests.FakeRegistrar()
+    let modeRegistrars = ModeRegistrars()
     let probe = FakePermissionsProbe(microphone: .granted, accessibility: .granted)
     let system = FakeSystemHotKeys()
     let surface = FakePanelSurface()
@@ -32,10 +33,11 @@ import Testing
         if seeded, !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
         return AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
-            escapeRegistrar: escape, permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
+            escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
+            permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
     }
 
     func corruptTheSettingsFile() throws {
@@ -163,10 +165,11 @@ import Testing
 
         let next = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
-            escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
+            escapeRegistrar: HotKeyTests.FakeRegistrar(), makeModeHotKeyRegistrar: { HotKeyTests.FakeRegistrar() },
+            permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
         next.launch()
         #expect(next.panelModel.welcome == nil)
         #expect(!next.panelModel.isOpen)
@@ -198,10 +201,11 @@ import Testing
         // Lancement suivant : silencieux.
         let next = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
-            escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
+            escapeRegistrar: HotKeyTests.FakeRegistrar(), makeModeHotKeyRegistrar: { HotKeyTests.FakeRegistrar() },
+            permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in FakePanelSurface() }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(next.panelModel.welcome == nil)
@@ -316,10 +320,11 @@ import Testing
         let nextSurface = FakePanelSurface()
         let next = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: HotKeyTests.FakeRegistrar(),
-            escapeRegistrar: HotKeyTests.FakeRegistrar(), permissionsProbe: probe, systemHotKeys: system,
+            escapeRegistrar: HotKeyTests.FakeRegistrar(), makeModeHotKeyRegistrar: { HotKeyTests.FakeRegistrar() },
+            permissionsProbe: probe, systemHotKeys: system,
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { _ in nextSurface }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter)
         next.launch()
         #expect(!next.panelModel.isOpen)
         #expect(nextSurface.showCount == 0)

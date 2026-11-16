@@ -22,7 +22,7 @@ import Testing
             settings: settings, catalog: catalog, promptTokenLimit: Self.limit, save: { try saver.save($0) })
     }
 
-    func settings(engine: String = "whisperkit", model: String = "large-v3-v20240930_turbo", vocabulary: [String] = [])
+    func settings(engine: TranscriptionEngine = .whisperKit, model: String = "large-v3-v20240930_turbo", vocabulary: [String] = [])
         -> TranscriptionSettings
     {
         TranscriptionSettings(engine: engine, whisperModel: model, language: "fr", vocabulary: vocabulary)
@@ -97,7 +97,7 @@ import Testing
             Issue.record("échec attendu, état reçu \(String(describing: Self.state(model, id)))")
             return
         }
-        #expect(reason.contains("disque plein"))
+        #expect(reason == TranscriptionModel.downloadFailure)
         // Relire le disque ne l'efface pas non plus.
         await model.refresh()
         #expect(Self.state(model, id) == .failed(reason))
@@ -268,7 +268,7 @@ import Testing
     }
 
     @Test func theRefusalUnderParakeetSaysWhichEngineHasTheLimit() async {
-        let model = makeModel(settings(engine: "parakeet"))
+        let model = makeModel(settings(engine: .parakeet))
         catalog.setTokenCount(140)
         await model.setVocabulary(text: "un\ndeux")
         let message = model.message ?? ""
@@ -287,7 +287,7 @@ import Testing
         #expect(!(whisper.message ?? "").localizedCaseInsensitiveContains("jeton"))
         #expect(whisper.settings.vocabulary == ["Docker"])
 
-        let parakeet = makeModel(settings(engine: "parakeet"))
+        let parakeet = makeModel(settings(engine: .parakeet))
         await parakeet.setVocabulary(text: "Docker")
         #expect(parakeet.message == nil)
         #expect(parakeet.settings.vocabulary == ["Docker"])
@@ -327,12 +327,12 @@ import Testing
     }
 
     @Test func switchingToWhisperKitRecountsButSwitchingToParakeetDoesNot() async {
-        let model = makeModel(settings(engine: "parakeet", vocabulary: ["Docker"]))
-        model.setEngine("whisperkit")
+        let model = makeModel(settings(engine: .parakeet, vocabulary: ["Docker"]))
+        model.setEngine(.whisperKit)
         await model.waitForRecheck()
         #expect(catalog.countRequests.count == 1)
 
-        model.setEngine("parakeet")
+        model.setEngine(.parakeet)
         await model.waitForRecheck()
         #expect(catalog.countRequests.count == 1)
     }
@@ -386,7 +386,7 @@ import Testing
         await whisper.waitForRecheck()
         #expect(whisper.messageKind == .warning)
 
-        let parakeet = makeModel(settings(engine: "parakeet", vocabulary: ["Docker"]))
+        let parakeet = makeModel(settings(engine: .parakeet, vocabulary: ["Docker"]))
         parakeet.setWhisperModel("small")
         await parakeet.waitForRecheck()
         #expect(parakeet.message == nil)
@@ -445,7 +445,7 @@ import Testing
     // MARK: - « Moteur choisi » : le modèle du texte final seulement
 
     @Test func aWhisperModelIsNeverTheChosenOneWhenParakeetIsTheEngine() {
-        let model = makeModel(settings(engine: "parakeet"))
+        let model = makeModel(settings(engine: .parakeet))
         #expect(!model.isUsedByChosenEngine(FakeModelCatalog.turbo.id))
         #expect(!model.isUsedByDictation(FakeModelCatalog.turbo.id))
         #expect(model.isUsedByChosenEngine(LocalModelID.parakeet))
@@ -462,7 +462,7 @@ import Testing
     }
 
     @Test func deletingTheWhisperModelOfTheSettingsDoesNotWarnWhenParakeetIsTheEngine() async {
-        let model = makeModel(settings(engine: "parakeet"))
+        let model = makeModel(settings(engine: .parakeet))
         await model.refresh()
         await model.delete(FakeModelCatalog.turbo.id)
         #expect(model.message == nil)

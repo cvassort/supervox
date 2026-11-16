@@ -57,17 +57,9 @@ public final class OpenAICompatibleClient: Sendable {
     /// La requête part dès l'appel de `chatStream`, pas à la première itération. Une tâche consommatrice annulée voit sa
     /// boucle se terminer sans erreur (comportement d'`AsyncThrowingStream`) : tester `Task.isCancelled` ensuite.
     public func chatStream(model: String, messages: [ChatMessage], maxTokens: Int) -> AsyncThrowingStream<ChatDelta, Error> {
-        AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    try await self.streamChat(model: model, messages: messages, maxTokens: maxTokens, into: continuation)
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: mapped(error))
-                }
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+        endpoint.events(
+            request: { try self.streamingRequest(model: model, messages: messages, maxTokens: maxTokens) },
+            reader: { status, redact in ChatChunkParser(status: status, redact: redact) })
     }
 
     /// Synthèse vocale (`POST <base>/v1/audio/speech`). Rend les octets audio. `extra` est fusionné au premier niveau
@@ -106,25 +98,9 @@ public final class OpenAICompatibleClient: Sendable {
 
     // MARK: - Requêtes
 
-    /// `<base>/v1/<path>`. La base peut avoir un `/` final, se terminer par `/v1` ou porter un préfixe de chemin :
-    /// dans tous les cas on obtient exactement un `/v1`, sans `//`. La requête et le fragment de la base sont ignorés.
-    private func endpointURL(path: [String]) throws -> URL {
-        guard var components = URLComponents(url: config.baseURL, resolvingAgainstBaseURL: false),
-              let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              let host = components.host, !host.isEmpty
-        else {
-            throw EndpointError.transport("\(EndpointConfig.baseURLVariable) doit être une adresse http(s) complète")
-        }
-        var segments = components.path.split(separator: "/").map(String.init)
-        if segments.last == "v1" { segments.removeLast() }
-        components.path = "/" + (segments + ["v1"] + path).joined(separator: "/")
-        components.query = nil
-        components.fragment = nil
-        guard let url = components.url else {
-            throw EndpointError.transport("\(EndpointConfig.baseURLVariable) donne une adresse inutilisable")
-        }
-        return url
-    }
+    private var endpoint: EndpointRequest { EndpointRequest(config: config, session: session) }
+
+    private func endpointURL(path: [String]) throws -> URL { try endpoint.url(path: path) }
 
     /// Envoie la requête et rend le corps et la réponse d'un statut 2xx. Toute autre issue est une `EndpointError`,
     /// sauf l'annulation de la tâche, qui reste une `CancellationError`. Une redirection vers une autre origine
@@ -146,31 +122,16 @@ public final class OpenAICompatibleClient: Sendable {
         return (data, http)
     }
 
-    /// Erreur de `URLSession` (ou levée en cours de lecture) rendue au format du client : l'annulation reste une
-    /// `CancellationError`, une `EndpointError` passe telle quelle, tout le reste est une panne de transport.
-    private func mapped(_ error: any Error) -> any Error {
-        switch error {
-        case is CancellationError: return CancellationError()
-        case let error as URLError where error.code == .cancelled: return CancellationError()
-        case let error as EndpointError: return error
-        default: return EndpointError.transport(error.localizedDescription)
-        }
-    }
+    private func mapped(_ error: any Error) -> any Error { endpoint.mapped(error) }
 
-    /// Corps d'erreur affichable : la clé est masquée d'abord (une troncature ne doit pas en laisser un morceau),
-    /// puis le texte est limité à 500 caractères.
-    private func errorBody(_ data: Data) -> String {
-        errorBody(String(decoding: data, as: UTF8.self))
-    }
+    private func errorBody(_ data: Data) -> String { endpoint.errorBody(data) }
 
-    private func errorBody(_ text: String) -> String {
-        String(text.replacingOccurrences(of: config.apiKey, with: "***").prefix(500))
-    }
+    private func errorBody(_ text: String) -> String { endpoint.errorBody(text) }
 
     // MARK: - Flux de chat
 
-    private func streamChat(model: String, messages: [ChatMessage], maxTokens: Int,
-                            into continuation: AsyncThrowingStream<ChatDelta, Error>.Continuation) async throws {
+    /// `POST <base>/v1/chat/completions` en flux : la requête de `chatStream` et de `complete`.
+    private func streamingRequest(model: String, messages: [ChatMessage], maxTokens: Int) throws -> URLRequest {
         struct Body: Encodable {
             struct Message: Encodable { let role: String; let content: String }
             let model: String
@@ -186,38 +147,8 @@ public final class OpenAICompatibleClient: Sendable {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONEncoder().encode(
             Body(model: model, messages: messages.map { .init(role: $0.role, content: $0.content) }, max_tokens: maxTokens))
-
-        let delegate = EndpointTaskDelegate()
-        let (bytes, response) = try await session.bytes(for: request, delegate: delegate)
-        if delegate.refusedRedirect { throw EndpointError.crossOriginRedirect }
-        guard let http = response as? HTTPURLResponse else { throw EndpointError.malformedResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            var body = Data()
-            for try await byte in bytes {
-                body.append(byte)
-                if body.count >= Self.errorBodyReadLimit { break }
-            }
-            throw EndpointError.http(status: http.statusCode, body: errorBody(body))
-        }
-
-        var lines = SSELineSplitter()
-        var parser = ChatChunkParser(status: http.statusCode, redact: { self.errorBody($0) })
-        for try await byte in bytes {
-            for line in try lines.push(byte) {
-                for delta in try parser.consume(line: line) { continuation.yield(delta) }
-                if parser.isDone { return try parser.finishAfterDone() }
-            }
-        }
-        if let last = lines.finish() {
-            for delta in try parser.consume(line: last) { continuation.yield(delta) }
-            if parser.isDone { return try parser.finishAfterDone() }
-        }
-        try Task.checkCancellation()
-        throw parser.endWithoutDone()
+        return request
     }
-
-    /// Un corps d'erreur HTTP n'est lu que jusqu'à cette taille : on n'en garde de toute façon que 500 caractères.
-    private static let errorBodyReadLimit = 64 * 1024
 
     /// Un corps 2xx qui n'est pas de l'audio est refusé (voir `speech`).
     private func checkIsAudio(_ data: Data, response: HTTPURLResponse, format: String) throws {
@@ -299,50 +230,16 @@ private struct MultipartForm {
     private mutating func append(_ string: String) { body.append(Data(string.utf8)) }
 }
 
-/// Découpe un flux d'octets en lignes selon les règles SSE : fin de ligne `\n`, `\r\n` ou `\r` seul, quelle que soit
-/// la façon dont le réseau a coupé les morceaux (un `\r` et son `\n` peuvent arriver séparés).
-/// Une ligne est décodée en UTF-8 une fois complète : un caractère coupé en deux par le réseau est recollé.
-private struct SSELineSplitter {
-    /// Au-delà, la ligne n'est plus un événement de chat : le corps n'est pas un flux utilisable.
-    static let maxLineBytes = 1 << 20
-
-    private var line: [UInt8] = []
-    private var skipLineFeed = false
-
-    mutating func push(_ byte: UInt8) throws -> [String] {
-        switch byte {
-        case 0x0D:
-            skipLineFeed = true
-            return [take()]
-        case 0x0A:
-            if skipLineFeed { skipLineFeed = false; return [] }
-            return [take()]
-        default:
-            skipLineFeed = false
-            line.append(byte)
-            if line.count > Self.maxLineBytes { throw EndpointError.malformedResponse }
-            return []
-        }
-    }
-
-    /// La dernière ligne, quand le flux s'arrête sans fin de ligne.
-    mutating func finish() -> String? {
-        line.isEmpty ? nil : take()
-    }
-
-    private mutating func take() -> String {
-        defer { line.removeAll(keepingCapacity: true) }
-        return String(decoding: line, as: UTF8.self)
-    }
-}
-
 /// Lit les lignes d'un flux de chat et en tire les morceaux de texte. Une ligne = un événement : les serveurs
 /// compatibles n'étalent jamais un objet JSON sur plusieurs lignes `data:`.
-private struct ChatChunkParser {
+private struct ChatChunkParser: SSEReader {
     private let status: Int
     private let redact: (String) -> String
     private(set) var isDone = false
-    private var deliveredSomething = false
+    /// La première raison d'arrêt non nulle du flux. Un serveur peut en redire une autre plus loin (l'enregistrement
+    /// `chat-stream-reasoning.sse` dit `length`, puis `stop` sur un morceau vide) : la première est celle du texte.
+    private(set) var finishReason: String?
+    private(set) var deliveredSomething = false
     private var sawDataLine = false
     /// Lignes qui ne sont ni un champ SSE ni un commentaire : le début d'un corps JSON d'erreur, par exemple.
     private var unrecognised: [String] = []
@@ -373,9 +270,9 @@ private struct ChatChunkParser {
         if let error = object["error"], !(error is NSNull) {
             throw EndpointError.http(status: status, body: redact(String(payload)))
         }
-        guard let choice = (object["choices"] as? [Any])?.first as? [String: Any],
-              let delta = choice["delta"] as? [String: Any]
-        else { return [] }
+        guard let choice = (object["choices"] as? [Any])?.first as? [String: Any] else { return [] }
+        if finishReason == nil, let reason = choice["finish_reason"] as? String, !reason.isEmpty { finishReason = reason }
+        guard let delta = choice["delta"] as? [String: Any] else { return [] }
         // Un serveur peut envoyer les deux noms de champ avec le même texte : on ne garde que le premier non vide.
         let reasoning = [delta["reasoning_content"], delta["reasoning"]].lazy.compactMap { $0 as? String }.first { !$0.isEmpty }
         var out: [ChatDelta] = []
@@ -387,19 +284,80 @@ private struct ChatChunkParser {
 
     /// `[DONE]` sans un seul morceau de texte (ni réponse ni réflexion) n'est pas une réponse : on ne la fait pas
     /// passer pour un succès.
-    func finishAfterDone() throws {
+    func finishAfterDone() throws -> [ChatDelta] {
         if !deliveredSomething { throw EndpointError.malformedResponse }
+        return []
     }
 
     /// L'erreur d'un flux qui s'arrête sans `[DONE]`. Sans aucune ligne `data:`, le corps n'est pas un flux : si c'est
     /// un objet JSON `error`, c'est lui qu'on rend, sinon le corps est mal formé.
-    func endWithoutDone() -> EndpointError {
-        if sawDataLine || unrecognised.isEmpty { return .streamInterrupted }
+    func endWithoutDone() -> any Error {
+        if sawDataLine || unrecognised.isEmpty { return EndpointError.streamInterrupted }
         let text = unrecognised.joined(separator: "\n")
         if let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any],
            let error = object["error"], !(error is NSNull) {
-            return .http(status: status, body: redact(text))
+            return EndpointError.http(status: status, body: redact(text))
         }
-        return .malformedResponse
+        return EndpointError.malformedResponse
+    }
+}
+
+/// Le même flux de chat lu comme une complétion : les morceaux deviennent `.text` et `.reasoning`, la raison d'arrêt
+/// devient un `.stop` unique livré à `[DONE]`, après le contrôle « au moins un morceau », donc jamais avant une erreur.
+private struct OpenAICompletionReader: SSEReader {
+    private var parser: ChatChunkParser
+
+    init(status: Int, redact: @escaping (String) -> String) {
+        parser = ChatChunkParser(status: status, redact: redact)
+    }
+
+    var isDone: Bool { parser.isDone }
+
+    mutating func consume(line: String) throws -> [CompletionEvent] {
+        try parser.consume(line: line).map {
+            switch $0 {
+            case .content(let text): .text(text)
+            case .reasoning(let text): .reasoning(text)
+            }
+        }
+    }
+
+    /// Sans aucun morceau, `[DONE]` n'est pas une réponse (`.malformedResponse`), sauf si le serveur dit que la réponse
+    /// est coupée ou refusée : la raison est alors livrée, `.stop` seul, fin normale (même règle que pour Anthropic).
+    mutating func finishAfterDone() throws -> [CompletionEvent] {
+        let stop = parser.finishReason.map(Self.stop(for:))
+        if !parser.deliveredSomething, let stop, stop == .truncated || stop == .refused { return [.stop(stop)] }
+        _ = try parser.finishAfterDone()
+        return stop.map { [.stop($0)] } ?? []
+    }
+
+    func endWithoutDone() -> any Error { parser.endWithoutDone() }
+
+    /// `finish_reason` des serveurs compatibles OpenAI.
+    private static func stop(for reason: String) -> CompletionStop {
+        switch reason {
+        case "stop": .complete
+        case "length": .truncated
+        case "content_filter": .refused
+        default: .other
+        }
+    }
+}
+
+extension OpenAICompatibleClient: LanguageModel {
+    /// `POST <base>/v1/chat/completions` (`stream: true`), messages `[system: instruction, user: input]`. Même lecteur
+    /// que `chatStream`, qui ne livre pas la raison d'arrêt ; ici elle arrive en `.stop`. Un silence est
+    /// `CompletionError.stalled`, alors que `chatStream` le rend en `.transport`.
+    public func complete(_ request: CompletionRequest) -> AsyncThrowingStream<CompletionEvent, Error> {
+        endpoint.events(
+            request: {
+                try self.streamingRequest(
+                    model: request.model,
+                    messages: [ChatMessage(role: "system", content: request.instruction),
+                               ChatMessage(role: "user", content: request.input)],
+                    maxTokens: request.maxTokens)
+            },
+            reader: { status, redact in OpenAICompletionReader(status: status, redact: redact) },
+            timeoutAs: CompletionError.stalled)
     }
 }
