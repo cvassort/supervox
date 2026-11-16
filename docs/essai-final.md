@@ -835,7 +835,8 @@ du texte relu (l'essai 57 en fait le détail ; ici, on ne vérifie que ce que le
      presse-papiers, mais Supervox n'a pas l'autorisation de le coller à votre place : faites ⌘V… ». La ligne des permissions dit que
      l'Accessibilité manque. L'aide devient « Cliquez dans le texte pour le corriger, ou sur « Coller » pour le coller.
      Échap ferme sans coller. » tant que le panneau n'a pas repris la frappe (la même phrase qu'après un clic dans une
-     autre application, essai 38 ; sans « réessayer », qui échouerait de la même façon). **Dans cet état, n'utilisez pas
+     autre application, essai 38 ; sans « réessayer », qui échouerait de la même façon), seule : la ligne de la correction
+     n'est pas affichée sous un message. **Dans cet état, n'utilisez pas
      ⌘↩** : le panneau n'a plus la frappe, ⌘↩ irait à l'application de dessous.
 2. Cliquez à l'endroit voulu dans l'application de dessous (le panneau reste ouvert), puis faites ⌘V.
    - Attendu : le texte est collé.
@@ -1064,7 +1065,8 @@ Pastille « Dictée nettoyée » (relecture éteinte). Curseur dans l'applicatio
    - Attendu : le panneau reste ouvert ; à l'arrivée du texte, **rien n'est collé** : le panneau passe à « À relire », avec
      le texte mis en forme dans le champ et, sous le champ, « L'application au premier plan a changé pendant la mise en
      forme : le texte n'a pas été collé. Collez-le ou copiez-le. » L'aide dit « Cliquez dans le texte pour le corriger, ou
-     sur « Coller » pour le coller. Échap ferme sans coller. » (le panneau n'a pas la frappe : ⌘↩ n'est pas annoncé). Le
+     sur « Coller » pour le coller. Échap ferme sans coller. » (le panneau n'a pas la frappe : ⌘↩ n'est pas annoncé), seule : la
+     ligne de la correction n'est pas affichée sous un message. Le
      bouton « Version précédente » est là et rend la transcription brute. Cliquez à l'endroit voulu dans l'application où
      vous êtes, puis « Coller » : le texte arrive dans cette application, pas dans l'application de départ.
      Fermez par Échap (rien n'est collé).
@@ -1246,15 +1248,20 @@ dictée (essai 51) : vous êtes en relecture.
    - Attendu : à droite, « Corriger à la voix », « Copier » et « Coller » ; à gauche, le bouton à flèche « Version
      précédente ». Sous le champ, deux lignes d'aide : « ⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans
      « Dernière dictée ». » et « ⌃⌥Espace ou « Corriger à la voix » : dites ce qu'il faut changer. » (le raccourci est celui
-     de votre réglage).
+     de votre réglage). Si un message s'affiche sous le champ (par exemple après une correction qui n'a pas abouti, essai 58),
+     la ligne « … ou « Corriger à la voix » : … » n'est pas affichée tant qu'il est là ; celle de ⌘↩ reste.
 2. **Par le bouton.** Cliquez sur « Corriger à la voix ».
    - Attendu : le titre passe par « Préparation… » (« Terminer » est alors grisé et la phrase dit « Patientez un instant :
      vous pourrez dire ce qu'il faut changer dès que l'écoute commence. »), puis « Écoute de la consigne » avec un point
      rouge, la durée et la forme d'onde ; le bouton devient « Terminer » ; le champ est en lecture seule ; la phrase dit
-     « Dites ce qu'il faut changer, puis appuyez de nouveau sur ⌃⌥Espace ou cliquez sur « Terminer ». » Dites « ajoute que
+     « Dites ce qu'il faut changer, puis appuyez de nouveau sur ⌃⌥Espace ou cliquez sur « Terminer ». » Pendant **toute**
+     la correction, « Copier » et « Coller » sont grisés (⌘↩ ne fait rien : on ne copie ni ne colle un texte que l'écran ne
+     montre pas, notamment pendant « Réécriture… », où le champ montre le texte du modèle et non le vôtre), et une ligne sous la
+     rangée dit « Échap annule la correction ; le texte ne change pas. » (à chaque étape, « Préparation… » comprise ; il n'y a
+     pas d'autre aide de relecture pendant ce temps). Dites « ajoute que
      les tests doivent passer », puis « Terminer ». Le titre passe par « Transcription de la consigne… » puis
-     « Réécriture… », avec « Réécriture du texte selon votre consigne… » ; le champ montre le texte du modèle à mesure.
-     Enfin « À relire » : le nouveau texte **remplace** l'ancien et mentionne que les tests doivent passer (**comportement du
+     « Réécriture… », avec « Réécriture du texte selon votre consigne… » ; le champ montre le texte du modèle à mesure, et le
+     bouton, redevenu « Corriger à la voix », est grisé jusqu'à la fin. Enfin « À relire » : le nouveau texte **remplace** l'ancien et mentionne que les tests doivent passer (**comportement du
      modèle à confirmer**). Rien n'est collé.
 3. Cliquez sur « Version précédente », puis sur « Version suivante ».
    - Attendu : le texte d'avant la correction revient, puis la version corrigée. Avec le champ actif, ⌘Z (sans rien avoir
@@ -1286,8 +1293,9 @@ Mêmes préparatifs que l'essai 57 (relecture d'un texte). Dans tous les cas, le
 tapé compris), aucune version n'est ajoutée, et la relecture revient.
 
 1. Cliquez sur « Corriger à la voix », ne dites rien pendant quelques secondes, « Terminer ».
-   - Attendu : « Aucune consigne n'a été entendue : le texte n'a pas changé. » sous le champ. **Comportement à confirmer** :
-     cela dépend du détecteur de voix sur le bruit de la pièce.
+   - Attendu : « Aucune consigne n'a été entendue : le texte n'a pas changé. » sous le champ, avec la ligne d'aide de ⌘↩
+     mais **sans** celle de la correction (le message la remplace). **Comportement à confirmer** : cela dépend du détecteur
+     de voix sur le bruit de la pièce.
 2. Dictez une consigne sans rapport avec le texte (« il fait beau aujourd'hui »).
    - Attendu : « Le modèle n'a rien changé au texte. » **Comportement du modèle à confirmer** : la consigne de correction
      lui demande de rendre le texte inchangé quand la consigne ne s'y rapporte pas ; un modèle peut faire autre chose.
@@ -1298,7 +1306,9 @@ tapé compris), aucune version n'est ajoutée, et la relecture revient.
    la transcription brute : essai 52), puis corrigez.
    - Attendu : « Aucun modèle fort n'est choisi : choisissez-en un en tête de Réglages, onglet Modes, pour corriger à la
      voix. Le texte n'a pas changé. » Rétablissez le modèle fort.
-5. Commencez une correction et, pendant « Écoute de la consigne » (ou « Préparation… »), tapez Échap.
+5. Commencez une correction et, pendant « Écoute de la consigne » (ou « Préparation… », « Transcription de la consigne… »,
+   « Réécriture… »), lisez la ligne sous la rangée (« Échap annule la correction ; le texte ne change pas. »), puis tapez
+   Échap.
    - Attendu : seule la correction est annulée : la relecture revient, texte intact, panneau ouvert ; un **second** Échap
      ferme le panneau sans rien coller ; « Dernière dictée » montre le texte de la relecture.
 
