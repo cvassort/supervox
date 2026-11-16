@@ -404,6 +404,44 @@ import Testing
         #expect(lines.first?.contains("rétabli") == true)
     }
 
+    /// Un mode dont la combinaison n'a jamais été active (donnée pendant la capture, refusée à la reprise) : la phrase dit
+    /// « enregistré », jamais « rétabli », puisqu'il n'y a rien à rétablir.
+    @Test func aModeWhoseHotKeyWasNeverActiveSaysItCouldNotBeRegisteredNotRestored() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(Self.settings([Self.report]))
+        controller.launch()
+        controller.suspendHotKeysForCapture()
+        modeRegistrars.refusing = [Self.keyC]
+        try controller.updateSettings { $0.modes.insert(Self.mail, at: 2) }
+
+        #expect(controller.resumeHotKeys())
+        #expect(controller.modeHotKeys.active == ["perso-un": Self.keyB], "le mode déjà actif est rétabli, l'autre n'a rien")
+        let lines = hotKeyLines(controller)
+        #expect(lines.count == 1)
+        let line = try #require(lines.first)
+        #expect(line.contains("Courriel"))
+        #expect(line.contains("n'a pas pu être enregistré après la capture"))
+        #expect(!line.contains("rétabli"))
+    }
+
+    /// Un mode actif dont la combinaison change pendant la capture et est refusée à la reprise : la combinaison refusée n'a jamais
+    /// été active, la phrase dit « enregistré » ; l'ancienne revient.
+    @Test func aChangedHotKeyThatTheSystemRefusesSaysRegisteredNotRestoredAndTheOldOneComesBack() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(Self.settings([Self.report]))
+        controller.launch()
+        controller.suspendHotKeysForCapture()
+        for registrar in modeRegistrars.made { registrar.refused = [Self.keyC] }
+        try controller.updateSettings { $0.modes[1].hotKey = Self.keyC }
+
+        #expect(controller.resumeHotKeys())
+        #expect(controller.modeHotKeys.active == ["perso-un": Self.keyB])
+        let line = try #require(hotKeyLines(controller).first)
+        #expect(line.contains(Self.keyC.label(layout: HotKeyTests.ansi)))
+        #expect(line.contains("n'a pas pu être enregistré après la capture"))
+        #expect(!line.contains("rétabli"))
+    }
+
     // MARK: - Conflits
 
     @Test func aHotKeyHeldByAModeIsRefusedToEveryoneElseWithTheHoldersName() throws {

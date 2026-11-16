@@ -68,6 +68,8 @@ public final class AppController {
     /// (`publishHotKeyNotice`), sans que l'une efface l'autre.
     private var globalHotKeyNotice: String?
     private var modeHotKeyNotices: [String: String] = [:]
+    /// Les combinaisons des modes actives quand la capture en cours a commencé (vide hors capture).
+    private var modeHotKeysBeforeCapture: [String: HotKey] = [:]
 
     public init(
         settingsStore: SettingsStore,
@@ -493,6 +495,8 @@ public final class AppController {
     /// Le temps d'une capture de raccourci : panneau fermé (Échap rendu) et raccourci global rendu au système.
     func suspendHotKeysForCapture() {
         panel.close()
+        // Ce qui était actif avant : à la reprise, un refus ne dit « rétabli » que pour une combinaison qui l'était.
+        if !modeHotKeys.isSuspended { modeHotKeysBeforeCapture = modeHotKeys.active }
         hotKeys.suspend()
         modeHotKeys.suspend()
     }
@@ -507,12 +511,22 @@ public final class AppController {
                 "Le raccourci \(settings.hotKey.label(layout: keyboardLayout)) n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages."
             log.notice("raccourci non rétabli après la capture")
         }
+        let activeBefore = modeHotKeysBeforeCapture
+        modeHotKeysBeforeCapture = [:]
         for id in modeHotKeys.resume() {
             guard let mode = settings.mode(id), let hotKey = mode.hotKey else { continue }
             let label = hotKey.label(layout: keyboardLayout)
-            modeHotKeyNotices[id] =
-                "Le raccourci \(label) du mode « \(mode.name) » n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages, onglet Modes."
-            log.notice("raccourci de mode non rétabli après la capture")
+            // « Rétabli » est vrai seulement d'une combinaison qui était active avant la capture : celle qu'on a donnée pendant,
+            // ou qu'un refus du lancement avait écartée, n'a jamais été prise ; elle n'a pas pu être enregistrée.
+            if activeBefore[id] == hotKey {
+                modeHotKeyNotices[id] =
+                    "Le raccourci \(label) du mode « \(mode.name) » n'a pas pu être rétabli après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages, onglet Modes."
+                log.notice("raccourci de mode non rétabli après la capture")
+            } else {
+                modeHotKeyNotices[id] =
+                    "Le raccourci \(label) du mode « \(mode.name) » n'a pas pu être enregistré après la capture : macOS l'a refusé. Choisissez-en un autre dans Réglages, onglet Modes."
+                log.notice("raccourci de mode non enregistré après la capture")
+            }
         }
         publishHotKeyNotice()
         return restored
