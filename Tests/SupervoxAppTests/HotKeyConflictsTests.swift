@@ -56,7 +56,19 @@ import Testing
 
     @Test func anEnabledSystemShortcutIsRefusedWithTheSettingsSentence() throws {
         let sentence = try #require(refusal(Self.keyC, owner: .mode("perso-deux"), system: [Self.keyC]))
-        #expect(sentence == HotKeySettingsModel.systemShortcutRefusal(label: "⌃⌥C"))
+        // Mot pour mot ce que la fenêtre de réglages dit pour la même combinaison.
+        let registrar = HotKeyTests.FakeRegistrar()
+        let center = HotKeyCenter(registrar: registrar, layout: Self.layout)
+        _ = center.apply(Self.keyA, onPress: {})
+        let model = HotKeySettingsModel(
+            hotKey: Self.keyA, active: center.active, behavior: .toggle, layout: Self.layout,
+            systemHotKeys: FakeSystemHotKeys([Self.keyC]), keyMonitor: FakeKeyMonitor(),
+            control: GlobalHotKeyControl(
+                apply: { center.apply($0, onPress: {}) }, suspend: {}, resume: { true }, clear: {}, taken: { _ in nil }),
+            save: { _, _ in })
+        model.record(Self.keyC)
+        #expect(sentence == model.message)
+        #expect(sentence.contains("raccourci de macOS"))
     }
 
     @Test func aMissingNameStillRefusesWithoutInventingOne() throws {

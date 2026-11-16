@@ -159,7 +159,7 @@ public final class HotKeySettingsModel {
         }
         // macOS accepterait la combinaison sans dire lequel des deux raccourcis l'emporte.
         guard !systemHotKeys.enabled().contains(candidate) else {
-            message = Self.systemShortcutRefusal(label: candidateLabel)
+            message = HotKeyConflicts.systemShortcutRefusal(label: candidateLabel)
             return
         }
         let previous = hotKey
@@ -210,9 +210,6 @@ public final class HotKeySettingsModel {
         if flags.contains(.command) { modifiers.insert(.command) }
         return HotKey(keyCode: UInt32(keyCode), modifiers: modifiers)
     }
-
-    /// Refus d'une combinaison captée.
-    static func systemShortcutRefusal(label: String) -> String { HotKeyConflicts.systemShortcutRefusal(label: label) }
 
     /// Le raccourci enregistré est aussi un raccourci de macOS activé : il est enregistré, mais rien ne dit lequel des
     /// deux l'emporte.

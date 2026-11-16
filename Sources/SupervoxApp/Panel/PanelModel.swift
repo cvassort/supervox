@@ -37,7 +37,7 @@ extension ModeChip {
 public enum NoticeOrigin: Int, CaseIterable, Comparable, Sendable {
     /// Le fichier de réglages n'a pas pu être repris au lancement.
     case settingsLoad
-    /// Le raccourci global n'a pas pu être enregistré.
+    /// Le raccourci global, ou celui d'un mode, n'a pas pu être enregistré ou rétabli (une ligne par raccourci).
     case hotKey
     /// Échap n'a pas pu être réservé pendant que le panneau est ouvert.
     case escape
