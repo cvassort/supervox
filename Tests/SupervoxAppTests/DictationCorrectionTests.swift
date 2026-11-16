@@ -977,8 +977,8 @@ import SupervoxCore
         #expect(field.textView.undoManager?.canUndo == false)
         #expect(field.textView.undoManager?.canRedo == false)
         // Un ⌘Z ou ⇧⌘Z qui suit n'a plus rien à défaire dans le champ : il ne touche pas au texte, et ne lève rien.
-        field.textView.undo(nil)
-        field.textView.redo(nil)
+        field.textView.undoOrPreviousVersion()
+        field.textView.redoOrNextVersion()
         #expect(field.textView.string == "Version B, plus courte.")
         #expect(field.ends == [.undo, .redo])
     }
@@ -1007,18 +1007,65 @@ import SupervoxCore
     func undoAndRedoUseTheFieldsStackFirst() {
         let field = Field(text: "Version A.")
         field.type(" Mot.")
-        field.textView.undo(nil)
+        field.textView.undoOrPreviousVersion()
         #expect(field.textView.string == "Version A.")
         #expect(field.ends.isEmpty, "la pile du champ avait quelque chose à défaire")
-        field.textView.undo(nil)
+        field.textView.undoOrPreviousVersion()
         #expect(field.textView.string == "Version A.")
         #expect(field.ends == [.undo])
 
-        field.textView.redo(nil)
+        field.textView.redoOrNextVersion()
         #expect(field.textView.string == "Version A. Mot.")
         #expect(field.ends == [.undo], "la pile du champ avait quelque chose à refaire")
-        field.textView.redo(nil)
+        field.textView.redoOrNextVersion()
         #expect(field.ends == [.undo, .redo])
         #expect(field.textView.string == "Version A. Mot.")
+    }
+
+    @Test("règle 6 : les sélecteurs undo: et redo: que le panneau envoie au champ passent par la pile puis par les versions")
+    func theUndoAndRedoSelectorsReachTheFieldsHistory() {
+        let field = Field(text: "Version A.")
+        field.type(" Mot.")
+        #expect(field.textView.tryToPerform(NSSelectorFromString("undo:"), with: nil))
+        #expect(field.textView.string == "Version A.")
+        #expect(field.ends.isEmpty)
+        #expect(field.textView.tryToPerform(NSSelectorFromString("undo:"), with: nil))
+        #expect(field.ends == [.undo])
+        #expect(field.textView.tryToPerform(NSSelectorFromString("redo:"), with: nil))
+        #expect(field.textView.string == "Version A. Mot.")
+        #expect(field.textView.tryToPerform(NSSelectorFromString("redo:"), with: nil))
+        #expect(field.ends == [.undo, .redo])
+        // Les autres sélecteurs ne sont pas interceptés.
+        field.textView.setSelectedRange(NSRange(location: 0, length: 3))
+        #expect(field.textView.tryToPerform(NSSelectorFromString("selectAll:"), with: nil))
+        #expect(field.textView.selectedRange() == NSRange(location: 0, length: field.textView.string.utf16.count))
+    }
+
+    @Test("règle 6 : ⌘Z et ⇧⌘Z ne font rien dans un champ en lecture seule (pendant la correction) : ni défaire, ni changer de version")
+    func undoAndRedoDoNothingInAReadOnlyField() {
+        let field = Field(text: "Version A.")
+        field.type(" Mot.")
+        field.textView.isEditable = false
+        _ = field.textView.tryToPerform(NSSelectorFromString("undo:"), with: nil)
+        field.textView.undoOrPreviousVersion()
+        #expect(field.textView.string == "Version A. Mot.")
+        #expect(field.ends.isEmpty)
+        field.textView.isEditable = true
+        field.textView.undoOrPreviousVersion()
+        field.textView.isEditable = false
+        field.textView.redoOrNextVersion()
+        _ = field.textView.tryToPerform(NSSelectorFromString("redo:"), with: nil)
+        #expect(field.textView.string == "Version A.")
+        #expect(field.ends.isEmpty)
+    }
+
+    @Test("une version qui remplace un texte par le même texte laisse la pile du champ (documenté : seul un texte différent la vide)")
+    func anIdenticalVersionKeepsTheStack() {
+        let field = Field(text: "Version A.")
+        field.type(" Mot.")
+        field.textView.undoOrPreviousVersion()
+        // Le champ montre « Version A. » : une version identique ne remplace rien, la pile (le refaire) reste.
+        ReviewTextView.update(field.textView, text: "Version A.", isEditable: true, takesFocus: false)
+        #expect(field.textView.undoManager?.canRedo == true)
     }
 }

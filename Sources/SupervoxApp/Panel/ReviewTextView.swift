@@ -173,14 +173,32 @@ final class FocusingTextView: NSTextView {
     var onHistoryEnd: (@MainActor (EditingCommand) -> Void)?
 
     /// ⌘Z : la pile de ce champ d'abord (la frappe faite après une réécriture se défait la première), puis, quand elle est vide,
-    /// la version précédente du texte.
-    @objc func undo(_ sender: Any?) {
+    /// la version précédente du texte. Rien ne se défait ni ne se change dans un champ en lecture seule (pendant une
+    /// correction, le texte est celui que le modèle reçoit).
+    func undoOrPreviousVersion() {
+        guard isEditable else { return }
         if let manager = undoManager, manager.canUndo { manager.undo() } else { onHistoryEnd?(.undo) }
     }
 
     /// ⇧⌘Z : de même, avec la version suivante.
-    @objc func redo(_ sender: Any?) {
+    func redoOrNextVersion() {
+        guard isEditable else { return }
         if let manager = undoManager, manager.canRedo { manager.redo() } else { onHistoryEnd?(.redo) }
+    }
+
+    /// `undo:` et `redo:`, tels que le panneau les envoie (`FloatingPanel.performKeyEquivalent`), passent par les deux méthodes
+    /// ci-dessus. Interceptés ici plutôt que déclarés `@objc` : une méthode de ce sélecteur ferait avertir de `#selector` le
+    /// test qui lit le menu Édition par `Selector(("undo:"))`.
+    override func tryToPerform(_ action: Selector, with object: Any?) -> Bool {
+        if action == NSSelectorFromString("undo:") {
+            undoOrPreviousVersion()
+            return true
+        }
+        if action == NSSelectorFromString("redo:") {
+            redoOrNextVersion()
+            return true
+        }
+        return super.tryToPerform(action, with: object)
     }
 
     override func viewDidMoveToWindow() {
