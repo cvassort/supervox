@@ -216,8 +216,7 @@ public final class AppController {
     /// l'affichage.
     func launch() {
         let hotKeyNeedsPanel = applyHotKey()
-        // Un raccourci de mode refusé ouvre le panneau comme le raccourci global : c'est là que l'avis se lit.
-        let modeHotKeyNeedsPanel = applyModeHotKeys()
+        applyModeHotKeys()
         if isFirstLaunch {
             panelModel.welcome = Self.welcome(hotKeyLabel: panelModel.hotKeyLabel)
             do {
@@ -227,7 +226,7 @@ public final class AppController {
                 log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
             }
         }
-        if hotKeyNeedsPanel || modeHotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
+        if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
         preloadEngines()
     }
 
@@ -369,24 +368,45 @@ public final class AppController {
             systemEnabled: systemHotKeys.enabled(), layout: keyboardLayout)
     }
 
-    /// Met les raccourcis des modes d'accord avec les réglages en vigueur, et dit dans le panneau lesquels sont refusés (une
-    /// ligne par mode). Une combinaison déjà active n'est pas touchée. Rend vrai si au moins un mode est refusé.
-    @discardableResult
-    private func applyModeHotKeys() -> Bool {
+    /// Met les raccourcis des modes d'accord avec les réglages en vigueur, et dit dans le panneau lesquels ne le sont pas (une
+    /// ligne par mode). Une combinaison déjà active n'est pas touchée.
+    ///
+    /// Une combinaison déjà utilisée n'est pas laissée au système : le raccourci global gagne toujours, puis, entre modes, le
+    /// premier dans l'ordre des réglages. Le perdant n'est pas enregistré, et son avis nomme le détenteur. Un mode refusé
+    /// n'ouvre pas le panneau : l'avis attend sa prochaine ouverture.
+    private func applyModeHotKeys() {
         var bindings: [String: HotKey] = [:]
-        for mode in settings.modes { if let hotKey = mode.hotKey { bindings[mode.id] = hotKey } }
+        var holders: [(hotKey: HotKey, name: String)] = []
+        var notices: [String: String] = [:]
+        for mode in settings.modes {
+            guard let hotKey = mode.hotKey else { continue }
+            let label = hotKey.label(layout: keyboardLayout)
+            if hotKey == settings.hotKey {
+                notices[mode.id] = Self.inactiveMessage(label: label, modeName: mode.name, holder: nil)
+            } else if let holder = holders.first(where: { $0.hotKey == hotKey }) {
+                notices[mode.id] = Self.inactiveMessage(label: label, modeName: mode.name, holder: holder.name)
+            } else {
+                bindings[mode.id] = hotKey
+                holders.append((hotKey, mode.name))
+            }
+        }
         let refused = modeHotKeys.apply(
             bindings, onPress: { [weak self] in self?.dictation.modeHotKeyPressed($0) },
             onRelease: { [weak self] in self?.dictation.modeHotKeyReleased($0) })
-        modeHotKeyNotices = [:]
         for mode in settings.modes {
             guard let error = refused[mode.id], let hotKey = mode.hotKey else { continue }
-            let label = hotKey.label(layout: keyboardLayout)
-            modeHotKeyNotices[mode.id] = Self.message(for: error, label: label, modeName: mode.name)
-            log.notice("raccourci de mode refusé : \(label, privacy: .public)")
+            notices[mode.id] = Self.message(
+                for: error, label: hotKey.label(layout: keyboardLayout), modeName: mode.name)
         }
+        // Un refus qui dure n'est journalisé qu'une fois : l'avis est recomposé à chaque enregistrement des réglages.
+        for (id, notice) in notices where modeHotKeyNotices[id] != notice { log.notice("raccourci de mode non actif") }
+        modeHotKeyNotices = notices
         publishHotKeyNotice()
-        return !refused.isEmpty
+    }
+
+    private static func inactiveMessage(label: String, modeName: String, holder: String?) -> String {
+        let user = holder.map { "le mode « \($0) »" } ?? "le raccourci général"
+        return "Le raccourci \(label) du mode « \(modeName) » n'est pas actif : il est déjà utilisé par \(user). Changez-le dans Réglages, onglet Modes."
     }
 
     private func setGlobalHotKeyNotice(_ text: String?) {

@@ -169,7 +169,19 @@ import Testing
         #expect(lines.first?.contains("Compte rendu") == true)
         #expect(lines.first?.contains("⌃⌥B") == true)
         #expect(lines.first?.contains("Courriel") == false)
-        #expect(controller.panelModel.isOpen, "le panneau s'ouvre pour le dire, comme pour le raccourci global")
+        #expect(!controller.panelModel.isOpen, "un mode refusé n'ouvre pas le panneau : l'avis attend la prochaine ouverture")
+
+        controller.togglePanelFromMenu()
+        #expect(controller.panelModel.isOpen)
+        #expect(hotKeyLines(controller).count == 1, "l'avis est là quand le panneau s'ouvre")
+    }
+
+    @Test func aGlobalRefusalStillOpensThePanelAtLaunchEvenWithModes() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        hotKeys.refused = [.standard]
+        let controller = makeController(Self.settings([Self.report]))
+        controller.launch()
+        #expect(controller.panelModel.isOpen)
     }
 
     @Test func eachRefusedModeGetsItsOwnLineInTheOrderOfTheModes() {
@@ -220,6 +232,83 @@ import Testing
 
         // Le mode perd son raccourci : la ligne s'efface.
         try controller.updateSettings { $0.modes[1].hotKey = nil }
+        #expect(controller.panelModel.notices[.hotKey] == nil)
+    }
+
+    // MARK: - Doublons dans les réglages
+
+    static let sameAsReport = Mode(id: "perso-deux", name: "Courriel", instruction: "Rédige.", hotKey: keyB)
+
+    @Test func twoModesOnTheSameCombinationKeepTheFirstOfTheListEveryTime() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Le registraire double accepte les doublons : c'est l'application qui écarte le second, pas le « système ».
+        for _ in 0..<8 {
+            let registrars = ModeRegistrars()
+            let controller = makeController(Self.settings([Self.report, Self.sameAsReport]), registrars: registrars)
+            controller.launch()
+            #expect(controller.modeHotKeys.active == ["perso-un": Self.keyB])
+            #expect(registrars.createdCount == 1, "le perdant n'a même pas de registraire")
+        }
+        for _ in 0..<8 {
+            let registrars = ModeRegistrars()
+            let controller = makeController(Self.settings([Self.sameAsReport, Self.report]), registrars: registrars)
+            controller.launch()
+            #expect(controller.modeHotKeys.active == ["perso-deux": Self.keyB], "le premier dans l'ordre des modes gagne")
+        }
+    }
+
+    @Test func theLoserOfADuplicateIsNamedWithItsHolderAndNeverBlamedOnMacOS() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(Self.settings([Self.report, Self.sameAsReport]))
+        controller.launch()
+
+        let lines = hotKeyLines(controller)
+        #expect(lines.count == 1)
+        let line = lines.first ?? ""
+        #expect(line.contains("Courriel"), "le mode qui n'est pas actif est nommé")
+        #expect(line.contains("« Compte rendu »"), "le détenteur est nommé")
+        #expect(line.contains("n'est pas actif"))
+        #expect(line.contains("⌃⌥B"))
+        #expect(!line.contains("macOS"))
+        #expect(!controller.panelModel.isOpen)
+    }
+
+    @Test func threeModesOnOneCombinationLeaveOneHolderAndTwoLines() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let third = Mode(id: "perso-trois", name: "Note", instruction: "Note.", hotKey: Self.keyB)
+        let controller = makeController(Self.settings([Self.report, Self.sameAsReport, third]))
+        controller.launch()
+        #expect(controller.modeHotKeys.active == ["perso-un": Self.keyB])
+        let lines = hotKeyLines(controller)
+        #expect(lines.count == 2)
+        #expect(lines.allSatisfy { $0.contains("« Compte rendu »") }, "tous nomment le détenteur, pas un autre perdant")
+    }
+
+    @Test func aModeOnTheGlobalCombinationIsSetAsideAndNamesTheGlobalHotKey() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let onGlobal = Mode(id: "perso-un", name: "Compte rendu", instruction: "Résume.", hotKey: .standard)
+        let registrars = ModeRegistrars()
+        let controller = makeController(Self.settings([onGlobal]), registrars: registrars)
+        controller.launch()
+
+        #expect(hotKeys.registered == .standard, "le raccourci global gagne toujours")
+        #expect(controller.modeHotKeys.active.isEmpty)
+        #expect(registrars.createdCount == 0)
+        let lines = hotKeyLines(controller)
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("raccourci général") == true)
+        #expect(lines.first?.contains("Compte rendu") == true)
+        #expect(lines.first?.contains("macOS") == false)
+    }
+
+    @Test func theLoserTakesTheCombinationWhenItsHolderLetsGo() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(Self.settings([Self.report, Self.sameAsReport]))
+        controller.launch()
+        #expect(controller.modeHotKeys.active == ["perso-un": Self.keyB])
+
+        try controller.updateSettings { $0.modes.removeAll { $0.id == "perso-un" } }
+        #expect(controller.modeHotKeys.active == ["perso-deux": Self.keyB])
         #expect(controller.panelModel.notices[.hotKey] == nil)
     }
 
