@@ -10,6 +10,20 @@ public enum AudioCaptureError: Error, Equatable {
     case noInputDevice
     case alreadyRunning
     case engineFailed(String)
+    /// La lecture demande un moteur démarré (par `start`) : aucun son ne peut être joué avant, ni après `stop()`.
+    case notRunning
+
+    /// La raison, en une phrase qui se lit dans le panneau (sans point final) : le texte d'un message déjà passé par une table
+    /// fixe, jamais le texte brut d'une erreur système.
+    public var reason: String {
+        switch self {
+        case .microphoneAccessDenied(let message): return message
+        case .noInputDevice: return "aucun micro utilisable n'a été trouvé"
+        case .alreadyRunning: return "le micro est déjà utilisé"
+        case .engineFailed(let message): return "le moteur audio a échoué (\(message))"
+        case .notRunning: return "le moteur audio n'est pas démarré"
+        }
+    }
 }
 
 /// Capture du micro par `AVAudioEngine`, avec annulation d'écho (voice processing) activée par défaut.
