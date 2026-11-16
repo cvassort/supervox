@@ -1345,7 +1345,7 @@ modèles de transcription déjà téléchargés :
    - Attendu : **une seule** requête (un POST) vers l'adresse de votre fournisseur, dont le chemin se termine par
      `/v1/chat/completions` (type compatible) ou `/v1/messages` (l'autre type) ; aucune autre connexion ; aucune donnée
      audio. Si votre outil déchiffre le trafic, le corps est un texte JSON qui contient le nom du modèle, la consigne, le
-     vocabulaire de l'onglet Transcription s'il n'est pas vide, et votre texte entre `<dictee>` et `</dictee>`, rien d'autre. S'il ne le déchiffre pas, vous ne voyez que l'hôte et le volume : quelques
+     vocabulaire de l'onglet Transcription s'il n'est pas vide, et votre texte entre `<dictee-…>` et `</dictee-…>` (le nom de la balise porte un suffixe de seize chiffres hexadécimaux, le même dans la consigne, et différent à chaque requête ; pour une correction à la voix : `<texte-…>` et `<consigne-…>`), rien d'autre. S'il ne le déchiffre pas, vous ne voyez que l'hôte et le volume : quelques
      milliers de caractères, bien moins qu'un enregistrement (indication, non une preuve). **Comportement à confirmer.**
 3. Observez une correction à la voix.
    - Attendu : une seule requête, celle de la réécriture (la consigne dite est transcrite sur ce Mac), vers le même hôte.
