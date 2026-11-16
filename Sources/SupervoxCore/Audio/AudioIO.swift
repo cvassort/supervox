@@ -16,7 +16,11 @@ public enum PlaybackEnd: Equatable, Sendable {
 /// - appelé **une seule fois** par clip, **hors du fil principal** : `.played` quand le dernier échantillon est sorti du
 ///   périphérique, `.stopped` si `stopPlayback()` ou `stop()` l'a coupé avant ;
 /// - `stopPlayback()` et `stop()` **n'attendent pas** les `onEnd` : `.stopped` peut arriver juste après leur retour ;
-/// - `onEnd` ne doit **jamais** appeler `stopPlayback()` (précondition, comme `stop()` depuis `onChunk`) ; il peut appeler `play()`.
+/// - `onEnd` ne doit **jamais** appeler `stopPlayback()` (précondition, comme `stop()` depuis `onChunk`) ; il peut appeler `play()` ;
+/// - `onChunk` ne rappelle **jamais** l'`AudioIO` : ni `play()`, ni `stopPlayback()`, ni `stop()` (précondition, dans le vrai comme dans le
+///   double). Ces appels prennent un verrou interne que `stop()` tient en attendant la fin de `onChunk` : un `stop()` d'un autre fil et un
+///   `onChunk` qui coupe la lecture resteraient bloqués ensemble. Pour réagir à une tranche, la transmettre sans attente à un autre
+///   contexte (file, acteur) qui appellera `stopPlayback()`.
 public protocol AudioIO: MicrophoneFeed {
     /// Met le clip en file, après ceux déjà en file : ils se jouent l'un après l'autre. Rend la main sans attendre la fin.
     /// - Throws: `AudioCaptureError.notRunning` hors capture (avant `start`, ou après `stop`). Rien n'est joué, `onEnd` n'est pas appelé.
@@ -164,6 +168,7 @@ public final class ScriptedAudioIO: AudioIO {
     // MARK: Lecture
 
     public func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws {
+        state.withLock { $0.gate }?.assertNotDelivering(calling: "play()")
         let immediate = try state.withLock { state -> Bool in
             guard state.running else { throw AudioCaptureError.notRunning }
             state.log.append("play")
@@ -200,6 +205,7 @@ public final class ScriptedAudioIO: AudioIO {
     }
 
     public func stopPlayback() {
+        state.withLock { $0.gate }?.assertNotDelivering(calling: "stopPlayback()")
         let queued = state.withLock { state -> [Queued] in
             state.log.append("stopPlayback")
             state.stopPlaybackCount += 1

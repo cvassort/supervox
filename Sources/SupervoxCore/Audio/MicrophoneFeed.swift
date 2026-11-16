@@ -62,9 +62,12 @@ final class DeliveryGate: @unchecked Sendable {
 
     /// `stop()` depuis `onChunk` : le verrou de livraison serait pris deux fois par le même fil, ce que le système
     /// sanctionne par la mort du processus (mesuré avec `OSAllocatedUnfairLock`). On préfère un message clair.
-    func assertNotDelivering() {
+    ///
+    /// Le même contrôle sert aux appels de la lecture (`play()`, `stopPlayback()`) : ils prennent le verrou de cycle de vie que `stop()`
+    /// tient en attendant la fin de `onChunk`, donc `onChunk` qui les appelle pendant un `stop()` d'un autre fil bloquerait les deux.
+    func assertNotDelivering(calling call: String = "stop()") {
         precondition(!isCurrentThreadDelivering,
-                     "stop() appelé depuis onChunk : erreur de programmation. Signaler un autre contexte qui appellera stop().")
+                     "\(call) appelé depuis onChunk : erreur de programmation. Signaler un autre contexte qui appellera \(call).")
     }
 }
 

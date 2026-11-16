@@ -212,9 +212,10 @@ private let someClip = AudioClip(samples: [0.1, 0.2, 0.3], sampleRate: 22_050)
     #expect(chunks.withLock { $0 } == 1, "le micro continue de livrer après stopPlayback")
 }
 
-/// Le lecteur rappelle ses gestionnaires de façon synchrone depuis `stop()`. `LiveAudioIO` ne tient aucun verrou autour de cet
-/// appel : le rappel passe, sur un autre fil, sans interblocage, et une seule fois.
-@Test func stopPlaybackReturnsWhenTheDeviceCallsBackSynchronouslyDuringTheStop() throws {
+/// L'appareil rappelle ses gestionnaires de façon synchrone depuis son `stopPlayback()` (comme le vrai lecteur). `LiveAudioIO` n'a aucun
+/// verrou : ce test ne prouve que le transit, une fois, sur un autre fil, sans attente. La protection contre l'interblocage vit dans
+/// `PlaybackTracker` (`stopAllHoldsNoLockWhileThePlayerCallsItsHandlersSynchronously`, processus fils), là où le verrou existe.
+@Test func aSynchronousCallbackFromTheDevicesStopPlaybackReachesOnEndExactlyOnce() throws {
     let device = FakeDevice()
     let io = LiveAudioIO(device: device)
     let received = Received()
@@ -436,4 +437,80 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
     io.finishPlayback(.played)
     #expect(io.finishPlayback(.played))
     #expect(sink.all == ["a:played", "b:played"])
+}
+
+// MARK: - `onChunk` ne rappelle jamais l'`AudioIO` : précondition, dans le vrai comme dans le double (processus fils)
+
+/// Sans cette précondition, `stopPlayback()` ou `play()` appelé depuis `onChunk` prend `lifecycle` pendant qu'un `stop()` d'un autre
+/// fil tient `lifecycle` et attend la fin de `onChunk` : les deux fils restent bloqués pour toujours (sondé par la revue).
+private func syntheticTapWindow() -> AVAudioPCMBuffer {
+    let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 48_000, channels: 1, interleaved: false)!
+    let window = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480)!
+    window.frameLength = 480
+    return window
+}
+
+private func expectProgrammingError(_ stderr: [UInt8], mentioning call: String) {
+    let text = String(decoding: stderr, as: UTF8.self)
+    #expect(text.contains("erreur de programmation"), "\(text)")
+    #expect(text.contains(call), "\(text)")
+}
+
+@Test func captureStopPlaybackFromOnChunkIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let capture = AudioCapture()
+        let tap = capture.makeTap(sampleRate: 48_000, accumulate: false) { _ in capture.stopPlayback() }
+        tap(syntheticTapWindow(), AVAudioTime(hostTime: 0))
+    }
+    expectProgrammingError(result.standardErrorContent, mentioning: "stopPlayback()")
+}
+
+@Test func capturePlayFromOnChunkIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let capture = AudioCapture()
+        let tap = capture.makeTap(sampleRate: 48_000, accumulate: false) { _ in
+            try? capture.play(AudioClip(samples: [0.1], sampleRate: 22_050)) { _ in }
+        }
+        tap(syntheticTapWindow(), AVAudioTime(hostTime: 0))
+    }
+    expectProgrammingError(result.standardErrorContent, mentioning: "play()")
+}
+
+@Test func scriptedStopPlaybackFromOnChunkIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let io = ScriptedAudioIO()
+        try io.start { _ in io.stopPlayback() }
+        io.push(AudioChunk(samples: [0.1], sampleRate: 16_000))
+    }
+    expectProgrammingError(result.standardErrorContent, mentioning: "stopPlayback()")
+}
+
+@Test func scriptedPlayFromOnChunkIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let io = ScriptedAudioIO()
+        try io.start { _ in try? io.play(AudioClip(samples: [0.1], sampleRate: 16_000)) { _ in } }
+        io.push(AudioChunk(samples: [0.1], sampleRate: 16_000))
+    }
+    expectProgrammingError(result.standardErrorContent, mentioning: "play()")
+}
+
+@Test func scriptedStopFromOnChunkIsAProgrammingError() async throws {
+    let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        let io = ScriptedAudioIO()
+        try io.start { _ in io.stop() }
+        io.push(AudioChunk(samples: [0.1], sampleRate: 16_000))
+    }
+    expectProgrammingError(result.standardErrorContent, mentioning: "stop()")
+}
+
+/// La précondition ne vise que l'appel depuis `onChunk` : depuis un autre fil, pendant une livraison en cours, ces appels restent permis
+/// (ils attendent la porte ou passent) ; ici hors de toute livraison, sur le double comme sur le vrai.
+@Test func playAndStopPlaybackOutsideOnChunkAreNotRefused() throws {
+    let io = ScriptedAudioIO()
+    try io.start { _ in }
+    try io.play(someClip) { _ in }
+    io.stopPlayback()
+    io.stop()
+    let capture = AudioCapture()
+    capture.stopPlayback()
 }

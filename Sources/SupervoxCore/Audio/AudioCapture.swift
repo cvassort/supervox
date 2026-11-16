@@ -263,8 +263,10 @@ public final class AudioCapture: @unchecked Sendable {
     ///
     /// - Throws: `notRunning` si le moteur ne tourne pas (`start` pas appelé, ou `stop` passé) ; `engineFailed` pour une capture sans
     ///   traitement de la voix (pas de lecteur), un clip vide ou illisible, ou un échec du lecteur. Rien n'est joué, `onEnd` n'est pas appelé.
+    ///   Jamais depuis `onChunk` (précondition).
     public func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws {
         // La conversion se fait hors verrou : elle peut durer, et `stop()` ne doit pas l'attendre.
+        currentGate.withLock { $0 }?.assertNotDelivering(calling: "play()")
         let format = try lifecycle.withLock { try playerFormat() }
         guard let buffer = Self.playbackBuffer(clip, format: format) else {
             throw AudioCaptureError.engineFailed("clip audio vide ou illisible")
@@ -284,9 +286,10 @@ public final class AudioCapture: @unchecked Sendable {
     }
 
     /// Coupe tout de suite la lecture et vide la file : chaque clip en file reçoit `.stopped`. Sans effet si rien ne joue. Jamais depuis `onEnd`
-    /// (précondition). Ne touche pas à la capture.
+    /// ni depuis `onChunk` (précondition). Ne touche pas à la capture.
     public func stopPlayback() {
         // Avant de prendre `lifecycle` : même ordre que `stop()` depuis `onChunk`.
+        currentGate.withLock { $0 }?.assertNotDelivering(calling: "stopPlayback()")
         playback.assertNotInEndHandler()
         lifecycle.withLock { stopPlayerLocked(engineStop: false) }
     }
