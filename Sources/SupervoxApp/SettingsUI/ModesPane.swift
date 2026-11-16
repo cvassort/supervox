@@ -160,6 +160,7 @@ private struct ModeRow: View {
                 Spacer(minLength: 12)
                 HStack(spacing: 8) {
                     Button("Modifier…") { edit(row.id) }
+                        .accessibilityLabel("Modifier « \(row.title) »")
                     Menu {
                         Button("Dupliquer") {
                             let id = model.duplicate(row.id)
@@ -185,6 +186,7 @@ private struct ModeRow: View {
                     isOn: Binding(get: { row.reviews }, set: { [row] in model.setReview($0, for: row.id) })
                 )
                 .toggleStyle(.switch)
+                .accessibilityLabel("\(ModesModel.toggleTitle) : \(row.title)")
             }
         }
         .padding(.vertical, 2)

@@ -1014,6 +1014,24 @@ import Testing
             ModesPane.deletionMessage(for: try row(model, ModeChip.promptID), chosenInPanel: false).contains("« Ajouter un mode »"))
     }
 
+    /// Ce que la feuille dit à la place du champ de consigne de Dictée brute et d'Entretien : deux phrases propres à chacun.
+    @Test func theSheetSaysWhyTheLockedModesHaveNoInstruction() {
+        #expect(
+            ModesModel.lockedInstructionNote(for: ModeChip.rawID)
+                == "Ce mode n'a pas de consigne : le texte y est collé tel quel.")
+        #expect(
+            ModesModel.lockedInstructionNote(for: ModeChip.interviewID)
+                == "Ce mode n'a pas de consigne à modifier. Ce mode arrive à une étape suivante.")
+    }
+
+    /// La feuille a une hauteur fixe qui tient sous une fenêtre de réglages sur un écran de 800 points, et un champ de consigne
+    /// borné qui défile au-delà : la feuille ne grandit pas avec une consigne de plusieurs milliers de caractères.
+    @Test func theSheetHasABoundedHeightAndABoundedInstructionField() {
+        #expect(ModeEditor.sheetHeight <= 700)
+        #expect(ModeEditor.instructionMaxHeight <= 120)
+        #expect(ModeEditor.instructionMinHeight <= ModeEditor.instructionMaxHeight)
+    }
+
     // MARK: - Trous relevés à la revue
 
     /// Un mode sans consigne n'envoie rien : un modèle périmé qu'il porte n'ajoute aucune note sur sa ligne.

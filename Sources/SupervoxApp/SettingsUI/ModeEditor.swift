@@ -21,10 +21,10 @@ public struct ModeEditor: View {
 
     /// La feuille a une hauteur fixe, qui tient dans un écran de portable sous la fenêtre de réglages : le formulaire défile.
     /// `height` ne change que pour rendre toute la feuille en une image.
-    public static let sheetHeight: CGFloat = 560
+    public static let sheetHeight: CGFloat = 640
     /// Le champ de consigne est borné : une consigne plus longue défile dans le champ.
-    static let instructionMinHeight: CGFloat = 90
-    static let instructionMaxHeight: CGFloat = 160
+    static let instructionMinHeight: CGFloat = 80
+    static let instructionMaxHeight: CGFloat = 120
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -73,11 +73,7 @@ public struct ModeEditor: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                } header: {
-                    Text("Dictée")
-                }
-                Section {
-                    LabeledContent("Raccourci") {
+                    LabeledContent("Raccourci du mode") {
                         HStack(spacing: 8) {
                             ModeHotKeyRecorder(model: model, id: draft.id)
                             Button("Retirer") { model.clearHotKey(for: draft.id) }
@@ -85,14 +81,11 @@ public struct ModeEditor: View {
                         }
                     }
                 } header: {
-                    Text("Raccourci du mode")
+                    Text("Dictée")
                 } footer: {
-                    Text(
-                        "Ce raccourci lance la dictée dans ce mode, de n'importe où. Échap annule la capture."
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("Le raccourci lance ce mode de n'importe où. Échap annule la capture.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -140,14 +133,8 @@ public struct ModeEditor: View {
                         }
                     }
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
-                if let origin, draft.instruction != origin {
-                    HStack {
-                        Spacer()
-                        Button("Revenir à la consigne d'origine") { draft.resetInstructionToOrigin() }
-                    }
-                }
             } else {
-                Text("Ce mode n'a pas de consigne : le texte n'y passe pas par un modèle.")
+                Text(ModesModel.lockedInstructionNote(for: draft.id))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -155,10 +142,18 @@ public struct ModeEditor: View {
             Text("Consigne")
         } footer: {
             if draft.isInstructionEditable {
-                Text("Sans consigne, le texte est collé tel quel. Avec une consigne, il est envoyé au fournisseur pour être mis en forme.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Le bouton est sur la ligne de l'explication : il ne prend pas une rangée de plus dans une feuille de hauteur fixe.
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Sans consigne, le texte est collé tel quel.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    if let origin, draft.instruction != origin {
+                        Button("Revenir à la consigne d'origine") { draft.resetInstructionToOrigin() }
+                            .controlSize(.small)
+                    }
+                }
             }
         }
     }

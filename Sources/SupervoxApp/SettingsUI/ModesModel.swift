@@ -140,6 +140,13 @@ public final class ModesModel {
         "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un en tête de l'onglet Modes, dans « Modèles », ou choisissez un modèle propre à ce mode."
     /// Sur la ligne d'un mode qui dépend du modèle fort, tant qu'aucun n'est choisi. La section « Modèles » est en tête de l'onglet.
     public static let noStrongModelRowNote = "Aucun modèle fort n'est choisi : choisissez-en un ci-dessus, dans « Modèles »."
+    /// Ce que la feuille dit à la place du champ de consigne d'un mode qui n'en a pas : Dictée brute colle le texte tel quel, Entretien
+    /// n'est pas encore là.
+    public static func lockedInstructionNote(for id: String) -> String {
+        id == ModeChip.interviewID
+            ? "Ce mode n'a pas de consigne à modifier. \(laterModeNote)"
+            : "Ce mode n'a pas de consigne : le texte y est collé tel quel."
+    }
     public static let noProviderNote = "Aucun fournisseur n'est enregistré : ajoutez-en un dans l'onglet Fournisseurs."
     public static let noTranscriptionEngineTitle = "Moteur de l'onglet Transcription"
     public static let pastedAsIsSummary = "Texte collé tel quel"

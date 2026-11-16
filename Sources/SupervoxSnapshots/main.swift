@@ -145,6 +145,25 @@ let exampleTerms = [
     "Arles", "Nîmes", "Brest", "Reims", "Rouen", "Troyes", "Vichy",
 ]
 
+
+/// Une fenêtre qui se dit clé et principale, pour les images d'une fenêtre qui a la frappe (réglages, feuilles). Une fenêtre hors
+/// écran n'est jamais clé (l'outil ne peut pas activer l'application) ; sans cela, et sans `ActiveApplication`, AppKit dessine les
+/// contrôles AppKit (interrupteurs, menus) dans leur style inactif : un interrupteur activé paraît éteint (piste grise).
+final class ActiveLookingWindow: NSWindow {
+    override var isKeyWindow: Bool { true }
+    override var isMainWindow: Bool { true }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+/// L'outil tourne sans pouvoir activer l'application (aucune session active : `NSApp.isActive` reste faux). Or AppKit dessine un
+/// interrupteur activé en gris tant que l'application n'est pas active, même dans une fenêtre clé : cause des interrupteurs
+/// « éteints » des premières images. Une fenêtre qui n'est pas clé (`keyWindow: false`) garde son style inactif.
+final class ActiveApplication: NSApplication {
+    override var isActive: Bool { true }
+}
+
+
 let layout = ExampleLayout()
 let granted = ExamplePermissions(microphoneState: .granted, accessibilityState: .granted)
 let missing = ExamplePermissions(microphoneState: .notDetermined, accessibilityState: .denied)
@@ -312,21 +331,25 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 /// écran ne l'est jamais, et un bouton principal y sort gris, comme dans une fenêtre inactive. À dire pour chaque image de
 /// relecture, selon que le panneau a la frappe dans cet état ou non.
 @MainActor func render(
-    _ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil, keyWindow: Bool = false
+    _ view: some View, name: String, dark: Bool, background: NSColor, size: NSSize? = nil, keyWindow requested: Bool = false
 ) throws {
+    // La fenêtre de réglages et ses feuilles ont la frappe quand on les regarde : elles sont rendues comme une fenêtre clé (contrôles
+    // actifs, interrupteurs à la couleur d'accent). Le panneau, lui, dit lui-même s'il a la frappe (`keyWindow`).
+    let isPanel = ["panneau", "dictee", "relecture"].contains { name.hasPrefix($0) }
+    let keyWindow = requested || !isPanel
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
         rootView: AnyView(
             view.background(Color(nsColor: background)).environment(\.colorScheme, dark ? .dark : .light)
                 .environment(\.controlActiveState, keyWindow ? .key : .inactive)))
     host.appearance = appearance
-    let window = NSWindow(
+    let window = (keyWindow ? ActiveLookingWindow.self : NSWindow.self).init(
         contentRect: NSRect(origin: NSPoint(x: -10_000, y: -10_000), size: size ?? host.fittingSize),
         styleMask: [.titled], backing: .buffered, defer: false)
     window.appearance = appearance
     window.backgroundColor = background
     window.contentView = host
-    window.orderFrontRegardless()
+    if keyWindow { window.makeKeyAndOrderFront(nil) } else { window.orderFrontRegardless() }
     let target: NSView = host
     target.layoutSubtreeIfNeeded()
     // Laisse SwiftUI terminer sa mise en page et ses tâches (`checkKeys` est déjà fait).
@@ -342,7 +365,7 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
     window.orderOut(nil)
 }
 
-let application = NSApplication.shared
+let application = ActiveApplication.shared
 application.setActivationPolicy(.accessory)
 
 /// La taille de la vraie fenêtre (`SettingsView`).
@@ -535,10 +558,10 @@ for dark in [false, true] {
     }
 
     // Feuilles d'un mode, à la taille que la feuille prend.
-    // Toute la feuille en une image (sa hauteur réelle est `ModeEditor.sheetHeight`, le formulaire y défile), sauf la dernière.
-    let sheetHeight: CGFloat = 900
+    // La vraie taille de la feuille : ce que l'utilisateur voit sans faire défiler.
+    let sheetHeight = ModeEditor.sheetHeight
     let sheetSize = NSSize(width: 520, height: sheetHeight)
-    let realSheetSize = NSSize(width: 520, height: ModeEditor.sheetHeight)
+    let realSheetSize = sheetSize
     // Un mode de base dont la consigne a été modifiée : le bouton « Revenir à la consigne d'origine ».
     let editedBase = ExampleModes()
     editedBase.settings.modes[2].instruction =
@@ -546,6 +569,13 @@ for dark in [false, true] {
     try render(
         ModeEditor(model: editedBase.makeModel(), id: ModeChip.promptID, height: sheetHeight),
         name: "mode-edition-base", dark: dark, background: window, size: sheetSize, keyWindow: true)
+    // Le cas le plus chargé : Prompt avec sa consigne d'origine (longue), son modèle et un raccourci. Toute la feuille tient, y
+    // compris « Raccourci du mode », sans faire défiler.
+    let loadedPrompt = ExampleModes()
+    loadedPrompt.settings.modes[2].hotKey = keyB
+    try render(
+        ModeEditor(model: loadedPrompt.makeModel(), id: ModeChip.promptID, height: sheetHeight),
+        name: "mode-edition-prompt-origine", dark: dark, background: window, size: sheetSize, keyWindow: true)
     // Premier lancement : Prompt sans fournisseur ni modèle fort (la réserve, et l'explication sous le sélecteur).
     try render(
         ModeEditor(model: ExampleModes(AppSettings.defaults).makeModel(), id: ModeChip.promptID, height: sheetHeight),
