@@ -54,7 +54,15 @@ public struct PanelView: View {
             // Le texte tel que le champ le donne, sans rien y toucher et sans attendre : `editDraft` le garde et prévient le
             // contrôleur de dictée.
             edit: { model.editDraft($0) },
-            paste: { model.paste() })
+            paste: { model.paste() },
+            // La pile du champ n'a plus rien à défaire (refaire) : ⌘Z (⇧⌘Z) change de version.
+            history: { command in
+                switch command {
+                case .undo: model.previousVersion()
+                case .redo: model.nextVersion()
+                default: break
+                }
+            })
     }
 
     private func welcomeLine(_ text: String) -> some View {

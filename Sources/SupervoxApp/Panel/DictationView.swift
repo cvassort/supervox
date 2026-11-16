@@ -15,11 +15,13 @@ struct DictationView: View {
     /// Le texte en relecture a changé (le texte entier, tel quel) ; sans effet hors relecture.
     let edit: @MainActor (String) -> Void
     let paste: @MainActor () -> Void
+    /// ⌘Z ou ⇧⌘Z en bout de pile du champ : changer de version.
+    var history: @MainActor (EditingCommand) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 10) {
             if let review = display.review {
-                ReviewView(display: display, review: review, edit: edit, paste: paste, copy: copy)
+                ReviewView(display: display, review: review, edit: edit, paste: paste, copy: copy, history: history)
             } else if display.mood == .ready, display.transcript == nil {
                 ready
                     .frame(maxWidth: .infinity, minHeight: 84)

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import SupervoxCore
@@ -911,5 +912,89 @@ import SupervoxCore
         let h = harness()
         let (_, _) = await drive(h, to: step)
         #expect(h.controller.isBusy == (step != .rewriting))
+    }
+
+    // MARK: - Règle 6 : le champ (sans fenêtre)
+
+    /// Un champ de relecture avec sa pile propre (celle de son coordinateur), sans fenêtre, et ce que `onHistoryEnd` a reçu.
+    @MainActor final class Field {
+        let textView: FocusingTextView
+        let coordinator: ReviewTextView.Coordinator
+        var ends: [EditingCommand] = []
+
+        init(text: String = "") {
+            let view = ReviewTextView(text: text, isEditable: true, takesFocus: false, onEdit: { _ in }, onHistoryEnd: { _ in })
+            coordinator = view.makeCoordinator()
+            textView = FocusingTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80))
+            textView.allowsUndo = true
+            textView.isRichText = false
+            textView.delegate = coordinator
+            ReviewTextView.update(textView, text: text, isEditable: true, takesFocus: false)
+            textView.onHistoryEnd = { [unowned self] in ends.append($0) }
+        }
+
+        func type(_ text: String) {
+            textView.insertText(text, replacementRange: NSRange(location: textView.string.utf16.count, length: 0))
+        }
+    }
+
+    @Test("règle 6 : un texte remplacé de l'extérieur (nouvelle version) vide la pile du champ, y compris ce qu'il aurait pu refaire")
+    func aReplacedTextClearsTheFieldsStack() throws {
+        let field = Field(text: "Version A.")
+        field.type(" Mot.")
+        try #require(field.textView.undoManager?.canUndo == true)
+        field.textView.undoManager?.undo()
+        #expect(field.textView.string == "Version A.")
+        try #require(field.textView.undoManager?.canRedo == true, "le test ne prouve rien sans un refaire possible")
+        field.type(" Autre.")
+
+        ReviewTextView.update(field.textView, text: "Version B, plus courte.", isEditable: true, takesFocus: false)
+        #expect(field.textView.string == "Version B, plus courte.")
+        #expect(field.textView.undoManager?.canUndo == false)
+        #expect(field.textView.undoManager?.canRedo == false)
+        // Un ⌘Z ou ⇧⌘Z qui suit n'a plus rien à défaire dans le champ : il ne touche pas au texte, et ne lève rien.
+        field.textView.undo(nil)
+        field.textView.redo(nil)
+        #expect(field.textView.string == "Version B, plus courte.")
+        #expect(field.ends == [.undo, .redo])
+    }
+
+    @Test("règle 6 : le même texte ne vide pas la pile (la frappe remonte au modèle, qui redonne le même texte)")
+    func theSameTextKeepsTheStack() {
+        let field = Field(text: "Version A.")
+        field.type(" Mot.")
+        ReviewTextView.update(field.textView, text: field.textView.string, isEditable: true, takesFocus: false)
+        #expect(field.textView.undoManager?.canUndo == true)
+    }
+
+    @Test("règle 6 : pas de réécriture pendant un texte marqué, et la pile reste")
+    func markedTextKeepsTheStackAndTheText() throws {
+        let field = Field(text: "ab")
+        field.type("c")
+        field.textView.setMarkedText(
+            "^", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        try #require(field.textView.hasMarkedText())
+        ReviewTextView.update(field.textView, text: "autre", isEditable: true, takesFocus: false)
+        #expect(field.textView.string == "abc^")
+        #expect(field.textView.undoManager?.canUndo == true)
+    }
+
+    @Test("règle 6 : ⌘Z défait la frappe du champ d'abord, et seulement quand la pile est vide prévient le panneau ; de même ⇧⌘Z")
+    func undoAndRedoUseTheFieldsStackFirst() {
+        let field = Field(text: "Version A.")
+        field.type(" Mot.")
+        field.textView.undo(nil)
+        #expect(field.textView.string == "Version A.")
+        #expect(field.ends.isEmpty, "la pile du champ avait quelque chose à défaire")
+        field.textView.undo(nil)
+        #expect(field.textView.string == "Version A.")
+        #expect(field.ends == [.undo])
+
+        field.textView.redo(nil)
+        #expect(field.textView.string == "Version A. Mot.")
+        #expect(field.ends == [.undo], "la pile du champ avait quelque chose à refaire")
+        field.textView.redo(nil)
+        #expect(field.ends == [.undo, .redo])
+        #expect(field.textView.string == "Version A. Mot.")
     }
 }

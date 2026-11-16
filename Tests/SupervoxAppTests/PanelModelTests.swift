@@ -406,6 +406,109 @@ import Testing
         }
     }
 
+    // MARK: - Correction à la voix
+
+    @Test("canCorrect : seulement en relecture, avec un texte non blanc")
+    func correctingIsPossibleOnlyInTheReviewWithAText() {
+        #expect(reviewing("Un texte.").canCorrect)
+        #expect(!reviewing("").canCorrect)
+        #expect(!reviewing("  \n\t ").canCorrect)
+        for stage in [
+            DictationStage.idle, .preparing, .recording, .finalizing, .formatting, .pasting, .copied, .cancelled,
+            .failed(.noSpeech), .correcting(.preparing), .correcting(.recording), .correcting(.transcribing),
+            .correcting(.rewriting),
+        ] {
+            #expect(!reviewing("Un texte.", stage: stage).canCorrect, "\(stage)")
+        }
+    }
+
+    @Test("correct() : « Corriger à la voix » en relecture, « Terminer » pendant l'écoute, et rien d'autre")
+    func correctStartsThenFinishesAndNothingElse() {
+        var started = 0
+        var finished = 0
+        func model(_ draft: String, _ stage: DictationStage) -> PanelModel {
+            let model = reviewing(draft, stage: stage)
+            model.onCorrect = { started += 1 }
+            model.onFinishCorrection = { finished += 1 }
+            return model
+        }
+        model("Un texte.", .review).correct()
+        #expect((started, finished) == (1, 0))
+        model("Un texte.", .correcting(.recording)).correct()
+        #expect((started, finished) == (1, 1))
+        #expect(model("Un texte.", .correcting(.recording)).canFinishCorrection)
+        for (draft, stage) in [
+            ("", DictationStage.review), ("  ", .review), ("Un texte.", .correcting(.preparing)),
+            ("Un texte.", .correcting(.transcribing)), ("Un texte.", .correcting(.rewriting)), ("Un texte.", .pasting),
+            ("Un texte.", .idle), ("Un texte.", .recording),
+        ] {
+            let other = model(draft, stage)
+            other.correct()
+            #expect(!other.canFinishCorrection || stage == .correcting(.recording))
+        }
+        #expect((started, finished) == (1, 1), "aucun autre appel")
+    }
+
+    @Test("règle 8 : pendant la correction on ne peut pas coller, le champ est en lecture seule, « Copier » copie le texte courant")
+    func duringTheCorrectionNothingPastesAndCopyCopiesTheDraft() {
+        for step in [CorrectionStep.preparing, .recording, .transcribing, .rewriting] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.setDictation(
+                DictationViewState(
+                    stage: .correcting(step), liveText: "Texte reçu en flux.", lastTranscript: "Le tout premier texte.",
+                    draft: "Le texte courant."))
+            var pasted = 0
+            var copied: [String] = []
+            var edits: [String] = []
+            model.onPaste = { pasted += 1 }
+            model.onCopy = { copied.append($0); return true }
+            model.onDraftChange = { edits.append($0) }
+
+            #expect(!model.canPaste, "\(step)")
+            model.paste()
+            model.editDraft("Autre chose.")
+            model.copyTranscript()
+            #expect(pasted == 0, "\(step)")
+            #expect(edits.isEmpty, "\(step)")
+            #expect(model.dictation.draft == "Le texte courant.", "\(step)")
+            #expect(copied == ["Le texte courant."], "\(step)")
+            let review = model.dictationDisplay.review
+            #expect(review?.canPaste == false, "\(step)")
+            #expect(review?.isEditable == false, "\(step)")
+            #expect(review?.canCopy == true, "\(step)")
+            #expect(review?.hint == nil, "\(step)")
+            // La réécriture montre le texte reçu à la place du brouillon ; les autres étapes montrent le brouillon.
+            #expect(review?.text == (step == .rewriting ? "Texte reçu en flux." : "Le texte courant."), "\(step)")
+        }
+    }
+
+    @Test("la réécriture sans rien reçu montre encore le brouillon")
+    func theRewritingStepShowsTheDraftUntilSomethingArrives() {
+        let model = reviewing("Le texte courant.", stage: .correcting(.rewriting))
+        #expect(model.dictationDisplay.review?.text == "Le texte courant.")
+    }
+
+    @Test("previousVersion() et nextVersion() relaient le contrôleur, seulement s'il y a une version de ce côté")
+    func versionButtonsRelayOnlyWhenThereIsAVersion() {
+        var back = 0
+        var forward = 0
+        let model = reviewing("Un texte.")
+        model.onPreviousVersion = { back += 1 }
+        model.onNextVersion = { forward += 1 }
+        model.previousVersion()
+        model.nextVersion()
+        #expect((back, forward) == (0, 0))
+
+        model.setDictation(DictationViewState(stage: .review, draft: "Un texte.", canGoBack: true))
+        model.previousVersion()
+        model.nextVersion()
+        #expect((back, forward) == (1, 0))
+        model.setDictation(DictationViewState(stage: .review, draft: "Un texte.", canGoForward: true))
+        model.previousVersion()
+        model.nextVersion()
+        #expect((back, forward) == (1, 1))
+    }
+
     @Test("règle 15 : « Copier » en relecture copie le brouillon entier, pas le dernier texte")
     func copyingInReviewCopiesTheWholeDraft() {
         let long = (1...300).map { "mot\($0)" }.joined(separator: " ")

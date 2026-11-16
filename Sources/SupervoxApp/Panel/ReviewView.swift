@@ -14,6 +14,8 @@ struct ReviewView: View {
     let edit: @MainActor (String) -> Void
     let paste: @MainActor () -> Void
     let copy: @MainActor () -> Void
+    /// ⌘Z ou ⇧⌘Z que la pile du champ n'a plus à défaire ou refaire : le changement de version.
+    var history: @MainActor (EditingCommand) -> Void = { _ in }
 
     var body: some View {
         VStack(spacing: 10) {
@@ -44,7 +46,8 @@ struct ReviewView: View {
 
     /// `edit` va tel quel au champ : ni rognage, ni normalisation, ni report au tour suivant.
     private var field: some View {
-        ReviewTextView(text: review.text, isEditable: review.isEditable, takesFocus: review.isEditable, onEdit: edit)
+        ReviewTextView(
+            text: review.text, isEditable: review.isEditable, takesFocus: review.isEditable, onEdit: edit, onHistoryEnd: history)
             // Un champ vide le dit : `NSTextView` n'a pas de texte de substitution. Même place que le premier caractère (marge
             // de ligne de 5 points, 2 de marge du haut), sans prendre le clic.
             .overlay(alignment: .topLeading) {

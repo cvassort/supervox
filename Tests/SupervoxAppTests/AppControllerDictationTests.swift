@@ -62,14 +62,15 @@ final class TimeoutLog: Sendable {
 
     func makeController(
         settings: AppSettings = .defaults, terminationWait: (@Sendable (Double) async -> Void)? = nil,
-        rewriter custom: RewriteEnvironment? = nil, frontApplication: @escaping @MainActor () -> Int32? = { nil }
+        rewriter custom: RewriteEnvironment? = nil, frontApplication: @escaping @MainActor () -> Int32? = { nil },
+        layout: any KeyboardLayout = HotKeyTests.ansi
     ) -> AppController {
         try? store.save(settings)
         let controller = AppController(
             settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
             escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
             permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
-            keyboardLayout: HotKeyTests.ansi, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
+            keyboardLayout: layout, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
             dictation: engines.environment, rewriter: custom ?? rewriter.environment, frontApplication: frontApplication,
             inserter: rig.inserter,
@@ -1121,6 +1122,122 @@ final class TimeoutLog: Sendable {
         #expect(controller.settings.lastModeID == ModeChip.rawID)
         hotKeys.press()
         #expect(await until { engines.sessions.count == 3 })
+    }
+
+    // MARK: - Correction à la voix (étape 5, tâche 8)
+
+    /// La correction mène sa session jusqu'à `recording` (session n° `index`).
+    func recordCorrection(_ controller: AppController, index: Int = 1) async -> FakeSession {
+        let found = await until { engines.sessions.count > index }
+        #expect(found)
+        let session = found ? engines.sessions[index] : FakeSession()
+        #expect(await until { session.calls.contains("start") })
+        session.emit(.preparing)
+        session.emit(.recording)
+        #expect(await until { controller.panelModel.dictation.stage == .correcting(.recording) })
+        return session
+    }
+
+    @Test func theCorrectionSentenceNamesTheRealGlobalHotKeyByTheSameLabelAsThePanel() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Code 0x0C : « Q » en ANSI, « A » en AZERTY : le libellé suit la disposition, comme celui du reste du panneau.
+        var settings = AppSettings.defaults
+        settings.hotKey = HotKey(keyCode: 0x0C, modifiers: [.control, .option])
+        let controller = makeController(settings: settings, layout: HotKeyTests.azerty)
+        enableReview(controller)
+        await reviewedDictation(controller)
+        #expect(controller.panelModel.hotKeyLabel == "⌃⌥A")
+
+        hotKeys.press()
+        _ = await recordCorrection(controller)
+        #expect(
+            controller.panelModel.dictation.notice == DictationController.correctionListeningNotice(hotKeyLabel: "⌃⌥A"))
+        #expect(
+            controller.panelModel.dictation.notice
+                == "Dites ce qu'il faut changer, puis appuyez de nouveau sur ⌃⌥A ou cliquez sur « Terminer ».")
+        #expect(controller.panelModel.dictation.notice?.contains("Espace") == false, "jamais le libellé d'un autre raccourci")
+    }
+
+    @Test func withoutAGlobalHotKeyTheCorrectionSentenceOnlyNamesTheButton() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+        controller.clearHotKey()
+        #expect(controller.panelModel.hotKeyLabel == nil)
+
+        controller.panelModel.correct()
+        _ = await recordCorrection(controller)
+        #expect(controller.panelModel.dictation.notice == "Dites ce qu'il faut changer, puis cliquez sur « Terminer ».")
+    }
+
+    @Test func theButtonsOfThePanelModelDriveTheCorrectionAndTheVersions() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller, "Texte dicté.")
+        #expect(controller.panelModel.canCorrect)
+
+        controller.panelModel.correct()
+        let session = await recordCorrection(controller)
+        #expect(!controller.panelModel.canCorrect)
+        #expect(controller.panelModel.canFinishCorrection)
+        controller.panelModel.correct()   // « Terminer »
+        #expect(await until { session.count(of: "finish") == 1 })
+        session.emit(.finalizing)
+        session.emit(.finished("Mets une majuscule."))
+        let call = await rewriter.call()
+        call.finish(.rewritten("Texte dicté, corrigé."))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.draft == "Texte dicté, corrigé.")
+        #expect(controller.panelModel.dictation.canGoBack)
+
+        controller.panelModel.previousVersion()
+        #expect(controller.panelModel.dictation.draft == "Texte dicté.")
+        #expect(controller.panelModel.dictation.canGoForward)
+        controller.panelModel.nextVersion()
+        #expect(controller.panelModel.dictation.draft == "Texte dicté, corrigé.")
+    }
+
+    @Test func theGlobalHotKeyEndsTheCorrectionAndEscapeCancelsOnlyIt() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        enableReview(controller)
+        await reviewedDictation(controller)
+        controller.panelModel.editDraft("Texte retouché.")
+
+        hotKeys.press()
+        let session = await recordCorrection(controller)
+        hotKeys.press()
+        #expect(await until { session.count(of: "finish") == 1 })
+
+        escape.press()
+        #expect(controller.panelModel.dictation.stage == .review)
+        #expect(controller.panelModel.dictation.draft == "Texte retouché.")
+        #expect(controller.panelModel.isOpen)
+        #expect(await until { session.count(of: "cancel") == 1 })
+        escape.press()
+        #expect(!controller.panelModel.isOpen)
+        #expect(controller.dictation.lastTranscript == "Texte retouché.")
+    }
+
+    @Test func aModesHotKeyIsIgnoredDuringTheReviewAndTheCorrection() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settings: modesSettings(lastModeID: ModeChip.rawID))
+        enableReview(controller)
+        await reviewedDictation(controller)
+        let before = controller.panelModel.dictation
+        modeRegistrars.press(Self.keyB)
+        await settle()
+        #expect(controller.panelModel.dictation == before)
+        #expect(engines.sessions.count == 1)
+
+        controller.panelModel.correct()
+        let session = await recordCorrection(controller)
+        modeRegistrars.press(Self.keyB)
+        await settle()
+        #expect(session.count(of: "finish") == 0)
+        #expect(controller.panelModel.dictation.stage == .correcting(.recording))
     }
 
     /// Règle 15 : « Copier » en relecture copie le brouillon entier par l'insertion, sans quitter la relecture.

@@ -98,6 +98,13 @@ public final class PanelModel {
     @ObservationIgnored public var onDraftChange: (@MainActor (String) -> Void)?
     /// Ce que fait « Coller » : le contrôleur de dictée insère le texte en relecture.
     @ObservationIgnored public var onPaste: (@MainActor () -> Void)?
+    /// Ce que fait « Corriger à la voix » : le contrôleur de dictée commence la correction de la relecture.
+    @ObservationIgnored public var onCorrect: (@MainActor () -> Void)?
+    /// Ce que fait « Terminer » : la consigne est dite.
+    @ObservationIgnored public var onFinishCorrection: (@MainActor () -> Void)?
+    /// « Version précédente » et son contraire.
+    @ObservationIgnored public var onPreviousVersion: (@MainActor () -> Void)?
+    @ObservationIgnored public var onNextVersion: (@MainActor () -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
 
@@ -127,7 +134,8 @@ public final class PanelModel {
     /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre. En relecture, c'est le brouillon que l'on est en
     /// train de corriger ; ailleurs, le dernier texte. Un texte blanc ne se copie pas : rien ne change.
     public func copyTranscript() {
-        let text = dictation.stage == .review ? dictation.draft : dictation.lastTranscript
+        // Pendant une correction aussi, c'est le texte courant (le brouillon), jamais le texte reçu en flux.
+        let text = dictation.stage == .review || dictation.stage.isCorrecting ? dictation.draft : dictation.lastTranscript
         guard let text, !Self.isBlank(text), let onCopy else { return }
         copyState = onCopy(text) ? .copied : .failed
     }
@@ -148,6 +156,34 @@ public final class PanelModel {
         dictation.draft = text
         copyState = .idle
         onDraftChange?(text)
+    }
+
+    /// On peut corriger à la voix en relecture, quand le texte n'est pas blanc.
+    public var canCorrect: Bool { dictation.stage == .review && !Self.isBlank(dictation.draft) }
+
+    /// On peut terminer la consigne : la correction écoute.
+    public var canFinishCorrection: Bool { dictation.stage == .correcting(.recording) }
+
+    /// Le bouton de la correction : « Corriger à la voix » commence la correction ; « Terminer », pendant qu'elle écoute, la
+    /// termine. Ne fait rien dans les autres cas.
+    public func correct() {
+        if canCorrect {
+            onCorrect?()
+        } else if canFinishCorrection {
+            onFinishCorrection?()
+        }
+    }
+
+    /// « Version précédente » : sans effet s'il n'y en a pas (`DictationViewState.canGoBack`).
+    public func previousVersion() {
+        guard dictation.canGoBack else { return }
+        onPreviousVersion?()
+    }
+
+    /// La version suivante : sans effet s'il n'y en a pas.
+    public func nextVersion() {
+        guard dictation.canGoForward else { return }
+        onNextVersion?()
     }
 
     private static func isBlank(_ text: String) -> Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }

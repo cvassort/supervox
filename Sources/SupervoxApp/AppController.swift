@@ -153,6 +153,8 @@ public final class AppController {
             modes: { ModeRun.from(relay.settings?()?.mode($0)) },
             rewriter: rewriter,
             frontApplication: frontApplication,
+            // Le libellé du raccourci global réellement enregistré, celui que le reste du panneau montre.
+            hotKeyLabel: { [panelModel] in panelModel.hotKeyLabel },
             wait: reviewHandoverWait)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
@@ -163,6 +165,10 @@ public final class AppController {
         panelModel.onCopy = { [inserter] in inserter.copy($0) }
         panelModel.onDraftChange = { [dictationController] in dictationController.reviewEdited($0) }
         panelModel.onPaste = { [dictationController] in dictationController.pasteReview() }
+        panelModel.onCorrect = { [dictationController] in dictationController.startCorrection() }
+        panelModel.onFinishCorrection = { [dictationController] in dictationController.finishCorrection() }
+        panelModel.onPreviousVersion = { [dictationController] in dictationController.previousVersion() }
+        panelModel.onNextVersion = { [dictationController] in dictationController.nextVersion() }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }

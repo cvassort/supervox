@@ -12,12 +12,19 @@ struct ReviewTextView: NSViewRepresentable {
     /// Le champ prend la frappe dès qu'il est dans une fenêtre clé.
     var takesFocus: Bool
     var onEdit: @MainActor (String) -> Void
+    /// ⌘Z (`.undo`) ou ⇧⌘Z (`.redo`) quand la pile d'annulation du champ n'a plus rien à défaire (ou refaire) : le panneau
+    /// change alors de version du texte.
+    var onHistoryEnd: @MainActor (EditingCommand) -> Void
 
-    init(text: String, isEditable: Bool, takesFocus: Bool, onEdit: @escaping @MainActor (String) -> Void) {
+    init(
+        text: String, isEditable: Bool, takesFocus: Bool, onEdit: @escaping @MainActor (String) -> Void,
+        onHistoryEnd: @escaping @MainActor (EditingCommand) -> Void
+    ) {
         self.text = text
         self.isEditable = isEditable
         self.takesFocus = takesFocus
         self.onEdit = onEdit
+        self.onHistoryEnd = onHistoryEnd
     }
 
     /// Le champ, configuré. Un `FocusingTextView` : voir `takesFocus`.
@@ -52,12 +59,17 @@ struct ReviewTextView: NSViewRepresentable {
     }
 
     /// Met le champ à jour. La chaîne n'est remplacée que si elle diffère de celle du champ : la remplacer par la même
-    /// renverrait le curseur à la fin. Remplacer la chaîne ne vide pas la pile d'annulation : le champ et sa pile sont neufs à
-    /// chaque relecture, c'est ce qui l'empêche de viser un texte disparu. Et jamais pendant une saisie en attente (touche morte,
+    /// renverrait le curseur à la fin. Un texte remplacé de l'extérieur (une autre version, le texte reçu du modèle) vide la pile
+    /// d'annulation du champ : ses actions visent des plages de l'ancien texte, et un ⌘Z sur un texte plus court lève
+    /// `NSRangeException`. Une frappe, elle, remonte par `textDidChange` : le texte du modèle est alors déjà celui du champ, et
+    /// rien n'est remplacé. Le champ et sa pile sont de plus neufs à chaque relecture. Et jamais pendant une saisie en attente (touche morte,
     /// méthode de saisie : `hasMarkedText()`) : le texte marqué ne remonte pas par `textDidChange`, donc `text` a du retard, et
     /// la réécriture effacerait la saisie. La saisie validée, `textDidChange` remet le modèle d'accord avec le champ.
     static func update(_ textView: NSTextView, text: String, isEditable: Bool, takesFocus: Bool) {
-        if textView.string != text, !textView.hasMarkedText() { textView.string = text }
+        if textView.string != text, !textView.hasMarkedText() {
+            textView.string = text
+            textView.undoManager?.removeAllActions()
+        }
         if textView.isEditable != isEditable { textView.isEditable = isEditable }
         (textView as? FocusingTextView)?.takesFocus = takesFocus
     }
@@ -111,6 +123,7 @@ struct ReviewTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let textView = Self.makeTextView()
         textView.delegate = context.coordinator
+        (textView as? FocusingTextView)?.onHistoryEnd = onHistoryEnd
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
@@ -124,6 +137,7 @@ struct ReviewTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         context.coordinator.onEdit = onEdit
         guard let textView = scrollView.documentView as? NSTextView else { return }
+        (textView as? FocusingTextView)?.onHistoryEnd = onHistoryEnd
         Self.update(textView, text: text, isEditable: isEditable, takesFocus: takesFocus)
     }
 
@@ -153,6 +167,20 @@ final class FocusingTextView: NSTextView {
         // Seulement au passage de faux à vrai : SwiftUI répète la valeur à chaque mise à jour, et l'utilisateur qui est allé
         // sur un bouton ne doit pas être ramené au champ.
         didSet { if takesFocus && !oldValue { focusIfPossible() } }
+    }
+
+    /// Appelé quand ⌘Z (⇧⌘Z) n'a rien à défaire (refaire) dans la pile de ce champ.
+    var onHistoryEnd: (@MainActor (EditingCommand) -> Void)?
+
+    /// ⌘Z : la pile de ce champ d'abord (la frappe faite après une réécriture se défait la première), puis, quand elle est vide,
+    /// la version précédente du texte.
+    @objc func undo(_ sender: Any?) {
+        if let manager = undoManager, manager.canUndo { manager.undo() } else { onHistoryEnd?(.undo) }
+    }
+
+    /// ⇧⌘Z : de même, avec la version suivante.
+    @objc func redo(_ sender: Any?) {
+        if let manager = undoManager, manager.canRedo { manager.redo() } else { onHistoryEnd?(.redo) }
     }
 
     override func viewDidMoveToWindow() {
