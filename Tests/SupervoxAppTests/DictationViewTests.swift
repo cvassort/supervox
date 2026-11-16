@@ -70,6 +70,32 @@ import Testing
         #expect(result.count <= 30)
     }
 
+    @Test("M5 : la coupe ne sépare jamais une grappe de caractères : émoji composé, drapeau, marque combinante")
+    func theCutNeverSplitsACharacterCluster() {
+        let family = "👨‍👩‍👧‍👦"
+        let flag = "🇫🇷"
+        let combined = "e\u{0301}"
+        for unit in [family, flag, combined] {
+            let text = String(repeating: unit + " ", count: 200) + "fin"
+            for limit in [20, 21, 50, 99, 260] {
+                let cut = DictationText.tail(text, maxCharacters: limit)
+                #expect(cut.count <= limit, "\(unit) \(limit)")
+                #expect(cut.hasSuffix("fin"))
+                // Tout ce qui reste entre « … » et « fin » est fait d'unités entières.
+                let body = cut.dropFirst(2).dropLast(3).split(separator: " ").map(String.init)
+                #expect(body.allSatisfy { $0 == unit }, "\(unit) \(limit) : \(body)")
+                let heads = DictationText.head(text, maxCharacters: limit)
+                let kept = heads.dropLast(2).split(separator: " ").map(String.init)
+                #expect(kept.allSatisfy { $0 == unit }, "head \(unit) \(limit)")
+            }
+            // Sans aucune espace : la coupe franche tombe elle aussi sur une frontière de grappe.
+            let solid = String(repeating: unit, count: 300)
+            let cut = DictationText.tail(solid, maxCharacters: 40)
+            #expect(cut.count <= 40)
+            #expect(cut == "…" + String(repeating: unit, count: cut.count - 1), "\(unit) sans espace : \(cut.unicodeScalars.count)")
+        }
+    }
+
     @Test func aTinyLimitStillGivesSomethingSensible() {
         #expect(DictationText.tail("bonjour tout le monde", maxCharacters: 1) == "…")
         #expect(DictationText.tail("", maxCharacters: 10) == "")
@@ -856,24 +882,135 @@ private struct ReviewProbe: PermissionsProbe {
         #expect(DictationStage.formatting.holdsPanel)
     }
 
+    // MARK: Tour de correction 1
+
+    /// Une réponse du modèle à paragraphes et à puces, plus longue que la limite du texte en direct.
+    private static let paragraphs: String = {
+        let intro = "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin, avec les points à retenir.\n\n"
+        let bullets = (1...9).map { "- point numéro \($0) à vérifier avant la fin de la semaine" }.joined(separator: "\n")
+        return intro + bullets + "\n\n  Cordialement,\n"
+    }()
+
+    @Test("I1 : les sauts de ligne du texte en flux sont remplacés par une espace avant la coupe, la fin du texte se voit")
+    func lineBreaksAreFlattenedSoThatTheEndOfTheStreamShows() throws {
+        #expect(Self.paragraphs.count > DictationText.liveTextLimit, "le texte d'essai dépasse la limite")
+        let shown = display(formatting(live: Self.paragraphs))
+        let text = try #require(shown.liveText)
+        #expect(!text.contains("\n"), "un saut de ligne ferait déborder les quatre lignes avant la fin du texte")
+        #expect(text.hasSuffix("Cordialement,"))
+        #expect(text.hasPrefix("… "))
+        #expect(text.count <= DictationText.liveTextLimit)
+        #expect(!text.contains("  "), "les suites de blancs sont une seule espace")
+    }
+
+    @Test("I1 : un texte à paragraphes qui tient est aplati lui aussi, sans changer un seul mot")
+    func aShortTextWithParagraphsIsFlattenedWordForWord() {
+        let shown = display(formatting(live: "Bonjour,\n\nVoici.\t\tMerci \n"))
+        #expect(shown.liveText == "Bonjour, Voici. Merci")
+    }
+
+    @Test("I1 : la relecture qui suit garde la mise en page intacte")
+    func theReviewKeepsTheLayoutOfTheFormattedText() {
+        let state = DictationViewState(stage: .review, lastTranscript: "brut", draft: Self.paragraphs)
+        #expect(display(state).review?.text == Self.paragraphs)
+    }
+
+    @Test("I1 : la prise et la transcription gardent leur texte tel quel (seul le flux de la mise en forme est aplati)")
+    func recordingAndFinalizingKeepTheirLiveTextUntouched() {
+        for stage in [DictationStage.recording, .finalizing] {
+            let shown = display(DictationViewState(stage: stage, liveText: "un\ndeux", elapsed: 1))
+            #expect(shown.liveText == "un\ndeux", "\(stage)")
+        }
+    }
+
+    @Test("I3 : l'indicateur d'attente et le texte en flux ont chacun un libellé, qui ne porte jamais le texte")
+    func theActivityAndTheStreamHaveTheirOwnAccessibilityLabels() throws {
+        #expect(DictationText.formattingActivityLabel == "Mise en forme en cours")
+        #expect(DictationText.formattingStreamLabel == "Réponse du modèle")
+        for live in ["", "du texte reçu"] {
+            let shown = display(formatting(live: live))
+            #expect(shown.activityLabel == DictationText.formattingActivityLabel)
+            #expect(shown.streamLabel == DictationText.formattingStreamLabel)
+            #expect(shown.activityLabel?.contains("texte reçu") != true)
+        }
+    }
+
+    @Test("I3 : ni libellé de mise en forme, ni libellé de flux hors de la mise en forme")
+    func theFormattingLabelsBelongToFormattingOnly() {
+        let stages: [DictationStage] = [
+            .idle, .preparing, .recording, .finalizing, .review, .pasting, .copied, .cancelled, .failed(.noSpeech),
+        ]
+        for stage in stages {
+            let shown = display(DictationViewState(stage: stage, liveText: "x", elapsed: 1, draft: "t"))
+            #expect(shown.activityLabel == nil, "\(stage)")
+            #expect(shown.streamLabel == nil, "\(stage)")
+        }
+    }
+
+    @Test("M7 : la phrase Échap ne se coupe pas entre une espace et ses guillemets ou son point-virgule")
+    func theCancelHintHasNonBreakingSpacesAroundItsPunctuation() {
+        let hint = DictationText.formattingCancelHint
+        #expect(!hint.contains("« ") && !hint.contains(" »") && !hint.contains(" ;"))
+        #expect(hint.contains("\u{00A0};") && hint.contains("«\u{00A0}Dernière\u{00A0}dictée\u{00A0}»"))
+    }
+
     // MARK: Règle 2
 
-    /// Un cas par `RewriteFailure`. Le `switch` sans `default` fait échouer la compilation si un cas s'ajoute sans passer ici.
-    private static func every(provider: String) -> [RewriteFailure] {
-        let all: [RewriteFailure] = [
-            .noModel, .providerMissing, .noKey(provider: provider), .keychain, .unauthorized(401), .notFound,
-            .rejected(422), .rateLimited, .server(503), .unreachable, .redirected, .interrupted, .stalled(120),
-            .providerError, .truncated, .refused, .empty, .timedOut(300), .malformed,
-        ]
-        for failure in all {
-            switch failure {
-            case .noModel, .providerMissing, .noKey, .keychain, .unauthorized, .notFound, .rejected, .rateLimited, .server,
-                .unreachable, .redirected, .interrupted, .stalled, .providerError, .truncated, .refused, .empty, .timedOut,
-                .malformed:
-                break
-            }
+    /// Miroir de `RewriteFailure` sans valeurs associées. Exhaustif par construction : un cas ajouté à `RewriteFailure` casse la
+    /// compilation de `kind(of:)` ; il faut alors ajouter un `Kind`, ce qui casse celle de `sample`, qui oblige à fournir
+    /// l'échantillon ; et la boucle du test le mesure sans autre geste.
+    private enum Kind: CaseIterable {
+        case noModel, providerMissing, noKey, keychain, unauthorized, notFound, rejected, rateLimited, server, unreachable
+        case redirected, interrupted, stalled, providerError, truncated, refused, empty, timedOut, malformed
+    }
+
+    private static func kind(of failure: RewriteFailure) -> Kind {
+        switch failure {
+        case .noModel: .noModel
+        case .providerMissing: .providerMissing
+        case .noKey: .noKey
+        case .keychain: .keychain
+        case .unauthorized: .unauthorized
+        case .notFound: .notFound
+        case .rejected: .rejected
+        case .rateLimited: .rateLimited
+        case .server: .server
+        case .unreachable: .unreachable
+        case .redirected: .redirected
+        case .interrupted: .interrupted
+        case .stalled: .stalled
+        case .providerError: .providerError
+        case .truncated: .truncated
+        case .refused: .refused
+        case .empty: .empty
+        case .timedOut: .timedOut
+        case .malformed: .malformed
         }
-        return all
+    }
+
+    /// Un échantillon par genre, avec les nombres les plus longs plausibles (codes à trois chiffres, délais en secondes).
+    private static func sample(_ kind: Kind, provider: String) -> RewriteFailure {
+        switch kind {
+        case .noModel: .noModel
+        case .providerMissing: .providerMissing
+        case .noKey: .noKey(provider: provider)
+        case .keychain: .keychain
+        case .unauthorized: .unauthorized(401)
+        case .notFound: .notFound
+        case .rejected: .rejected(422)
+        case .rateLimited: .rateLimited
+        case .server: .server(503)
+        case .unreachable: .unreachable
+        case .redirected: .redirected
+        case .interrupted: .interrupted
+        case .stalled: .stalled(120)
+        case .providerError: .providerError
+        case .truncated: .truncated
+        case .refused: .refused
+        case .empty: .empty
+        case .timedOut: .timedOut(300)
+        case .malformed: .malformed
+        }
     }
 
     @Test("règle 2 : chaque phrase de panne suivie de rawTextNotice tient entière dans le détail de la relecture")
@@ -884,10 +1021,10 @@ private struct ReviewProbe: PermissionsProbe {
         let name = Provider.shortName(sixty)
         #expect(name.count == Provider.shortNameLimit + 1, "le nom de 60 caractères est rogné")
 
-        let failures = Self.every(provider: name)
-        #expect(failures.count == 19)
         var longest = 0
-        for failure in failures {
+        for kind in Kind.allCases {
+            let failure = Self.sample(kind, provider: name)
+            #expect(Self.kind(of: failure) == kind, "l'échantillon de \(kind) est d'un autre genre")
             let notice = failure.message + " " + DictationController.rawTextNotice
             longest = max(longest, notice.count)
             let state = DictationViewState(stage: .review, notice: notice, lastTranscript: "brut", draft: "brut")

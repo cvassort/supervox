@@ -15,8 +15,15 @@ public enum DictationText {
     /// Ce que le panneau dit pendant la mise en forme tant que le modèle n'a rien envoyé.
     public static let formattingWaiting = "En attente de la réponse du modèle…"
     /// Ce que le panneau dit sous la mise en forme : Échap l'annule, et la transcription brute n'est pas perdue (elle reste
-    /// « Dernière dictée »).
-    public static let formattingCancelHint = "Échap annule la mise en forme ; la transcription brute reste dans « Dernière dictée »."
+    /// « Dernière dictée »). Espaces insécables avant « ; » et dans les guillemets : une ligne ne finit pas sur « « ». Voir
+    /// `DictationFormattingTests.theCancelHintOfTheFormattingScreenIsTrue`, qui relie cette phrase à ce que fait Échap.
+    public static let formattingCancelHint =
+        "Échap annule la mise en forme\u{00A0}; la transcription brute reste dans «\u{00A0}Dernière\u{00A0}dictée\u{00A0}»."
+
+    /// Ce que VoiceOver lit pour l'indicateur d'attente de la mise en forme.
+    public static let formattingActivityLabel = "Mise en forme en cours"
+    /// Ce que VoiceOver lit pour le texte que le modèle envoie à mesure (le texte lui-même en est la valeur).
+    public static let formattingStreamLabel = "Réponse du modèle"
 
     /// La ligne d'aide sous le champ de relecture.
     public static let reviewHint = "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée »."
@@ -169,6 +176,10 @@ public struct DictationDisplay: Equatable, Sendable {
     public var waitingText: String?
     /// Pendant la mise en forme : ce qu'Échap fait.
     public var cancelHint: String?
+    /// Pendant la mise en forme : le libellé d'accessibilité de l'indicateur d'attente.
+    public var activityLabel: String?
+    /// Pendant la mise en forme : le libellé d'accessibilité du texte reçu.
+    public var streamLabel: String?
     /// Le raccourci s'affiche sous « Prêt ».
     public var showsHotKey: Bool
     public var transcript: Transcript?
@@ -209,6 +220,8 @@ public struct DictationDisplay: Equatable, Sendable {
         showsHotKey = false
         waitingText = nil
         cancelHint = nil
+        activityLabel = nil
+        streamLabel = nil
         let live = Self.nonBlank(state.liveText).map {
             DictationText.tail($0, maxCharacters: DictationText.liveTextLimit)
         }
@@ -237,10 +250,20 @@ public struct DictationDisplay: Equatable, Sendable {
         case .formatting:
             // Une attente, sans durée ni forme d'onde : le texte reçu du modèle s'écrit au fur et à mesure (sa fin, comme le
             // texte en direct), et la phrase d'attente tient la place tant que rien n'est arrivé.
+            // Les sauts de ligne et les suites de blancs deviennent une espace AVANT la coupe : la vue garde les quatre premières
+            // lignes, et un texte à paragraphes ou à puces en aurait fait plus que quatre avant sa fin. C'est la fin du texte
+            // reçu qu'il faut voir. La relecture qui suit garde la mise en page.
+            let streamed = Self.nonBlank(state.liveText).map { text in
+                DictationText.tail(
+                    text.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+                    maxCharacters: DictationText.liveTextLimit)
+            }
             mood = .working
-            liveText = live
-            waitingText = live == nil ? DictationText.formattingWaiting : nil
+            liveText = streamed
+            waitingText = streamed == nil ? DictationText.formattingWaiting : nil
             cancelHint = DictationText.formattingCancelHint
+            activityLabel = DictationText.formattingActivityLabel
+            streamLabel = DictationText.formattingStreamLabel
         case .review:
             mood = .review
         case .pasting:

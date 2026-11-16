@@ -455,6 +455,24 @@ import SupervoxCore
         #expect(h.controller.view.lastTranscript == Self.raw)
     }
 
+    @Test("règle 7 : ce que dit l'écran de mise en forme sur Échap est vrai : annulée, la transcription brute est « Dernière dictée »")
+    func theCancelHintOfTheFormattingScreenIsTrue() async {
+        let h = harness()
+        let call = await formatting(h)
+        let shown = DictationDisplay(state: h.controller.view)
+        #expect(shown.cancelHint == DictationText.formattingCancelHint, "l'écran promet l'effet d'Échap")
+        #expect(shown.cancelHint?.contains("Échap annule") == true)
+
+        h.controller.escapePressed()
+        #expect(await until { call.sawCancellation })
+        let after = DictationDisplay(state: h.controller.view)
+        #expect(after.cancelHint == nil, "la mise en forme est annulée")
+        let card = after.transcript
+        #expect(card?.label == "Dernière dictée", "la carte que la phrase nomme")
+        #expect(card?.text == Self.raw, "et elle porte la transcription brute, pas un texte mis en forme")
+        #expect(h.pasted.isEmpty)
+    }
+
     @Test("règle 7 : un texte ou une issue qui arrive après l'annulation ne change ni l'écran ni le panneau", arguments: Closing.allCases)
     func lateTextAndOutcomeAfterTheCancellationAreIgnored(closing: Closing) async {
         let h = harness(review: true)

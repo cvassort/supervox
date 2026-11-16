@@ -35,10 +35,10 @@ struct DictationView: View {
                 } else if let waiting = display.waitingText {
                     liveText(waiting, dimmed: true)
                 } else if let received = display.liveText {  // la mise en forme : sans durée
-                    liveText(received, dimmed: false)
+                    liveText(received, dimmed: false, label: display.streamLabel)
                 }
                 if let detail = display.detail { DetailText(text: detail) }
-                if let hint = display.cancelHint { DetailText(text: hint) }
+                if let hint = display.cancelHint { DetailText(text: hint, color: DetailText.systemSecondary) }
                 if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: copy) }
             }
         }
@@ -73,7 +73,7 @@ struct DictationView: View {
                     Text(label).font(.callout).foregroundStyle(.secondary)
                 }
             } else {
-                MoodIcon(mood: display.mood)
+                MoodIcon(mood: display.mood, workingLabel: display.activityLabel)
                 Text(display.headline)
                     .font(.headline)
                     .lineLimit(display.mood == .info ? 3 : 1)
@@ -90,10 +90,26 @@ struct DictationView: View {
     }
 
     /// `dimmed` : le texte s'efface (la transcription finale va le remplacer ; ou c'est la phrase d'attente, non du texte).
-    private func liveText(_ text: String, dimmed: Bool) -> some View {
+    ///
+    /// `label` : la réponse du modèle, exposée à VoiceOver sous ce libellé, le texte en valeur (sans le « … » de tête, qui se
+    /// lirait « points de suspension »). `updatesFrequently` : le texte change à chaque morceau, VoiceOver ne l'annonce pas à
+    /// chaque fois ; il le lit quand on s'y place.
+    @ViewBuilder
+    private func liveText(_ text: String, dimmed: Bool, label: String? = nil) -> some View {
+        if let label {
+            liveTextBody(text, dimmed: dimmed)
+                .accessibilityLabel(label)
+                .accessibilityValue(text.hasPrefix("… ") ? String(text.dropFirst(2)) : text)
+                .accessibilityAddTraits(.updatesFrequently)
+        } else {
+            liveTextBody(text, dimmed: dimmed)
+        }
+    }
+
+    private func liveTextBody(_ text: String, dimmed: Bool) -> some View {
         Text(text)
             .font(.callout)
-            .foregroundStyle(dimmed ? .secondary : .primary)
+            .foregroundStyle(dimmed ? AnyShapeStyle(DetailText.systemSecondary) : AnyShapeStyle(.primary))
             .lineLimit(4)
             .fixedSize(horizontal: false, vertical: true)
             // La place de quatre lignes (une ligne de `callout` fait 15 points, relevé sur les images), réservée pendant
@@ -105,11 +121,17 @@ struct DictationView: View {
 /// Le message sous le titre : quatre lignes au plus en `caption` (`DictationText.detailLimit`).
 struct DetailText: View {
     let text: String
+    var color: Color = .secondary
+
+    /// Le gris des deux textes qui disent quoi attendre et comment annuler (« En attente… », la phrase d'Échap). Mesuré sur les
+    /// images : le style `.secondary` de SwiftUI et `NSColor.secondaryLabelColor` rendent le même gris, à 3,08:1 sur le fond
+    /// clair du panneau (sous les 4,5:1 des petits textes) ; 80 % du texte principal donne plus de 4,5:1, clair et sombre (l'image rend un gris plus pâle que l’opacité, hors fenêtre clé).
+    static let systemSecondary = Color.primary.opacity(0.8)
 
     var body: some View {
         Text(text)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(color)
             .lineLimit(4)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -120,6 +142,8 @@ struct DetailText: View {
 /// la préparation et la transcription.
 struct MoodIcon: View {
     let mood: DictationDisplay.Mood
+    /// Le libellé que VoiceOver lit pour l'indicateur d'attente ; sans lui, l'indicateur garde son libellé du système.
+    var workingLabel: String?
 
     var body: some View {
         switch mood {
@@ -129,7 +153,11 @@ struct MoodIcon: View {
                 .foregroundStyle(.red)
                 .accessibilityLabel("Enregistrement en cours")
         case .working:
-            ProgressView().controlSize(.small).frame(width: 16, height: 16)
+            if let workingLabel {
+                ProgressView().controlSize(.small).frame(width: 16, height: 16).accessibilityLabel(workingLabel)
+            } else {
+                ProgressView().controlSize(.small).frame(width: 16, height: 16)
+            }
         case .success:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .failure:

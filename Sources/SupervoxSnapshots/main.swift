@@ -313,9 +313,10 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 
 /// Le nom du fournisseur des images de la mise en forme : fictif, comme les doubles.
 let exampleProvider = "Fournisseur d'exemple"
-/// Le début d'une réponse du modèle, coupé en cours de phrase comme à l'arrivée du flux.
+/// Le début d'une réponse du modèle, coupé en cours de phrase comme à l'arrivée du flux : des paragraphes et des puces, comme une
+/// vraie mise en forme. L'écran les aplatit pour montrer la fin du texte reçu.
 let exampleStreamedText =
-    exampleLongText + " Merci d'avance pour votre relecture, et bonne journée à toutes et à tous. Nous reviendrons vers vous avec"
+    "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de :\n- commencer la livraison la semaine prochaine ;\n- vérifier les accès de chaque équipe ;\n- renvoyer le calendrier mis à jour avant la fin de la journée.\n\nMerci d'avance pour votre relecture.\n\nNous reviendrons vers vous avec"
 /// Le texte mis en forme d'un mode qui relit avant de coller : des paragraphes et une formule de politesse.
 let exampleFormattedText =
     "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée.\n\nCordialement,"
