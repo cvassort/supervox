@@ -26,9 +26,17 @@ struct DictationView: View {
             } else {
                 header
                 if let bars = display.bars { Waveform(bars: bars) }
-                // Pendant la prise (durée affichée), la place du texte est réservée même sans texte encore.
-                if display.duration != nil { liveText(display.liveText ?? "") }
+                // Pendant la prise (durée affichée), la place du texte est réservée même sans texte encore. Pendant la mise en
+                // forme, elle l'est aussi : la phrase d'attente d'abord, puis le texte du modèle à mesure qu'il arrive.
+                if display.duration != nil {
+                    liveText(display.liveText ?? "", dimmed: display.mood == .working)
+                } else if let waiting = display.waitingText {
+                    liveText(waiting, dimmed: true)
+                } else if let received = display.liveText {  // la mise en forme : sans durée
+                    liveText(received, dimmed: false)
+                }
                 if let detail = display.detail { DetailText(text: detail) }
+                if let hint = display.cancelHint { DetailText(text: hint) }
                 if let transcript = display.transcript { TranscriptCard(transcript: transcript, copy: copy) }
             }
         }
@@ -79,11 +87,11 @@ struct DictationView: View {
         }
     }
 
-    private func liveText(_ text: String) -> some View {
+    /// `dimmed` : le texte s'efface (la transcription finale va le remplacer ; ou c'est la phrase d'attente, non du texte).
+    private func liveText(_ text: String, dimmed: Bool) -> some View {
         Text(text)
             .font(.callout)
-            // Pendant la transcription finale, le texte en direct s'efface : il va être remplacé.
-            .foregroundStyle(display.mood == .working ? .secondary : .primary)
+            .foregroundStyle(dimmed ? .secondary : .primary)
             .lineLimit(4)
             .fixedSize(horizontal: false, vertical: true)
             // La place de quatre lignes (une ligne de `callout` fait 15 points, relevé sur les images), réservée pendant

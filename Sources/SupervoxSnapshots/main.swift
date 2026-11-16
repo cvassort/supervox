@@ -298,10 +298,11 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 /// refait un clic sur « Copier » dont le presse-papiers accepte ou refuse le texte. `keyboard` : le panneau a la frappe (il
 /// est la fenêtre clé) ; l'aide en dépend, et l'image est rendue comme dans une fenêtre clé ou non (voir `render`).
 @MainActor func reviewPanelModel(
-    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true
+    _ draft: String, stage: DictationStage = .review, notice: String? = nil, copy: Bool? = nil, keyboard: Bool = true,
+    mode: String = ModeChip.rawID
 ) -> PanelModel {
     let model = dictationPanelModel(
-        state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
+        mode: mode, state: DictationViewState(stage: stage, notice: notice, lastTranscript: exampleShortText, draft: draft))
     model.panelHasKeyboard = keyboard
     if let copy {
         model.onCopy = { _ in copy }
@@ -309,6 +310,15 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
     }
     return model
 }
+
+/// Le nom du fournisseur des images de la mise en forme : fictif, comme les doubles.
+let exampleProvider = "Fournisseur d'exemple"
+/// Le début d'une réponse du modèle, coupé en cours de phrase comme à l'arrivée du flux.
+let exampleStreamedText =
+    exampleLongText + " Merci d'avance pour votre relecture, et bonne journée à toutes et à tous. Nous reviendrons vers vous avec"
+/// Le texte mis en forme d'un mode qui relit avant de coller : des paragraphes et une formule de politesse.
+let exampleFormattedText =
+    "Bonjour à tous,\n\nVoici le compte rendu de la réunion de ce matin.\n\nNous avons convenu de commencer la livraison la semaine prochaine, de vérifier les accès de chaque équipe et de renvoyer le calendrier mis à jour avant la fin de la journée.\n\nCordialement,"
 
 /// La raison que l'insertion donne quand elle n'a pas l'Accessibilité : celle de l'application, obtenue en l'exécutant sur un
 /// presse-papiers en mémoire et un poseur de touches qui ne poste rien.
@@ -335,7 +345,7 @@ let exampleReviewText = Array(repeating: exampleLongText, count: 5).joined(separ
 ) throws {
     // La fenêtre de réglages et ses feuilles ont la frappe quand on les regarde : elles sont rendues comme une fenêtre clé (contrôles
     // actifs, interrupteurs à la couleur d'accent). Le panneau, lui, dit lui-même s'il a la frappe (`keyWindow`).
-    let isPanel = ["panneau", "dictee", "relecture"].contains { name.hasPrefix($0) }
+    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme"].contains { name.hasPrefix($0) }
     let keyWindow = requested || !isPanel
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
@@ -492,6 +502,47 @@ for dark in [false, true] {
         ("relecture-copie-impossible", reviewPanelModel(exampleShortText, copy: false), granted),
     ]
     for (name, model, probe) in reviewCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
+    }
+
+    // La mise en forme : l'attente, le flux de la réponse, puis la relecture. Une panne ramène la transcription brute, avec la
+    // phrase de la panne et celle de `rawTextNotice` ; l'application changée garde le texte mis en forme (le panneau n'a alors pas
+    // la frappe : `.available`).
+    let sending = DictationController.formattingNotice(provider: exampleProvider)
+    let rawNotice = { (failure: RewriteFailure) in failure.message + " " + DictationController.rawTextNotice }
+    let formattingCases: [(name: String, model: PanelModel, probe: any PermissionsProbe)] = [
+        ("mise-en-forme-attente",
+         dictationPanelModel(
+            mode: ModeChip.cleanedID,
+            state: DictationViewState(stage: .formatting, notice: sending, lastTranscript: exampleLongText)), granted),
+        ("mise-en-forme-flux",
+         dictationPanelModel(
+            mode: ModeChip.cleanedID,
+            state: DictationViewState(
+                stage: .formatting, liveText: exampleStreamedText, notice: sending, lastTranscript: exampleLongText)),
+         granted),
+        ("mise-en-forme-echec-cle",
+         reviewPanelModel(
+            exampleLongText, notice: rawNotice(.noKey(provider: exampleProvider)), mode: ModeChip.cleanedID), granted),
+        // Le cas le plus long : un nom de fournisseur de 60 caractères, rogné à 40 par `Provider.shortName`.
+        ("mise-en-forme-echec-cle-nom-long",
+         reviewPanelModel(
+            exampleLongText,
+            notice: rawNotice(.noKey(provider: Provider.shortName(String(repeating: "Fournisseur ", count: 5)))),
+            mode: ModeChip.cleanedID), granted),
+        ("mise-en-forme-echec-delai",
+         reviewPanelModel(
+            exampleLongText, notice: rawNotice(.timedOut(Int(RewritePolicy.standard.timeout.rounded()))),
+            mode: ModeChip.cleanedID), granted),
+        ("mise-en-forme-application-changee",
+         reviewPanelModel(
+            exampleFormattedText, notice: DictationController.frontApplicationChangedNotice, keyboard: false,
+            mode: ModeChip.cleanedID), granted),
+        ("relecture-apres-mise-en-forme", reviewPanelModel(exampleFormattedText, mode: ModeChip.cleanedID), granted),
+    ]
+    for (name, model, probe) in formattingCases {
         try render(
             PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
             name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)

@@ -771,3 +771,151 @@ private struct ReviewProbe: PermissionsProbe {
         #expect(DictationText.status(for: .copied) == "Texte copié")
     }
 }
+
+// MARK: - Tâche 7 : « Mise en forme… » et la relecture après une panne du modèle
+
+@MainActor @Suite struct DictationFormattingDisplayTests {
+    private static let provider = "Fournisseur d'exemple"
+
+    private func display(_ state: DictationViewState) -> DictationDisplay {
+        DictationDisplay(state: state)
+    }
+
+    private func formatting(live: String = "", last: String? = "La transcription brute.") -> DictationViewState {
+        DictationViewState(
+            stage: .formatting, liveText: live, elapsed: 12.9,
+            notice: DictationController.formattingNotice(provider: Self.provider), lastTranscript: last)
+    }
+
+    @Test("règle 1 : la mise en forme est une attente, sans forme d'onde, sans durée, sans carte « Dernière dictée »")
+    func formattingIsAWaitWithoutWaveformDurationOrLastTranscriptCard() {
+        let shown = display(formatting())
+        #expect(shown.headline == "Mise en forme…")
+        #expect(shown.mood == .working)
+        #expect(shown.bars == nil)
+        #expect(shown.duration == nil)
+        #expect(shown.transcript == nil, "la transcription brute n'est pas « Dernière dictée » pendant la mise en forme")
+        #expect(shown.review == nil)
+        #expect(!shown.showsHotKey)
+        #expect(shown.detail == DictationController.formattingNotice(provider: Self.provider))
+    }
+
+    @Test("règle 1 : tant que rien n'est arrivé, pas de texte en direct, et la vue montre l'attente de la réponse")
+    func nothingReceivedYetShowsTheWaitingSentence() {
+        #expect(DictationText.formattingWaiting == "En attente de la réponse du modèle…")
+        for blank in ["", " ", "\n\t  "] {
+            let shown = display(formatting(live: blank))
+            #expect(shown.liveText == nil, "\(blank.debugDescription)")
+            #expect(shown.waitingText == DictationText.formattingWaiting, "\(blank.debugDescription)")
+        }
+    }
+
+    @Test("règle 1 : dès que du texte arrive, il remplace l'attente")
+    func receivedTextReplacesTheWaitingSentence() {
+        let shown = display(formatting(live: "Bonjour à tous,"))
+        #expect(shown.liveText == "Bonjour à tous,")
+        #expect(shown.waitingText == nil)
+    }
+
+    @Test("règle 1 : le texte reçu est montré par sa fin, avec la coupe du texte en direct")
+    func theReceivedTextIsShownByItsEndLikeTheLiveText() throws {
+        let long = (1...120).map { "mot\($0)" }.joined(separator: " ")
+        let shown = display(formatting(live: long))
+        let text = try #require(shown.liveText)
+        #expect(text == DictationText.tail(long, maxCharacters: DictationText.liveTextLimit))
+        #expect(text.hasPrefix("… "))
+        #expect(text.hasSuffix("mot120"))
+        #expect(text.count <= DictationText.liveTextLimit)
+    }
+
+    @Test("pendant l'attente, l'utilisateur sait qu'Échap annule, et que le texte brut n'est pas perdu")
+    func theWaitSaysThatEscapeCancels() throws {
+        let shown = display(formatting())
+        let hint = try #require(shown.cancelHint)
+        #expect(hint.contains("Échap"))
+        #expect(hint == DictationText.formattingCancelHint)
+        #expect(display(formatting(live: "du texte")).cancelHint == hint)
+    }
+
+    @Test("ni attente, ni aide d'annulation hors de la mise en forme")
+    func theWaitingSentenceAndTheCancelHintBelongToFormattingOnly() {
+        let stages: [DictationStage] = [
+            .idle, .preparing, .recording, .finalizing, .review, .pasting, .copied, .cancelled,
+            .failed(.noSpeech), .failed(.clipboard),
+        ]
+        for stage in stages {
+            let shown = display(DictationViewState(stage: stage, liveText: "", elapsed: 1, draft: "t"))
+            #expect(shown.waitingText == nil, "\(stage)")
+            #expect(shown.cancelHint == nil, "\(stage)")
+        }
+    }
+
+    @Test("la dictée en cours tient le panneau pendant la mise en forme")
+    func formattingIsActiveAndHoldsThePanel() {
+        #expect(DictationStage.formatting.isActive)
+        #expect(DictationStage.formatting.holdsPanel)
+    }
+
+    // MARK: Règle 2
+
+    /// Un cas par `RewriteFailure`. Le `switch` sans `default` fait échouer la compilation si un cas s'ajoute sans passer ici.
+    private static func every(provider: String) -> [RewriteFailure] {
+        let all: [RewriteFailure] = [
+            .noModel, .providerMissing, .noKey(provider: provider), .keychain, .unauthorized(401), .notFound,
+            .rejected(422), .rateLimited, .server(503), .unreachable, .redirected, .interrupted, .stalled(120),
+            .providerError, .truncated, .refused, .empty, .timedOut(300), .malformed,
+        ]
+        for failure in all {
+            switch failure {
+            case .noModel, .providerMissing, .noKey, .keychain, .unauthorized, .notFound, .rejected, .rateLimited, .server,
+                .unreachable, .redirected, .interrupted, .stalled, .providerError, .truncated, .refused, .empty, .timedOut,
+                .malformed:
+                break
+            }
+        }
+        return all
+    }
+
+    @Test("règle 2 : chaque phrase de panne suivie de rawTextNotice tient entière dans le détail de la relecture")
+    func everyFailureSentenceAndTheRawTextNoticeFitTheDetailLimit() {
+        // 60 caractères : la phrase de `noKey` cite le nom tel que `LiveRewriter` le donne, rogné par `Provider.shortName`.
+        let sixty = String(repeating: "Fournisseur ", count: 5)
+        #expect(sixty.count == 60)
+        let name = Provider.shortName(sixty)
+        #expect(name.count == Provider.shortNameLimit + 1, "le nom de 60 caractères est rogné")
+
+        let failures = Self.every(provider: name)
+        #expect(failures.count == 19)
+        var longest = 0
+        for failure in failures {
+            let notice = failure.message + " " + DictationController.rawTextNotice
+            longest = max(longest, notice.count)
+            let state = DictationViewState(stage: .review, notice: notice, lastTranscript: "brut", draft: "brut")
+            let shown = display(state)
+            #expect(shown.detail == notice, "coupée : \(failure)")
+            #expect(notice.count <= DictationText.detailLimit, "\(failure) : \(notice.count) caractères")
+            #expect(shown.detail?.hasSuffix(DictationController.rawTextNotice) == true, "\(failure)")
+        }
+        #expect(longest <= DictationText.detailLimit)
+    }
+
+    @Test("règle 2 : les avis de la mise en forme tiennent aussi, avec un nom de 60 caractères")
+    func theFormattingNoticesFitTheDetailLimitToo() {
+        let name = String(repeating: "Fournisseur ", count: 5)
+        let sending = DictationController.formattingNotice(provider: name)
+        #expect(sending.count <= DictationText.detailLimit)
+        let shown = display(DictationViewState(stage: .formatting, notice: sending))
+        #expect(shown.detail == sending)
+        let changed = display(
+            DictationViewState(stage: .review, notice: DictationController.frontApplicationChangedNotice, draft: "t"))
+        #expect(changed.detail == DictationController.frontApplicationChangedNotice)
+    }
+
+    @Test("règle 2 : un avis plus long que la limite est bien coupé, et la fin est perdue (la limite est réelle)")
+    func aLongerNoticeIsStillCut() {
+        let notice = String(repeating: "mot ", count: 100) + DictationController.rawTextNotice
+        let shown = display(DictationViewState(stage: .review, notice: notice, draft: "t"))
+        #expect(shown.detail != notice)
+        #expect(shown.detail?.count ?? Int.max <= DictationText.detailLimit)
+    }
+}

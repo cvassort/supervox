@@ -12,6 +12,12 @@ public enum DictationText {
     /// Message sous le titre (raison d'un échec, d'une copie) : quatre lignes en `caption`.
     public static let detailLimit = 320
 
+    /// Ce que le panneau dit pendant la mise en forme tant que le modèle n'a rien envoyé.
+    public static let formattingWaiting = "En attente de la réponse du modèle…"
+    /// Ce que le panneau dit sous la mise en forme : Échap l'annule, et la transcription brute n'est pas perdue (elle reste
+    /// « Dernière dictée »).
+    public static let formattingCancelHint = "Échap annule la mise en forme ; la transcription brute reste dans « Dernière dictée »."
+
     /// La ligne d'aide sous le champ de relecture.
     public static let reviewHint = "⌘↩ colle le texte. Échap ferme sans coller ; le texte reste dans « Dernière dictée »."
 
@@ -155,6 +161,10 @@ public struct DictationDisplay: Equatable, Sendable {
     public var liveText: String?
     /// Le message sous le titre : téléchargement, vocabulaire, raison d'un échec ou d'une copie.
     public var detail: String?
+    /// Pendant la mise en forme, tant que rien n'est arrivé : la phrase qui dit que le modèle répond (`liveText` est alors nul).
+    public var waitingText: String?
+    /// Pendant la mise en forme : ce qu'Échap fait.
+    public var cancelHint: String?
     /// Le raccourci s'affiche sous « Prêt ».
     public var showsHotKey: Bool
     public var transcript: Transcript?
@@ -193,6 +203,8 @@ public struct DictationDisplay: Equatable, Sendable {
         liveText = nil
         detail = notice
         showsHotKey = false
+        waitingText = nil
+        cancelHint = nil
         let live = Self.nonBlank(state.liveText).map {
             DictationText.tail($0, maxCharacters: DictationText.liveTextLimit)
         }
@@ -219,7 +231,12 @@ public struct DictationDisplay: Equatable, Sendable {
             duration = DictationText.duration(state.elapsed)
             liveText = live
         case .formatting:
+            // Une attente, sans durée ni forme d'onde : le texte reçu du modèle s'écrit au fur et à mesure (sa fin, comme le
+            // texte en direct), et la phrase d'attente tient la place tant que rien n'est arrivé.
             mood = .working
+            liveText = live
+            waitingText = live == nil ? DictationText.formattingWaiting : nil
+            cancelHint = DictationText.formattingCancelHint
         case .review:
             mood = .review
         case .pasting:
