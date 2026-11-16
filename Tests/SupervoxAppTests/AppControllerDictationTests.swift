@@ -62,7 +62,7 @@ final class TimeoutLog: Sendable {
 
     func makeController(
         settings: AppSettings = .defaults, terminationWait: (@Sendable (Double) async -> Void)? = nil,
-        rewriter custom: RewriteEnvironment? = nil
+        rewriter custom: RewriteEnvironment? = nil, frontApplication: @escaping @MainActor () -> Int32? = { nil }
     ) -> AppController {
         try? store.save(settings)
         let controller = AppController(
@@ -71,7 +71,8 @@ final class TimeoutLog: Sendable {
             permissionsProbe: probe, systemHotKeys: FakeSystemHotKeys(),
             keyboardLayout: HotKeyTests.ansi, makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            dictation: engines.environment, rewriter: custom ?? rewriter.environment, inserter: rig.inserter,
+            dictation: engines.environment, rewriter: custom ?? rewriter.environment, frontApplication: frontApplication,
+            inserter: rig.inserter,
             holdWatch: HoldWatch(
                 anyHeld: { [held] in
                     held.asked.append($0)
@@ -701,6 +702,24 @@ final class TimeoutLog: Sendable {
         await settle()
         #expect(controller.panelModel.dictation == DictationViewState(lastTranscript: "euh bonjour tout le monde"))
         #expect(!controller.panelModel.isOpen)
+        #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty)
+    }
+
+    @MainActor final class FrontBox { var pid: Int32? = 100 }
+
+    @Test func aFrontApplicationThatChangedDuringTheFormattingKeepsTheTextInTheReview() async {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let front = FrontBox()
+        let controller = makeController(settings: rewriteSettings(), frontApplication: { front.pid })
+        let call = await formatting(controller)
+
+        front.pid = 200
+        call.finish(.rewritten("Texte mis en forme."))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.draft == "Texte mis en forme.")
+        #expect(controller.panelModel.dictation.notice == DictationController.frontApplicationChangedNotice)
+        #expect(controller.panelModel.isOpen)
+        await settle()
         #expect(rig.log.entries.filter { $0.hasPrefix("writeText") }.isEmpty)
     }
 

@@ -267,6 +267,87 @@ import SupervoxCore
         #expect(h.controller.lastTranscript == Self.formatted)
     }
 
+    // MARK: - Règle 4 amendée : l'application au premier plan a changé pendant la mise en forme
+
+    @Test("règle 4 : l'application au premier plan est la même à la fin : le texte se colle")
+    func aSameFrontApplicationStillPastes() async {
+        let h = harness()
+        h.knobs.front = 100
+        let call = await formatting(h)
+        call.finish(.rewritten(Self.formatted))
+
+        #expect(await until { h.pasted == [Self.formatted] })
+        #expect(h.knobs.frontReads == 2, "une lecture au début de la mise en forme, une à la fin")
+    }
+
+    @Test("règle 4 : l'application au premier plan a changé : rien n'est collé, le texte mis en forme passe en relecture avec l'avis")
+    func aChangedFrontApplicationSendsTheTextToTheReviewInsteadOfPasting() async {
+        let h = harness()
+        h.knobs.front = 100
+        let call = await formatting(h)
+        h.knobs.front = 200   // l'utilisateur est allé ailleurs
+        call.finish(.rewritten(Self.formatted))
+
+        #expect(await until { h.controller.view.stage == .review })
+        #expect(h.controller.view.draft == Self.formatted)
+        #expect(h.controller.view.notice == DictationController.frontApplicationChangedNotice)
+        #expect(
+            DictationController.frontApplicationChangedNotice
+                == "L'application au premier plan a changé pendant la mise en forme : le texte n'a pas été collé. Collez-le ou copiez-le.")
+        #expect(h.controller.lastTranscript == Self.formatted)
+        #expect(h.controller.reviewPreviousText == Self.raw)
+        #expect(h.panel.isOpen)
+        #expect(h.panel.keyboards.last != .focused, "le panneau ne prend pas la frappe à l'application où l'utilisateur est allé")
+        await settle()
+        #expect(h.writtenTexts == 0)
+        #expect(h.pasted.isEmpty)
+        #expect(!h.controller.isBusy)
+        // Le texte se colle depuis la relecture, comme un autre.
+        h.controller.pasteReview()
+        #expect(await until { h.pasted == [Self.formatted] })
+    }
+
+    @Test("règle 4 : si le lecteur ne sait pas dire, au début ou à la fin, le texte se colle comme avant",
+        arguments: [(Int32?.none, Int32?(200)), (Int32?(100), Int32?.none), (Int32?.none, Int32?.none)])
+    func anUnknownFrontApplicationStillPastes(start: Int32?, end: Int32?) async {
+        let h = harness()
+        h.knobs.front = start
+        let call = await formatting(h)
+        h.knobs.front = end
+        call.finish(.rewritten(Self.formatted))
+
+        #expect(await until { h.pasted == [Self.formatted] })
+        #expect(h.controller.view.stage != .review)
+    }
+
+    @Test("règle 4 : avec relecture l'application au premier plan n'est pas lue, et une panne ne change rien à ce que montre le texte brut")
+    func theFrontApplicationIsNotReadWhenTheModeReviews() async {
+        let h = harness(review: true)
+        let call = await formatting(h)
+        h.knobs.front = 200
+        call.finish(.rewritten(Self.formatted))
+        #expect(await until { h.controller.view.stage == .review })
+        #expect(h.controller.view.notice == nil)
+        #expect(h.controller.view.draft == Self.formatted)
+        #expect(h.knobs.frontReads == 0)
+
+        let failing = harness()
+        let failed = await formatting(failing)
+        failing.knobs.front = 200
+        failed.finish(.failed(.server(503)))
+        #expect(await until { failing.controller.view.stage == .review })
+        #expect(failing.controller.view.notice == RewriteFailure.server(503).message + " " + DictationController.rawTextNotice)
+        #expect(failing.controller.view.draft == Self.raw)
+    }
+
+    @Test("règle 4 : une dictée brute ne lit pas l'application au premier plan")
+    func rawDictationDoesNotReadTheFrontApplication() async {
+        let h = harness(run: .raw(engine: nil))
+        await dictate(h)
+        #expect(await until { h.pasted == [Self.raw] })
+        #expect(h.knobs.frontReads == 0)
+    }
+
     // MARK: - Règle 5 : échec du modèle
 
     nonisolated static let failures: [RewriteFailure] = [

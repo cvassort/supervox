@@ -49,6 +49,10 @@ public final class DictationController {
     public static func formattingNotice(provider: String) -> String {
         "Le texte est envoyé à « \(Provider.shortName(provider)) » pour être mis en forme."
     }
+    /// Ce que le panneau dit quand l'utilisateur est allé dans une autre application pendant la mise en forme d'un mode sans
+    /// relecture : le texte n'est pas collé là où il ne l'attend plus.
+    public static let frontApplicationChangedNotice =
+        "L'application au premier plan a changé pendant la mise en forme : le texte n'a pas été collé. Collez-le ou copiez-le."
     /// Ce que le panneau ajoute à la phrase d'une panne du modèle : le texte en relecture est la transcription brute.
     public static let rawTextNotice =
         "Le texte ci-dessus est la transcription brute : corrigez-la, collez-la ou copiez-la."
@@ -79,6 +83,7 @@ public final class DictationController {
     @ObservationIgnored private let reviewBeforePaste: @MainActor (String) -> Bool
     @ObservationIgnored private let modes: @MainActor (String) -> ModeRun
     @ObservationIgnored private let rewriter: RewriteEnvironment
+    @ObservationIgnored private let frontApplication: @MainActor () -> Int32?
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
@@ -114,6 +119,8 @@ public final class DictationController {
     ///   - modes: ce que fait la dictée de ce mode (`ModeRun`) ; lu une fois, à l'appui qui commence la dictée. Par défaut, seule
     ///     la dictée brute dicte (`ModeRun.legacy`).
     ///   - rewriter: la mise en forme par le modèle de langage, pour les modes à consigne. Par défaut, aucun modèle : elle échoue.
+    ///   - frontApplication: l'identifiant du processus de l'application au premier plan, `nil` si l'on ne sait pas le dire ;
+    ///     lu au début et à la fin de la mise en forme d'un mode sans relecture, pour ne pas coller dans une autre application.
     ///   - wait: attend ce nombre de secondes (`focusHandoverDelay`) ; injectée pour qu'aucun test n'attende une durée réelle.
     public init(
         environment: DictationEnvironment, inserter: TextInserter,
@@ -130,6 +137,7 @@ public final class DictationController {
         reviewBeforePaste: @escaping @MainActor (String) -> Bool = { _ in false },
         modes: @escaping @MainActor (String) -> ModeRun = ModeRun.legacy,
         rewriter: RewriteEnvironment = .unavailable,
+        frontApplication: @escaping @MainActor () -> Int32? = { nil },
         wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
     ) {
         self.environment = environment
@@ -147,6 +155,7 @@ public final class DictationController {
         self.reviewBeforePaste = reviewBeforePaste
         self.modes = modes
         self.rewriter = rewriter
+        self.frontApplication = frontApplication
         self.wait = wait
     }
 
@@ -529,6 +538,8 @@ public final class DictationController {
         let prompt = RewritePrompt.format(instruction: instruction, text: text, vocabulary: run.vocabulary)
         let job = RewriteJob(instruction: prompt.instruction, input: prompt.input, model: model)
         run.rewriting = true
+        // Sans relecture, le texte se collera tout seul à l'arrivée : on retient où l'utilisateur est maintenant.
+        if !run.reviewsBeforePaste { run.frontApplicationAtStart = frontApplication() }
         var next = view
         next.stage = .formatting
         next.liveText = ""
@@ -555,10 +566,20 @@ public final class DictationController {
         switch outcome {
         case .rewritten(let text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
             log.notice("mise en forme terminée")
+            // Voulu : le texte mis en forme remplace la transcription brute comme dernier texte (sans relecture, elle n'est plus
+            // récupérable après le collage ; avec relecture, elle est la version précédente).
             lastTranscript = text
             var next = view
             next.liveText = text
             setView(next)
+            // Sans relecture, le texte se collerait dans l'application où l'utilisateur est allé entre-temps : il attend en
+            // relecture. Si l'une des deux lectures ne sait pas dire, on colle comme avant.
+            if !run.reviewsBeforePaste, let start = run.frontApplicationAtStart, let now = frontApplication(), start != now {
+                log.notice("mise en forme terminée ; application au premier plan changée : relecture")
+                startReview(
+                    text, notice: Self.frontApplicationChangedNotice, previous: raw, keyboard: .available, after: run)
+                return
+            }
             deliver(text, run, previous: raw)
         case .rewritten:
             formattingFailed(.empty, raw: raw, run)
@@ -580,13 +601,15 @@ public final class DictationController {
     // MARK: - Relecture
 
     /// Le texte final n'est pas inséré : la dictée est finie, le texte attend dans `draft` et le panneau prend la frappe.
-    private func startReview(_ text: String, notice: String?, previous: String? = nil, after run: Run) {
+    private func startReview(
+        _ text: String, notice: String?, previous: String? = nil, keyboard: PanelKeyboard = .focused, after run: Run
+    ) {
         log.notice("dictée terminée ; relecture")
         retire(run)
         review = Review(previous: previous)
         setView(DictationViewState(stage: .review, notice: notice, draft: text))
         if !panel.isOpen { panel.open() }
-        panel.setKeyboard(.focused)
+        panel.setKeyboard(keyboard)
     }
 
     /// L'utilisateur a modifié le texte. Ignoré hors relecture (et pendant le collage : le texte qui part est celui qu'on a vu).
@@ -800,6 +823,8 @@ private final class Run {
     var vocabulary: [String] = []
     /// La mise en forme attend sa réponse : tant que c'est vrai, son texte et son issue comptent.
     var rewriting = false
+    /// L'application au premier plan au début de la mise en forme d'un mode sans relecture (`nil` : inconnue, ou relecture).
+    var frontApplicationAtStart: Int32?
     var rewrite: Task<Void, Never>?
     var session: (any DictationSessioning)?
     /// La dernière phase vue dans les instantanés de la session.

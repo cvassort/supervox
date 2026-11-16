@@ -85,6 +85,7 @@ public final class AppController {
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
         rewriter: RewriteEnvironment,
+        frontApplication: @escaping @MainActor () -> Int32? = { nil },
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
@@ -151,6 +152,7 @@ public final class AppController {
             // Lu une fois, à l'appui, avec le choix de relecture : le mode tel que les réglages l'ont à cet instant.
             modes: { ModeRun.from(relay.settings?()?.mode($0)) },
             rewriter: rewriter,
+            frontApplication: frontApplication,
             wait: reviewHandoverWait)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
@@ -193,6 +195,7 @@ public final class AppController {
         terminate: @escaping @MainActor () -> Void,
         dictation: DictationEnvironment = .unavailable,
         makeModel: @escaping @Sendable (ProviderKind, EndpointConfig) -> any LanguageModel,
+        frontApplication: @escaping @MainActor () -> Int32? = { nil },
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
@@ -207,7 +210,7 @@ public final class AppController {
             makeSettingsWindow: makeSettingsWindow, terminate: terminate, dictation: dictation,
             rewriter: LiveRewriter.environment(
                 settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets), makeModel: makeModel),
-            inserter: inserter, holdWatch: holdWatch, terminationWait: terminationWait,
+            frontApplication: frontApplication, inserter: inserter, holdWatch: holdWatch, terminationWait: terminationWait,
             reviewHandoverWait: reviewHandoverWait)
         current.settings = { [weak self] in self?.settings }
     }
@@ -237,7 +240,8 @@ public final class AppController {
             clickMonitor: GlobalClickMonitor(),
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
-            dictation: dictation, makeModel: LiveRewriter.client, inserter: inserter)
+            dictation: dictation, makeModel: LiveRewriter.client, frontApplication: FrontApplication.system,
+            inserter: inserter)
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,

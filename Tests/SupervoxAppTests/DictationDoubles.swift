@@ -327,6 +327,9 @@ final class RewriteCall: Sendable {
     /// Le déroulé de chaque mode (`ModeRun.legacy` pour un mode absent), et chaque lecture que le contrôleur en a faite.
     var modeRuns: [String: ModeRun] = [:]
     var modeReads: [String] = []
+    /// L'application au premier plan que répond le lecteur (`nil` : il ne sait pas dire), et chaque lecture.
+    var front: Int32? = 100
+    var frontReads = 0
 }
 
 /// L'attente du contrôleur entre le retrait de la frappe et l'insertion : elle journalise sa durée, n'attend rien, sauf si le
@@ -420,6 +423,10 @@ final class RewriteCall: Sendable {
                 return knobs.modeRuns[mode] ?? ModeRun.legacy(mode)
             },
             rewriter: rewriter.environment,
+            frontApplication: {
+                knobs.frontReads += 1
+                return knobs.front
+            },
             wait: { await handover.wait($0) })
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
