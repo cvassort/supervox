@@ -1,6 +1,11 @@
 import Foundation
 
-/// Le marqueur que le modèle écrit en tête de sa réponse d'entretien, et que ni la voix ni l'écran ne montrent jamais.
+/// Le marqueur que le modèle écrit en tête de sa réponse d'entretien. `ReplyFilter` retire de ce qui est dit et montré le marqueur
+/// **tel que la consigne le demande** : le mot en majuscules ou en minuscules, entre crochets, d'un seul tenant. Il ne retire
+/// pas ce qu'il ne reconnaît pas (`[ SUITE ]`, `[SUITE` sans crochet fermant, `SUITE:`), qui est alors dit ; et un marqueur
+/// précédé d'un caractère invisible (U+200B, U+FEFF…) ou entouré de signes (`**[SUITE]**`) est retiré mais ne fixe pas `signal`
+/// (relevé à la revue, non corrigé). Rien ne garantit donc qu'aucun marqueur n'est jamais montré, seulement que celui de la
+/// consigne ne l'est pas.
 public enum ReplySignal: String, Equatable, Sendable {
     /// `[SUITE]` : la réponse pose une question.
     case `continue` = "SUITE"
@@ -26,7 +31,10 @@ public enum ReplySignal: String, Equatable, Sendable {
 ///   `signal`, inconnu le laisse à `.continue`. Toute autre tête est du texte.
 /// - **Ailleurs** : toute occurrence d'un marqueur connu (casse ignorée, crochets compris) est retirée, et le retrait n'en
 ///   fabrique pas un autre (`[SU[SUITE]ITE]` ne rend rien). Une fin de texte qui peut encore devenir un marqueur connu est
-///   retenue jusqu'à ce qu'il le devienne ou ne le puisse plus ; `finish` rend ce qui reste.
+///   retenue jusqu'à ce qu'il le devienne ou ne le puisse plus ; `finish` rend ce qui reste. La retenue ne dépasse jamais
+///   `maxHeldLength` (12) caractères : une suite de `[` ou de débuts de marqueur plus longue est rendue tout de suite, sauf ses
+///   12 derniers caractères. Limite : un marqueur imbriqué dans un autre sur plus de 12 caractères retenus (`[SU[SU[SUITE]ITE]ITE]`
+///   en tient 12) n'a pas la garantie du point fixe ; le texte avant la fenêtre est déjà rendu.
 /// - **Texte cumulé qui ne prolonge pas le précédent** : seuls les caractères au-delà de la longueur déjà lue sont pris.
 ///
 /// Ce que ce n'est pas : un marqueur mal écrit par le modèle (`[ SUITE ]`, `[SUITE` sans crochet fermant, `SUITE:`) n'est pas
@@ -75,6 +83,11 @@ public struct ReplyFilter: Sendable {
     private static let bracketed = markers.map { "[\($0.word)]" }
     /// La longueur d'une tête, au plus (le plus long marqueur en fait 10 : choix non mesuré, de la marge).
     private static let maxHeadLength = 12
+    /// La longueur du plus long marqueur, crochets compris (code lu : `[proposer]`, `[conclure]`).
+    private static let maxMarkerLength = bracketed.map(\.count).max() ?? 0
+    /// Ce qui reste retenu au plus en fin de texte, hors tête : même marge que la tête (choix non mesuré). Borne aussi le travail
+    /// de `heldLength` et de `markerLength`, qui ne regardent que la fin du texte gardé (leur coût ne dépend plus de sa longueur).
+    private static let maxHeldLength = 12
 
     /// Le texte à rendre pour tout ce qui a été reçu, et le sens du marqueur de tête s'il est décidé. Fonction pure du texte
     /// reçu : ce qui est rendu pour un texte l'est aussi, en début, pour tout texte qui le prolonge.
@@ -123,23 +136,26 @@ public struct ReplyFilter: Sendable {
         return Array(kept[..<(kept.count - heldLength(kept))])
     }
 
-    /// La longueur du marqueur connu qui termine `kept` (celui qui commence au dernier `[`), `nil` s'il n'y en a pas.
+    /// La longueur du marqueur connu qui termine `kept` (celui qui commence au dernier `[`), `nil` s'il n'y en a pas. Ne regarde
+    /// que les `maxMarkerLength` derniers scalaires : un `[` plus loin ne peut pas ouvrir un marqueur qui finit ici.
     private static func markerLength(endingAt kept: [Unicode.Scalar]) -> Int? {
-        guard let open = kept.lastIndex(of: "["), kept.count - open <= maxHeadLength else { return nil }
-        let candidate = String(String.UnicodeScalarView(kept[open...])).lowercased()
-        return bracketed.contains(candidate) ? kept.count - open : nil
+        let window = kept.suffix(maxMarkerLength)
+        guard let open = window.lastIndex(of: "[") else { return nil }
+        let candidate = String(String.UnicodeScalarView(window[open...])).lowercased()
+        return bracketed.contains(candidate) ? kept.endIndex - open : nil
     }
 
     /// La longueur de la fin de `kept` à retenir : la suite de segments `[lettres` collés qui terminent le texte, chacun début d'un
-    /// marqueur connu. Un seul ne suffit pas : `[SU[SUITE]ITE]` laisse `[SU` derrière le marqueur du milieu, qui retiré fait de
-    /// `[SU` + `ITE]` un marqueur.
+    /// marqueur connu, sur au plus `maxHeldLength` scalaires. Un seul segment ne suffit pas : `[SU[SUITE]ITE]` laisse `[SU`
+    /// derrière le marqueur du milieu, qui retiré fait de `[SU` + `ITE]` un marqueur.
     private static func heldLength(_ kept: [Unicode.Scalar]) -> Int {
-        var segmentEnd = kept.count
-        while let open = kept[..<segmentEnd].lastIndex(of: "[") {
-            let segment = String(String.UnicodeScalarView(kept[open..<segmentEnd])).lowercased()
+        let window = kept.suffix(maxHeldLength)
+        var segmentEnd = window.endIndex
+        while let open = window[..<segmentEnd].lastIndex(of: "[") {
+            let segment = String(String.UnicodeScalarView(window[open..<segmentEnd])).lowercased()
             guard bracketed.contains(where: { $0.hasPrefix(segment) && $0 != segment }) else { break }
             segmentEnd = open
         }
-        return kept.count - segmentEnd
+        return kept.endIndex - segmentEnd
     }
 }

@@ -153,6 +153,54 @@ private let responses: [(text: String, shown: String, signal: ReplySignal)] = [
         #expect(filter.finish() == "")
     }
 
+    // MARK: Retenue bornée (m-3, m-4)
+
+    /// Une suite de `[` qui ne peut pas devenir un marqueur n'est pas retenue sans borne : au plus 12 caractères restent en
+    /// attente, le reste est rendu tout de suite ; `finish` rend ces 12 derniers.
+    @Test func aLongRunOfOpeningBracketsIsReleasedAtOnceExceptTheLastTwelve() {
+        let brackets = String(repeating: "[", count: 42)
+
+        var filter = ReplyFilter()
+        #expect(filter.feed("Bonjour " + brackets) == "Bonjour " + String(repeating: "[", count: 30))
+        #expect(filter.finish() == String(repeating: "[", count: 12))
+        #expect(filter.signal == .continue)
+
+        // Même chose quand la réponse commence par les crochets (la tête est décidée au 12ᵉ caractère : ce n'est pas un marqueur).
+        var leading = ReplyFilter()
+        #expect(leading.feed(brackets) == String(repeating: "[", count: 30))
+        #expect(leading.finish() == String(repeating: "[", count: 12))
+    }
+
+    @Test func aLongRunOfMarkerStartsIsReleasedAtOnceExceptTheLastTwelve() {
+        let starts = String(repeating: "[s", count: 30)   // 60 caractères, chaque `[s` est un début de `[suite]`
+        var filter = ReplyFilter()
+        let shown = filter.feed("Voir " + starts)
+
+        #expect(shown == "Voir " + String(starts.dropLast(12)))
+        #expect(filter.finish() == String(starts.suffix(12)))
+    }
+
+    /// Le texte rendu est le même qu'avant la borne tant que le texte retenu tient dans les 12 caractères : le marqueur de la fin
+    /// du flux coupé en deux, imbriqué sur moins de 12 caractères, reste retiré.
+    @Test func theBoundDoesNotChangeWhatIsRemovedWithinTheTwelveCharacters() {
+        #expect(run("a [SU[SUITE]ITE] b").shown == "a  b")
+        #expect(run("a [SUITE] b [[SUITE]").shown == "a  b [")
+        #expect(run("fin [SUIT", cuts: Array(1..<9)).shown == "fin [SUIT")
+    }
+
+    /// Pour chaque début de chacune des six réponses, ce que `finish` rend en plus de ce que `feed` a rendu tient en 12 scalaires.
+    @Test(arguments: responses.indices)
+    func whatIsHeldNeverExceedsTwelveCharacters(index: Int) {
+        let scalars = Array(responses[index].text.unicodeScalars)
+        for count in 0...scalars.count {
+            var prefix = String.UnicodeScalarView()
+            prefix.append(contentsOf: scalars[0..<count])
+            var filter = ReplyFilter()
+            _ = filter.feed(String(prefix))
+            #expect(filter.finish().unicodeScalars.count <= 12, "début de \(count) caractères")
+        }
+    }
+
     // MARK: Absent, inconnu, plus loin (règle 7)
 
     @Test func aReplyWithoutAMarkerIsShownWholeWithTheContinueSignal() {
