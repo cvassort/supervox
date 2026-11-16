@@ -113,6 +113,10 @@ public enum DictationText {
         case .formatting: "Mise en forme…"
         case .review: "À relire"
         case .pasting: "Collage…"
+        case .correcting(.preparing): "Préparation…"
+        case .correcting(.recording): "Correction à la voix"
+        case .correcting(.transcribing): "Transcription de la consigne…"
+        case .correcting(.rewriting): "Réécriture…"
         case .copied: "Texte copié"
         case .cancelled: "Dictée interrompue"
         case .failed(.noSpeech): "Rien à transcrire"
@@ -241,6 +245,8 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .review
         case .pasting:
             mood = .working
+        case .correcting(let step):
+            mood = step == .recording ? .recording : .working
         case .copied:
             mood = .success
         case .cancelled:
@@ -249,18 +255,22 @@ public struct DictationDisplay: Equatable, Sendable {
             mood = .failure
         }
 
-        // La relecture : le texte entier, à corriger, coller ou copier. Rien d'autre ne le montre.
-        if stage == .review || stage == .pasting {
+        // La relecture : le texte entier, à corriger, coller ou copier. Rien d'autre ne le montre. Pendant une correction, le
+        // texte reste là en lecture seule (ni collage ni aide) : celui que le modèle envoie à mesure, à la place du brouillon, à
+        // l'étape de la réécriture. « Copier » copie le brouillon (voir `PanelModel.copyTranscript`).
+        if stage == .review || stage == .pasting || stage.isCorrecting {
             let usable = stage == .review && Self.nonBlank(state.draft) != nil
+            let shown = stage == .correcting(.rewriting) ? Self.nonBlank(state.liveText) ?? state.draft : state.draft
             let hint: String? =
-                stage == .pasting
+                stage == .pasting || stage.isCorrecting
                 ? nil
                 : !usable
                     ? DictationText.reviewEmptyHint
                     : panelHasKeyboard ? DictationText.reviewHint : DictationText.reviewNoKeyboardHint
             review = Review(
-                text: state.draft, isEditable: stage == .review, canPaste: usable, canCopy: usable,
-                isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: state.draft.isEmpty)
+                text: shown, isEditable: stage == .review, canPaste: usable,
+                canCopy: usable || (stage.isCorrecting && Self.nonBlank(state.draft) != nil),
+                isPasting: stage == .pasting, copy: copy, hint: hint, showsPlaceholder: shown.isEmpty)
         } else {
             review = nil
         }

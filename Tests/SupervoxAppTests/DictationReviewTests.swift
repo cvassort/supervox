@@ -367,11 +367,53 @@ import SupervoxCore
         #expect(h.controller.view == DictationViewState(lastTranscript: "Texte à ne pas coller."))
     }
 
-    // MARK: - Règle 12 : le raccourci pendant la relecture
+    // MARK: - Règle 12 : le raccourci pendant la relecture (remplacée par la correction à la voix, étape 5 tâche 8)
 
-    @Test("règle 12 : le raccourci en relecture ou pendant le collage est ignoré, appui comme relâchement, en bascule comme en maintien",
+    @Test("règle 12 : pendant le collage, le raccourci global est ignoré, appui comme relâchement, en bascule comme en maintien",
+        arguments: [HotKeyBehavior.toggle, .hold])
+    func theHotKeyIsIgnoredWhilePasting(behavior: HotKeyBehavior) async {
+        let h = harness()
+        h.knobs.behavior = behavior
+        h.handover.holds = true
+        await review(h)
+        h.controller.pasteReview()
+        #expect(await until { h.handover.sleeper.isSleeping })
+        let before = h.controller.view
+
+        h.controller.hotKeyPressed()
+        h.controller.hotKeyReleased()
+        h.controller.hotKeyPressed()
+        await settle()
+        #expect(h.engines.sessions.count == 1, "aucune session fabriquée")
+        #expect(h.controller.view == before)
+        #expect(h.controller.view.stage == .pasting)
+        #expect(h.panel.isOpen)
+        #expect(h.panel.closeCount == 0)
+        #expect(!h.controller.isBusy)
+        h.handover.sleeper.release()
+    }
+
+    @Test("règle 12 : en relecture, l'appui global commence une correction (bascule ou maintien) ; son relâchement hors correction ne fait rien",
+        arguments: [HotKeyBehavior.toggle, .hold])
+    func theGlobalHotKeyStartsACorrectionInTheReview(behavior: HotKeyBehavior) async {
+        let h = harness()
+        h.knobs.behavior = behavior
+        await review(h)
+        h.controller.hotKeyReleased()
+        await settle()
+        #expect(h.controller.view.stage == .review, "un relâchement sans correction ne fait rien")
+
+        h.controller.hotKeyPressed()
+        #expect(h.controller.view.stage == .correcting(.preparing))
+        #expect(h.controller.view.draft == Self.text)
+        #expect(h.panel.isOpen)
+        #expect(h.panel.closeCount == 0)
+        #expect(await until { h.engines.sessions.count == 2 })
+    }
+
+    @Test("règle 12 : le raccourci d'un mode est ignoré pendant la relecture et pendant le collage, appui comme relâchement, en bascule comme en maintien",
         arguments: [HotKeyBehavior.toggle, .hold], [DictationStage.review, .pasting])
-    func theHotKeyIsIgnoredDuringTheReview(behavior: HotKeyBehavior, stage: DictationStage) async {
+    func aModeHotKeyIsIgnoredDuringTheReview(behavior: HotKeyBehavior, stage: DictationStage) async {
         let h = harness()
         h.knobs.behavior = behavior
         h.handover.holds = stage == .pasting
@@ -382,20 +424,20 @@ import SupervoxCore
         }
         let before = h.controller.view
 
-        h.controller.hotKeyPressed()
-        h.controller.hotKeyReleased()
-        h.controller.hotKeyPressed()
+        h.controller.modeHotKeyPressed(ModeChip.rawID)
+        h.controller.modeHotKeyReleased(ModeChip.rawID)
+        h.controller.modeHotKeyPressed(ModeChip.promptID)
         await settle()
         #expect(h.engines.sessions.count == 1, "aucune session fabriquée")
         #expect(h.controller.view == before)
         #expect(h.controller.view.stage == stage)
+        #expect(h.knobs.selectedModes.isEmpty, "le mode ne change pas")
         #expect(h.panel.isOpen)
         #expect(h.panel.closeCount == 0)
-        #expect(!h.controller.isBusy)
         h.handover.sleeper.release()
     }
 
-    @Test("règle 12 : après un changement de pastille vers un autre mode, le raccourci laisse le panneau ouvert et la relecture intacte",
+    @Test("règle 12 : après un changement de pastille vers un autre mode, l'appui global ne ferme pas le panneau : il corrige la relecture (le collage, lui, l'ignore)",
         arguments: [DictationStage.review, .pasting])
     func aChipChangeDuringTheReviewDoesNotLetTheHotKeyClosePanel(stage: DictationStage) async {
         let h = harness()
@@ -413,9 +455,14 @@ import SupervoxCore
         await settle()
         #expect(h.panel.isOpen)
         #expect(h.panel.closeCount == 0)
-        #expect(h.controller.view == before)
         #expect(h.controller.view.draft == "Brouillon à garder.")
-        #expect(h.engines.sessions.count == 1)
+        if stage == .review {
+            #expect(h.controller.view.stage == .correcting(.preparing))
+            #expect(h.engines.sessions.count == 2)
+        } else {
+            #expect(h.controller.view == before)
+            #expect(h.engines.sessions.count == 1)
+        }
         h.handover.sleeper.release()
     }
 

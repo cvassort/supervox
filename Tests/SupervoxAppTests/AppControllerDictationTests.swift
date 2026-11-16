@@ -1098,22 +1098,29 @@ final class TimeoutLog: Sendable {
         #expect(controller.panelModel.dictation.stage == .review)
         #expect(controller.settings.lastModeID == ModeChip.interviewID, "le mode choisi est enregistré")
 
-        // Le raccourci est ignoré : le panneau reste ouvert, la relecture intacte.
+        // Le raccourci global commence la correction de la relecture (étape 5) : il ne change ni le mode ni le texte, et ne
+        // ferme pas le panneau.
         hotKeys.press()
-        await settle()
+        #expect(controller.panelModel.dictation.stage == .correcting(.preparing))
+        #expect(controller.panelModel.dictation.draft == "Texte à garder.")
+        #expect(controller.settings.lastModeID == ModeChip.interviewID)
         #expect(controller.panelModel.isOpen)
+        #expect(await until { engines.sessions.count == 2 })
+
+        // Échap n'annule que la correction : la relecture revient, intacte.
+        escape.press()
         #expect(controller.panelModel.dictation == before)
-        #expect(engines.sessions.count == 1)
+        #expect(controller.panelModel.isOpen)
 
         // Fermée, la relecture laisse la place : la dictée suivante suit le nouveau mode (ici, pas encore de dictée).
         escape.press()
         hotKeys.press()
         #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
-        #expect(engines.sessions.count == 1)
+        #expect(engines.sessions.count == 2)
         controller.panelModel.select(ModeChip.rawID)
         #expect(controller.settings.lastModeID == ModeChip.rawID)
         hotKeys.press()
-        #expect(await until { engines.sessions.count == 2 })
+        #expect(await until { engines.sessions.count == 3 })
     }
 
     /// Règle 15 : « Copier » en relecture copie le brouillon entier par l'insertion, sans quitter la relecture.
