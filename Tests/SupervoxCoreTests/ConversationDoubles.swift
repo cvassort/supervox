@@ -443,6 +443,13 @@ final class ConversationHarness: @unchecked Sendable {
     /// Ce que le son était à chaque requête au modèle fort : son journal et s'il tournait encore.
     var audioAtStrongRequests: [(log: [String], running: Bool)] { state.withLock { $0.strongSeen } }
 
+    /// Annule l'entretien et attend qu'il soit arrêté, mais rend la main si la tâche du test est annulée (limite de temps de la
+    /// suite) : un entretien qui ne s'arrête pas fait échouer le test, il ne le laisse pas en vie.
+    func cancel() async {
+        let chain = chain
+        await untilDoneOrCancelled { await chain.cancel() }
+    }
+
     @discardableResult
     func start() async -> EventLog {
         let log = EventLog.reading(await chain.start())
@@ -479,4 +486,43 @@ func conversation(_ texts: String...) -> Conversation {
         if index.isMultiple(of: 2) { conversation.appendUser(text) } else { conversation.appendInterviewer(text) }
     }
     return conversation
+}
+
+/// Rend la main quand `body` a fini, ou quand la tâche appelante est annulée (alors `body` continue sans que personne l'attende).
+func untilDoneOrCancelled(_ body: @escaping @Sendable () async -> Void) async {
+    let once = Once()
+    await withTaskCancellationHandler {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            once.install(continuation)
+            Task {
+                await body()
+                once.fire()
+            }
+        }
+    } onCancel: {
+        once.fire()
+    }
+}
+
+/// Reprend une attente au plus une fois, que le déclenchement vienne avant ou après la pose de l'attente.
+final class Once: @unchecked Sendable {
+    private let state = OSAllocatedUnfairLock(initialState: (fired: false, continuation: nil as CheckedContinuation<Void, Never>?))
+
+    func install(_ continuation: CheckedContinuation<Void, Never>) {
+        let fireNow = state.withLock { s -> Bool in
+            if s.fired { return true }
+            s.continuation = continuation
+            return false
+        }
+        if fireNow { continuation.resume() }
+    }
+
+    func fire() {
+        let continuation = state.withLock { s -> CheckedContinuation<Void, Never>? in
+            s.fired = true
+            defer { s.continuation = nil }
+            return s.continuation
+        }
+        continuation?.resume()
+    }
 }

@@ -33,7 +33,7 @@ struct ConversationCancelTests {
         await h.previewSleeper.waitForSleeps(1)
         await h.watchdogSleeper.waitForSleeps(1)
 
-        await h.chain.cancel()
+        await h.cancel()
 
         // À son retour, plus rien ne tourne : la surveillance et l'aperçu ont été annulés et attendus.
         #expect(!h.previewSleeper.isSleeping && !h.watchdogSleeper.isSleeping)
@@ -50,7 +50,7 @@ struct ConversationCancelTests {
         await h.say(0)
         await h.fast.model(at: 0).started.wait()   // la requête est partie, rien ne vient
 
-        await h.chain.cancel()
+        await h.cancel()
 
         await h.fast.model(at: 0).terminated.wait()
         #expect(h.fast.model(at: 0).wasCancelled)
@@ -66,7 +66,7 @@ struct ConversationCancelTests {
         await h.say(0)
         await h.speech.waitForCalls(1)
 
-        await h.chain.cancel()
+        await h.cancel()
 
         #expect(h.speech.cancelledCalls == 1)
         await log.waitForEnd()
@@ -82,7 +82,7 @@ struct ConversationCancelTests {
         await h.say(0)
         await h.audio.plays.wait(atLeast: 1)
 
-        await h.chain.cancel()
+        await h.cancel()
 
         await log.waitForEnd()
         #expect(h.audio.inner.stopPlaybackCount == 1)   // la lecture est coupée une fois
@@ -101,7 +101,7 @@ struct ConversationCancelTests {
         await h.say(0)
         await h.transcriber.waitForCalls(1)
 
-        await h.chain.cancel()
+        await h.cancel()
 
         await h.transcriber.cancellation(of: 0).wait()
         await log.waitForEnd()
@@ -118,7 +118,7 @@ struct ConversationCancelTests {
 
         await h.chain.conclude()
         #expect(h.strong.calls == 1)
-        await h.chain.cancel()
+        await h.cancel()
 
         await h.strong.model(at: 0).terminated.wait()
         #expect(h.strong.model(at: 0).wasCancelled)
@@ -132,8 +132,8 @@ struct ConversationCancelTests {
         let log = await h.start()
         await log.wait(.state(.listening))
 
-        await h.chain.cancel()
-        await h.chain.cancel()
+        await h.cancel()
+        await h.cancel()
         await h.chain.conclude()
 
         await log.waitForEnd()
@@ -296,6 +296,26 @@ struct ConversationFailureTests {
         await log.waitForEnd()
         #expect(log.end == .failed(.microphone("le micro s'est arrêté pendant l'entretien"), Conversation()))
         expectCleanEnd(h)
+    }
+
+    @Test func theFirstChunkDelayCountsFromTheMomentTheMicrophoneOpens() async {
+        // La préparation dure (ici : cent secondes d'horloge) : le délai de la première tranche ne court pas pendant elle.
+        let h = ConversationHarness()
+        let preparation = Gate()
+        h.detector.prepareRelease = preparation
+        let log = await h.start()
+        await h.detector.prepareEntered.wait()
+        h.clock.advance(by: 100)
+        preparation.open()
+        await log.wait(.state(.listening))
+        await h.watchdogSleeper.waitForSleeps(1)
+
+        h.clock.advance(by: 2)   // moins que les 3 s accordées à la première tranche, depuis l'ouverture du micro
+        h.watchdogSleeper.tick()
+        await h.watchdogSleeper.waitForSleeps(2)
+
+        #expect(log.end == nil)
+        await finish(h)
     }
 
     @Test func aMicrophoneThatStopsAfterATurnEndsFailedWithTheConversation() async {

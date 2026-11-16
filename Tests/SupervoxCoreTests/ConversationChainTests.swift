@@ -8,7 +8,7 @@ import Testing
 
 /// Met fin à un entretien que le test laisse en cours, et attend la fin du flux.
 func finish(_ harness: ConversationHarness) async {
-    await harness.chain.cancel()
+    await harness.cancel()
     await harness.log?.waitForEnd()
 }
 
@@ -226,6 +226,9 @@ struct ConversationTurnTests {
             model: "modele-exemple-rapide", instruction: InterviewPrompt.instruction(remainingQuestions: 3), input: "bonjour",
             maxTokens: 1_024)])   // le tour vide n'est pas dans la conversation, la question n'est pas comptée
         #expect(log.end == .prompt("Prompt final", conversation("bonjour", "Merci.")))
+        // Le tour vide n'a laissé aucun passage ni aucun échantillon à l'écoute suivante.
+        #expect(h.transcriber.calls.map(\.clip) == [h.expectedClip(turn: 0), h.expectedClip(turn: 1)])
+        #expect(h.detector.resets == 3)   // préparation, retour à l'écoute après le tour vide, réflexion du second tour
     }
 
     // MARK: Règle 4
