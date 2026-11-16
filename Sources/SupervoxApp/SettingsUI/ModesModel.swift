@@ -125,7 +125,9 @@ public final class ModesModel {
     public static let removedProviderMarker = "fournisseur supprimé"
     public static let removedProviderNote = "Fournisseur supprimé : choisissez un autre modèle."
     public static let noStrongModelNote =
-        "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un dans la section « Modèles » de l'onglet Modes, ou choisissez un modèle propre à ce mode."
+        "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un en tête de l'onglet Modes, dans « Modèles », ou choisissez un modèle propre à ce mode."
+    /// Sur la ligne d'un mode qui dépend du modèle fort, tant qu'aucun n'est choisi. La section « Modèles » est en tête de l'onglet.
+    public static let noStrongModelRowNote = "Aucun modèle fort n'est choisi : choisissez-en un ci-dessus, dans « Modèles »."
     public static let noProviderNote = "Aucun fournisseur n'est enregistré : ajoutez-en un dans l'onglet Fournisseurs."
     public static let noTranscriptionEngineTitle = "Moteur de l'onglet Transcription"
     public static let pastedAsIsSummary = "Texte collé tel quel"
@@ -222,7 +224,15 @@ public final class ModesModel {
     private func row(_ mode: Mode) -> Row {
         var notes: [String] = []
         if mode.id == ModeChip.interviewID { notes += [Self.alwaysReviewedNote, Self.laterModeNote] }
-        if let choice = mode.model, mode.usesModel, provider(choice) == nil { notes.append(Self.removedProviderNote) }
+        if mode.usesModel {
+            // Le modèle qui recevra le texte : le sien, sinon le modèle fort. Sans lui, la ligne ne doit pas laisser croire que
+            // le mode marche.
+            if let choice = mode.model ?? settings.strongModel {
+                if provider(choice) == nil { notes.append(Self.removedProviderNote) }
+            } else {
+                notes.append(Self.noStrongModelRowNote)
+            }
+        }
         return Row(
             id: mode.id, title: mode.name, summary: summary(mode), reviews: settings.reviewsBeforePaste(mode.id),
             isReviewLocked: AppSettings.alwaysReviewed.contains(mode.id), canDelete: mode.canDelete,
@@ -282,7 +292,10 @@ public final class ModesModel {
     /// n'est choisi pour un mode qui en a besoin.
     public func modelNote(for draft: ModeDraft) -> String? {
         guard sendsText(draft) else { return nil }
-        guard let choice = draft.model ?? settings.strongModel else { return Self.noStrongModelNote }
+        // Sans aucun fournisseur, l'explication du sélecteur suffit : ne pas renvoyer à des choix qui n'existent pas encore.
+        guard let choice = draft.model ?? settings.strongModel else {
+            return settings.providers.isEmpty ? nil : Self.noStrongModelNote
+        }
         return provider(choice) == nil ? Self.removedProviderNote : nil
     }
 

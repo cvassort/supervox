@@ -148,7 +148,9 @@ import Testing
             ModesModel.privacyNote(providerName: "Fournisseur d'exemple")
                 == "Ce mode envoie le texte dicté à « Fournisseur d'exemple ». L'audio reste sur cet ordinateur.")
         #expect(ModesModel.toggleTitle == "Relire avant de coller")
-        let model = Rig().makeModel()
+        var settings = Rig.defaultSettings()
+        settings.strongModel = Self.strong
+        let model = Rig(settings).makeModel()
         #expect(
             try row(model, ModeChip.interviewID).note
                 == "Toujours relu : l'entretien passe toujours par la relecture. Ce mode arrive à une étape suivante.")
@@ -752,7 +754,7 @@ import Testing
         #expect(model.modelNote(for: draft) == ModesModel.removedProviderNote)
         #expect(model.privacyNote(for: draft) == nil, "aucun fournisseur à nommer")
         // Un mode qui n'a pas de modèle propre ne porte pas cette note.
-        #expect(try row(model, ModeChip.cleanedID).note == nil)
+        #expect(try row(model, ModeChip.cleanedID).note != ModesModel.removedProviderNote)
     }
 
     @Test func aProviderWithoutAListedModelPointsToTheProvidersTab() throws {
@@ -777,10 +779,10 @@ import Testing
         var draft = model.draft(for: "perso-deux")  // sans modèle propre
         #expect(model.privacyNote(for: draft) == nil, "aucun modèle fort : aucun fournisseur nommé")
         #expect(model.modelNote(for: draft) == ModesModel.noStrongModelNote)
-        // Les phrases sont épinglées en toutes lettres : la section « Modèles » est sous la liste, pas « en haut ».
+        // Les phrases sont épinglées en toutes lettres : la section « Modèles » est en tête de l'onglet, sous l'introduction.
         #expect(
             ModesModel.noStrongModelNote
-                == "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un dans la section « Modèles » de l'onglet Modes, ou choisissez un modèle propre à ce mode.")
+                == "Aucun modèle fort n'est choisi : le texte de ce mode ne pourra pas être mis en forme. Choisissez-en un en tête de l'onglet Modes, dans « Modèles », ou choisissez un modèle propre à ce mode.")
         #expect(ModesModel.removedProviderNote == "Fournisseur supprimé : choisissez un autre modèle.")
         #expect(ModesModel.noProviderNote == "Aucun fournisseur n'est enregistré : ajoutez-en un dans l'onglet Fournisseurs.")
         model.setStrongModel(Self.strong)
@@ -799,6 +801,42 @@ import Testing
         let other = Rig(settings).makeModel()
         #expect(other.privacyNote(for: other.draft(for: "perso-un")) == ModesModel.privacyNote(providerName: "Autre exemple"))
         #expect(other.privacyNote(for: other.draft(for: "perso-deux")) == ModesModel.privacyNote(providerName: "Fournisseur d'exemple"))
+    }
+
+    /// Tant qu'aucun modèle fort n'est choisi, chaque ligne qui en dépend (consigne, pas de modèle propre) le dit ; la note disparaît
+    /// dès qu'il est choisi ; un mode sans consigne, ou qui a son modèle, ne la porte jamais.
+    @Test func aRowThatDependsOnTheStrongModelSaysSoUntilOneIsChosen() throws {
+        let literal = "Aucun modèle fort n'est choisi : choisissez-en un ci-dessus, dans « Modèles »."
+        #expect(ModesModel.noStrongModelRowNote == literal)
+        var settings = Self.personalSettings()
+        settings.modes.append(Mode(id: "perso-vide", name: "Sans consigne", instruction: ""))
+        let rig = Rig(settings)
+        let model = rig.makeModel()
+        #expect(try row(model, ModeChip.cleanedID).note == literal)
+        #expect(try row(model, ModeChip.promptID).note == literal)
+        #expect(try row(model, "perso-deux").note == literal)
+        #expect(try row(model, "perso-un").note == nil, "il a son modèle propre")
+        #expect(try row(model, ModeChip.rawID).note == nil, "il ne passe pas par un modèle")
+        #expect(try row(model, "perso-vide").note == nil, "sans consigne : rien n'est envoyé")
+        #expect(try row(model, ModeChip.interviewID).note?.contains("Aucun modèle fort") == false)
+
+        model.setStrongModel(Self.strong)
+        #expect(model.rows.compactMap(\.note).filter { $0 == literal }.isEmpty)
+        #expect(try row(model, ModeChip.cleanedID).note == nil)
+
+        // Un modèle fort dont le fournisseur est supprimé : la ligne dit autre chose, et le dit vrai.
+        rig.settings.providers = []
+        model.reload()
+        #expect(try row(model, ModeChip.cleanedID).note == ModesModel.removedProviderNote)
+        #expect(try row(model, "perso-un").note == ModesModel.removedProviderNote, "son propre modèle est aussi sans fournisseur")
+    }
+
+    /// Sans aucun fournisseur, la feuille ne renvoie pas à des choix qui n'existent pas encore : l'explication du sélecteur suffit.
+    @Test func withoutAnyProviderTheSheetDoesNotPointToChoicesThatDoNotExist() {
+        let model = Rig(AppSettings.defaults).makeModel()
+        let draft = model.draft(for: ModeChip.promptID)
+        #expect(model.modelNote(for: draft) == nil)
+        #expect(model.pickerContent(selected: nil).emptyNote == ModesModel.noProviderNote)
     }
 
     // MARK: - Règle 8 : ordre

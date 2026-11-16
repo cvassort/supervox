@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Onglet Modes : une ligne par mode (modifier, dupliquer, déplacer, supprimer), puis les modèles fort et rapide ; le bouton qui
-/// ajoute un mode est au bas de la fenêtre. Toute la logique est dans `ModesModel`.
+/// Onglet Modes : les modèles fort et rapide en tête (sous l'introduction), puis une ligne par mode (modifier, dupliquer,
+/// déplacer, supprimer) ; le bouton qui ajoute un mode est au bas de la fenêtre. Toute la logique est dans `ModesModel`.
 public struct ModesPane: View {
     let model: ModesModel
     /// Le mode dont la feuille est ouverte.
@@ -32,6 +32,18 @@ public struct ModesPane: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Section {
+                    // Fournisseur sans liste, ou aucun fournisseur : dit une fois, avant les sélecteurs.
+                    ModelPickerNotes(content: model.pickerContent(selected: nil))
+                    ModelSetting(
+                        title: ModesModel.strongTitle, note: ModesModel.strongNote, model: model,
+                        selection: model.strongModel, onSelect: { model.setStrongModel($0) })
+                    ModelSetting(
+                        title: ModesModel.fastTitle, note: ModesModel.fastNote, model: model,
+                        selection: model.fastModel, onSelect: { model.setFastModel($0) })
+                } header: {
+                    Text("Modèles")
+                }
+                Section {
                     let rows = model.rows
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         ModeRow(
@@ -44,18 +56,6 @@ public struct ModesPane: View {
                     }
                 } header: {
                     Text("Modes")
-                }
-                Section {
-                    ModelSetting(
-                        title: ModesModel.strongTitle, note: ModesModel.strongNote, model: model,
-                        selection: model.strongModel, onSelect: { model.setStrongModel($0) })
-                    ModelSetting(
-                        title: ModesModel.fastTitle, note: ModesModel.fastNote, model: model,
-                        selection: model.fastModel, onSelect: { model.setFastModel($0) })
-                    // Une seule fois pour les deux sélecteurs : fournisseur sans liste, ou aucun fournisseur.
-                    ModelPickerNotes(content: model.pickerContent(selected: nil))
-                } header: {
-                    Text("Modèles")
                 }
             }
             .formStyle(.grouped)
