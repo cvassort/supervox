@@ -1252,7 +1252,7 @@ dictée (essai 51) : vous êtes en relecture.
      la ligne « … ou « Corriger à la voix » : … » n'est pas affichée tant qu'il est là ; celle de ⌘↩ reste.
 2. **Par le bouton.** Cliquez sur « Corriger à la voix ».
    - Attendu : le titre passe par « Préparation… » (« Terminer » est alors grisé et la phrase dit « Patientez un instant :
-     vous pourrez dire ce qu'il faut changer dès que l'écoute commence. »), puis « Écoute de la consigne » avec un point
+     vous pourrez dire ce qu'il faut changer dès que l'écoute commencera. »), puis « Écoute de la consigne » avec un point
      rouge, la durée et la forme d'onde ; le bouton devient « Terminer » ; le champ est en lecture seule ; la phrase dit
      « Dites ce qu'il faut changer, puis appuyez de nouveau sur ⌃⌥Espace ou cliquez sur « Terminer ». » Pendant **toute**
      la correction, « Copier » et « Coller » sont grisés (⌘↩ ne fait rien : on ne copie ni ne colle un texte que l'écran ne
@@ -1281,8 +1281,9 @@ dictée (essai 51) : vous êtes en relecture.
      « Terminer ». »).
 7. **Par le raccourci, en maintien.** Réglages, onglet Raccourci, « Maintenir pour dicter » (la fenêtre ferme le panneau :
    refaites une dictée). En relecture, maintenez ⌃⌥Espace, dites une consigne, relâchez.
-   - Attendu : la phrase dit « Dites ce qu'il faut changer, puis relâchez ⌃⌥Espace. » ; le relâchement termine la
-     consigne. Si vous avez commencé par le **bouton** en réglage « maintien », la phrase est celle de la bascule
+   - Attendu : pendant « Préparation… », la phrase dit « Gardez ⌃⌥Espace enfoncé : vous pourrez dire ce qu'il faut changer
+     dès que l'écoute commencera. » (gardez la touche) ; puis elle dit « Dites ce qu'il faut changer, puis relâchez
+     ⌃⌥Espace. » ; le relâchement termine la consigne. Si vous avez commencé par le **bouton** en réglage « maintien », la phrase est celle de la bascule
      (le bouton ne tient aucune touche) : retapez ⌃⌥Espace ou « Terminer ». Rétablissez la bascule.
 8. Tapez un mot à la fin du texte, faites ⌘Z (le mot disparaît), puis cliquez sur « Coller », curseur dans une application.
    - Attendu : le texte collé ne contient pas le mot défait. Rétablissez : fermez par Échap.
@@ -1343,8 +1344,8 @@ modèles de transcription déjà téléchargés :
 2. Observez une dictée en « Dictée nettoyée ».
    - Attendu : **une seule** requête (un POST) vers l'adresse de votre fournisseur, dont le chemin se termine par
      `/v1/chat/completions` (type compatible) ou `/v1/messages` (l'autre type) ; aucune autre connexion ; aucune donnée
-     audio. Si votre outil déchiffre le trafic, le corps est un texte JSON qui contient la consigne et votre texte entre
-     `<dictee>` et `</dictee>`, rien d'autre. S'il ne le déchiffre pas, vous ne voyez que l'hôte et le volume : quelques
+     audio. Si votre outil déchiffre le trafic, le corps est un texte JSON qui contient le nom du modèle, la consigne, le
+     vocabulaire de l'onglet Transcription s'il n'est pas vide, et votre texte entre `<dictee>` et `</dictee>`, rien d'autre. S'il ne le déchiffre pas, vous ne voyez que l'hôte et le volume : quelques
      milliers de caractères, bien moins qu'un enregistrement (indication, non une preuve). **Comportement à confirmer.**
 3. Observez une correction à la voix.
    - Attendu : une seule requête, celle de la réécriture (la consigne dite est transcrite sur ce Mac), vers le même hôte.
