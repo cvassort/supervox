@@ -165,7 +165,7 @@ import Testing
     @Test func aLaterApplyReplacesTheHandlers() {
         apply(["un": Self.keyA])
         var second: [String] = []
-        hotKeys.apply(["un": Self.keyA], onPress: { second.append($0) }, onRelease: { _ in })
+        _ = hotKeys.apply(["un": Self.keyA], onPress: { second.append($0) }, onRelease: { _ in })
         registrars.press(Self.keyA)
         #expect(second == ["un"])
         #expect(pressed.presses.isEmpty)
