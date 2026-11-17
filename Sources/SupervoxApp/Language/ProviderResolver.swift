@@ -15,6 +15,9 @@ public struct ResolvedProvider: Sendable {
     }
 }
 
+/// Ce que `LiveRewriter` appelle pour résoudre un fournisseur : `ProviderResolver.resolve`, ou un double dans les tests.
+public typealias ProviderResolution = @MainActor @Sendable (UUID, AppSettings, SecretAccess) async throws -> ResolvedProvider
+
 /// Retrouve un fournisseur dans les réglages, vérifie son adresse, puis lit sa clé. Commun à la mise en forme (`LiveRewriter`) et à
 /// l'entretien (`InterviewSetup`) : une seule règle, dans un seul ordre.
 public enum ProviderResolver {
@@ -22,17 +25,21 @@ public enum ProviderResolver {
     /// trousseau). La clé est lue par `SecretAccess`, sur sa file : jamais sur le fil principal.
     ///
     /// - Throws: `RewriteFailure` (`.providerMissing`, `.unreachable`, `.keychain`, `.noKey`), ou `CancellationError` si la tâche est
-    ///   annulée pendant ou après la lecture de la clé (aucune clé n'est alors rendue, même lue).
+    ///   annulée à l'entrée, avant la lecture de la clé, pendant ou après (aucune clé n'est alors rendue, même lue ; une tâche déjà
+    ///   annulée ne lit jamais le trousseau).
     @MainActor
     public static func resolve(
         _ providerID: UUID, settings: AppSettings, secrets: SecretAccess
     ) async throws -> ResolvedProvider {
+        // Une tâche déjà annulée (Échap dit avant l'appel) ne coûte ni refus ni invite du trousseau.
+        try Task.checkCancellation()
         guard let provider = settings.providers.first(where: { $0.id == providerID }) else {
             throw RewriteFailure.providerMissing
         }
         guard let address = try? ProvidersModel.validatedBaseURL(provider.baseURL), let url = URL(string: address) else {
             throw RewriteFailure.unreachable
         }
+        try Task.checkCancellation()
         let key: String?
         do {
             key = try await secrets.read(account: provider.id.uuidString)

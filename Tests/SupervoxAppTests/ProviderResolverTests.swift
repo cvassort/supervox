@@ -170,4 +170,32 @@ private final class ThreadStore: SecretStore {
 
         await #expect(throws: CancellationError.self) { try await task.value }
     }
+
+    @Test("une tâche déjà annulée ne lit jamais le trousseau (aucune invite pour un Échap déjà dit)")
+    func aTaskCancelledBeforeTheCallNeverReadsTheKeychain() async {
+        let (access, store) = secrets([provider.id: Self.apiKey])
+        let (provider, settings) = (provider, settings())
+
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ProviderResolver.resolve(provider.id, settings: settings, secrets: access)
+        }
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(store.readCount == 0)
+    }
+
+    @Test("l'annulation est vue dès l'entrée : une tâche annulée devant un fournisseur inconnu lève l'annulation, pas « disparu »")
+    func cancellationIsCheckedBeforeAnyRefusal() async {
+        let (access, store) = secrets()
+        let settings = settings()
+
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await ProviderResolver.resolve(UUID(), settings: settings, secrets: access)
+        }
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(store.readCount == 0)
+    }
 }
