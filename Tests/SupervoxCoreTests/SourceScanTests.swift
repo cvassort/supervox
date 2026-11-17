@@ -173,7 +173,7 @@ import Testing
         let pattern = try Regex(Self.forbiddenErrorText)
         let folders = [
             "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Speech", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
-            "Sources/SupervoxApp/Language", "Sources/SupervoxCore/Conversation",
+            "Sources/SupervoxApp/Language", "Sources/SupervoxCore/Conversation", "Sources/SupervoxApp/Interview",
         ]
         let offending = try folders.flatMap { folder in
             try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
@@ -274,6 +274,18 @@ import Testing
         let offending = sources.filter {
             $0.code.contains("localizedDescription") || $0.code.contains(logging) || $0.code.contains(mainThread)
         }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    /// La vue de l'entretien ne montre que des phrases fixes (`InterviewText`) : jamais le texte brut d'une erreur, et aucun journal
+    /// (le texte dit pourrait y passer). Le balayage voit l'état, la table de phrases et la vue ; sans eux il ne vérifierait rien.
+    @Test func theInterviewViewShowsNoRawErrorTextAndLogsNothing() throws {
+        let state = try Self.sources(under: "Sources/SupervoxApp/Interview")
+        #expect(state.contains { $0.place == "InterviewText.swift" }, "le balayage doit voir la table de phrases")
+        let view = try Self.sources(under: "Sources/SupervoxApp/Panel").filter { $0.place == "InterviewView.swift" }
+        #expect(view.count == 1, "le balayage doit voir la vue de l'entretien")
+        let logging = try Regex(Self.forbiddenLogging)
+        let offending = (state + view).filter { $0.code.contains("localizedDescription") || $0.code.contains(logging) }.map(\.place)
         #expect(offending.isEmpty, "\(offending)")
     }
 

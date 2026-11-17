@@ -68,7 +68,7 @@ public protocol OutsideClickMonitor: AnyObject {
 ///
 /// Clic en dehors. Tant que le panneau est ouvert, un clic dans une autre application le ferme
 /// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`), une
-/// relecture ou un collage (`review`, `pasting`).
+/// relecture ou un collage (`review`, `pasting`), ou un entretien (`PanelModel.holdsPanel`).
 ///
 /// Dictée. Le panneau ne connaît de la dictée que son état (`PanelModel.dictation`). Sa fermeture est signalée par `onClosed`,
 /// et Échap peut être confié à un gestionnaire (`escapeHandler`).
@@ -100,6 +100,8 @@ public final class PanelController: PanelOpening {
         (surface as? any ContentSizeObserving)?.onContentSizeChange = { [weak self] in self?.contentChanged() }
         // La frappe du panneau, telle que la surface la voit : seule source de ce que l'aide de la relecture annonce.
         (surface as? any KeyStateObserving)?.onKeyChange = { [weak self] isKey in self?.model.panelHasKeyboard = isKey }
+        // Le titre de l'entretien qui change est annoncé à VoiceOver : seul endroit où l'annonce du système est postée.
+        model.onAnnounce = { AccessibilityNotification.Announcement($0).post() }
     }
 
     /// Le contenu du panneau a changé (l'état de la dictée, un texte, une permission) : si sa hauteur n'est plus celle de la
@@ -160,11 +162,11 @@ public final class PanelController: PanelOpening {
         if let escapeHandler { escapeHandler() } else { close() }
     }
 
-    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée, une relecture ou un collage
-    /// (`DictationStage.holdsPanel`) : le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas annuler ce
+    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée, une relecture, un collage ou un entretien
+    /// (`PanelModel.holdsPanel`) : le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas annuler ce
     /// qu'on dit ni ce qu'on relit.
     private func outsideClick() {
-        guard !model.dictation.stage.holdsPanel else { return }
+        guard !model.holdsPanel else { return }
         close()
     }
 

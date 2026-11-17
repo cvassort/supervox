@@ -454,4 +454,34 @@ import Testing
         controller.open()
         #expect(controller.isOpen)
     }
+
+    // MARK: - Entretien (tâche 8)
+
+    @Test("règle 3 : le clic en dehors est ignoré pendant tout l'entretien, quelle que soit la phase", arguments: InterviewTextTests.phases)
+    func outsideClickIsIgnoredWhileAnInterviewRuns(_ phase: InterviewPhase) {
+        let controller = makeController()
+        controller.open()
+        var state = InterviewViewState(maxQuestions: 6, privacy: "La vie privée.")
+        state.phase = phase
+        model.setInterview(state)
+
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        #expect(surface.isShown)
+        #expect(clicks.isWatching)
+        #expect(!surface.calls.contains(.hide))
+    }
+
+    @Test("règle 3 : l'entretien fini (état retiré), le clic en dehors ferme de nouveau")
+    func outsideClickClosesOnceTheInterviewIsOver() {
+        let controller = makeController()
+        controller.open()
+        model.setInterview(InterviewViewState(maxQuestions: 6, privacy: "La vie privée."))
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        model.setInterview(nil)
+        clicks.clickOutside()
+        #expect(!model.isOpen)
+        #expect(surface.calls.last == .hide)
+    }
 }

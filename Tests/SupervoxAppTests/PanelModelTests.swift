@@ -570,4 +570,100 @@ import Testing
             #expect(model.copyState == .idle, "\(stage)")
         }
     }
+
+    // MARK: - L'entretien (tâche 8)
+
+    private static func interview(_ phase: InterviewPhase = .listening) -> InterviewViewState {
+        var state = InterviewViewState(maxQuestions: 6, privacy: "La vie privée.")
+        state.phase = phase
+        return state
+    }
+
+    @Test func thereIsNoInterviewUntilOneIsSet() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(model.interview == nil)
+        #expect(!model.holdsPanel && !model.modesLocked)
+        model.setInterview(Self.interview())
+        #expect(model.interview == Self.interview())
+        model.setInterview(nil)
+        #expect(model.interview == nil)
+    }
+
+    @Test("règle 3 : le panneau est tenu pendant tout l'entretien, quelle que soit la phase", arguments: InterviewTextTests.phases)
+    func theInterviewHoldsThePanel(phase: InterviewPhase) {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setInterview(Self.interview(phase))
+        #expect(model.holdsPanel)
+        #expect(model.modesLocked)
+        model.setInterview(nil)
+        #expect(!model.holdsPanel && !model.modesLocked)
+    }
+
+    @Test("règle 3 : la dictée tient toujours le panneau comme avant, et ne verrouille pas les pastilles")
+    func theDictationStillHoldsThePanelAsBefore() {
+        for stage in [DictationStage.preparing, .recording, .finalizing, .formatting, .review, .pasting, .correcting(.recording)] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.setDictation(DictationViewState(stage: stage))
+            #expect(model.holdsPanel, "\(stage)")
+            #expect(!model.modesLocked, "\(stage) : le verrou des pastilles n'existait pas pour la dictée")
+        }
+        for stage in [DictationStage.idle, .copied, .cancelled, .failed(.clipboard)] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.setDictation(DictationViewState(stage: stage))
+            #expect(!model.holdsPanel, "\(stage)")
+        }
+    }
+
+    @Test("règle 3 : une pastille touchée pendant l'entretien ne change pas de mode ; elle le change de nouveau après")
+    func aChipTouchedDuringTheInterviewChangesNothing() {
+        let model = PanelModel(lastModeID: "prompt")
+        var saved: [String] = []
+        model.onModeChanged = { saved.append($0) }
+        model.setInterview(Self.interview())
+        model.select("dictee-nettoyee")
+        #expect(model.selectedModeID == "prompt")
+        #expect(saved.isEmpty, "le mode non changé a été enregistré")
+        model.setInterview(nil)
+        model.select("dictee-nettoyee")
+        #expect(model.selectedModeID == "dictee-nettoyee")
+        #expect(saved == ["dictee-nettoyee"])
+    }
+
+    @Test("règle 4 : « Conclure » appelle onConclude, sauf en préparation et en conclusion (bouton grisé)")
+    func concludeCallsOnConcludeExceptWhilePreparingAndConcluding() {
+        for phase in InterviewTextTests.phases {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            var calls = 0
+            model.onConclude = { calls += 1 }
+            model.setInterview(Self.interview(phase))
+            model.concludeInterview()
+            #expect(calls == (phase == .preparing || phase == .concluding ? 0 : 1), "\(phase)")
+        }
+    }
+
+    @Test("règle 4 : sans entretien « Conclure » ne fait rien")
+    func concludeWithoutAnInterviewDoesNothing() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var calls = 0
+        model.onConclude = { calls += 1 }
+        model.concludeInterview()
+        #expect(calls == 0)
+    }
+
+    @Test("règle 5 : seul un changement de titre est annoncé, au rythme où l'état est posé")
+    func onlyATitleChangeIsAnnounced() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var announced: [String] = []
+        model.onAnnounce = { announced.append($0) }
+        model.setInterview(Self.interview(.preparing))
+        var listening = Self.interview(.listening)
+        model.setInterview(listening)
+        for level: Float in [0.1, 0.5, 0.9] {  // le niveau arrive à chaque tranche : jamais annoncé
+            listening.level = level
+            model.setInterview(listening)
+        }
+        model.setInterview(Self.interview(.thinking))
+        model.setInterview(nil)
+        #expect(announced == ["Préparation de l'entretien…", "À vous", "Réflexion…"])
+    }
 }

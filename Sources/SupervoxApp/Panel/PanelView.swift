@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Contenu du panneau : pastilles de modes en haut, la dictée au centre (« Prêt » avec le raccourci, ou la dictée en cours),
-/// ligne des permissions et ligne d'avis si besoin, menu « … » en bas à droite.
+/// Contenu du panneau : pastilles de modes en haut, la dictée au centre (« Prêt » avec le raccourci, ou la dictée en cours) ou, pendant
+/// un entretien, la vue de l'entretien à sa place, ligne des permissions et ligne d'avis si besoin, menu « … » en bas à droite.
 public struct PanelView: View {
     let model: PanelModel
     let permissions: PermissionsModel
@@ -35,14 +35,8 @@ public struct PanelView: View {
     }
 
     private var chips: some View {
-        // Les pastilles des réglages, dans leur ordre ; à la ligne quand elles débordent, le panneau grandit.
-        ChipFlowLayout {
-            ForEach(model.modes) { mode in
-                ModeChipButton(
-                    title: mode.title, isSelected: mode.id == model.selectedModeID
-                ) { model.select(mode.id) }
-            }
-        }
+        ModeChips(
+            modes: model.modes, selectedID: model.selectedModeID, locked: model.modesLocked, select: { model.select($0) })
     }
 
     /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.
@@ -110,7 +104,7 @@ public struct PanelView: View {
 }
 
 /// Pastille de mode : capsule pleine si choisie, discrète sinon.
-private struct ModeChipButton: View {
+struct ModeChipButton: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
