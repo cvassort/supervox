@@ -127,15 +127,32 @@ import Testing
         }
     }
 
-    private func concludeImage(enabled: Bool) throws -> Data {
-        try image(of: ConcludeButton(enabled: enabled, action: {}).frame(width: 200).environment(\.controlActiveState, .key))
+    /// Le bouton reçoit l'état de l'entretien : il lit `canConclude` au seul endroit qui le calcule, aucun booléen libre.
+    private func concludeImage(_ phase: InterviewPhase, key: Bool = true) throws -> Data {
+        try image(
+            of: ConcludeButton(state: state(phase), action: {}).frame(width: 200)
+                .environment(\.controlActiveState, key ? .key : .inactive))
     }
 
-    @Test("règle 4 : le bouton grisé ne se dessine pas comme le bouton actif")
-    func theDisabledButtonLooksDisabled() throws {
-        let on = try concludeImage(enabled: true)
-        #expect(try concludeImage(enabled: true) == on, "le rendu n'est pas reproductible")
-        #expect(try concludeImage(enabled: false) != on)
+    @Test("règle 4, I2 : « Conclure » se dessine grisé en préparation et en conclusion, actif en écoute, réflexion et parole")
+    func theButtonFollowsThePhaseOfTheState() throws {
+        let active = try concludeImage(.listening)
+        #expect(try concludeImage(.listening) == active, "le rendu n'est pas reproductible")
+        for phase in [InterviewPhase.thinking, .speaking] {
+            #expect(try concludeImage(phase) == active, "\(phase) : le bouton devrait être actif")
+        }
+        for phase in [InterviewPhase.preparing, .concluding] {
+            #expect(try concludeImage(phase) != active, "\(phase) : le bouton devrait être grisé")
+        }
+        #expect(try concludeImage(.preparing) == concludeImage(.concluding))
+    }
+
+    @Test("I5 : « Conclure » actif et grisé restent distincts, et ne dépendent pas de l'état clé de la fenêtre")
+    func theButtonLooksTheSameWhetherTheWindowIsKeyOrNot() throws {
+        for phase in [InterviewPhase.listening, .preparing] {
+            #expect(try concludeImage(phase, key: true) == concludeImage(phase, key: false), "\(phase) : l'aspect suit la fenêtre")
+        }
+        #expect(try concludeImage(.listening, key: false) != concludeImage(.preparing, key: false))
     }
 
     @Test("règle 3 : les pastilles verrouillées ne se dessinent pas comme les pastilles actives")
@@ -147,19 +164,32 @@ import Testing
         #expect(try chips(locked: true) != chips(locked: false))
     }
 
+    @Test("M6 : une pastille verrouillée et non choisie dit pourquoi à VoiceOver ; la choisie et les actives, rien")
+    func aLockedChipExplainsItself() {
+        #expect(ModeChips.accessibilityHint(locked: true, isSelected: false) == "Indisponible pendant un entretien.")
+        #expect(ModeChips.accessibilityHint(locked: true, isSelected: true) == nil)
+        #expect(ModeChips.accessibilityHint(locked: false, isSelected: false) == nil)
+        #expect(ModeChips.accessibilityHint(locked: false, isSelected: true) == nil)
+    }
+
     // MARK: Règle 5 : l'orbe
 
-    @Test("règle 5 : l'orbe porte le titre de l'état comme libellé et n'est pas un élément interactif")
+    @Test("I3, règle 5 : l'orbe porte le titre de l'état comme libellé et n'est pas un élément interactif")
     func theOrbCarriesTheTitleAndIsNotInteractive() {
-        for phase in InterviewTextTests.phases {
-            let spec = OrbAccessibility(phase: phase)
-            #expect(spec.label == InterviewText.title(phase), "\(phase)")
+        var states = InterviewTextTests.phases.map { state($0) }
+        var textOnly = state(.speaking)
+        textOnly.textOnly = true
+        states.append(textOnly)
+        for state in states {
+            let spec = OrbAccessibility(title: state.title)
+            #expect(spec.label == state.title, "\(state.phase)")
             #expect(!spec.traits.contains(.isButton) && !spec.traits.contains(.isLink) && !spec.traits.contains(.isToggle))
+            #expect(spec.traits.contains(.isImage))
         }
     }
 
-    @Test("règle 5 : l'orbe suit le niveau du micro, borné, NaN lu comme le silence")
-    func theOrbFollowsTheLevelBoundedAndNaNIsSilence() {
+    @Test("I8 : seule l'écoute suit le niveau du micro (borné, NaN lu comme le silence) ; la parole et l'attente l'ignorent")
+    func onlyListeningFollowsTheMicrophone() {
         let silent = OrbAppearance(level: 0, phase: .listening, reduceMotion: false)
         let loud = OrbAppearance(level: 1, phase: .listening, reduceMotion: false)
         let middle = OrbAppearance(level: 0.5, phase: .listening, reduceMotion: false)
@@ -169,10 +199,18 @@ import Testing
         #expect(OrbAppearance(level: -3, phase: .listening, reduceMotion: false) == silent)
         #expect(OrbAppearance(level: .nan, phase: .listening, reduceMotion: false) == silent)
         #expect(OrbAppearance(level: .infinity, phase: .listening, reduceMotion: false) == loud)
+        for phase in [InterviewPhase.preparing, .thinking, .speaking, .concluding] {
+            for reduce in [false, true] {
+                let quiet = OrbAppearance(level: 0, phase: phase, reduceMotion: reduce)
+                let noisy = OrbAppearance(level: 1, phase: phase, reduceMotion: reduce)
+                #expect(quiet == noisy, "\(phase) (mouvement réduit : \(reduce)) : l'orbe suit le micro")
+                #expect(quiet.scale == 1, "\(phase)")
+            }
+        }
     }
 
-    @Test("règle 5 : avec « Réduire les animations » l'orbe reste fixe, seule l'opacité suit le niveau")
-    func withReducedMotionTheOrbIsFixedAndOnlyItsOpacityFollowsTheLevel() {
+    @Test("règle 5 : avec « Réduire les animations » l'orbe d'écoute reste fixe, seule l'opacité suit le niveau")
+    func withReducedMotionTheListeningOrbIsFixedAndOnlyItsOpacityFollowsTheLevel() {
         let silent = OrbAppearance(level: 0, phase: .listening, reduceMotion: true)
         let middle = OrbAppearance(level: 0.5, phase: .listening, reduceMotion: true)
         let loud = OrbAppearance(level: 1, phase: .listening, reduceMotion: true)
@@ -183,13 +221,39 @@ import Testing
         #expect(loud.opacity <= 1)
     }
 
-    @Test("une phase d'attente éteint l'orbe : même niveau, moins d'opacité qu'à l'écoute")
+    @Test("une phase d'attente éteint l'orbe ; l'écoute et la parole sont pleines")
     func aWaitingPhaseDimsTheOrb() {
         for reduce in [false, true] {
-            let live = OrbAppearance(level: 0.6, phase: .listening, reduceMotion: reduce)
-            #expect(OrbAppearance(level: 0.6, phase: .speaking, reduceMotion: reduce) == live)
+            let live = OrbAppearance(level: 1, phase: .listening, reduceMotion: reduce)
+            #expect(OrbAppearance(level: 1, phase: .speaking, reduceMotion: reduce).opacity == live.opacity)
             for phase in [InterviewPhase.preparing, .thinking, .concluding] {
-                #expect(OrbAppearance(level: 0.6, phase: phase, reduceMotion: reduce).opacity < live.opacity, "\(phase)")
+                #expect(OrbAppearance(level: 1, phase: phase, reduceMotion: reduce).opacity < live.opacity, "\(phase)")
+            }
+        }
+    }
+
+    @Test("I8 : l'orbe dit qui a la parole par son symbole : micro en écoute, onde en parole, attente sinon ; symboles du système")
+    func theOrbSymbolSaysWhoHasTheFloor() {
+        func symbol(_ phase: InterviewPhase, textOnly: Bool = false) -> String {
+            OrbAppearance(level: 0.5, phase: phase, textOnly: textOnly, reduceMotion: false).symbol
+        }
+        #expect(symbol(.listening) == "mic.fill")
+        #expect(symbol(.speaking) == "waveform")
+        #expect(symbol(.speaking, textOnly: true) == "text.bubble.fill", "sans voix, rien ne parle : pas d'onde")
+        for phase in [InterviewPhase.preparing, .thinking, .concluding] { #expect(symbol(phase) == "ellipsis", "\(phase)") }
+        let all = Set(InterviewTextTests.phases.map { symbol($0) } + [symbol(.speaking, textOnly: true)])
+        #expect(all.count == 4)
+        for name in all {
+            #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil, "\(name) n'est pas un symbole du système")
+        }
+    }
+
+    @Test("M1 : un signe d'activité lent pendant la conclusion seulement, arrêté sous « Réduire les animations »")
+    func onlyTheConclusionPulsesAndNotWhenMotionIsReduced() {
+        for phase in InterviewTextTests.phases {
+            for reduce in [false, true] {
+                let pulses = OrbAppearance(level: 0, phase: phase, reduceMotion: reduce).pulses
+                #expect(pulses == (phase == .concluding && !reduce), "\(phase), mouvement réduit : \(reduce)")
             }
         }
     }
@@ -202,7 +266,9 @@ import Testing
     }
 
     private func orb(level: Float, phase: InterviewPhase = .listening, reduceMotion: Bool) throws -> Rendering {
-        let host = NSHostingView(rootView: InterviewOrb(level: level, phase: phase, reduceMotion: reduceMotion))
+        let host = // Les 16 points de marge du panneau (`PanelView.padding`) : l'orbe est alignée sur la colonne des textes par un décalage de
+        // -8 points, son halo le plus grand déborde donc de son cadre dans cette marge.
+        NSHostingView(rootView: InterviewOrb(state: state(phase, level: level), reduceMotion: reduceMotion).padding(16))
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
         host.layoutSubtreeIfNeeded()
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
@@ -218,7 +284,7 @@ import Testing
             png: try #require(bitmap.representation(using: .png, properties: [:])))
     }
 
-    @Test("règle 5 : dessiné, l'orbe grandit avec le niveau ; avec « Réduire les animations » sa silhouette ne bouge pas")
+    @Test("règle 5 : dessinée, l'orbe d'écoute grandit avec le niveau ; avec « Réduire les animations » sa silhouette ne bouge pas")
     func theDrawnOrbGrowsWithTheLevelUnlessMotionIsReduced() throws {
         let silent = try orb(level: 0, reduceMotion: false)
         let loud = try orb(level: 1, reduceMotion: false)
@@ -232,13 +298,19 @@ import Testing
         #expect(fixedSilent.box == silent.box, "l'orbe fixe est l'orbe au repos")
     }
 
+    @Test("I8 : dessinée, l'orbe de parole ne bouge pas avec le micro, et ne ressemble pas à celle d'écoute")
+    func theDrawnSpeakingOrbIgnoresTheMicrophoneAndDiffersFromListening() throws {
+        let quiet = try orb(level: 0, phase: .speaking, reduceMotion: false)
+        let noisy = try orb(level: 1, phase: .speaking, reduceMotion: false)
+        #expect(quiet == noisy, "l'orbe de parole suit le micro")
+        #expect(try orb(level: 0, phase: .listening, reduceMotion: false).png != quiet.png, "écoute et parole se ressemblent")
+    }
+
     @Test("l'orbe, au niveau le plus fort, n'est coupée par aucun bord de son cadre")
     func theLoudestOrbIsNotClippedByItsFrame() throws {
-        for phase in [InterviewPhase.listening, .speaking] {
-            let loud = try orb(level: 1, phase: phase, reduceMotion: false)
-            #expect(loud.box.minX > 0 && loud.box.minY > 0, "\(loud.box) dans \(loud.size)")
-            #expect(loud.box.maxX < loud.size.width && loud.box.maxY < loud.size.height, "\(loud.box) dans \(loud.size)")
-        }
+        let loud = try orb(level: 1, phase: .listening, reduceMotion: false)
+        #expect(loud.box.minX > 0 && loud.box.minY > 0, "\(loud.box) dans \(loud.size)")
+        #expect(loud.box.maxX < loud.size.width && loud.box.maxY < loud.size.height, "\(loud.box) dans \(loud.size)")
     }
 
     // MARK: Règle 5 : l'annonce VoiceOver
@@ -275,10 +347,42 @@ import Testing
 
     // MARK: La vue elle-même
 
-    /// Hauteur de la vue pour cet état, à la largeur du panneau.
-    private func height(of state: InterviewViewState) -> CGFloat {
-        let host = NSHostingView(rootView: InterviewView(state: state, conclude: {}).frame(width: 488))
-        return host.fittingSize.height
+    /// Hauteur du panneau entier pour cet état, à sa largeur de 520 points.
+    private func panelHeight(_ state: InterviewViewState) -> CGFloat {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setInterview(state)
+        let view = PanelView(model: model, permissions: PermissionsModel(probe: GrantedProbe()), openSettings: {}, quit: {})
+        return NSHostingView(rootView: view).fittingSize.height
+    }
+
+    private func words(_ count: Int) -> String { Array(repeating: "précision", count: count).joined(separator: " ") }
+
+    /// Le pire cas réaliste : une réplique et une réponse très longues, l'avis le plus long, la note de maintien, deux fournisseurs
+    /// de 40 caractères dans la ligne de vie privée.
+    private func worstCase(words count: Int) -> InterviewViewState {
+        let forty = String(repeating: "x", count: Provider.shortNameLimit)
+        var worst = InterviewViewState(maxQuestions: 12, privacy: InterviewText.privacy(provider: forty, voiceProvider: forty))
+        worst.phase = .listening
+        worst.question = 12
+        worst.level = 1
+        worst.questionText = words(count)
+        worst.lastReply = words(count)
+        worst.notice = InterviewText.failure(.engine("transcriptionNotPrepared"))
+        worst.holdNote = true
+        return worst
+    }
+
+    @Test("I6, M11 : au pire cas réaliste le panneau reste sous son budget de hauteur, quelle que soit la longueur des textes")
+    func theWorstCasePanelStaysUnderTheHeightBudget() {
+        let long = panelHeight(worstCase(words: 300))
+        #expect(long <= InterviewView.panelHeightBudget, "\(long) pt pour un budget de \(InterviewView.panelHeightBudget) pt")
+        // Des textes dix fois plus longs ne le font pas grandir : la zone défile, plafonnée.
+        #expect(panelHeight(worstCase(words: 3_000)) == long)
+        // La zone se plafonne vraiment : sans plafond, 300 mots feraient bien plus que la zone ; avec un texte court elle est plus basse.
+        var short = worstCase(words: 300)
+        short.questionText = "Pourquoi ?"
+        short.lastReply = "Parce que."
+        #expect(panelHeight(short) < long - 50, "un texte court prend autant de place qu'un texte long")
     }
 
     @Test("chaque état dessine sa propre vue, en clair comme en sombre")
