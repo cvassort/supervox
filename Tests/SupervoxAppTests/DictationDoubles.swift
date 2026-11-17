@@ -106,6 +106,8 @@ final class FakeEngines: Sendable {
         var loadedGate: TestGate?
         var preloadedFor: [TranscriptionSettings] = []
         var preloadGate: TestGate?
+        /// Un journal commun à d'autres doubles (l'entretien) : « session de dictée fabriquée » y est écrit à chaque fabrication.
+        var journal: Journal?
     }
 
     let state = Mutex(State())
@@ -134,6 +136,7 @@ final class FakeEngines: Sendable {
                 let (error, session) = state.withLock { state -> ((any Error)?, FakeSession) in
                     let session = state.queue.isEmpty ? FakeSession() : state.queue.removeFirst()
                     if state.makeError == nil { state.sessions.append(session) }
+                    state.journal?.append("session de dictée fabriquée")
                     return (state.makeError, session)
                 }
                 if let error { throw error }
@@ -384,7 +387,8 @@ final class RewriteCall: Sendable {
     /// de touches double répond aux sondages des modificateurs.
     init(
         trusted: Bool = true, wait: (@MainActor (Double) async -> Void)? = nil, log: CallLog = CallLog(),
-        limit: Int = 1000, heldModifiers: [Bool] = [false]
+        limit: Int = 1000, heldModifiers: [Bool] = [false], interview: (any InterviewRunning)? = nil,
+        concludeInterview: (@MainActor () -> Void)? = nil
     ) {
         rig = InsertionRig(log: log, trusted: trusted, held: heldModifiers, wait: wait)
         engines.configure { $0.limit = limit }
@@ -431,7 +435,7 @@ final class RewriteCall: Sendable {
                 return knobs.front
             },
             hotKeyLabel: { knobs.hotKeyLabel },
-            wait: { await handover.wait($0) })
+            wait: { await handover.wait($0) }, interview: interview, concludeInterview: concludeInterview)
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
         controller.onViewChange = { [weak self] in self?.views.append($0) }

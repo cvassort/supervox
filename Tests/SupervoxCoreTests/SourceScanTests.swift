@@ -307,8 +307,8 @@ import Testing
 
     /// Aucune annonce réelle du système dans la suite : l'annonce VoiceOver n'est postée que par `Panel/AccessibilityAnnouncing.swift`,
     /// que le contrôleur du panneau reçoit par `AccessibilityAnnouncing` (un double dans les tests). Aucun test ne nomme la
-    /// réalisation du système. Limite : un test qui construit `AppController` ou `PanelController` sans annonceur et pose un entretien
-    /// en posterait une ; aucun ne le fait aujourd'hui.
+    /// réalisation du système. Toute construction d'`AppController` ou de `PanelController` dans les tests reçoit un annonceur
+    /// (`theControllersBuiltByTestsReceiveAnAnnouncer`) : les tests qui lancent un entretien n'en postent aucune.
     @Test func theSystemAnnouncementIsPostedInOnePlaceAndNoTestNamesIt() throws {
         let sources = try Self.sources(under: "Sources/SupervoxApp")
         let home = try #require(sources.first { $0.place == "Panel/AccessibilityAnnouncing.swift" }, "le fichier de l'annonce a disparu")
@@ -319,6 +319,49 @@ import Testing
             .filter { !$0.place.hasSuffix("SourceScanTests.swift") && ($0.code.contains("AccessibilityNotification") || $0.code.contains("SystemAccessibilityAnnouncer")) }
             .map(\.place)
         #expect(tests.isEmpty, "\(tests)")
+    }
+
+    /// Les arguments d'un appel, de la parenthèse ouvrante à la fermante qui lui répond (le code des tests est bien formé).
+    private static func callArguments(in code: String, from open: String.Index) -> Substring {
+        var depth = 0
+        var index = open
+        while index < code.endIndex {
+            switch code[index] {
+            case "(": depth += 1
+            case ")":
+                depth -= 1
+                if depth == 0 { return code[open...index] }
+            default: break
+            }
+            index = code.index(after: index)
+        }
+        return code[open...]
+    }
+
+    /// Chaque `AppController(…)` ou `PanelController(…)` construit par un test reçoit `announcer:` : sans lui, le défaut est
+    /// l'annonceur du système, et un test qui pose un entretien posterait une vraie annonce VoiceOver.
+    @Test func theControllersBuiltByTestsReceiveAnAnnouncer() throws {
+        let construction = try Regex(#"\b(?:AppController|PanelController)\s*\("#)
+        var seen = 0
+        var offending: [String] = []
+        for file in try Self.sources(under: "Tests") where !file.place.hasSuffix("SourceScanTests.swift") {
+            for match in file.code.matches(of: construction) {
+                seen += 1
+                let open = file.code.index(before: match.range.upperBound)
+                if !Self.callArguments(in: file.code, from: open).contains("announcer:") { offending.append(file.place) }
+            }
+        }
+        #expect(seen >= 10, "le balayage doit voir les constructions des tests (\(seen))")
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test func theAnnouncerScanSeesAConstructionWithoutAnnouncer() throws {
+        let code = "let c = AppController(settingsStore: store, inserter: rig.inserter)\nlet d = PanelController(model: m, announcer: a)"
+        let construction = try Regex(#"\b(?:AppController|PanelController)\s*\("#)
+        let calls = code.matches(of: construction).map {
+            Self.callArguments(in: code, from: code.index(before: $0.range.upperBound)).contains("announcer:")
+        }
+        #expect(calls == [false, true])
     }
 
     @Test(arguments: [

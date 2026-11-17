@@ -40,7 +40,7 @@ import Testing
             systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi, settingsView: settingsView,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            rewriter: .unavailable, inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter, announcer: RecordingAnnouncer())
     }
 
     /// Les modèles que la fenêtre de test a reçus, pour agir comme l'utilisateur.

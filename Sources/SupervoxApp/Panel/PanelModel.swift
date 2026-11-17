@@ -264,10 +264,13 @@ public final class PanelModel {
     }
 
     /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement ; pendant l'entretien (`modesLocked`) aucun
-    /// changement n'est pris, quel qu'en soit le chemin (pastille, raccourci d'un mode).
-    public func select(_ id: String) {
-        guard !modesLocked, id != selectedModeID, modes.contains(where: { $0.id == id }) else { return }
+    /// changement n'est pris, quel qu'en soit le chemin (pastille, raccourci d'un mode). Rend vrai seulement si le mode a changé
+    /// (et `onModeChanged` a été appelé) : un refus n'a aucun effet de bord.
+    @discardableResult
+    public func select(_ id: String) -> Bool {
+        guard !modesLocked, id != selectedModeID, modes.contains(where: { $0.id == id }) else { return false }
         selectedModeID = id
         onModeChanged?(id)
+        return true
     }
 }

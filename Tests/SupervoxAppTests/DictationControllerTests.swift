@@ -807,13 +807,14 @@ import SupervoxCore
 
     // MARK: - Mode, micro, modèle
 
-    @Test func anotherModeOpensThePanelWithoutADictationAndSaysSo() async {
+    /// Sans entretien branché (`interview: nil`, cas de ce banc seulement), le mode Entretien le dit, sans micro.
+    @Test func theInterviewModeWithoutAnInterviewOpensThePanelWithoutADictationAndSaysSo() async {
         let h = DictationHarness()
         h.knobs.modeID = ModeChip.interviewID
         h.controller.hotKeyPressed()
 
         #expect(h.panel.isOpen)
-        #expect(h.controller.view == DictationViewState(notice: "Ce mode arrive à une étape suivante."))
+        #expect(h.controller.view == DictationViewState(notice: "L'entretien n'a pas pu démarrer\u{00A0}: relancez Supervox."))
         await settle()
         #expect(h.engines.sessions.isEmpty)
 
@@ -1413,13 +1414,13 @@ import SupervoxCore
         _ = await h.session()
     }
 
-    @Test func theInterviewHotKeyOpensThePanelOnInterviewWithTheLaterModeSentence() async {
+    @Test func theInterviewHotKeyWithoutAnInterviewOpensThePanelOnInterviewWithTheCouldNotStartSentence() async {
         let h = DictationHarness()
         h.controller.modeHotKeyPressed(Self.interview)
 
         #expect(h.knobs.selectedModes == [Self.interview])
         #expect(h.panel.isOpen)
-        #expect(h.controller.view == DictationViewState(notice: DictationController.laterModeNotice))
+        #expect(h.controller.view == DictationViewState(notice: InterviewText.couldNotStart))
         await settle()
         #expect(h.engines.sessions.isEmpty)
     }
@@ -1431,7 +1432,7 @@ import SupervoxCore
 
         #expect(h.panel.isOpen)
         #expect(h.panel.closeCount == 0)
-        #expect(h.controller.view == DictationViewState(notice: DictationController.laterModeNotice))
+        #expect(h.controller.view == DictationViewState(notice: InterviewText.couldNotStart))
         // Déjà sur ce mode : le même raccourci referme le panneau, comme le raccourci global.
         h.controller.modeHotKeyPressed(Self.interview)
         #expect(!h.panel.isOpen)

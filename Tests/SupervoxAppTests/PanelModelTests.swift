@@ -620,11 +620,13 @@ import Testing
         var saved: [String] = []
         model.onModeChanged = { saved.append($0) }
         model.setInterview(Self.interview())
-        model.select("dictee-nettoyee")
+        #expect(!model.select("dictee-nettoyee"), "T9-1 : le refus se dit à l'appelant")
         #expect(model.selectedModeID == "prompt")
         #expect(saved.isEmpty, "le mode non changé a été enregistré")
         model.setInterview(nil)
-        model.select("dictee-nettoyee")
+        #expect(!model.select("dictee-inconnue"), "un mode inconnu n'est pas un changement")
+        #expect(!model.select("prompt"), "le mode déjà choisi n'est pas un changement")
+        #expect(model.select("dictee-nettoyee"))
         #expect(model.selectedModeID == "dictee-nettoyee")
         #expect(saved == ["dictee-nettoyee"])
     }

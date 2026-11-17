@@ -81,7 +81,7 @@ final class TimeoutLog: Sendable {
                 },
                 wait: { [holdSleeper] in await holdSleeper.wait($0) }),
             terminationWait: terminationWait ?? { try? await Task.sleep(for: .seconds($0)) },
-            reviewHandoverWait: { [handover] in await handover.wait($0) })
+            reviewHandoverWait: { [handover] in await handover.wait($0) }, announcer: RecordingAnnouncer())
         controller.launch()
         return controller
     }
@@ -136,15 +136,20 @@ final class TimeoutLog: Sendable {
         #expect(controller.panelModel.isOpen)
     }
 
-    @Test func theInterviewHotKeyOpensThePanelOnInterviewWithTheLaterModeSentence() async {
+    /// Le raccourci du mode Entretien lance l'entretien (panneau ouvert sur sa préparation). Ce constructeur ne reçoit aucune
+    /// résolution : l'entretien s'arrête sur « n'a pas pu démarrer », avant tout micro ; aucune session de dictée n'est créée.
+    @Test func theInterviewHotKeyLaunchesTheInterview() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController(settings: modesSettings(lastModeID: ModeChip.rawID))
         modeRegistrars.press(HotKey(keyCode: 0x02, modifiers: [.control, .option]))
 
         #expect(controller.panelModel.isOpen)
         #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
-        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview?.phase == .preparing, "l'entretien est lancé")
         #expect(store.load().settings.lastModeID == ModeChip.interviewID)
+        #expect(await until { controller.panelModel.interview == nil })
+        #expect(controller.panelModel.dictation.notice == InterviewText.couldNotStart)
+        #expect(controller.panelModel.isOpen)
         await settle()
         #expect(engines.sessions.isEmpty)
     }
@@ -259,7 +264,7 @@ final class TimeoutLog: Sendable {
         #expect(controller.panelModel.selectedModeID == ModeChip.rawID)
         hotKeys.press()
         let session = await record(controller)
-        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview == nil)
         // Le mode supprimé ne met rien en forme : la dictée brute se colle telle quelle.
         session.emit(.finished("euh bonjour"))
         #expect(await until { controller.panelModel.dictation.stage == .idle && !controller.panelModel.isOpen })
@@ -743,7 +748,7 @@ final class TimeoutLog: Sendable {
 
         hotKeys.press()
         _ = await record(controller)
-        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview == nil)
         #expect(engines.sessions.count == 1)
     }
 
@@ -766,7 +771,7 @@ final class TimeoutLog: Sendable {
                     return held.value
                 },
                 wait: { [holdSleeper] in await holdSleeper.wait($0) }),
-            reviewHandoverWait: { [handover] in await handover.wait($0) })
+            reviewHandoverWait: { [handover] in await handover.wait($0) }, announcer: RecordingAnnouncer())
         controller.launch()
         return controller
     }
@@ -830,7 +835,7 @@ final class TimeoutLog: Sendable {
         await dictateToReview(controller)
 
         #expect(made.model.requests.first?.instruction.hasPrefix("Consigne neuve.") == true)
-        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview == nil)
     }
 
     @Test func aModeEditedDuringTheRecordingDoesNotChangeThatDictation() async throws {
@@ -902,14 +907,22 @@ final class TimeoutLog: Sendable {
         #expect(controller.panelModel.dictation.elapsed == 1.5)
     }
 
-    @Test func aModeOtherThanRawDictationOpensThePanelWithoutADictation() async {
+    /// Au repos, un clic sur la pastille Entretien lance l'entretien, puis le raccourci global le relance ; ni l'un ni l'autre ne
+    /// crée de session de dictée (ce constructeur ne reçoit aucune résolution : l'entretien s'arrête sur sa phrase).
+    @Test func theInterviewPillAndThenTheGlobalHotKeyLaunchTheInterviewWithoutADictation() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
         controller.panelModel.select(ModeChip.interviewID)
+        #expect(controller.panelModel.interview != nil, "la pastille lance l'entretien")
+        #expect(controller.panelModel.isOpen)
+        #expect(await until { controller.panelModel.interview == nil })
+        #expect(controller.panelModel.dictation.notice == InterviewText.couldNotStart)
 
         hotKeys.press()
+        #expect(controller.panelModel.interview != nil, "le raccourci global le relance")
         #expect(controller.panelModel.isOpen)
-        #expect(controller.panelModel.dictation.notice == "Ce mode arrive à une étape suivante.")
+        #expect(await until { controller.panelModel.interview == nil })
+        #expect(controller.panelModel.dictation.notice == InterviewText.couldNotStart)
         await settle()
         #expect(engines.sessions.isEmpty)
 
@@ -1113,10 +1126,13 @@ final class TimeoutLog: Sendable {
         #expect(controller.panelModel.dictation == before)
         #expect(controller.panelModel.isOpen)
 
-        // Fermée, la relecture laisse la place : la dictée suivante suit le nouveau mode (ici, pas encore de dictée).
+        // Fermée, la relecture laisse la place : l'appui suivant suit le nouveau mode, l'entretien (qui ne démarre pas ici : ce
+        // constructeur ne reçoit aucune résolution), sans session de dictée.
         escape.press()
         hotKeys.press()
-        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview != nil, "l'entretien est lancé")
+        #expect(await until { controller.panelModel.interview == nil })
+        #expect(controller.panelModel.dictation.notice == InterviewText.couldNotStart)
         #expect(engines.sessions.count == 2)
         controller.panelModel.select(ModeChip.rawID)
         #expect(controller.settings.lastModeID == ModeChip.rawID)

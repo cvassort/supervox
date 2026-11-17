@@ -22,19 +22,26 @@ import Testing
         let cleaned = Mode(id: ModeChip.cleanedID, name: "Dictée nettoyée")
         let origin = try #require(ModeDefaults.instruction(for: ModeChip.cleanedID))
         #expect(ModeRun.from(cleaned) == .rewrite(instruction: origin, model: nil, engine: nil))
-        #expect(ModeRun.from(Mode(id: ModeChip.promptID, name: "Prompt")) != .later)
+        #expect(ModeRun.from(Mode(id: ModeChip.promptID, name: "Prompt")) == .rewrite(
+            instruction: try #require(ModeDefaults.instruction(for: ModeChip.promptID)), model: nil, engine: nil))
     }
 
-    @Test func theInterviewAndAnAbsentModeDoNotDictateYet() {
-        #expect(ModeRun.from(Mode(id: ModeChip.interviewID, name: "Entretien")) == .later)
-        #expect(ModeRun.from(Mode(id: ModeChip.interviewID, name: "Entretien", instruction: "Fais ceci.")) == .later)
-        #expect(ModeRun.from(nil) == .later)
+    @Test("le mode Entretien lance l'entretien avec son moteur, quelle que soit sa consigne ; un mode absent ne démarre rien")
+    func theInterviewLaunchesTheInterviewAndAnAbsentModeStartsNothing() {
+        #expect(ModeRun.from(Mode(id: ModeChip.interviewID, name: "Entretien")) == .interview(engine: nil))
+        #expect(ModeRun.from(Mode(id: ModeChip.interviewID, name: "Entretien", instruction: "Fais ceci.")) == .interview(engine: nil))
+        #expect(ModeRun.from(Mode(id: ModeChip.interviewID, name: "Entretien", engine: .whisperKit)) == .interview(engine: .whisperKit))
+        #expect(ModeRun.interview(engine: .whisperKit).engine == .whisperKit)
+        #expect(ModeRun.from(nil) == .missing)
+        #expect(ModeRun.missing.engine == nil)
     }
 
-    @Test func theLegacyDefaultKeepsStepFourBehaviour() {
+    @Test("le défaut sans réglages : la dictée brute dicte, l'entretien se lance, tout autre mode ne démarre rien")
+    func theLegacyDefault() {
         #expect(ModeRun.legacy(ModeChip.rawID) == .raw(engine: nil))
-        for id in [ModeChip.cleanedID, ModeChip.promptID, ModeChip.interviewID, "perso-un"] {
-            #expect(ModeRun.legacy(id) == .later)
+        #expect(ModeRun.legacy(ModeChip.interviewID) == .interview(engine: nil))
+        for id in [ModeChip.cleanedID, ModeChip.promptID, "perso-un"] {
+            #expect(ModeRun.legacy(id) == .missing)
         }
     }
 }

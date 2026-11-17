@@ -514,9 +514,11 @@ for dark in [false, true] {
                 stage: .failed(.engine("x")), notice: reason + " " + reason,
                 lastTranscript: exampleLongText + " " + exampleLongText)),
          granted),
-        ("dictee-mode-indisponible",
-         dictationPanelModel(
-            mode: ModeChip.interviewID, state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
+        // Le mode Entretien choisi : l'appui lance l'entretien, qui prend la place de la dictée (ici à l'écoute, comme
+        // `entretien-ecoute`).
+        ("dictee-mode-entretien",
+         interviewPanelModel(
+            phase: .listening, question: 1, level: 0.5, questionText: exampleInterviewQuestion, lastReply: ""), granted),
         ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(lastTranscript: exampleShortText)), granted),
         ("dictee-dernier-texte-copie", {
             let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))

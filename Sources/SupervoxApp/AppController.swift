@@ -33,6 +33,8 @@ public final class AppController {
     public let permissions: PermissionsModel
     /// La dictée : le raccourci, Échap et la fermeture du panneau y mènent.
     public let dictation: DictationController
+    /// L'entretien du mode Entretien : la dictée le lance, le conclut et l'annule ; « Conclure » du panneau y mène.
+    public let interview: InterviewController
     /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
     public let systemHotKeys: any SystemHotKeys
     /// Nomme les touches des raccourcis (libellés, avis) et reconnaît ⌘Q, ⌘W, ⌘H et ⌘M.
@@ -91,7 +93,11 @@ public final class AppController {
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
-        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        interview interviewEnvironment: InterviewEnvironment = .unavailable,
+        resolveInterview: (@MainActor (AppSettings, TranscriptionEngine?) async throws -> InterviewSetup)? = nil,
+        interviewHistory: any InterviewHistoryStoring = DiscardingInterviewHistory(),
+        announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         self.terminationWait = terminationWait
         self.settingsStore = settingsStore
@@ -123,8 +129,15 @@ public final class AppController {
             openSettings: { relay.openSettings?() }, quit: { relay.quit?() })
         let panel = PanelController(
             model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
-            surface: makePanelSurface(AnyView(content)))
+            surface: makePanelSurface(AnyView(content)), announcer: announcer)
         self.panel = panel
+        // Sans résolution fournie (tests de l'assemblage qui ne portent pas sur l'entretien), l'entretien ne démarre pas et le dit.
+        let interviewController = InterviewController(
+            environment: interviewEnvironment, settings: { relay.settings?() ?? .defaults },
+            behavior: { relay.settings?()?.hotKeyBehavior ?? .toggle },
+            resolve: resolveInterview ?? { _, _ in throw InterviewEnvironment.Unavailable() },
+            history: interviewHistory, panel: panelModel)
+        self.interview = interviewController
         let dictationController = DictationController(
             environment: dictation, inserter: inserter,
             settings: { relay.settings?()?.transcription ?? .defaults },
@@ -141,7 +154,7 @@ public final class AppController {
             // Le raccourci réellement enregistré, pas celui des réglages : un changement que le système a refusé laisse l'ancien
             // actif, et c'est lui que l'on tient.
             modeHotKeyModifiers: { [modeHotKeys] in modeHotKeys.active[$0]?.modifiers ?? [] },
-            selectMode: { [panelModel] in panelModel.select($0) },
+            selectMode: { [panelModel] in _ = panelModel.select($0) },
             ownerIsBound: { [hotKeys, modeHotKeys] owner in
                 switch owner {
                 case .global: hotKeys.active != nil
@@ -157,7 +170,10 @@ public final class AppController {
             frontApplication: frontApplication,
             // Le libellé du raccourci global réellement enregistré, celui que le reste du panneau montre.
             hotKeyLabel: { [panelModel] in panelModel.hotKeyLabel },
-            wait: reviewHandoverWait)
+            wait: reviewHandoverWait,
+            interview: interviewController,
+            // L'appui qui conclut passe par le bouton : il se grise, et une seule conclusion part.
+            concludeInterview: { [panelModel] in panelModel.concludeInterview() })
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
             panelModel.setDictation($0)
@@ -171,6 +187,7 @@ public final class AppController {
         panelModel.onFinishCorrection = { [dictationController] in dictationController.finishCorrection() }
         panelModel.onPreviousVersion = { [dictationController] in dictationController.previousVersion() }
         panelModel.onNextVersion = { [dictationController] in dictationController.nextVersion() }
+        panelModel.onConclude = { [interviewController] in interviewController.conclude() }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }
@@ -178,7 +195,11 @@ public final class AppController {
         relay.quit = { [weak self] in self?.quit() }
 
         panelModel.onOpen = { [permissions] in permissions.refresh() }
-        panelModel.onModeChanged = { [weak self] id in self?.saveLastMode(id) }
+        panelModel.onModeChanged = { [weak self] id in
+            self?.saveLastMode(id)
+            // Un clic sur la pastille Entretien au repos lance l'entretien (la dictée décide si c'est le moment).
+            self?.dictation.modeChosen(id)
+        }
 
         if let notice = loaded.notice { log.notice("réglages : \(notice, privacy: .public)") }
     }
@@ -207,9 +228,13 @@ public final class AppController {
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
-        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        interview: InterviewEnvironment = .unavailable,
+        interviewHistory: any InterviewHistoryStoring = DiscardingInterviewHistory(),
+        announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         let current = ActionRelay()
+        let access = SecretAccess(secrets)
         self.init(
             settingsStore: settingsStore, secrets: secrets, hotKeyRegistrar: hotKeyRegistrar,
             escapeRegistrar: escapeRegistrar, makeModeHotKeyRegistrar: makeModeHotKeyRegistrar,
@@ -217,19 +242,28 @@ public final class AppController {
             settingsView: settingsView, makePanelSurface: makePanelSurface, clickMonitor: clickMonitor,
             makeSettingsWindow: makeSettingsWindow, terminate: terminate, dictation: dictation,
             rewriter: LiveRewriter.environment(
-                settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets), makeModel: makeModel),
+                settings: { current.settings?() ?? .defaults }, secrets: access, makeModel: makeModel),
             frontApplication: frontApplication, inserter: inserter, holdWatch: holdWatch, terminationWait: terminationWait,
-            reviewHandoverWait: reviewHandoverWait)
+            reviewHandoverWait: reviewHandoverWait, interview: interview,
+            // La résolution de l'entretien : les réglages en vigueur au lancement, les clés par la file commune des secrets, les
+            // clients par `makeModel`, la voix par l'environnement (la cible `Supervox` y branche la vraie).
+            resolveInterview: { settings, engine in
+                try await InterviewSetup.resolve(
+                    settings: settings, engine: engine, secrets: access, makeModel: makeModel, makeVoice: interview.makeVoice)
+            },
+            interviewHistory: interviewHistory, announcer: announcer)
         current.settings = { [weak self] in self?.settings }
     }
 
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
-    /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, que la cible `Supervox` construit
-    /// (`SupervoxApp` ne dépend pas d'eux). Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
+    /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, `interview` : ceux de l'entretien (son réel, voix),
+    /// que la cible `Supervox` construit (`SupervoxApp` ne dépend pas d'eux). L'historique des entretiens n'écrit rien en
+    /// attendant son stockage. Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
     /// ci-dessus, que les tests exécutent.
     public convenience init(
         settingsView: @escaping SettingsViewProvider = SettingsView.provider,
         dictation: DictationEnvironment = .unavailable,
+        interview: InterviewEnvironment = .unavailable,
         inserter: TextInserter
     ) {
         let file = (try? SettingsStore.defaultFile())
@@ -249,7 +283,8 @@ public final class AppController {
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
             dictation: dictation, makeModel: LiveRewriter.client, frontApplication: FrontApplication.system,
-            inserter: inserter)
+            inserter: inserter, interview: interview, interviewHistory: DiscardingInterviewHistory(),
+            announcer: SystemAccessibilityAnnouncer())
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,
@@ -600,6 +635,8 @@ public final class AppController {
 
     /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`.
     func openSettings() {
+        // L'entretien s'annule aussi quand le panneau est déjà fermé (la fermeture l'annule sinon) : rien n'est gardé.
+        interview.cancel()
         panel.close()
         let window: any SettingsWindowSurface
         let content: SettingsContent
@@ -620,6 +657,7 @@ public final class AppController {
     }
 
     func quit() {
+        interview.cancel()
         panel.close()
         log.notice("quitter")
         terminate()
