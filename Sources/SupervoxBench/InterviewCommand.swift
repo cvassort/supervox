@@ -80,6 +80,10 @@ struct InterviewRuntime: Sendable {
     /// L'attente du chien de garde du micro (voir `InterviewCommand.watchdog`), distincte des précédentes : elle doit suspendre
     /// jusqu'à l'annulation, jamais rendre la main tout de suite (la boucle du chien de garde tournerait à vide).
     var watchdogSleep: @Sendable (Double) async throws -> Void
+    /// L'attente de la limite de temps d'une transcription (`ConversationConfig.transcriptionTimeout`) : réelle en lancement réel.
+    /// Elle doit rendre la main seulement quand le délai est écoulé : une attente qui rend tout de suite ferait échouer toute
+    /// transcription.
+    var transcriptionSleep: @Sendable (Double) async throws -> Void
     var say: @Sendable (String) -> Void
     var warn: @Sendable (String) -> Void
     var launchedAt: Date
@@ -91,6 +95,7 @@ struct InterviewRuntime: Sendable {
             environment: ProcessInfo.processInfo.environment, makeEngines: InterviewEngines.real,
             wait: { try? await Task.sleep(for: .seconds($0)) }, now: { ProcessInfo.processInfo.systemUptime },
             watchdogSleep: { try await Task.sleep(for: .seconds($0)) },
+            transcriptionSleep: { try await Task.sleep(for: .seconds($0)) },
             say: { print($0) }, warn: { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }, launchedAt: Date(), observe: nil)
     }
 }
@@ -165,6 +170,24 @@ struct InterviewCommand: AsyncParsableCommand {
         MicrophoneWatchdog(timeout: .infinity, firstChunkTimeout: .infinity, pollInterval: watchdogPoll, sleep: sleep)
     }
 
+    /// La configuration de l'entretien. Le délai de transcription est celui du moteur (`ConversationConfig.transcriptionTimeout`, sa
+    /// valeur par défaut), jamais recopié.
+    static func conversationConfig(fastModel: String, strongModel: String, maxQuestions: Int) -> ConversationConfig {
+        ConversationConfig(
+            fastModel: fastModel, strongModel: strongModel, maxQuestions: maxQuestions, template: "", language: language,
+            vocabulary: [], interruptMinDuration: interruptMinDuration, interruptLevel: interruptLevel)
+    }
+
+    /// Marge ajoutée au délai de transcription du moteur : 30 s, choix non mesuré.
+    static let reactionMargin = 30.0
+
+    /// Le délai au bout duquel un tour sans réaction est noté « sans réaction » : celui de transcription du moteur, plus la marge. Il
+    /// doit lui rester supérieur : un moteur lent mais dans son droit (transcription encore sous son délai) ne fait pas partir le tour
+    /// suivant, et une transcription qui dépasse son délai tombe en panne (`.failed`) avant lui.
+    static func reactionTimeout(for config: ConversationConfig) -> Double {
+        config.transcriptionTimeout + reactionMargin
+    }
+
     func run() async throws {
         try await run(runtime: .live)
     }
@@ -200,17 +223,16 @@ struct InterviewCommand: AsyncParsableCommand {
         let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
         // Sans aperçu : le passage est poussé d'un coup, un aperçu toutes les secondes ne montrerait rien et chargerait le moteur de
         // transcription pendant la mesure (son attente ne revient jamais). La limite de temps d'une transcription, elle, est réelle.
+        let config = Self.conversationConfig(fastModel: fastModel, strongModel: strongModel, maxQuestions: maxQuestions)
         let session = ConversationSession(
             audio: feed, detector: engines.detector, transcriber: engines.transcriber, fastModel: fast, strongModel: engines.strong,
             voice: engines.voice,
-            config: ConversationConfig(
-                fastModel: fastModel, strongModel: strongModel, maxQuestions: maxQuestions, template: "", language: Self.language,
-                vocabulary: [], interruptMinDuration: Self.interruptMinDuration, interruptLevel: Self.interruptLevel),
-            watchdog: Self.watchdog(sleep: runtime.watchdogSleep), now: runtime.now, sleep: never,
-            transcriptionSleep: { try await Task.sleep(for: .seconds($0)) })
+            config: config, watchdog: Self.watchdog(sleep: runtime.watchdogSleep), now: runtime.now, sleep: never,
+            transcriptionSleep: runtime.transcriptionSleep)
 
         let trace = await InterviewDriver.run(
-            engine: session, feed: feed, interruptAfter: interruptAfter, wait: runtime.wait, now: runtime.now,
+            engine: session, feed: feed, interruptAfter: interruptAfter, reactionTimeout: Self.reactionTimeout(for: config),
+            wait: runtime.wait, now: runtime.now,
             observe: runtime.observe, progress: say)
         withExtendedLifetime(session) {}
 

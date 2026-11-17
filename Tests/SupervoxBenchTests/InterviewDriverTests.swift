@@ -10,6 +10,9 @@ import Testing
 // non d'après le brief ; le son est le vrai `WavTurnFeed`, dont le test lit les tours poussés. Ce que le vrai moteur émet est
 // vérifié à part, dans `InterviewCommandTests`.
 
+/// Le délai d'un tour sans réaction donné au pilote : un nombre à part, le pilote n'en a pas de valeur propre.
+private let driverReactionTimeout = 90.0
+
 /// Un moteur d'entretien dont les événements viennent du test, et qui compte les appels qu'on lui fait.
 private final class EventScriptEngine: ConversationEngine {
     private let stream: AsyncStream<ConversationEvent>
@@ -48,7 +51,8 @@ private final class Rig: Sendable {
         let engine = engine, observed = observed, lines = lines
         let started = Task {
             await InterviewDriver.run(
-                engine: engine, feed: feed, interruptAfter: interruptAfter, wait: { await board.wait($0) }, now: { clock.now() },
+                engine: engine, feed: feed, interruptAfter: interruptAfter, reactionTimeout: driverReactionTimeout,
+                wait: { await board.wait($0) }, now: { clock.now() },
                 observe: { _ in observed.increment() }, progress: { lines.add($0) })
         }
         task.withLock { $0 = started }
@@ -148,7 +152,7 @@ private func talk(_ texts: String...) -> Conversation {
     @Test func withAnInterruptionTheNextTurnIsPushedAfterTheSimulatedDelayFollowingSpeakingStarted() async throws {
         let rig = try Rig(interruptAfter: 0.5)
         try await rig.send(.state(.listening))
-        try #require(await settle { rig.board.requests == [InterviewDriver.reactionTimeout] })
+        try #require(await settle { rig.board.requests == [driverReactionTimeout] })
         try await rig.send(.turnEnded("un"), .state(.thinking), .replyText("Une question ?"), .state(.speaking))
         try await rig.send(.speakingStarted(question: 1))
         // L'attente de 0,5 s démarre avec la réplique (celle du tour sans réaction a disparu : elle est seule), et le tour ne part
@@ -172,8 +176,8 @@ private func talk(_ texts: String...) -> Conversation {
         try await rig.send(.interrupted(heard: "Autre ?"), .state(.listening), .turnEnded("trois"), .speakingStarted(question: 3))
         await quiesce()
         #expect(rig.board.pendingSeconds.isEmpty)
-        #expect(rig.board.requests == [InterviewDriver.reactionTimeout, 0.5, InterviewDriver.reactionTimeout, 0.5,
-                                       InterviewDriver.reactionTimeout])
+        #expect(rig.board.requests == [driverReactionTimeout, 0.5, driverReactionTimeout, 0.5,
+                                       driverReactionTimeout])
         let trace = try await rig.finish()
         #expect(trace.interruptions == ["", "Autre ?"])
     }
@@ -304,13 +308,13 @@ private func talk(_ texts: String...) -> Conversation {
     @Test func aTurnTheEngineNeverReactsToIsNotedAndTheNextOneGoes() async throws {
         let rig = try Rig(turns: 2)
         try await rig.send(.state(.listening))
-        try #require(await settle { rig.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
+        try #require(await settle { rig.board.pendingSeconds == [driverReactionTimeout] })
         #expect(rig.pushed == [0])
 
-        #expect(rig.board.release(seconds: InterviewDriver.reactionTimeout))
+        #expect(rig.board.release(seconds: driverReactionTimeout))
         try #require(await settle { rig.pushed == [0, 1] })
         // Sa propre attente est armée pour le nouveau tour ; la réponse du moteur la rend sans objet.
-        try #require(await settle { rig.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
+        try #require(await settle { rig.board.pendingSeconds == [driverReactionTimeout] })
         try await rig.send(.turnEnded("deux"))
         try #require(await settle { rig.board.pendingSeconds.isEmpty })
         let trace = try await rig.finish()
@@ -321,8 +325,8 @@ private func talk(_ texts: String...) -> Conversation {
     @Test func aTurnTheEngineNeverReactsToIsFollowedByTheConclusionWhenItWasTheLast() async throws {
         let rig = try Rig(turns: 1)
         try await rig.send(.state(.listening))
-        try #require(await settle { rig.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
-        rig.board.release(seconds: InterviewDriver.reactionTimeout)
+        try #require(await settle { rig.board.pendingSeconds == [driverReactionTimeout] })
+        rig.board.release(seconds: driverReactionTimeout)
         let concluded = await settle { rig.engine.concludeCalls == 1 }
         #expect(concluded)
         _ = try await rig.finish()

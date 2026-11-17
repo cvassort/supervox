@@ -107,6 +107,16 @@ final class WaitBoard: Sendable {
         return found != nil
     }
 
+    /// Libère toutes les attentes suspendues plus courtes que `seconds` : le temps qui passe jusqu'à cet instant.
+    func releaseAll(lessThan seconds: Double) {
+        let due = state.withLock { state -> [Pending] in
+            let due = state.pending.filter { $0.seconds < seconds }
+            state.pending.removeAll { $0.seconds < seconds }
+            return due
+        }
+        for entry in due { entry.continuation.resume() }
+    }
+
     func releaseAll() {
         let all = state.withLock { state in
             defer { state.pending = [] }

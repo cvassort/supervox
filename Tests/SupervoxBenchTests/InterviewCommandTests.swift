@@ -50,21 +50,43 @@ private final class EnergyDetector: StreamingVoiceDetector {
     }
 }
 
+/// Une porte que le test ouvre : `pass()` attend l'ouverture, et lève `CancellationError` si la tâche est annulée avant (le moteur
+/// abandonne alors sa transcription, comme `Deadline` le demande).
+private final class TranscriptionHold: Sendable {
+    private let opened = Mutex(false)
+    func open() { opened.withLock { $0 = true } }
+    func pass() async throws {
+        while !opened.withLock({ $0 }) {
+            try Task.checkCancellation()
+            await Task.yield()
+        }
+    }
+}
+
 /// Transcription par l'amplitude : le tour `i` (rang à partir de 0) est un son d'amplitude 0,30 + 0,01 × i, et le texte rendu est
 /// « tour i+1 » : ce que la conversation retient prouve de quel fichier chaque tour vient.
 private final class AmplitudeTranscriber: Transcriber {
     let name = "double"
     private let clips = Mutex<[AudioClip]>([])
     private let failure: (any Error)?
+    private let hold: TranscriptionHold?
 
-    init(failure: (any Error)? = nil) { self.failure = failure }
+    /// - Parameter hold: retient le premier appel jusqu'à l'ouverture de la porte (un moteur lent), ou à l'annulation de sa tâche.
+    init(failure: (any Error)? = nil, hold: TranscriptionHold? = nil) {
+        self.failure = failure
+        self.hold = hold
+    }
 
     var seen: [AudioClip] { clips.withLock { $0 } }
 
     func prepare() async throws {}
 
     func transcribe(_ clip: AudioClip, language: String, vocabulary: [String]) async throws -> String {
-        clips.withLock { $0.append(clip) }
+        let rank = clips.withLock { clips -> Int in
+            clips.append(clip)
+            return clips.count - 1
+        }
+        if rank == 0, let hold { try await hold.pass() }
         if let failure { throw failure }
         let peak = clip.samples.map { abs($0) }.max() ?? 0
         return "tour \(Int(((peak - 0.30) * 100).rounded()) + 1)"
@@ -127,6 +149,12 @@ private let strongName = "modele-fort-exemple"
 private let voiceModelName = "modele-voix-exemple"
 private let voiceName = "voix-exemple"
 
+/// Les délais, lus de la commande et du moteur, jamais recopiés : la limite de temps d'une transcription, et le délai d'un tour sans
+/// réaction qui en dérive.
+private let engineConfig = InterviewCommand.conversationConfig(fastModel: fastName, strongModel: strongName, maxQuestions: 8)
+private let engineDeadline = engineConfig.transcriptionTimeout
+private let reactionDelay = InterviewCommand.reactionTimeout(for: engineConfig)
+
 private let validEnvironment = [EndpointConfig.baseURLVariable: endpointAddress, EndpointConfig.apiKeyVariable: endpointKey]
 
 private func interviewFolder() throws -> URL {
@@ -173,14 +201,18 @@ private final class InterviewRig: Sendable {
     let board = WaitBoard()
     let watchdogBoard = WaitBoard()
     let holding: Set<Double>
+    /// La limite de temps d'une transcription est tenue sur `board` (sinon elle ne se termine jamais, comme `never` de la commande).
+    private let holdsEngineDeadline: Bool
     private let setups = Mutex<[InterviewSetup]>([])
 
     init(fast: [ScriptedLanguageModel.Reply], strong: [ScriptedLanguageModel.Reply] = [.text("Prompt final de l'exemple.")],
-         transcriptionFailure: (any Error)? = nil, holding: Set<Double> = []) {
+         transcriptionFailure: (any Error)? = nil, holding: Set<Double> = [], hold: TranscriptionHold? = nil,
+         holdsEngineDeadline: Bool = false) {
         self.fast = ScriptedLanguageModel(fast)
         self.strong = ScriptedLanguageModel(strong)
-        transcriber = AmplitudeTranscriber(failure: transcriptionFailure)
-        self.holding = holding.union([InterviewDriver.reactionTimeout])
+        transcriber = AmplitudeTranscriber(failure: transcriptionFailure, hold: hold)
+        self.holdsEngineDeadline = holdsEngineDeadline
+        self.holding = holding.union([reactionDelay])
     }
 
     var builtSetups: [InterviewSetup] { setups.withLock { $0 } }
@@ -188,6 +220,7 @@ private final class InterviewRig: Sendable {
     func runtime(environment: [String: String] = validEnvironment) -> InterviewRuntime {
         let (board, watchdogBoard, clock, holding) = (board, watchdogBoard, clock, holding)
         let (stdout, stderr) = (stdout, stderr)
+        let holdsEngineDeadline = holdsEngineDeadline
         return InterviewRuntime(
             environment: environment,
             makeEngines: { [self] setup in
@@ -198,6 +231,9 @@ private final class InterviewRig: Sendable {
                 if holding.contains(seconds) { await board.wait(seconds) } else { await Task.yield() }
             },
             now: { clock.now() }, watchdogSleep: { await watchdogBoard.wait($0) },
+            transcriptionSleep: { seconds in
+                if holdsEngineDeadline { await board.wait(seconds) } else { try await Task.sleep(for: .seconds(1_000_000)) }
+            },
             say: { stdout.add($0) }, warn: { stderr.add($0) }, launchedAt: Date(timeIntervalSince1970: 0), observe: nil)
     }
 
@@ -592,8 +628,8 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         let running = Task { try await command.run(runtime: runtime) }
 
         // Le moteur ne réagit pas au premier fichier : l'attente d'un tour sans réaction est armée, le test la rend.
-        try #require(await settle { session.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
-        #expect(session.board.release(seconds: InterviewDriver.reactionTimeout))
+        try #require(await settle { session.board.pendingSeconds == [reactionDelay] })
+        #expect(session.board.release(seconds: reactionDelay))
         try await finished(running)
 
         let text = try report(file)
@@ -612,13 +648,68 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         let runtime = session.runtime()
         let running = Task { try await command.run(runtime: runtime) }
 
-        try #require(await settle { session.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
-        session.board.release(seconds: InterviewDriver.reactionTimeout)
+        try #require(await settle { session.board.pendingSeconds == [reactionDelay] })
+        session.board.release(seconds: reactionDelay)
         await #expect(throws: ExitCode.self) { try await finished(running) }
 
         #expect(try report(file).contains("- Fin : rien n'a été dit"))
         #expect(session.strong.requests.isEmpty)
         #expect(session.fast.requests.isEmpty)
+    }
+
+    // MARK: Un moteur lent (I-1)
+
+    @Test func aSlowTranscriptionUnderTheEngineDeadlineDoesNotLetTheNextTurnGo() async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6), .voice(turn: 1, seconds: 0.6)], in: folder)
+        let hold = TranscriptionHold()
+        let session = InterviewRig(
+            fast: [question("Quelle est la première question ?"), question("Et ensuite ?")], hold: hold, holdsEngineDeadline: true)
+        let file = folder.appendingPathComponent("rapport.md")
+        let command = try parse(wavs + models + ["--output", file.path])
+        let runtime = session.runtime()
+        let running = Task { try await command.run(runtime: runtime) }
+        defer { running.cancel() }
+
+        // Le tour 1 est en cours de transcription (le moteur est lent) : sa limite et le délai du tour sans réaction sont armés.
+        try #require(await settle { session.board.pendingSeconds.sorted() == [engineDeadline, reactionDelay].sorted() })
+        #expect(reactionDelay > engineDeadline, "le délai d'un tour muet doit dépasser la limite de transcription du moteur")
+        // Le temps passe jusqu'à la limite du moteur, sans l'atteindre : tout ce qui expire avant est libéré. Un délai plus court que
+        // la limite (60 s contre 120 s) ferait ici partir le tour suivant, pendant que le tour 1 se transcrit encore.
+        session.board.releaseAll(lessThan: engineDeadline)
+        await quiesce()
+        #expect(session.transcriber.seen.count == 1)
+        hold.open()
+        try await finished(running)
+
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(!text.contains("aucune réaction du moteur"), "le tour 1 a répondu, lentement")
+        #expect(text.contains("- Tours poussés : 2 sur 2 ; textes rendus par la transcription : 2."))
+        #expect(text.contains("Vous : tour 1\n\nSupervox : Quelle est la première question ?\n\nVous : tour 2\n\nSupervox : Et ensuite ?"))
+    }
+
+    @Test func aTranscriptionBeyondTheEngineDeadlineEndsTheInterviewBeforeTheNextTurnGoes() async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6), .voice(turn: 1, seconds: 0.6)], in: folder)
+        let session = InterviewRig(fast: [], hold: TranscriptionHold(), holdsEngineDeadline: true)   // la porte ne s'ouvre jamais
+        let file = folder.appendingPathComponent("rapport.md")
+        let command = try parse(wavs + models + ["--output", file.path])
+        let runtime = session.runtime()
+        let running = Task { try await command.run(runtime: runtime) }
+        defer { running.cancel() }
+
+        try #require(await settle { session.board.pendingSeconds.count == 2 })
+        // Le temps passe : la première attente qui expire est celle du moteur, pas celle du tour sans réaction.
+        let first = try #require(session.board.pendingSeconds.min())
+        try #require(first == engineDeadline)
+        session.board.release(seconds: first)
+        await #expect(throws: ExitCode.self) { try await finished(running) }
+
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(text.contains("- Fin : panne d'un moteur (code transcriptionTimedOut)."))
+        #expect(text.contains("- Tours poussés : 1 sur 2"))
+        #expect(!text.contains("aucune réaction du moteur"))
+        #expect(session.transcriber.seen.count == 1)
     }
 
     // MARK: Fin en échec (règle 4)

@@ -9,7 +9,7 @@ struct InterviewTrace: Equatable {
         var number: Int
         /// L'entretien a rendu le texte du tour (`.turnEnded`).
         var heard = false
-        /// Aucun événement n'a répondu à ce tour dans le délai (`InterviewDriver.reactionTimeout`) : le fichier n'a sans doute aucune voix.
+        /// Aucun événement n'a répondu à ce tour dans le délai (`reactionTimeout`) : le fichier n'a sans doute aucune voix.
         var noReaction = false
         var toFirstText: Double?
         var toFirstSentence: Double?
@@ -46,10 +46,6 @@ struct InterviewTrace: Equatable {
 /// Les dates sont lues quand la boucle reçoit l'événement (un instant après son émission) ; « fin de tour » est la date où le
 /// `WavTurnFeed` a fini de pousser la voix du tour (`WavTurnFeed.voiceEnd(of:)`), avant le silence qui la suit.
 enum InterviewDriver {
-    /// Secondes sans réaction du moteur à un tour poussé avant de le dire « sans réaction » : 60, choix non mesuré (une transcription
-    /// locale de quelques secondes d'audio prend bien moins ; `ConversationConfig.transcriptionTimeout` vaut 120 s).
-    static let reactionTimeout = 60.0
-
     private enum Input: Sendable {
         case event(ConversationEvent)
         case interruptDue(token: Int)
@@ -68,10 +64,13 @@ enum InterviewDriver {
     }
 
     /// - Parameters:
+    ///   - reactionTimeout: secondes sans réaction du moteur à un tour poussé avant de le dire « sans réaction ». L'appelant le dérive
+    ///     de la limite de temps de transcription du moteur (`InterviewCommand.reactionTimeout(for:)`) : plus court, un moteur lent mais
+    ///     dans son droit verrait le tour suivant partir pendant qu'il transcrit encore le précédent.
     ///   - observe: appelé avec chaque événement **après** que le pilote l'a traité (pour les tests).
     ///   - progress: une ligne de français par fait notable (tour poussé, conclusion demandée) ; jamais une valeur d'environnement.
     static func run(
-        engine: any ConversationEngine, feed: WavTurnFeed, interruptAfter: Double?,
+        engine: any ConversationEngine, feed: WavTurnFeed, interruptAfter: Double?, reactionTimeout: Double,
         wait: @escaping @Sendable (Double) async -> Void, now: @escaping @Sendable () -> Double,
         observe: (@Sendable (ConversationEvent) -> Void)? = nil, progress: @Sendable (String) -> Void = { _ in }
     ) async -> InterviewTrace {
