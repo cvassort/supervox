@@ -353,6 +353,16 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
         #expect(Set(written.keys) == ["language", "extra"])
     }
 
+    /// Une langue vide ou blanche ne dit rien : lue comme absente.
+    @Test(arguments: ["", " ", "\n\t "])
+    func aBlankLanguageReadsAsAbsent(blank: String) throws {
+        let data = try JSONSerialization.data(withJSONObject: ["language": blank, "identifier": "voix-exemple"])
+        let read = try JSONDecoder().decode(VoiceChoice.self, from: data)
+        #expect(read.language == "fr-FR")
+        #expect(read.identifier == "voix-exemple")
+        #expect(try tree(read)["language"] as? String == "fr-FR")
+    }
+
     @Test func aVoiceFileWithoutALanguageReadsFrench() throws {
         #expect(try decode(VoiceChoice.self, #"{"identifier": "voix-exemple"}"#).language == "fr-FR")
         #expect(try decode(VoiceChoice.self, #"{"language": "en-GB"}"#).language == "en-GB")
@@ -393,6 +403,34 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
         let read = try decode(VoiceChoice.self, #"{"gender": "\#(name)"}"#)
         #expect(read.gender == gender)
         #expect(try tree(read)["gender"] as? String == name)
+    }
+
+    private static func isOther(_ gender: VoiceGender) -> Bool {
+        if case .other = gender { return true }
+        return false
+    }
+
+    /// Un `other` qui porte un des trois noms connus est le cas connu : au décodage et par l'initialiseur de repli il y est
+    /// ramené, et l'égalité le tient pour lui (une valeur construite en code ne rompt pas « relu == écrit »).
+    @Test(arguments: [("female", VoiceGender.female), ("male", .male), ("neutral", .neutral)])
+    func anOtherCarryingAKnownNameIsTheKnownCase(name: String, known: VoiceGender) throws {
+        #expect(!Self.isOther(VoiceGender(name: name)))
+        #expect(VoiceGender(name: name) == known)
+        #expect(VoiceGender.other(name) == known)
+        let built = VoiceChoice(gender: .other(name))
+        let reread = try JSONDecoder().decode(VoiceChoice.self, from: JSONEncoder().encode(built))
+        #expect(reread.gender == known)
+        #expect(!Self.isOther(try #require(reread.gender)))
+        #expect(reread == built)
+    }
+
+    @Test(arguments: ["Female", "FEMALE", " female", "", "autre-valeur"])
+    func aNameThatIsNotExactlyAKnownOneStaysOther(name: String) throws {
+        #expect(Self.isOther(VoiceGender(name: name)))
+        #expect(VoiceGender(name: name) == .other(name))
+        let reread = try JSONDecoder().decode(
+            VoiceChoice.self, from: JSONEncoder().encode(VoiceChoice(gender: VoiceGender(name: name))))
+        #expect(reread.gender == .other(name))
     }
 
     @Test func twoUnknownGendersAreEqualOnlyWhenTheirTextIs() {

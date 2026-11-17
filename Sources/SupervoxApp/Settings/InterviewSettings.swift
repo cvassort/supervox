@@ -104,8 +104,9 @@ public struct InterviewSettings: Codable, Equatable, Sendable {
 }
 
 /// Le genre d'une voix. Une valeur que cette version ne connaît pas est gardée telle quelle (`other`) et réécrite à l'identique,
-/// au lieu d'être remplacée ou perdue. `other("female")` se réécrit comme `female` mais ne lui est pas égal : seule une valeur
-/// lue d'un fichier est sûre de ne pas y ressembler.
+/// au lieu d'être remplacée ou perdue. Un `other` qui porte l'un des trois noms connus ne se distingue pas du cas connu : le
+/// décodage et `init(name:)` le ramènent au cas connu, et l'égalité compare les noms écrits (`other("female") == female`), de sorte
+/// qu'une valeur relue est toujours égale à celle qui a été écrite.
 public enum VoiceGender: Codable, Equatable, Sendable {
     case female
     case male
@@ -121,15 +122,24 @@ public enum VoiceGender: Codable, Equatable, Sendable {
         }
     }
 
-    /// Une valeur qui n'est pas un texte lève une erreur ; `VoiceChoice` la lit comme « pas de genre ».
-    public init(from decoder: any Decoder) throws {
-        switch try decoder.singleValueContainer().decode(String.self) {
+    /// Le cas que ce nom désigne : un des trois connus (nom exact : « Female » reste `other`), sinon
+    /// `other`.
+    public init(name: String) {
+        switch name {
         case "female": self = .female
         case "male": self = .male
         case "neutral": self = .neutral
-        case let other: self = .other(other)
+        default: self = .other(name)
         }
     }
+
+    /// Une valeur qui n'est pas un texte lève une erreur ; `VoiceChoice` la lit comme « pas de genre ».
+    public init(from decoder: any Decoder) throws {
+        self.init(name: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    /// Le nom écrit seulement : `other("female")` est `female`.
+    public static func == (lhs: VoiceGender, rhs: VoiceGender) -> Bool { lhs.name == rhs.name }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
@@ -187,7 +197,9 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
         providerID = container.lenient(UUID.self, CodingKeys.providerID.rawValue)
         model = container.lenient(String.self, CodingKeys.model.rawValue)
         identifier = container.lenient(String.self, CodingKeys.identifier.rawValue)
-        language = container.lenient(String.self, CodingKeys.language.rawValue) ?? Self.system.language
+        // Une langue vide ou blanche ne dit rien : lue comme absente.
+        language = container.lenient(String.self, CodingKeys.language.rawValue)
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } ?? Self.system.language
         gender = container.lenient(VoiceGender.self, CodingKeys.gender.rawValue)
         // Entrée par entrée : une valeur qui n'est pas un texte ne fait pas perdre les autres paramètres.
         extra = (container.lenient([String: JSONValue].self, CodingKeys.extra.rawValue) ?? [:])
