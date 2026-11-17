@@ -104,26 +104,37 @@ struct ConversationPreparationTests {
 struct ConversationTurnTests {
     // MARK: Règle 2
 
-    @Test func microphoneChunksAreShownAsLevelsAndBroughtTo16kHz() async {
+    @Test func microphoneChunksAreBroughtTo16kHzAndShownAsLevels() async throws {
         let h = ConversationHarness(turns: [TurnScript(blocks: 8, start: 1, end: 4, base: 0)], fast: [modelReply("[CONCLURE]\nMerci.")])
         let log = await h.start()
         await log.wait(.state(.listening))
-        let chunk = AudioChunk(samples: [Float](repeating: 0.1, count: 3000), sampleRate: 48000)
+        // Une onde, non un signal constant : le moteur doit rendre ce que rend un `StreamingResampler` 48 kHz vers 16 kHz sur les mêmes
+        // tranches, dans le même ordre (la référence est calculée ici, avec une instance neuve).
+        let wave = (0..<3000).map { Float(sin(Double($0) * 0.05)) * 0.5 }
+        let chunk = AudioChunk(samples: wave, sampleRate: 48000)
+        let reference = try #require(StreamingResampler(from: 48000, to: 16000))
+        var converted: [Float] = []
+        for _ in 0..<14 { converted += reference.push(wave) }
+        try #require(converted.count >= 4000)
 
-        for _ in 0..<14 { h.audio.inner.push(chunk) }   // 3 000 échantillons à 48 kHz : 1 000 à 16 kHz, un bloc
+        for _ in 0..<14 { h.audio.inner.push(chunk) }   // 3 000 échantillons à 48 kHz : environ 1 000 à 16 kHz, un bloc
         await log.waitForEnd()
 
         let levels = log.items.compactMap { event -> Float? in
             if case .level(let level) = event { return level }
             return nil
         }
-        #expect(levels.count >= 8)
-        #expect(levels.allSatisfy { $0 == AudioLevel.display(of: chunk.samples) } && levels[0] > 0)
-        #expect(h.transcriber.calls.count == 1)
-        #expect(h.transcriber.calls[0].clip.sampleRate == 16000 && h.transcriber.calls[0].clip.samples.count == 3000)
+        let level = try #require(levels.first)
+        #expect(levels.count >= 8 && level > 0)
+        #expect(levels.allSatisfy { $0 == AudioLevel.display(of: wave) })
+        // Le détecteur reçoit l'audio à 16 kHz, bloc après bloc ; le passage transcrit est découpé dans cet audio-là.
+        #expect(h.detector.blocks.count == 8)
+        #expect(h.detector.blocks.first == Array(converted[0..<1000]))
+        let call = try #require(h.transcriber.calls.first)
+        #expect(call.clip == AudioClip(samples: Array(converted[1000..<4000]), sampleRate: 16000))
     }
 
-    @Test func aClosedPassageIsTranscribedWithPaddingAndBecomesATurn() async {
+    @Test func aClosedPassageIsTranscribedWithPaddingAndBecomesATurn() async throws {
         let turn = TurnScript(blocks: 8, start: 3, end: 5, base: 0)
         let h = ConversationHarness(turns: [turn], fast: [modelReply("[CONCLURE]\nMerci.")],
                                     config: makeConversationConfig(padding: 0.1))
@@ -133,13 +144,14 @@ struct ConversationTurnTests {
         let events = await log.waitForEnd()
 
         // Début à 3 000, fin à 5 000, remplissage de 0,1 s (1 600 échantillons) de chaque côté, borné à l'audio reçu (8 000).
-        #expect(h.transcriber.calls[0].clip == AudioClip(samples: rampSamples(1400..<6600), sampleRate: 16000))
-        #expect(h.transcriber.calls[0].language == "fr" && h.transcriber.calls[0].vocabulary == ["Supervox"])
+        let call = try #require(h.transcriber.calls.first)
+        #expect(call.clip == AudioClip(samples: rampSamples(1400..<6600), sampleRate: 16000))
+        #expect(call.language == "fr" && call.vocabulary == ["Supervox"])
         #expect(events.contains(.turnEnded("réponse")))
         #expect(log.end == .prompt("Prompt final", conversation("réponse", "Merci.")))
     }
 
-    @Test func anOpenPassageIsPreviewedEveryIntervalOneAtATime() async {
+    @Test func anOpenPassageIsPreviewedEveryIntervalOneAtATime() async throws {
         let h = ConversationHarness(turns: [TurnScript(blocks: 6, start: 1, end: 4, base: 0)],
                                     transcripts: { $0 == 0 ? .hold : .text("réponse finale") },
                                     fast: [modelReply("[CONCLURE]\nMerci.")])
@@ -153,7 +165,8 @@ struct ConversationTurnTests {
         h.previewSleeper.tick()
         await h.transcriber.waitForCalls(1)
 
-        #expect(h.transcriber.calls[0].clip == AudioClip(samples: rampSamples(1000..<3000), sampleRate: 16000))
+        let preview = try #require(h.transcriber.calls.first)
+        #expect(preview.clip == AudioClip(samples: rampSamples(1000..<3000), sampleRate: 16000))
         #expect(h.previewSleeper.started == 1)   // l'aperçu retenu : aucune seconde passe ne part
         h.transcriber.release(call: 0, text: "bon")
         await log.wait(.partialTranscript("bon"))
@@ -162,9 +175,9 @@ struct ConversationTurnTests {
         for block in 3..<6 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }
         let events = await log.waitForEnd()
 
-        let partial = events.firstIndex(of: .partialTranscript("bon"))
-        let ended = events.firstIndex(of: .turnEnded("réponse finale"))
-        #expect(partial != nil && ended != nil && partial! < ended!)
+        let partial = try #require(events.firstIndex(of: .partialTranscript("bon")))
+        let ended = try #require(events.firstIndex(of: .turnEnded("réponse finale")))
+        #expect(partial < ended)
         #expect(h.transcriber.calls.count == 2)
     }
 
@@ -224,7 +237,7 @@ struct ConversationTurnTests {
 
         #expect(h.fast.requests == [CompletionRequest(
             model: "modele-exemple-rapide", instruction: InterviewPrompt.instruction(remainingQuestions: 3), input: "bonjour",
-            maxTokens: 1_024)])   // le tour vide n'est pas dans la conversation, la question n'est pas comptée
+            maxTokens: 777)])   // le tour vide n'est pas dans la conversation, la question n'est pas comptée
         #expect(log.end == .prompt("Prompt final", conversation("bonjour", "Merci.")))
         // Le tour vide n'a laissé aucun passage ni aucun échantillon à l'écoute suivante.
         #expect(h.transcriber.calls.map(\.clip) == [h.expectedClip(turn: 0), h.expectedClip(turn: 1)])
@@ -246,9 +259,9 @@ struct ConversationTurnTests {
 
         #expect(h.fast.requests == [
             CompletionRequest(model: "modele-exemple-rapide", instruction: InterviewPrompt.instruction(remainingQuestions: 8),
-                              input: "t1", maxTokens: 1_024),
+                              input: "t1", maxTokens: 777),
             CompletionRequest(model: "modele-exemple-rapide", instruction: InterviewPrompt.instruction(remainingQuestions: 7),
-                              input: "t2", maxTokens: 1_024,
+                              input: "t2", maxTokens: 777,
                               history: [CompletionTurn(role: .user, text: "t1"),
                                         CompletionTurn(role: .assistant, text: "Quelle est votre demande ?")]),
         ])
@@ -258,9 +271,25 @@ struct ConversationTurnTests {
             .speakingEnded(heard: "Quelle est votre demande ?"), .state(.listening)])
     }
 
+    // MARK: Politique du tour (règle 4)
+
+    @Test func theTurnRequestUsesTheTurnPolicyOfTheConfiguration() async throws {
+        // Les nombres de la configuration de test (777 jetons, 17 s) ne sont ni ceux de `.turn` ni ceux de `.standard`.
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [modelReply("[CONCLURE]\nMerci.")])
+        let log = await h.start()
+
+        await h.say(0)
+        await log.waitForEnd()
+
+        let request = try #require(h.fast.requests.first)
+        #expect(request.maxTokens == 777)
+        #expect(h.turnSleeper.requested == [17])   // le délai que la requête demande à son attente injectée
+        #expect(h.conclusionSleeper.requested == [43])
+    }
+
     // MARK: Règle 10
 
-    @Test func eachTurnStartsFromAFreshTimelineAndAFreshDetector() async {
+    @Test func eachTurnStartsFromAFreshTimelineAndAFreshDetector() async throws {
         // Pendant la réplique, le micro continue de livrer : ces tranches-là ne sont ni vues du détecteur ni transcrites.
         let h = ConversationHarness(turns: twoTurns, transcripts: texts("t1", "t2"),
                                     fast: [question("Une question ?"), modelReply("[CONCLURE]\nMerci.")], completion: .manual)
@@ -279,7 +308,8 @@ struct ConversationTurnTests {
 
         #expect(h.transcriber.calls.map(\.clip) == [h.expectedClip(turn: 0), h.expectedClip(turn: 1)])
         #expect(h.detector.blocks.count == 12)   // les deux tours de six blocs, rien de la réplique
-        #expect(h.detector.blocks[6] == rampSamples(1_000_000..<1_001_000))   // le premier bloc du second tour est le sien
+        let firstBlockOfTheSecondTurn = try #require(h.detector.blocks.dropFirst(6).first)
+        #expect(firstBlockOfTheSecondTurn == rampSamples(1_000_000..<1_001_000))   // le premier bloc du second tour est le sien
         #expect(!h.detector.blocks.joined().contains { $0 >= 90 })
         #expect(h.detector.resets == 3)   // à la préparation, puis au début de chaque réflexion
     }
@@ -289,7 +319,7 @@ struct ConversationTurnTests {
 struct ConversationSpeechTests {
     // MARK: Règles 5 et 6
 
-    @Test func theReplyIsSynthesizedSentenceBySentenceWithoutTheMarker() async {
+    @Test func theReplyIsSynthesizedSentenceBySentenceWithoutTheMarker() async throws {
         let h = ConversationHarness(
             turns: [TurnScript(base: 0)], transcripts: texts("t1"),
             fast: [modelReply("[SUI", "TE]\nBonjour. Que voulez-", "vous faire ? Dites-moi tout.")])
@@ -299,7 +329,7 @@ struct ConversationSpeechTests {
         await log.wait(.speakingEnded(heard: "Bonjour. Que voulez-vous faire ? Dites-moi tout."))
 
         #expect(h.speech.texts == ["Bonjour.", "Que voulez-vous faire ?", "Dites-moi tout."])
-        #expect(h.audio.inner.played.map { $0.samples[0] } == [1, 2, 3])   // les clips jouent dans l'ordre des phrases
+        #expect(h.audio.inner.played.compactMap { $0.samples.first } == [1, 2, 3])   // les clips jouent dans l'ordre des phrases
         let replies = log.items.compactMap { event -> String? in
             if case .replyText(let text) = event { return text }
             return nil
@@ -309,7 +339,7 @@ struct ConversationSpeechTests {
         #expect(replies.allSatisfy { !$0.contains("[") })
         let trace = log.trace
         #expect(trace.filter(isSpeakingStarted) == [.speakingStarted(question: 1)])
-        let start = trace.firstIndex(of: .speakingStarted(question: 1))!
+        let start = try #require(trace.firstIndex(of: .speakingStarted(question: 1)))
         #expect(trace[start...].prefix(5) == [.speakingStarted(question: 1), .sentencePlayed("Bonjour."),
                                                .sentencePlayed("Que voulez-vous faire ?"), .sentencePlayed("Dites-moi tout."),
                                                .speakingEnded(heard: "Bonjour. Que voulez-vous faire ? Dites-moi tout.")])
@@ -348,7 +378,7 @@ struct ConversationSpeechTests {
         }
     }
 
-    @Test func onlyThePlayedSentencesEnterTheConversation() async {
+    @Test func onlyThePlayedSentencesEnterTheConversation() async throws {
         let h = ConversationHarness(
             turns: twoTurns, transcripts: texts("t1", "t2"),
             fast: [question("Un. Deux. Trois."), modelReply("[CONCLURE]\nMerci.")], completion: .manual)
@@ -374,7 +404,8 @@ struct ConversationSpeechTests {
         h.audio.inner.flushEnds()
         await log.waitForEnd()
 
-        #expect(h.fast.requests[1].history.last == CompletionTurn(role: .assistant, text: "Un. Trois."))
+        let second = try #require(h.fast.requests.dropFirst().first)
+        #expect(second.history.last == CompletionTurn(role: .assistant, text: "Un. Trois."))
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un. Trois.", "t2", "Merci.")))
     }
 
@@ -406,7 +437,7 @@ struct ConversationSpeechTests {
 
     // MARK: Règle 7
 
-    @Test func aProposalIsAnnouncedAndTheNextAnswerGoesBackToTheFastModelWithoutAnyKeywordSearch() async {
+    @Test func aProposalIsAnnouncedAndTheNextAnswerGoesBackToTheFastModelWithoutAnyKeywordSearch() async throws {
         let h = ConversationHarness(
             turns: twoTurns, transcripts: texts("t1", "oui c'est bon"),
             fast: [modelReply("[PROPOSER]\nJ'ai tout ce qu'il faut. On conclut ?"), question("Une dernière précision ?")])
@@ -416,12 +447,15 @@ struct ConversationSpeechTests {
         await log.wait(.state(.listening), count: 2)
         let trace = log.trace
         #expect(trace.contains(.notice(.proposal)))
-        #expect(trace.firstIndex(of: .notice(.proposal))! < trace.firstIndex(of: .speakingStarted(question: 1))!)
+        let proposal = try #require(trace.firstIndex(of: .notice(.proposal)))
+        let firstQuestion = try #require(trace.firstIndex(of: .speakingStarted(question: 1)))
+        #expect(proposal < firstQuestion)
         await h.say(1)
         await log.wait(.state(.listening), count: 3)   // la réponse « oui c'est bon » n'a pas conclu : l'entretien continue
 
         #expect(h.fast.calls == 2)
-        #expect(h.fast.requests[1].input == "oui c'est bon")
+        let second = try #require(h.fast.requests.dropFirst().first)
+        #expect(second.input == "oui c'est bon")
         #expect(log.trace.contains(.speakingStarted(question: 2)))   // la proposition compte, la suivante aussi
         #expect(log.count { $0 == .notice(.proposal) } == 1)
         #expect(!log.items.contains(.state(.concluding)))
@@ -448,7 +482,7 @@ struct ConversationSpeechTests {
 
     // MARK: Règle 8
 
-    @Test func theCeilingConcludesAfterTheLastAnswerWithoutAnotherRequestToTheFastModel() async {
+    @Test func theCeilingConcludesAfterTheLastAnswerWithoutAnotherRequestToTheFastModel() async throws {
         let h = ConversationHarness(
             turns: [TurnScript(base: 0), TurnScript(base: 1_000_000), TurnScript(base: 2_000_000)],
             transcripts: texts("t1", "t2", "t3"), fast: [question("Première ?"), question("Seconde ?")],
@@ -468,10 +502,12 @@ struct ConversationSpeechTests {
             InterviewPrompt.instruction(remainingQuestions: 2), InterviewPrompt.instruction(remainingQuestions: 1)])
         let trace = log.trace
         #expect(log.count { $0 == .notice(.lastQuestion) } == 1)
-        #expect(trace.firstIndex(of: .notice(.lastQuestion))! < trace.firstIndex(of: .speakingStarted(question: 2))!)
-        #expect(trace.firstIndex(of: .notice(.lastQuestion))! > trace.firstIndex(of: .speakingEnded(heard: "Première ?"))!)
+        let lastQuestion = try #require(trace.firstIndex(of: .notice(.lastQuestion)))
+        let secondQuestion = try #require(trace.firstIndex(of: .speakingStarted(question: 2)))
+        let firstQuestionHeard = try #require(trace.firstIndex(of: .speakingEnded(heard: "Première ?")))
+        #expect(lastQuestion < secondQuestion && lastQuestion > firstQuestionHeard)
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Première ?", "t2", "Seconde ?", "t3")))
-        #expect(trace.suffix(4) == [.turnEnded("t3"), .state(.concluding), .state(.finished), log.items.last!])
+        #expect(trace.suffix(4) == [.turnEnded("t3"), .state(.concluding), .state(.finished), .finished(.prompt("Prompt final", conversation("t1", "Première ?", "t2", "Seconde ?", "t3")))])
     }
 
     @Test func theLastQuestionNoticeIsNotGivenWhenTheReplyIsTheClosingSentence() async {
@@ -520,7 +556,7 @@ struct ConversationConclusionTests {
         let expected = conversation("t1", "Merci.")
         let suffix = String(request.input.dropFirst("<entretien-".count).prefix { $0 != ">" })
         #expect(!suffix.isEmpty)
-        #expect(request.model == "modele-exemple-fort" && request.maxTokens == RewritePolicy.standard.maxTokens)
+        #expect(request.model == "modele-exemple-fort")
         #expect(request.input == "<entretien-\(suffix)>\n\(expected.transcript)\n</entretien-\(suffix)>")
         #expect(request.instruction == [template, InterviewPrompt.conversationRule(suffix: suffix),
                                         RewritePrompt.vocabularyBlock(["Supervox", "FluidAudio"])].compactMap { $0 }.joined(separator: "\n\n"))
@@ -528,6 +564,20 @@ struct ConversationConclusionTests {
         #expect(log.end == .prompt("Prompt final", expected))
         #expect(log.items.last == log.items.last(where: isFinished))   // `.finished` est le dernier événement
         #expect(log.count(isFinished) == 1)
+    }
+
+    @Test func theConclusionRequestUsesTheConclusionPolicyOfTheConfiguration() async throws {
+        // 4 321 jetons et 43 s : ni `.standard` (16 000 / 120) ni `.turn` (1 024 / 30).
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [modelReply("[CONCLURE]\nMerci.")])
+        let log = await h.start()
+
+        await h.say(0)
+        await log.waitForEnd()
+
+        let request = try #require(h.strong.requests.first)
+        #expect(request.maxTokens == 4_321)
+        #expect(h.conclusionSleeper.requested == [43])
+        #expect(h.turnSleeper.requested == [17])   // le tour, lui, a gardé la politique de tour
     }
 
     @Test func aFailingConclusionKeepsTheConversation() async {

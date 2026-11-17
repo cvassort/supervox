@@ -11,12 +11,17 @@ private let twoTurns = [TurnScript(base: 0), TurnScript(base: 1_000_000)]
 
 /// Ce qui doit être vrai de toute fin d'entretien.
 private func expectCleanEnd(_ h: ConversationHarness, sourceLocation: SourceLocation = #_sourceLocation) {
-    let log = h.log!
+    guard let log = h.log else {
+        Issue.record("l'entretien n'a pas été démarré", sourceLocation: sourceLocation)
+        return
+    }
     #expect(h.journal.count(of: "audio.stop") == 1, "le micro est arrêté une seule fois", sourceLocation: sourceLocation)
     #expect(!h.audio.inner.isRunning, sourceLocation: sourceLocation)
-    let stopReturned = h.journal.index(of: "audio.stop.returned"), finished = h.journal.index(of: "event.finished")
-    #expect(stopReturned != nil && finished != nil && stopReturned! < finished!, "`.finished` après le retour de stop()",
-            sourceLocation: sourceLocation)
+    if let stopReturned = h.journal.index(of: "audio.stop.returned"), let finished = h.journal.index(of: "event.finished") {
+        #expect(stopReturned < finished, "`.finished` après le retour de stop()", sourceLocation: sourceLocation)
+    } else {
+        Issue.record("`audio.stop()` n'a pas rendu la main, ou `.finished` n'a pas été émis", sourceLocation: sourceLocation)
+    }
     #expect(!h.previewSleeper.isSleeping && !h.watchdogSleeper.isSleeping, sourceLocation: sourceLocation)
     #expect(log.count(isFinished) == 1 && log.items.last.map(isFinished) == true, sourceLocation: sourceLocation)
     #expect(log.items.dropLast().last == .state(.finished), sourceLocation: sourceLocation)
@@ -75,7 +80,7 @@ struct ConversationCancelTests {
         expectCleanEnd(h)
     }
 
-    @Test func cancelWhileAClipIsPlayingStopsThePlaybackAndClosesTheSpeech() async {
+    @Test func cancelWhileAClipIsPlayingStopsThePlaybackAndClosesTheSpeech() async throws {
         let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [question("Une question ?")],
                                     completion: .manual)
         let log = await h.start()
@@ -88,9 +93,9 @@ struct ConversationCancelTests {
         #expect(h.audio.inner.stopPlaybackCount == 1)   // la lecture est coupée une fois
         let events = log.items
         #expect(!events.contains { if case .sentencePlayed = $0 { true } else { false } })
-        let ended = events.firstIndex(of: .speakingEnded(heard: ""))
-        let finished = events.firstIndex(where: isFinished)
-        #expect(ended != nil && finished != nil && ended! < finished!)
+        let ended = try #require(events.firstIndex(of: .speakingEnded(heard: "")))
+        let finished = try #require(events.firstIndex(where: isFinished))
+        #expect(ended < finished)
         #expect(log.end == .cancelled)
         expectCleanEnd(h)
     }
@@ -169,7 +174,7 @@ struct ConversationCancelTests {
 
 @Suite(.timeLimit(.minutes(1)))
 struct ConversationConcludeTests {
-    @Test func concludeWhileThinkingCancelsTheFastRequestAndConcludesWithWhatWasSaid() async {
+    @Test func concludeWhileThinkingCancelsTheFastRequestAndConcludesWithWhatWasSaid() async throws {
         let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [ScriptedModel([])])
         let log = await h.start()
         await h.say(0)
@@ -180,11 +185,12 @@ struct ConversationConcludeTests {
         await log.waitForEnd()
         #expect(h.fast.model(at: 0).wasCancelled)
         #expect(log.end == .prompt("Prompt final", conversation("t1")))
-        #expect(h.strong.requests[0].input.contains("Vous : t1"))
+        let request = try #require(h.strong.requests.first)
+        #expect(request.input.contains("Vous : t1"))
         expectCleanEnd(h)
     }
 
-    @Test func concludeWhileSpeakingCutsThePlaybackAndKeepsOnlyThePlayedSentences() async {
+    @Test func concludeWhileSpeakingCutsThePlaybackAndKeepsOnlyThePlayedSentences() async throws {
         let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [question("Un. Deux.")],
                                     completion: .manual)
         let log = await h.start()
@@ -201,7 +207,7 @@ struct ConversationConcludeTests {
         #expect(h.audio.inner.stopPlaybackCount == 1)
         #expect(log.trace.contains(.speakingEnded(heard: "Un.")))
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.")))   // « Deux. » mise en file mais coupée : absente
-        let request = h.strong.requests[0].input
+        let request = try #require(h.strong.requests.first).input
         #expect(request.contains("Supervox : Un.") && !request.contains("Deux."))
         expectCleanEnd(h)
     }
@@ -238,7 +244,7 @@ struct ConversationConcludeTests {
 }
 
 @Suite(.timeLimit(.minutes(1)))
-struct ConversationFailureTests {
+struct ConversationBreakdownTests {
     // Toute panne après au moins un tour rend la conversation : l'appelant ne perd rien de ce qui a été dit.
 
     @Test func aTranscriptionThatThrowsEndsFailedWithTheConversationSoFar() async {
@@ -371,7 +377,7 @@ struct ConversationFailureTests {
         #expect(log.end == .prompt("Prompt final", conversation("t1 t2", "Une question ?")))
     }
 
-    @Test func aFastModelThatFailsAfterASentenceKeepsTheSentenceThatWasHeard() async {
+    @Test func aFastModelThatFailsAfterASentenceKeepsTheSentenceThatWasHeard() async throws {
         let h = ConversationHarness(
             turns: twoTurns, transcripts: texts("t1", "t2"),
             fast: [ScriptedModel([.text("[SUITE]\nUne phrase. Une deuxième"), .fail(CompletionError.provider(type: "surcharge"))]),
@@ -385,11 +391,12 @@ struct ConversationFailureTests {
 
         #expect(h.speech.texts.first == "Une phrase.")   // le morceau coupé n'est pas dit
         let trace = log.trace
-        let ended = trace.firstIndex(of: .speakingEnded(heard: "Une phrase."))
-        let notice = trace.firstIndex(of: .notice(.modelFailed(.providerError)))
-        #expect(ended != nil && notice != nil && ended! < notice!)
-        #expect(h.fast.requests[1].history.last == CompletionTurn(role: .assistant, text: "Une phrase."))
-        #expect(h.fast.requests[1].instruction == InterviewPrompt.instruction(remainingQuestions: 7))   // la question a été posée
+        let ended = try #require(trace.firstIndex(of: .speakingEnded(heard: "Une phrase.")))
+        let notice = try #require(trace.firstIndex(of: .notice(.modelFailed(.providerError))))
+        #expect(ended < notice)
+        let second = try #require(h.fast.requests.dropFirst().first)
+        #expect(second.history.last == CompletionTurn(role: .assistant, text: "Une phrase."))
+        #expect(second.instruction == InterviewPrompt.instruction(remainingQuestions: 7))   // la question a été posée
     }
 
     @Test func aReplyWithNothingToSayIsAFailureNotASilentQuestion() async {
@@ -421,7 +428,7 @@ struct ConversationFailureTests {
         await finish(h)
     }
 
-    @Test func aVoiceThatFailsGivesOneNoticeThenTheTextAloneIsShownAndCountedAsHeard() async {
+    @Test func aVoiceThatFailsGivesOneNoticeThenTheTextAloneIsShownAndCountedAsHeard() async throws {
         let h = ConversationHarness(
             turns: twoTurns, transcripts: texts("t1", "t2"), fast: [question("Un. Deux. Trois."), question("Quatre.")],
             speech: ScriptedSpeech(reply: { index, _ in index == 0 ? .fail(SpeechError.noVoice(language: "fr-FR")) : .clip }))
@@ -438,7 +445,9 @@ struct ConversationFailureTests {
         #expect(log.trace.contains(.speakingEnded(heard: "Un. Deux. Trois.")))
         #expect(log.trace.contains(.speakingEnded(heard: "Quatre.")))
         let trace = log.trace
-        #expect(trace.firstIndex(of: .notice(.voiceUnavailable))! < trace.firstIndex(of: .speakingStarted(question: 1))!)
+        let notice = try #require(trace.firstIndex(of: .notice(.voiceUnavailable)))
+        let started = try #require(trace.firstIndex(of: .speakingStarted(question: 1)))
+        #expect(notice < started)
         let replies = log.items.compactMap { event -> String? in
             if case .replyText(let text) = event { return text }
             return nil
@@ -473,5 +482,25 @@ struct ConversationFailureTests {
         #expect(log.count { $0 == .notice(.voiceUnavailable) } == 1)
         #expect(log.trace.contains(.speakingEnded(heard: "Un. Deux.")))
         await finish(h)
+    }
+}
+
+/// Les doubles eux-mêmes : un test qui demande plus de réponses que prévu échoue tout de suite, il n'attend pas la limite de la suite.
+@Suite(.timeLimit(.minutes(1)))
+struct ConversationDoublesTests {
+    @Test func aRequestToAModelWithNoReplyLeftRecordsAnIssueAndEndsTheEntretienAtOnce() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [])
+
+        // Le problème enregistré par le double est attendu ici : sans lui, `withKnownIssue` fait échouer le test. L'entretien est
+        // démarré DANS le bloc : ses tâches héritent du contexte du test qui les crée, et c'est lui qui rattache le problème.
+        await withKnownIssue("requête de trop au modèle rapide : voulue par ce test") {
+            let log = await h.start()
+            await h.say(0)
+            await log.waitForEnd()
+        }
+
+        let log = h.log
+        #expect(log?.end == .cancelled)   // l'entretien a été arrêté par le double, sans attendre la limite de temps
+        expectCleanEnd(h)
     }
 }

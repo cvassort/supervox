@@ -198,7 +198,8 @@ final class ModelSequence: LanguageModel, @unchecked Sendable {
     private let label: String
     private let journal: CallJournal
     private let models: [ScriptedModel]
-    private let state = OSAllocatedUnfairLock(initialState: (calls: 0, onComplete: nil as (@Sendable () -> Void)?))
+    private let state = OSAllocatedUnfairLock(
+        initialState: (calls: 0, onComplete: nil as (@Sendable () -> Void)?, onExcess: nil as (@Sendable () -> Void)?))
 
     init(_ label: String, _ models: [ScriptedModel], journal: CallJournal) {
         self.label = label
@@ -209,21 +210,34 @@ final class ModelSequence: LanguageModel, @unchecked Sendable {
     var calls: Int { state.withLock { $0.calls } }
     /// Les requêtes reçues, dans l'ordre.
     var requests: [CompletionRequest] { models.flatMap(\.requests) }
-    func model(at index: Int) -> ScriptedModel { models[index] }
+    /// La réponse de rang `index` ; un rang absent est une erreur du test, enregistrée, qui ne plante pas le processus.
+    func model(at index: Int) -> ScriptedModel {
+        guard models.indices.contains(index) else {
+            Issue.record("aucune réponse de rang \(index) au modèle \(label)")
+            return ScriptedModel()
+        }
+        return models[index]
+    }
+
+    /// Appelée quand une requête arrive alors que toutes les réponses prévues sont servies : le montage y met fin à l'entretien, pour
+    /// que le test qui a une requête de trop échoue tout de suite et non à la limite de temps de la suite.
+    func onExcess(_ body: @escaping @Sendable () -> Void) { state.withLock { $0.onExcess = body } }
 
     /// Appelée à chaque requête, avant qu'elle soit servie : le test y prend un instantané de l'état du son.
     func onComplete(_ body: @escaping @Sendable () -> Void) { state.withLock { $0.onComplete = body } }
 
     func complete(_ request: CompletionRequest) -> AsyncThrowingStream<CompletionEvent, Error> {
-        let (index, observer) = state.withLock { s -> (Int, (@Sendable () -> Void)?) in
+        let (index, observer, excess) = state.withLock { s -> (Int, (@Sendable () -> Void)?, (@Sendable () -> Void)?) in
             s.calls += 1
-            return (s.calls - 1, s.onComplete)
+            return (s.calls - 1, s.onComplete, s.onExcess)
         }
         journal.add("\(label).complete")
         observer?()
         guard index < models.count else {
             Issue.record("requête de trop au modèle \(label) (rang \(index))")
-            return AsyncThrowingStream { $0.finish(throwing: TestFailure("requête de trop")) }
+            excess?()
+            // Un flux qui ne finit qu'à l'annulation : l'entretien attend, et la fin que `excess` lui donne le range.
+            return AsyncThrowingStream { _ in }
         }
         return models[index].complete(request)
     }
@@ -366,13 +380,15 @@ struct TurnScript {
 /// annulation).
 func makeConversationConfig(maxQuestions: Int = 8, template: String = "", vocabulary: [String] = ["Supervox"],
                             padding: Double = 0, previewInterval: Double = 1) -> ConversationConfig {
+    // Des nombres DISTINCTS de `RewritePolicy.turn` (1 024 / 30) et de `.standard` (16 000 / 120) : une politique écrite en dur dans le
+    // moteur ne passerait pas pour celle de la configuration. Le harnais remplace l'attente (`sleep`) par un `TickSleeper`.
     let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
     return ConversationConfig(
         fastModel: "modele-exemple-rapide", strongModel: "modele-exemple-fort", maxQuestions: maxQuestions,
         template: template, language: "fr", vocabulary: vocabulary, interruptMinDuration: 0.3, interruptLevel: -30,
         padding: padding, previewInterval: previewInterval,
-        turnPolicy: RewritePolicy(maxTokens: 1_024, timeout: 30, sleep: never),
-        conclusionPolicy: RewritePolicy(maxTokens: 16_000, timeout: 120, sleep: never))
+        turnPolicy: RewritePolicy(maxTokens: 777, timeout: 17, sleep: never),
+        conclusionPolicy: RewritePolicy(maxTokens: 4_321, timeout: 43, sleep: never))
 }
 
 /// L'entretien et tous ses doubles.
@@ -388,6 +404,10 @@ final class ConversationHarness: @unchecked Sendable {
     /// L'attente de l'aperçu (`sleep` de l'entretien) et celle du chien de garde du micro : deux `TickSleeper`, aucune durée réelle.
     let previewSleeper = TickSleeper()
     let watchdogSleeper = TickSleeper()
+    /// Les attentes des politiques de requête (délai du tour, délai de la conclusion) : elles enregistrent la durée que le moteur leur
+    /// demande, ce qui prouve d'où vient chaque politique.
+    let turnSleeper = TickSleeper()
+    let conclusionSleeper = TickSleeper()
     let chain: ConversationChain
     let turns: [TurnScript]
     private let state = OSAllocatedUnfairLock(initialState: (log: nil as EventLog?, said: 0, strongSeen: [(log: [String], running: Bool)]()))
@@ -398,10 +418,14 @@ final class ConversationHarness: @unchecked Sendable {
     init(turns: [TurnScript] = [], transcripts: @escaping @Sendable (Int) -> ScriptedTranscriber.Reply = { _ in .text("réponse") },
          fast: [ScriptedModel] = [], strong: [ScriptedModel] = [modelReply("Prompt final")], speech: ScriptedSpeech = ScriptedSpeech(),
          completion: ScriptedAudioIO.Completion = .immediate, startError: AudioCaptureError? = nil,
-         config: ConversationConfig = makeConversationConfig(), detectorPrepareError: (any Error)? = nil,
+         config baseConfig: ConversationConfig = makeConversationConfig(), detectorPrepareError: (any Error)? = nil,
          detectorFailure: (block: Int, error: any Error)? = nil,
          makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) {
         self.turns = turns
+        var config = baseConfig
+        let turnWait = turnSleeper, conclusionWait = conclusionSleeper
+        config.turnPolicy.sleep = { try await turnWait.sleep($0) }
+        config.conclusionPolicy.sleep = { try await conclusionWait.sleep($0) }
         audio = ObservedAudio(completion: completion, startError: startError, journal: journal)
         var events: [Int: VoiceEvent] = [:]
         var offset = 0
@@ -436,6 +460,10 @@ final class ConversationHarness: @unchecked Sendable {
         self.strong.onComplete {
             seen.withLock { $0.strongSeen.append((log: log.inner.log, running: log.inner.isRunning)) }
         }
+        // Une requête de trop à l'un des modèles met fin à l'entretien : le test échoue tout de suite (le problème est déjà enregistré).
+        let ending = chain
+        self.fast.onExcess { Task { await ending.cancel() } }
+        self.strong.onExcess { Task { await ending.cancel() } }
     }
 
     var log: EventLog? { state.withLock { $0.log } }
@@ -460,6 +488,10 @@ final class ConversationHarness: @unchecked Sendable {
     /// Dit le tour `index` : attend que l'entretien écoute, puis pousse les blocs du tour.
     func say(_ index: Int) async {
         guard let log else { return }
+        guard turns.indices.contains(index) else {
+            Issue.record("le tour \(index) n'est pas scripté")
+            return
+        }
         let turn = turns[index]
         let said = state.withLock { s -> Int in
             defer { s.said += 1 }
@@ -474,6 +506,10 @@ final class ConversationHarness: @unchecked Sendable {
 
     /// Le clip que le moteur de transcription doit recevoir pour le tour `index` quand le remplissage est nul.
     func expectedClip(turn index: Int) -> AudioClip {
+        guard turns.indices.contains(index) else {
+            Issue.record("le tour \(index) n'est pas scripté")
+            return AudioClip(samples: [], sampleRate: 16000)
+        }
         let turn = turns[index]
         return AudioClip(samples: rampSamples((turn.base + turn.start * 1000)..<(turn.base + turn.end * 1000)), sampleRate: 16000)
     }
@@ -525,4 +561,14 @@ final class Once: @unchecked Sendable {
         }
         continuation?.resume()
     }
+}
+
+/// Rend la main quand `condition` est vraie, en cédant la main entre deux lectures (aucune durée : un compte de passages). Rend la
+/// main aussi quand la tâche est annulée (limite de temps de la suite) : `false` alors.
+func waitUntil(_ condition: @Sendable () async -> Bool) async -> Bool {
+    while !Task.isCancelled {
+        if await condition() { return true }
+        await Task.yield()
+    }
+    return false
 }
