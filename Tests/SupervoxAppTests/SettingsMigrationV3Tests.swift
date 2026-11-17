@@ -37,8 +37,10 @@ private let providerID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1"
 @Suite struct SettingsMigrationV3Tests {
     // MARK: - Un fichier de la version 2
 
-    /// Un fichier de la version 2, tel que l'étape 5 l'écrit : fournisseur d'exemple, les quatre modes de base, `fastModel` et
-    /// `strongModel` choisis, et chaque champ à une valeur qui n'est pas son défaut (pour qu'une perte se voie).
+    /// Un fichier de la version 2 TAPÉ À LA MAIN, à la forme (clés triées, indentation) de ce que l'étape 5 écrit ; il n'est pas
+    /// produit par l'encodeur de l'étape 5 (la fixture de l'étape 4, dans `SettingsStoreTests`, l'est). Fournisseur d'exemple, les
+    /// quatre modes de base, `fastModel` et `strongModel` choisis, et chaque champ à une valeur qui n'est pas son défaut (pour
+    /// qu'une perte se voie).
     private static let versionTwoFile = #"""
     {
       "fastModel" : {
