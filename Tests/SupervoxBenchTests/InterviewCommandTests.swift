@@ -398,10 +398,10 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
     @Test func neitherTheKeyNorTheAddressNorAModelNameIsWrittenAnywhere() async throws {
         // Le modèle répète tout ce qu'il connaît : sans retrait, la conversation du rapport porterait la clé, l'adresse et les noms.
         let echo = "Je suis joignable à \(endpointAddress), sur \(endpointAddress.dropFirst(8)), avec la clé \(endpointKey), "
-            + "modèles \(fastName) et \(strongName), voix du modèle \(voiceModelName). Autre question ?"
+            + "modèles \(fastName) et \(strongName), voix \(voiceName) du modèle \(voiceModelName). Autre question ?"
         let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
         let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6)], in: folder)
-        let secrets = [endpointKey, endpointAddress, "exemple.invalid", fastName, strongName, voiceModelName]
+        let secrets = [endpointKey, endpointAddress, "exemple.invalid", fastName, strongName, voiceModelName, voiceName]
 
         // Une fois avec un fichier de rapport, une fois sur la sortie standard.
         let report = folder.appendingPathComponent("rapport.md")

@@ -116,7 +116,8 @@ struct InterviewCommand: AsyncParsableCommand {
 
             Les durées du rapport ne sont pas comparables aux mesures de latence des étapes précédentes (`latency`) : la forme des \
             requêtes est différente (historique de la conversation, consigne de système avec le nombre de questions restantes). Ni la \
-            clé, ni l'adresse, ni les noms de modèle ne sont écrits dans le rapport ni sur la sortie.
+            clé, ni l'adresse, ni les noms de modèle et de voix ne sont écrits dans le rapport ni sur la sortie : ils y sont retirés partout, \
+            y compris dans les phrases fixes du rapport et dans la conversation, où un nom qui est un mot courant devient « <modèle> ».
             """)
 
     @Argument(help: "Un fichier WAV par tour de la personne, dans l'ordre.")
@@ -201,7 +202,7 @@ struct InterviewCommand: AsyncParsableCommand {
         } catch EndpointError.missingVariable {
             throw InterviewError.missingEndpoint
         }
-        let redact = interviewRedactor(endpoint, names: [fastModel, strongModel, voiceModel].compactMap { $0 })
+        let redact = interviewRedactor(endpoint, names: [fastModel, strongModel, voiceModel, voice].compactMap { $0 })
         let say: @Sendable (String) -> Void = { runtime.say(redact($0)) }
         let warn: @Sendable (String) -> Void = { runtime.warn(redact($0)) }
         let reportFile = output.map { URL(fileURLWithPath: $0) }
