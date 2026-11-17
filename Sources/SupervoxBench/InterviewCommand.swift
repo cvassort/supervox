@@ -13,9 +13,12 @@ enum InterviewError: Error, Equatable, CustomStringConvertible {
     case invalidOption(String)
     case unreadableWav(name: String, reason: String)
     case emptyWav(String)
+    case outputIsAnInput(String)
 
     var description: String {
         switch self {
+        case .outputIsAnInput(let name):
+            "--output désigne le fichier WAV d'entrée « \(name) » : il serait écrasé par le rapport. Choisir un autre fichier."
         case .noWav: "Au moins un fichier WAV est nécessaire : un par tour de la personne."
         case .voiceNeedsVoiceModel: "--voice demande aussi --voice-model."
         case .voiceModelNeedsVoice: "--voice-model demande aussi --voice."
@@ -269,6 +272,15 @@ struct InterviewCommand: AsyncParsableCommand {
         guard !wavs.isEmpty else { throw InterviewError.noWav }
         if voice != nil, voiceModel == nil { throw InterviewError.voiceNeedsVoiceModel }
         if voiceModel != nil, voice == nil { throw InterviewError.voiceModelNeedsVoice }
+        // Jamais le rapport sur un fichier d'entrée, `--overwrite` ou non : il serait lu au départ, puis écrasé à la fin. Les chemins
+        // sont comparés sans `.`, `..` ni lien symbolique (`/var` et `/private/var` désignent le même fichier).
+        if let output {
+            let target = URL(fileURLWithPath: output).standardizedFileURL.resolvingSymlinksInPath()
+            for path in wavs {
+                let input = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+                if input == target { throw InterviewError.outputIsAnInput(input.lastPathComponent) }
+            }
+        }
         guard maxQuestions >= 1 else { throw InterviewError.invalidOption("--max-questions doit être au moins 1.") }
         if let interruptAfter, !(interruptAfter.isFinite && interruptAfter > 0) {
             throw InterviewError.invalidOption("--interrupt-after doit être un nombre de secondes positif.")

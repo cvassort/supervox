@@ -398,6 +398,59 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         #expect(try String(contentsOf: report, encoding: .utf8).hasPrefix("# Entretien du banc"))
     }
 
+    @Test func overwriteNeverReplacesAnInputWavWhateverTheSpellingOfItsPath() async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6), .voice(turn: 1, seconds: 0.6)], in: folder)
+        let before = try Data(contentsOf: URL(fileURLWithPath: wavs[1]))
+
+        for spelling in [wavs[1], folder.path + "/./tour2.wav", folder.path + "/sous/../tour2.wav"] {
+            let session = InterviewRig(fast: [])
+            let command = try parse(wavs + models + ["--output", spelling, "--overwrite"])
+            let error = await refusal { try await command.run(runtime: session.runtime()) }
+            #expect(error == .outputIsAnInput("tour2.wav"), "\(spelling)")
+            #expect(session.builtSetups.isEmpty)
+        }
+        #expect(try Data(contentsOf: URL(fileURLWithPath: wavs[1])) == before, "le fichier d'entrée a été touché")
+    }
+
+    @Test func overwriteNeverReplacesAFileGitTracksEvenInAFolderAPatternIgnores() async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        func git(_ arguments: [String]) throws {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["git", "-C", folder.path] + arguments
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            try #require(process.terminationStatus == 0, "git \(arguments) a échoué")
+        }
+        try git(["init", "-q"])
+        try "sortie/\nlibre/\n".write(to: folder.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        let tracked = folder.appendingPathComponent("sortie/rapport.md")
+        try FileManager.default.createDirectory(at: tracked.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "suivi".write(to: tracked, atomically: true, encoding: .utf8)
+        try git(["add", "-f", "sortie/rapport.md"])
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6)], in: folder)
+
+        // Mesuré : git ne tient pas pour « ignoré » un dossier qui contient un fichier suivi (`git check-ignore`), donc la garde du
+        // dossier (`OutputGuard.checkIgnoredByGit`) refuse le fichier suivi, `--overwrite` ou non : cette option ne lève que la garde
+        // « le rapport existe déjà ».
+        for extra in [["--overwrite"], [String]()] {
+            let session = InterviewRig(fast: [])
+            let command = try parse(wavs + models + ["--output", tracked.path] + extra)
+            await #expect(throws: OutputError.self) { try await command.run(runtime: session.runtime()) }
+            #expect(session.builtSetups.isEmpty)
+        }
+        #expect(try String(contentsOf: tracked, encoding: .utf8) == "suivi")
+
+        // Un dossier ignoré qui ne contient rien de suivi : accepté.
+        let free = folder.appendingPathComponent("libre/rapport.md")
+        let rig = InterviewRig(fast: [question("Quelle est la première question ?")])
+        try await parse(wavs + models + ["--output", free.path]).run(runtime: rig.runtime())
+        #expect(try String(contentsOf: free, encoding: .utf8).hasPrefix("# Entretien du banc"))
+    }
+
     @Test func aReportInsideAGitRepositoryThatDoesNotIgnoreItIsRefusedBeforeAnythingIsBuilt() async throws {
         let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
         let git = Process()
