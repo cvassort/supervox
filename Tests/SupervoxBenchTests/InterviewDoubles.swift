@@ -17,6 +17,18 @@ func settle(_ condition: @Sendable () -> Bool) async -> Bool {
     return condition()
 }
 
+/// Attend la fin d'une tâche **en la rendant à l'annulation du test** : un `Task { … }` non structuré n'hérite pas de l'annulation que
+/// la limite de temps d'une suite envoie au corps du test, et `await task.value` seul ne s'interrompt pas. Sans cet auxiliaire, un test
+/// dont la commande ne finit pas reste suspendu au-delà de sa limite (observé par la revue : 235 s au lieu de 60 s, et un processus
+/// d'aide qui survit à la garde). Toute attente d'une tâche des tests de la commande passe par ici.
+func finished<T: Sendable>(_ task: Task<T, any Error>) async throws -> T {
+    try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+}
+
+func finished<T: Sendable>(_ task: Task<T, Never>) async -> T {
+    await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+}
+
 /// Cède le fil un grand nombre de fois, pour qu'une tâche lancée plus tôt ait eu l'occasion de s'enregistrer : sert à vérifier
 /// qu'une attente n'a **pas** été armée. Une vérification qui passe à tort si cette tâche tardait davantage, jamais l'inverse.
 func quiesce() async {

@@ -54,6 +54,9 @@ private final class Rig: Sendable {
         task.withLock { $0 = started }
     }
 
+    /// Un test qui sort (échec, annulation) n'abandonne pas un pilote vivant.
+    deinit { task.withLock { $0?.cancel() } }
+
     /// Émet les événements l'un après l'autre, en attendant à chaque fois que le pilote l'ait traité : ce que le test lit ensuite
     /// est l'état **après** cet événement, sans durée ni sondage au hasard.
     func send(_ events: ConversationEvent...) async throws {
@@ -73,7 +76,8 @@ private final class Rig: Sendable {
 
     func result() async -> InterviewTrace {
         let started = task.withLock { $0 }
-        return await started?.value ?? InterviewTrace()
+        guard let started else { return InterviewTrace() }
+        return await finished(started)
     }
 
     var pushed: [Int] { feed.pushedTurns }

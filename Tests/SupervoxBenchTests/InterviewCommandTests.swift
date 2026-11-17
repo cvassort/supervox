@@ -568,7 +568,7 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
             }
         }
         defer { releaser.cancel() }
-        try await running.value
+        try await finished(running)
 
         let text = try report(file)
         #expect(text.contains("- Interruptions : 1 (ce qui avait été entendu : \(heard))."), "\(text)")
@@ -594,7 +594,7 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         // Le moteur ne réagit pas au premier fichier : l'attente d'un tour sans réaction est armée, le test la rend.
         try #require(await settle { session.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
         #expect(session.board.release(seconds: InterviewDriver.reactionTimeout))
-        try await running.value
+        try await finished(running)
 
         let text = try report(file)
         #expect(text.contains("- Tours poussés : 2 sur 2 ; textes rendus par la transcription : 1."))
@@ -614,7 +614,7 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
 
         try #require(await settle { session.board.pendingSeconds == [InterviewDriver.reactionTimeout] })
         session.board.release(seconds: InterviewDriver.reactionTimeout)
-        await #expect(throws: ExitCode.self) { try await running.value }
+        await #expect(throws: ExitCode.self) { try await finished(running) }
 
         #expect(try report(file).contains("- Fin : rien n'a été dit"))
         #expect(session.strong.requests.isEmpty)
