@@ -11,8 +11,9 @@ extension KeyedDecodingContainer where K == JSONKey {
 /// Réglages de l'entretien vocal, enregistrés dans `settings.json` sous `interview` (version 3). Chaque champ absent ou d'une
 /// autre forme prend son défaut ; un champ que cette version ne connaît pas est gardé et réécrit tel quel (`UnknownFields`).
 ///
-/// Ce que le fichier dit n'est pas borné à la lecture : c'est `normalized` que les consommateurs appellent, pour ramener chaque
-/// valeur dans sa borne.
+/// Une valeur hors borne est ramenée dans sa borne dès la lecture (le décodage applique `normalized`), pour qu'aucun
+/// consommateur ne puisse oublier la borne ; un gabarit blanc se lit `nil`. `normalized` reste pour les valeurs que l'interface
+/// pose ensuite.
 public struct InterviewSettings: Codable, Equatable, Sendable {
     /// Nombre maximal de questions posées. Défaut 8 : choix non mesuré.
     public var maxQuestions: Int
@@ -88,6 +89,7 @@ public struct InterviewSettings: Codable, Equatable, Sendable {
             container.lenient(Double.self, CodingKeys.interruptMinDuration.rawValue) ?? defaults.interruptMinDuration
         interruptLevel = container.lenient(Double.self, CodingKeys.interruptLevel.rawValue) ?? defaults.interruptLevel
         unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+        self = normalized
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -210,7 +212,8 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
 /// Durée de conservation de l'historique des entretiens, enregistrée dans `settings.json` sous `history` (version 3). Un champ
 /// absent ou d'une autre forme prend le défaut ; un champ inconnu est gardé et réécrit tel quel.
 public struct HistorySettings: Codable, Equatable, Sendable {
-    /// Nombre de jours de conservation. 0 : ne rien garder. Défaut 30 : choix non mesuré.
+    /// Nombre de jours de conservation. 0 : ne rien garder. Défaut 30 : choix non mesuré. Lu borné (`normalized`) : jamais
+    /// négatif, jamais au-delà de `maxRetentionDays`.
     public var retentionDays: Int
     /// Ce que cette version ne connaît pas, réécrit tel quel.
     var unknown = UnknownFields()
@@ -223,6 +226,21 @@ public struct HistorySettings: Codable, Equatable, Sendable {
 
     /// Les durées que l'interface propose, en jours : choix non mesuré.
     public static let choices: [Int] = [0, 7, 30, 90, 365]
+
+    /// Plafond de `retentionDays`, en jours (dix ans) : choix non mesuré. Un nombre énorme ferait déborder un calcul de date.
+    public static let maxRetentionDays = 3650
+
+    /// La durée ramenée dans sa borne : une valeur négative prend le défaut (30 jours, jamais 0 : « ne rien garder » effacerait
+    /// l'historique de la personne), une valeur au-delà du plafond va au plafond. Part de `self` : les champs inconnus restent.
+    public var normalized: HistorySettings {
+        var result = self
+        if retentionDays < 0 {
+            result.retentionDays = Self.defaults.retentionDays
+        } else {
+            result.retentionDays = min(retentionDays, Self.maxRetentionDays)
+        }
+        return result
+    }
 
     /// Le champ connu seulement : un champ inconnu ne change pas l'égalité.
     public static func == (lhs: HistorySettings, rhs: HistorySettings) -> Bool {
@@ -237,6 +255,7 @@ public struct HistorySettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: JSONKey.self)
         retentionDays = container.lenient(Int.self, CodingKeys.retentionDays.rawValue) ?? Self.defaults.retentionDays
         unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+        self = normalized
     }
 
     public func encode(to encoder: any Encoder) throws {

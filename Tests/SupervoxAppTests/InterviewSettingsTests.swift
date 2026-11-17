@@ -215,12 +215,64 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
         #expect((written["futur-objet"] as? NSDictionary)?.isEqual(to: ["x": "y"]) == true)
     }
 
-    /// `normalized` repart de la valeur lue : il ne reconstruit pas un `InterviewSettings` neuf, qui perdrait ces champs.
+    /// `normalized` repart de la valeur : il ne reconstruit pas un `InterviewSettings` neuf, qui perdrait ces champs. La valeur
+    /// hors borne est posée après la lecture (la lecture, elle, borne déjà : voir `outOfRangeValuesAreBoundedAtReading`).
     @Test func normalizingKeepsTheUnknownFields() throws {
-        let read = try decode(InterviewSettings.self, #"{"maxQuestions": 99, "futur": {"a": 1}}"#)
+        var read = try decode(InterviewSettings.self, #"{"maxQuestions": 5, "futur": {"a": 1}}"#)
+        read.maxQuestions = 99
         let written = try tree(read.normalized)
         #expect(written["maxQuestions"] as? Int == 20)
         #expect((written["futur"] as? NSDictionary)?.isEqual(to: ["a": 1]) == true)
+    }
+
+    // MARK: - Bornes à la lecture
+
+    /// Une valeur hors borne est ramenée dans sa borne dès le décodage, sans que personne appelle `normalized` : aucun
+    /// consommateur ne peut oublier la borne (`maxQuestions` à 0 conclurait l'entretien sans question).
+    @Test func outOfRangeValuesAreBoundedAtReading() throws {
+        let low = try decode(
+            InterviewSettings.self,
+            #"{"maxQuestions": 0, "turnSilence": 0, "interruptMinDuration": 0, "interruptLevel": -80}"#)
+        #expect(low.maxQuestions == 1)
+        #expect(low.turnSilence == 0.3)
+        #expect(low.interruptMinDuration == 0.1)
+        #expect(low.interruptLevel == -50)
+        let high = try decode(
+            InterviewSettings.self,
+            #"{"maxQuestions": 99, "turnSilence": 9, "interruptMinDuration": 9, "interruptLevel": 5}"#)
+        #expect(high.maxQuestions == 20)
+        #expect(high.turnSilence == 2.0)
+        #expect(high.interruptMinDuration == 1.0)
+        #expect(high.interruptLevel == -10)
+        #expect(try decode(InterviewSettings.self, #"{"template": "\n  "}"#).template == nil)
+    }
+
+    @Test func boundingAtReadingKeepsTheUnknownFieldsAndTheValuesInRange() throws {
+        let read = try decode(
+            InterviewSettings.self, #"{"maxQuestions": 99, "turnSilence": 1.25, "template": " T ", "futur": {"a": 1}}"#)
+        let written = try tree(read)
+        #expect(written["maxQuestions"] as? Int == 20)
+        #expect(written["turnSilence"] as? Double == 1.25)
+        #expect(written["template"] as? String == " T ")
+        #expect((written["futur"] as? NSDictionary)?.isEqual(to: ["a": 1]) == true)
+    }
+
+    @Test(arguments: [
+        (-5, 30), (-1, 30), (Int.min, 30), (0, 0), (7, 7), (30, 30), (365, 365), (3650, 3650), (3651, 3650), (Int.max, 3650),
+    ])
+    func theRetentionIsBoundedAtReading(file: Int, expected: Int) throws {
+        #expect(try decode(HistorySettings.self, #"{"retentionDays": \#(file)}"#).retentionDays == expected)
+        // `normalized` pose la même règle sur une valeur choisie par l'interface.
+        #expect(HistorySettings(retentionDays: file).normalized.retentionDays == expected)
+    }
+
+    @Test func theMaximumRetentionIsTenYearsAndNormalizingKeepsTheUnknownFields() throws {
+        #expect(HistorySettings.maxRetentionDays == 3650)
+        var read = try decode(HistorySettings.self, #"{"retentionDays": 7, "futur": [1]}"#)
+        read.retentionDays = -1
+        let written = try tree(read.normalized)
+        #expect(written["retentionDays"] as? Int == 30)
+        #expect((written["futur"] as? NSArray)?.isEqual(to: [1]) == true)
     }
 
     // MARK: - L'égalité ignore les champs inconnus

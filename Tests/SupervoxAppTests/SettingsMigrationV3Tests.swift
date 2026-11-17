@@ -222,6 +222,31 @@ private let providerID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1"
         #expect(reloaded == settings)
     }
 
+    /// Les valeurs hors borne d'un fichier sont bornées dès `load()` : un consommateur qui lit `settings.interview` ou
+    /// `settings.history` sans rien appeler ne voit jamais une question maximale nulle, ni une durée de conservation négative
+    /// (qui ferait supprimer tout l'historique) ou énorme.
+    @Test(arguments: [
+        (#"{"version": 3, "interview": {"maxQuestions": 0}, "history": {"retentionDays": -5}}"#, 1, 30),
+        (#"{"version": 3, "interview": {"maxQuestions": 99}, "history": {"retentionDays": 9223372036854775807}}"#, 20, 3650),
+        (#"{"version": 3, "interview": {"maxQuestions": 7}, "history": {"retentionDays": 0}}"#, 7, 0),
+    ])
+    func outOfRangeValuesAreBoundedByLoad(json: String, questions: Int, days: Int) throws {
+        let directory = try makeDirectory()
+        defer { removeDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let store = SettingsStore(file: file, now: fixedClock)
+        try Data(json.utf8).write(to: file)
+
+        let loaded = store.load()
+        #expect(loaded.notice == nil)
+        #expect(loaded.settings.interview.maxQuestions == questions)
+        #expect(loaded.settings.history.retentionDays == days)
+        try store.save(loaded.settings)
+        let written = try jsonObject(Data(contentsOf: file))
+        #expect((written["interview"] as? [String: Any])?["maxQuestions"] as? Int == questions)
+        #expect((written["history"] as? [String: Any])?["retentionDays"] as? Int == days)
+    }
+
     // MARK: - Fichier futur et fichier illisible
 
     /// Un fichier de la version 4 : lu autant que possible (ce que la version 3 en connaît), jamais écrasé.
