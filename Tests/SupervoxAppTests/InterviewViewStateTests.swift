@@ -359,11 +359,14 @@ import Testing
 
     private func words(_ count: Int) -> String { Array(repeating: "précision", count: count).joined(separator: " ") }
 
-    /// Le pire cas réaliste : une réplique et une réponse très longues, l'avis le plus long, la note de maintien, deux fournisseurs
-    /// de 40 caractères dans la ligne de vie privée.
+    /// Le pire cas réaliste : une réplique et une réponse très longues, l'avis le plus long, la note de maintien, des fournisseurs
+    /// de 40 caractères dans la ligne de vie privée (modèle rapide, modèle fort et voix : trois noms).
     private func worstCase(words count: Int) -> InterviewViewState {
         let forty = String(repeating: "x", count: Provider.shortNameLimit)
-        var worst = InterviewViewState(maxQuestions: 12, privacy: InterviewText.privacy(provider: forty, voiceProvider: forty))
+        var worst = InterviewViewState(
+            maxQuestions: 12,
+            privacy: InterviewText.privacy(
+                provider: forty, strongProvider: String(repeating: "y", count: Provider.shortNameLimit), voiceProvider: forty))
         worst.phase = .listening
         worst.question = 12
         worst.level = 1

@@ -143,23 +143,34 @@ import Testing
 
     @Test func thePrivacyLineNamesTheProviderOfTheTextAndKeepsTheAudioOnTheComputer() {
         #expect(
-            InterviewText.privacy(provider: "Fournisseur d'exemple", voiceProvider: nil)
+            InterviewText.privacy(provider: "Fournisseur d'exemple", strongProvider: "Fournisseur d'exemple", voiceProvider: nil)
                 == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur.")
     }
 
     @Test func withAProviderVoiceThePrivacyLineAddsWhereTheTextOfSupervoxGoes() {
         #expect(
-            InterviewText.privacy(provider: "Fournisseur d'exemple", voiceProvider: "Voix d'exemple")
+            InterviewText.privacy(provider: "Fournisseur d'exemple", strongProvider: "Fournisseur d'exemple", voiceProvider: "Voix d'exemple")
                 == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur. Le texte que dit Supervox part chez «\u{00A0}Voix d'exemple\u{00A0}».")
     }
 
     @Test("un nom de fournisseur démesuré est rogné comme partout : la ligne tient dans la limite")
     func aHugeProviderNameIsCutSoThePrivacyLineStillFits() {
         let huge = String(repeating: "Fournisseur ", count: 20)
-        let line = InterviewText.privacy(provider: huge, voiceProvider: huge)
+        let line = InterviewText.privacy(provider: huge, strongProvider: "Autre " + huge, voiceProvider: huge)
         #expect(line.count <= DictationText.detailLimit, "\(line.count) caractères")
         #expect(line.contains(Provider.shortName(huge)))
+        #expect(line.contains(Provider.shortName("Autre " + huge)))
         #expect(!line.contains(huge))
+    }
+
+    @Test("amendement I : le modèle fort chez un autre fournisseur est nommé aussi (il reçoit la conversation à la conclusion)")
+    func aStrongModelAtAnotherProviderIsNamedToo() {
+        #expect(
+            InterviewText.privacy(provider: "Fournisseur d'exemple", strongProvider: "Second d'exemple", voiceProvider: nil)
+                == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}» et «\u{00A0}Second d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur.")
+        #expect(
+            InterviewText.privacy(provider: "Fournisseur d'exemple", strongProvider: "Second d'exemple", voiceProvider: "Voix d'exemple")
+                == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}» et «\u{00A0}Second d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur. Le texte que dit Supervox part chez «\u{00A0}Voix d'exemple\u{00A0}».")
     }
 
     // MARK: Règle 1 : la longueur
@@ -188,8 +199,10 @@ import Testing
             InterviewText.cancelHint, InterviewText.concludeLabel, InterviewText.concludeHelp, InterviewText.holdNote,
             InterviewText.questionCounter(99, of: 99), InterviewText.supervoxLabel, InterviewText.youLabel,
             InterviewText.modeLockedHint,
-            InterviewText.privacy(provider: forty, voiceProvider: nil),
-            InterviewText.privacy(provider: forty, voiceProvider: forty),
+            InterviewText.privacy(provider: forty, strongProvider: forty, voiceProvider: nil),
+            InterviewText.privacy(provider: forty, strongProvider: forty, voiceProvider: forty),
+            InterviewText.privacy(provider: forty, strongProvider: String(repeating: "y", count: 40), voiceProvider: nil),
+            InterviewText.privacy(provider: forty, strongProvider: String(repeating: "y", count: 40), voiceProvider: forty),
         ]
         expected += Self.everyRewriteFailure.map(InterviewText.turnFailure)
         expected += [

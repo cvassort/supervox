@@ -96,11 +96,15 @@ public enum InterviewText {
 
     // MARK: Vie privée
 
-    /// Le pied de la vue (D11) : où part le texte, et que l'audio reste sur l'ordinateur. Avec une voix de fournisseur, où part aussi
-    /// le texte que dit Supervox. Les noms sont rognés comme partout (`Provider.shortName`) : la ligne tient quel que soit le nom.
-    public static func privacy(provider: String, voiceProvider: String?) -> String {
-        let line = fr(
-            "Le texte de vos réponses part chez « \(Provider.shortName(provider)) » ; l'audio du micro reste sur cet ordinateur.")
+    /// Le pied de la vue (D11) : où part le texte, et que l'audio reste sur l'ordinateur. `provider` reçoit les réponses à chaque tour
+    /// (modèle rapide), `strongProvider` la conversation entière à la conclusion (modèle fort) : quand ce ne sont pas les mêmes, la ligne
+    /// nomme les deux. Avec une voix de fournisseur, où part aussi le texte que dit Supervox. Les noms sont rognés comme partout
+    /// (`Provider.shortName`) : la ligne tient quel que soit le nom, et deux noms identiques une fois rognés ne sont dits qu'une fois.
+    public static func privacy(provider: String, strongProvider: String, voiceProvider: String?) -> String {
+        let fast = Provider.shortName(provider)
+        let strong = Provider.shortName(strongProvider)
+        let receivers = fast == strong ? "« \(fast) »" : "« \(fast) » et « \(strong) »"
+        let line = fr("Le texte de vos réponses part chez \(receivers) ; l'audio du micro reste sur cet ordinateur.")
         guard let voiceProvider else { return line }
         return line + " " + fr("Le texte que dit Supervox part chez « \(Provider.shortName(voiceProvider)) ».")
     }
@@ -246,7 +250,13 @@ public enum InterviewText {
         }
         sentences += [cancelHint, concludeLabel, concludeHelp, supervoxLabel, youLabel, holdNote, modeLockedHint]
         sentences += [questionCounter(99, of: 99)]
-        sentences += [privacy(provider: forty, voiceProvider: nil), privacy(provider: forty, voiceProvider: forty)]
+        let other = String(repeating: "y", count: Provider.shortNameLimit)
+        sentences += [
+            privacy(provider: forty, strongProvider: forty, voiceProvider: nil),
+            privacy(provider: forty, strongProvider: forty, voiceProvider: forty),
+            privacy(provider: forty, strongProvider: other, voiceProvider: nil),
+            privacy(provider: forty, strongProvider: other, voiceProvider: forty),
+        ]
         sentences += notices.map(notice) + failures.map(turnFailure) + failures.map { notice(.modelFailed($0)) }
         sentences += knownFailureCodes.flatMap { code in [failure(.microphone(code)), failure(.engine(code))] }
         sentences.append(failure(.engine("code-inconnu")))

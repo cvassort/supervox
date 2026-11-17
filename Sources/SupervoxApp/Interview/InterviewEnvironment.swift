@@ -25,18 +25,23 @@ public struct InterviewSetup: Sendable {
     /// Le silence qui marque la fin d'un tour, en secondes, borné (`InterviewSettings.normalized`). `ConversationConfig` ne le porte
     /// pas : c'est le détecteur de voix qui le lit, et il est construit hors du moteur (`EngineCache.detector(minSilence:)`).
     public var turnSilence: Double
+    /// Les réglages de transcription de l'entretien, lus avec le reste : ceux de l'onglet Transcription, avec `engine` pour moteur.
+    /// La préparation et la construction en ont besoin (variante WhisperKit, vocabulaire), et les lisent ici, une seule fois.
+    public var transcription: TranscriptionSettings
     /// Le fournisseur du modèle rapide, tel que l'utilisateur l'a nommé : celui qui reçoit le texte des réponses de la personne
-    /// (`InterviewText.privacy` le rogne). Le modèle fort peut venir d'un autre fournisseur, qui reçoit alors la conversation à la
-    /// conclusion : cette ligne ne le dit pas.
+    /// à chaque tour (`InterviewText.privacy` le rogne).
     public var providerName: String
+    /// Le fournisseur du modèle fort : celui qui reçoit la conversation entière à la conclusion. Le même que `providerName` quand
+    /// les deux modèles viennent du même fournisseur ; la ligne de vie privée nomme les deux sinon.
+    public var strongProviderName: String
     /// Le fournisseur de la voix quand elle en vient (le texte que dit Supervox part chez lui) ; `nil` quand c'est la voix du système,
     /// y compris quand la voix choisie n'a pas pu être résolue.
     public var voiceProviderName: String?
 
     public init(
         engine: TranscriptionEngine, fastModel: any LanguageModel, strongModel: any LanguageModel,
-        voice: any SpeechSynthesizer, config: ConversationConfig, turnSilence: Double, providerName: String,
-        voiceProviderName: String?
+        voice: any SpeechSynthesizer, config: ConversationConfig, turnSilence: Double, transcription: TranscriptionSettings,
+        providerName: String, strongProviderName: String, voiceProviderName: String?
     ) {
         self.engine = engine
         self.fastModel = fastModel
@@ -44,8 +49,17 @@ public struct InterviewSetup: Sendable {
         self.voice = voice
         self.config = config
         self.turnSilence = turnSilence
+        var transcription = transcription
+        transcription.engine = engine
+        self.transcription = transcription
         self.providerName = providerName
+        self.strongProviderName = strongProviderName
         self.voiceProviderName = voiceProviderName
+    }
+
+    /// La ligne de vie privée de cet entretien : les fournisseurs qui reçoivent du texte, et celui de la voix.
+    public var privacy: String {
+        InterviewText.privacy(provider: providerName, strongProvider: strongProviderName, voiceProvider: voiceProviderName)
     }
 
     /// Résout un entretien : les deux modèles (chacun par `ProviderResolver`, la clé lue hors du fil principal), la configuration et
@@ -81,7 +95,8 @@ public struct InterviewSetup: Sendable {
         return InterviewSetup(
             engine: engine ?? .interviewDefault, fastModel: makeModel(fast.kind, fast.config),
             strongModel: makeModel(strong.kind, strong.config), voice: voice, config: config,
-            turnSilence: interview.turnSilence, providerName: fast.name, voiceProviderName: voiceProviderName)
+            turnSilence: interview.turnSilence, transcription: settings.transcription, providerName: fast.name,
+            strongProviderName: strong.name, voiceProviderName: voiceProviderName)
     }
 
     @MainActor
@@ -136,25 +151,38 @@ public struct InterviewSetup: Sendable {
 /// La cible `Supervox` le construit avec les vrais moteurs (et le son réel) ; tout le reste (tests, outil de rendu, constructeurs
 /// par défaut) reçoit `unavailable`. `SupervoxApp` ne dépend pas des moteurs.
 public struct InterviewEnvironment: Sendable {
-    /// Télécharge, si besoin, et charge le moteur de transcription et le détecteur de voix, comme la dictée. Lève si le modèle ne peut
-    /// pas être obtenu ; une tâche annulée s'arrête.
-    public var prepare: @Sendable (TranscriptionEngine) async throws -> Void
+    /// Télécharge, si besoin, les modèles de `setup.transcription`, puis charge le moteur de transcription (`setup.engine`, variante
+    /// WhisperKit de `setup.transcription`) et le détecteur de voix de l'entretien, au silence de fin de tour `setup.turnSilence`
+    /// (un exemplaire distinct de celui de la dictée, que le préchargement du lancement ne prépare pas). Sans cela, le premier tour
+    /// paierait le chargement. Lève si un modèle ne peut pas être obtenu ; une tâche annulée s'arrête. N'ouvre ni micro ni son.
+    public var prepare: @Sendable (InterviewSetup) async throws -> Void
     /// Construit la conversation, une fois la porte de préchargement passée. Ne démarre ni micro ni son : c'est `start()`.
     public var makeConversation: @Sendable (InterviewSetup) async throws -> any ConversationEngine
+    /// Fabrique une voix pour `InterviewSetup.resolve`. Contrat : avec `nil`, la voix **du système** pour ce choix ; avec un
+    /// fournisseur résolu, la voix **de ce fournisseur**. Fabriquer ne synthétise rien.
+    public var makeVoice: @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
 
     public init(
-        prepare: @escaping @Sendable (TranscriptionEngine) async throws -> Void,
-        makeConversation: @escaping @Sendable (InterviewSetup) async throws -> any ConversationEngine
+        prepare: @escaping @Sendable (InterviewSetup) async throws -> Void,
+        makeConversation: @escaping @Sendable (InterviewSetup) async throws -> any ConversationEngine,
+        makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
     ) {
         self.prepare = prepare
         self.makeConversation = makeConversation
+        self.makeVoice = makeVoice
     }
 
-    /// Ce que lèvent les deux fermetures de `unavailable` : aucun entretien n'est branché dans ce processus.
+    /// Ce que lèvent les fermetures de `unavailable` : aucun entretien n'est branché dans ce processus.
     public struct Unavailable: Error, Equatable, Sendable {}
 
-    /// Aucun entretien branché : les deux fermetures lèvent. Le défaut de tout ce qui n'est pas l'application elle-même ; le panneau
-    /// dit alors « L'entretien n'a pas pu démarrer : relancez Supervox. ».
+    /// Aucun entretien branché : préparer et construire lèvent, la voix fabriquée lève à la première phrase. Le défaut de tout ce qui
+    /// n'est pas l'application elle-même ; le panneau dit alors « L'entretien n'a pas pu démarrer : relancez Supervox. ».
     public static let unavailable = InterviewEnvironment(
-        prepare: { _ in throw Unavailable() }, makeConversation: { _ in throw Unavailable() })
+        prepare: { _ in throw Unavailable() }, makeConversation: { _ in throw Unavailable() },
+        makeVoice: { _, _ in UnavailableVoice() })
+
+    /// La voix de `unavailable` : jamais utilisée (rien ne se construit), elle lève si on la sollicitait.
+    private struct UnavailableVoice: SpeechSynthesizer {
+        func synthesize(_ text: String) async throws -> Speech { throw Unavailable() }
+    }
 }

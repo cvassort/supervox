@@ -358,12 +358,14 @@ let exampleCorrectedStream =
 /// Le panneau pendant un entretien : l'état que le contrôleur de l'entretien y poserait, avec des textes inventés et neutres.
 @MainActor func interviewPanelModel(
     phase: InterviewPhase, question: Int = 0, level: Float = 0, questionText: String = "", lastReply: String = "",
-    notice: String? = nil, holdNote: Bool = false, voiceProvider: String? = nil, textOnly: Bool = false, keyboard: Bool = true,
+    notice: String? = nil, holdNote: Bool = false, strongProvider: String = exampleProvider, voiceProvider: String? = nil,
+    textOnly: Bool = false, keyboard: Bool = true,
     maxQuestions: Int = 6
 ) -> PanelModel {
     let model = panelModel(mode: ModeChip.interviewID)
     var state = InterviewViewState(
-        maxQuestions: maxQuestions, privacy: InterviewText.privacy(provider: exampleProvider, voiceProvider: voiceProvider))
+        maxQuestions: maxQuestions,
+        privacy: InterviewText.privacy(provider: exampleProvider, strongProvider: strongProvider, voiceProvider: voiceProvider))
     state.phase = phase
     state.question = question
     state.level = level
@@ -676,11 +678,12 @@ for dark in [false, true] {
             phase: .concluding, question: 6, level: 0, questionText: "Merci, j'ai tout ce qu'il me faut : je rédige le prompt.",
             lastReply: exampleInterviewReply)),
         // Le pire cas réaliste de hauteur : une réplique et une réponse bien plus longues que la zone qui défile, l'avis le plus long,
-        // la note de maintien, la vie privée à deux fournisseurs de 40 caractères, la dernière question de douze.
+        // la note de maintien, la vie privée à trois fournisseurs (modèle rapide, modèle fort de 40 caractères, voix de 40 caractères), la dernière question de douze.
         ("entretien-pire-cas", interviewPanelModel(
             phase: .listening, question: 12, level: 0.8, questionText: exampleInterviewVeryLongQuestion,
             lastReply: exampleInterviewVeryLongQuestion, notice: InterviewText.failure(.engine("transcriptionNotPrepared")),
-            holdNote: true, voiceProvider: String(repeating: "V", count: 40), maxQuestions: 12)),
+            holdNote: true, strongProvider: String(repeating: "F", count: 40), voiceProvider: String(repeating: "V", count: 40),
+            maxQuestions: 12)),
         // Le panneau qui n'a pas la frappe : « Conclure » actif et grisé restent lisibles hors fenêtre clé.
         ("entretien-preparation-sans-frappe", interviewPanelModel(phase: .preparing, keyboard: false)),
         ("entretien-ecoute-sans-frappe", interviewPanelModel(

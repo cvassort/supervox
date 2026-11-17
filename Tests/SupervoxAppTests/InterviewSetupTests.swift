@@ -430,7 +430,47 @@ final class SetupModelFactory: Sendable {
         let setup = try await resolve(settings())
         let environment = InterviewEnvironment.unavailable
 
-        await #expect(throws: InterviewEnvironment.Unavailable.self) { try await environment.prepare(.parakeet) }
+        await #expect(throws: InterviewEnvironment.Unavailable.self) { try await environment.prepare(setup) }
         await #expect(throws: InterviewEnvironment.Unavailable.self) { _ = try await environment.makeConversation(setup) }
+        let voice = environment.makeVoice(.system, nil)
+        await #expect(throws: InterviewEnvironment.Unavailable.self) { _ = try await voice.synthesize("Bonjour.") }
+    }
+
+    // MARK: - Ce que la préparation porte pour la suite (amendement I)
+
+    @Test("amendement I : le fournisseur du modèle fort est nommé à part, et la vie privée nomme les deux quand ils diffèrent")
+    func theStrongProviderIsNamedAndThePrivacyLineNamesBoth() async throws {
+        let setup = try await resolve(settings())
+        #expect(setup.providerName == "Fournisseur d'exemple")
+        #expect(setup.strongProviderName == "Second d'exemple")
+        #expect(
+            setup.privacy
+                == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}» et «\u{00A0}Second d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur.")
+
+        let same = try await resolve(settings(strong: .some(ModelChoice(providerID: fastProvider.id, model: "modele-exemple-fort"))))
+        #expect(same.strongProviderName == "Fournisseur d'exemple")
+        #expect(
+            same.privacy
+                == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur.")
+
+        let voiced = try await resolve(settings(voice: providerVoice))
+        #expect(
+            voiced.privacy
+                == "Le texte de vos réponses part chez «\u{00A0}Fournisseur d'exemple\u{00A0}» et «\u{00A0}Second d'exemple\u{00A0}»\u{00A0}; l'audio du micro reste sur cet ordinateur. Le texte que dit Supervox part chez «\u{00A0}Voix d'exemple\u{00A0}».")
+    }
+
+    @Test("amendement I : les réglages de transcription suivent la préparation, avec le moteur de l'entretien")
+    func theTranscriptionSettingsTravelWithTheEngineOfTheInterview() async throws {
+        var base = settings()
+        base.transcription = TranscriptionSettings(
+            engine: .whisperKit, whisperModel: "variante-exemple", language: "fr", vocabulary: ["Supervox"])
+        let setup = try await resolve(base, engine: .parakeet)
+        #expect(setup.transcription.engine == .parakeet)
+        #expect(setup.transcription.whisperModel == "variante-exemple")
+        #expect(setup.transcription.vocabulary == ["Supervox"])
+
+        let whisper = try await resolve(base, engine: .whisperKit)
+        #expect(whisper.transcription.engine == .whisperKit)
+        #expect(whisper.engine == .whisperKit)
     }
 }
