@@ -98,15 +98,15 @@ public enum InterviewText {
     /// le texte d'une erreur ; un test relit la liste des codes dans le moteur et exige une phrase propre à chacun.
     private static let failureSentences: [String: String] = [
         ConversationFailure.Code.microphoneAccessDenied:
-            "L'accès au micro est refusé : autorisez Supervox dans Réglages Système, Confidentialité et sécurité, Microphone, puis relancez l'entretien.",
+            "L'accès au micro est refusé : autorisez Supervox dans Réglages Système, Confidentialité et sécurité, Micro, puis relancez l'entretien.",
         ConversationFailure.Code.noInputDevice:
             "Aucun micro n'est disponible : branchez-en un ou choisissez une entrée dans Réglages Système, Son, puis relancez l'entretien.",
         ConversationFailure.Code.alreadyRunning:
-            "Le micro est déjà pris par une autre écoute de Supervox : fermez-la, puis relancez l'entretien.",
+            "Le micro est déjà utilisé : terminez l'autre dictée ou l'autre écoute de Supervox, puis relancez l'entretien.",
         ConversationFailure.Code.engineFailed:
             "Le moteur audio n'a pas pu démarrer : vérifiez que le micro fonctionne dans une autre application, puis relancez l'entretien.",
         ConversationFailure.Code.notRunning:
-            "Le micro s'est arrêté avant de commencer : relancez l'entretien.",
+            "Le moteur audio n'était pas démarré quand Supervox a voulu parler : relancez l'entretien.",
         ConversationFailure.Code.silent:
             "Le micro ne donne plus aucun son : vérifiez qu'il est branché et choisi comme entrée dans Réglages Système, Son, puis relancez l'entretien.",
         ConversationFailure.Code.unusableSampleRate:
@@ -116,13 +116,13 @@ public enum InterviewText {
         ConversationFailure.Code.detectorFailed:
             "Le détecteur de voix a échoué : relancez l'entretien ; si cela se répète, vérifiez dans Réglages, onglet Transcription, que son modèle est téléchargé.",
         ConversationFailure.Code.transcriptionUnsupportedSampleRate:
-            "Le moteur de transcription ne lit pas la fréquence de ce micro : choisissez une autre entrée dans Réglages Système, Son, puis relancez l'entretien.",
+            "Le moteur de transcription a reçu un son à une fréquence qu'il ne lit pas : relancez l'entretien ; si cela se répète, choisissez une autre entrée dans Réglages Système, Son.",
         ConversationFailure.Code.transcriptionNotPrepared:
-            "Le moteur de transcription n'est pas prêt : vérifiez dans Réglages, onglet Transcription, que son modèle est téléchargé, puis relancez l'entretien.",
+            "Le moteur de transcription n'était pas prêt : relancez l'entretien ; si cela se répète, vérifiez dans Réglages, onglet Transcription, que son modèle est téléchargé.",
         ConversationFailure.Code.transcriptionUnsupportedLocale:
             "Le moteur de transcription ne gère pas cette langue : changez de moteur ou de langue dans Réglages, onglet Transcription, puis relancez l'entretien.",
         ConversationFailure.Code.transcriptionVocabularyUnavailable:
-            "Le vocabulaire n'a pas pu être chargé : raccourcissez-le dans Réglages, onglet Transcription, puis relancez l'entretien.",
+            "Le moteur de transcription n'a pas pu prendre en compte votre vocabulaire : relancez l'entretien ; si cela se répète, videz le vocabulaire dans Réglages, onglet Transcription.",
         ConversationFailure.Code.transcriptionFailed:
             "La transcription a échoué : relancez l'entretien ; si cela se répète, changez de moteur dans Réglages, onglet Transcription.",
         ConversationFailure.Code.transcriptionTimedOut:
