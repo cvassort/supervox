@@ -96,7 +96,7 @@ final class TestFeed: MicrophoneFeed, @unchecked Sendable {
 final class ScriptedDetector: StreamingVoiceDetector, @unchecked Sendable {
     let blockSize: Int
     private let events: [Int: VoiceEvent]
-    private let state = OSAllocatedUnfairLock(initialState: (blocks: [[Float]](), prepares: 0, resets: 0,
+    private let state = OSAllocatedUnfairLock(initialState: (blocks: [[Float]](), prepares: 0, resets: 0, resetMarks: [Int](),
                                                               holds: [Int: (entered: Gate, release: Gate)]()))
     /// Fait échouer `prepare()`.
     var prepareError: Error?
@@ -123,6 +123,9 @@ final class ScriptedDetector: StreamingVoiceDetector, @unchecked Sendable {
     var blocks: [[Float]] { state.withLock { $0.blocks } }
     var prepares: Int { state.withLock { $0.prepares } }
     var resets: Int { state.withLock { $0.resets } }
+    /// Pour chaque `reset()`, le nombre de blocs reçus à cet instant : la remise à neuf a eu lieu entre ce bloc-là (exclu) et le
+    /// précédent.
+    var resetMarks: [Int] { state.withLock { $0.resetMarks } }
 
     func prepare() async throws {
         state.withLock { $0.prepares += 1 }
@@ -131,7 +134,12 @@ final class ScriptedDetector: StreamingVoiceDetector, @unchecked Sendable {
         if let prepareError { throw prepareError }
     }
 
-    func reset() async { state.withLock { $0.resets += 1 } }
+    func reset() async {
+        state.withLock { s in
+            s.resets += 1
+            s.resetMarks.append(s.blocks.count)
+        }
+    }
 
     func process(_ block: [Float]) async throws -> VoiceEvent? {
         precondition(block.count == blockSize, "bloc de \(block.count) échantillons, \(blockSize) attendus")

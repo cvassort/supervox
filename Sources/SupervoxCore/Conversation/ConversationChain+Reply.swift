@@ -5,20 +5,14 @@ import os
 extension ConversationChain {
     // MARK: Réplique
 
-    /// Ce que la réplique laisse à la conversation.
-    struct ReplyResult {
-        var signal: ReplySignal
-        var failure: RewriteFailure?
-    }
-
     enum ModelEnd: Sendable {
         case done
         case failed(RewriteFailure)
         case cancelled
     }
 
-    /// Les entrées de la réplique, dans un seul flux : le texte du modèle, la fin du modèle, la fin d'une synthèse, la fin d'un
-    /// clip. Une seule tâche les lit, dans l'ordre : aucune course entre elles.
+    /// Les entrées de la réplique, dans le flux de l'entretien : le texte du modèle, la fin du modèle, la fin d'une synthèse, la fin
+    /// d'un clip.
     enum ReplyInput: Sendable {
         case text(String)
         case modelEnded(ModelEnd)
@@ -59,54 +53,95 @@ extension ConversationChain {
         ReplySnapshot(queuedClips: reply.queue.queuedClips, synthesizing: reply.queue.synthesizing, pending: reply.queue.pending)
     }
 
-    /// Une requête au modèle rapide, puis sa réplique dite phrase par phrase. Rend la main quand le modèle a fini, que plus rien
-    /// n'est à synthétiser et que tous les clips en file ont fini, ou dès que la tâche est annulée (la réplique est alors rangée :
-    /// requête et synthèse annulées, lecture coupée, ce qui a été joué est compté).
-    func speak(remaining: Int) async -> ReplyResult {
-        guard let completion = conversation.completion() else {
-            return ReplyResult(signal: .continue, failure: .empty)   // jamais : le dernier tour est celui de la personne
-        }
-        let (inputs, inputSink) = AsyncStream<ReplyInput>.makeStream()
-        let tracker = ReplyPlayback()
-        reply = ReplyState(remainingAtStart: remaining)
-        replyInputs = inputSink
-        replyTracker = tracker
+    /// Comment une réplique se termine.
+    enum ReplyClosing {
+        /// Le modèle a fini, plus rien n'est à synthétiser, tous les clips ont fini.
+        case complete
+        /// La personne a coupé la parole (la porte d'interruption a dit oui).
+        case interrupted
+        /// L'entretien se termine (conclusion, panne, annulation).
+        case ended
+    }
 
+    /// Une requête au modèle rapide, dont la réplique sera dite phrase par phrase. Ses entrées arrivent par le flux de l'entretien,
+    /// sous un numéro de génération neuf.
+    func startReply(remaining: Int) {
+        guard let completion = conversation.completion() else {
+            // Jamais : le dernier tour est celui de la personne. Traité comme un modèle qui n'a rien dit.
+            emit(.notice(.modelFailed(.empty)))
+            becomeIdle()
+            return
+        }
+        replyGeneration += 1
+        let generation = replyGeneration
+        reply = ReplyState(remainingAtStart: remaining)
+        replyActive = true
+        replyTracker = ReplyPlayback()
+        emit(.state(.thinking))
+
+        let inputs = inputSink
         let model = fastModel
         let name = config.fastModel
         let policy = config.turnPolicy
         let instruction = InterviewPrompt.instruction(remainingQuestions: remaining)
-        let modelTask = Task {
+        modelTask = Task {
+            let end: ModelEnd
             do {
                 _ = try await Rewriter.run(model, model: name, instruction: instruction, input: completion.input,
-                                           history: completion.history, policy: policy) { inputSink.yield(.text($0)) }
-                inputSink.yield(.modelEnded(.done))
+                                           history: completion.history, policy: policy) {
+                    inputs.yield(.reply(generation: generation, .text($0)))
+                }
+                end = .done
             } catch is CancellationError {
-                inputSink.yield(.modelEnded(.cancelled))
+                end = .cancelled
             } catch let failure as RewriteFailure {
-                inputSink.yield(.modelEnded(.failed(failure)))
+                end = .failed(failure)
             } catch {
-                inputSink.yield(.modelEnded(.failed(.from(error))))
+                end = .failed(.from(error))
             }
+            inputs.yield(.reply(generation: generation, .modelEnded(end)))
         }
+    }
 
-        for await input in inputs {
-            handle(input)
-            advance()
-            if reply.isComplete { break }
-        }
+    /// La réplique est finie d'elle-même. Rend `.concluding` si l'intervieweur conclut ; sinon l'écoute reprend (`nil`).
+    func finishReply() async -> TalkOutcome? {
+        let result = await closeReply(.complete)
+        if let stop = interruption() { return stop }
+        if result.signal == .conclude { return .concluding }
+        if let failure = result.failure { emit(.notice(.modelFailed(failure))) }
+        if timeline.openSegmentStart == nil { await renew() }   // une ligne de temps neuve, sauf si la personne parle déjà
+        if let stop = interruption() { return stop }
+        becomeIdle()
+        return nil
+    }
 
-        // Rangement, quelle que soit la façon de finir : ce qui produit est arrêté et attendu avant ce qui consomme.
-        modelTask.cancel()
-        await modelTask.value
+    /// Coupe la réplique en cours : par la personne (`interrupted`), ou parce que l'entretien se termine.
+    func abortReply(interrupted: Bool) async {
+        let heard = await closeReply(interrupted ? .interrupted : .ended).heard
+        // Coupée avant toute phrase entendue, la réplique n'a pas répondu au tour de la personne : il attend toujours sa réplique,
+        // et ce qu'elle dit ensuite lui est fusionné (la conversation joint deux tours de suite du même côté).
+        if interrupted { awaitingReply = heard.isEmpty }
+    }
+
+    /// Range la réplique : ce qui produit est arrêté et attendu avant ce qui consomme, la lecture est coupée si des clips sont en
+    /// file, et seules les phrases jouées jusqu'au bout (ou montrées) entrent dans la conversation. Le numéro de génération change
+    /// **avant** la première attente : ce qui reste de cette réplique dans le flux (texte, synthèse, fin de clip) est jeté à la lecture,
+    /// et ne lance plus aucune synthèse ni lecture.
+    func closeReply(_ closing: ReplyClosing) async -> (heard: String, signal: ReplySignal, failure: RewriteFailure?) {
+        replyActive = false
+        replyGeneration += 1
+        let tracker = replyTracker
+        modelTask?.cancel()
+        await modelTask?.value
+        modelTask = nil
         synthesisTask?.cancel()
         await synthesisTask?.value
         synthesisTask = nil
-        if tracker.outstanding > 0 {
+        if let tracker, tracker.outstanding > 0 {
             audio.stopPlayback()
             await tracker.waitUntilIdle()
         }
-        for (index, end) in tracker.ends.sorted(by: { $0.key < $1.key }) where reply.outcomes[index] == .queued {
+        for (index, end) in (tracker?.ends ?? [:]).sorted(by: { $0.key < $1.key }) where reply.outcomes[index] == .queued {
             finishClip(index, end)
         }
 
@@ -115,7 +150,10 @@ extension ConversationChain {
             .map { reply.sentences[$0] }
             .joined(separator: " ")
         conversation.appendInterviewer(heard)
-        if reply.started { emit(.speakingEnded(heard: heard)) }
+        switch closing {
+        case .interrupted: emit(.interrupted(heard: heard))
+        case .complete, .ended: if reply.started { emit(.speakingEnded(heard: heard)) }
+        }
 
         var failure: RewriteFailure?
         if case .failed(let reason)? = reply.modelEnd { failure = reason }
@@ -124,10 +162,9 @@ extension ConversationChain {
         // question : c'est un modèle qui n'a rien dit. Dès qu'une phrase a été dite ou montrée, elle reste.
         let spoken = reply.sentences.indices.contains { reply.outcomes[$0] == .played || reply.outcomes[$0] == .shown }
         if case .done? = reply.modelEnd, !spoken, signal != .conclude { failure = .empty }
-        replyInputs = nil
         replyTracker = nil
         reply = ReplyState()
-        return ReplyResult(signal: signal, failure: failure)
+        return (heard, signal, failure)
     }
 
     func handle(_ input: ReplyInput) {
@@ -148,6 +185,7 @@ extension ConversationChain {
             reply.queue.clipEnded()
             finishClip(index, end)
         }
+        advance()
     }
 
     func absorb(_ delta: String) {
@@ -166,14 +204,16 @@ extension ConversationChain {
     func advance() {
         if !voiceUsable {
             for index in reply.queue.takeAllPending() { show(index) }
-        } else if let index = reply.queue.nextToSynthesize(), let inputs = replyInputs {
+        } else if let index = reply.queue.nextToSynthesize() {
             let text = reply.sentences[index]
             let voice = voice
+            let inputs = inputSink
+            let generation = replyGeneration
             synthesisTask = Task {
                 do {
-                    inputs.yield(.synthesized(index, .success(try await voice.synthesize(text))))
+                    inputs.yield(.reply(generation: generation, .synthesized(index, .success(try await voice.synthesize(text)))))
                 } catch {
-                    inputs.yield(.synthesized(index, .failure(error)))
+                    inputs.yield(.reply(generation: generation, .synthesized(index, .failure(error))))
                 }
             }
         }
@@ -194,12 +234,14 @@ extension ConversationChain {
                 announcedFallback = true
                 emit(.notice(.voiceFellBack))
             }
-            guard let tracker = replyTracker, let inputs = replyInputs else { return }
+            guard let tracker = replyTracker else { return }
+            let inputs = inputSink
+            let generation = replyGeneration
             tracker.reserve()
             do {
                 try audio.play(speech.clip) { end in
                     tracker.ended(index, end)
-                    inputs.yield(.clipEnded(index, end))
+                    inputs.yield(.reply(generation: generation, .clipEnded(index, end)))
                 }
             } catch {
                 tracker.release()
@@ -235,7 +277,9 @@ extension ConversationChain {
         }
     }
 
-    /// La première phrase de la réplique est mise en file (ou affichée) : la question compte, avec les avis qui la concernent.
+    /// La première phrase de la réplique commence à être jouée (ou est affichée) : la question compte, avec les avis qui la
+    /// concernent. Le premier clip d'une réplique part dès `play()` : la file de lecture est vide, la réplique précédente a attendu
+    /// la fin de tous ses clips (code lu ; l'`AudioIO` ne signale pas le début d'un clip). Coupée avant, la question ne compte pas.
     func beginSpeaking() {
         guard !reply.started else { return }
         reply.started = true

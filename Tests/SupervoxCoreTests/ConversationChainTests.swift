@@ -42,6 +42,19 @@ func texts(_ texts: String...) -> @Sendable (Int) -> ScriptedTranscriber.Reply {
     { index in .text(index < texts.count ? texts[index] : "réponse") }
 }
 
+/// Le détecteur a été remis à neuf avant le premier bloc de chaque tour scripté, et jamais pendant un passage (entre le bloc qui
+/// l'ouvre et celui qui le ferme) : un passage ne perd jamais son début, et un tour ne voit rien du précédent.
+func expectFreshDetectorForEachTurn(_ h: ConversationHarness, sourceLocation: SourceLocation = #_sourceLocation) {
+    let marks = h.detector.resetMarks
+    var offset = 0
+    for turn in h.turns {
+        #expect(marks.contains(offset), "aucune remise à neuf avant le bloc \(offset)", sourceLocation: sourceLocation)
+        let inside = (offset + turn.start + 1)...(offset + turn.blocks - 1)
+        #expect(!marks.contains(where: inside.contains), "remise à neuf pendant le passage \(inside)", sourceLocation: sourceLocation)
+        offset += turn.blocks
+    }
+}
+
 @Suite(.timeLimit(.minutes(1)))
 struct ConversationPreparationTests {
     // MARK: Règle 1
@@ -258,7 +271,8 @@ struct ConversationTurnTests {
         #expect(log.end == .prompt("Prompt final", conversation("bonjour", "Merci.")))
         // Le tour vide n'a laissé aucun passage ni aucun échantillon à l'écoute suivante.
         #expect(h.transcriber.calls.map(\.clip) == [h.expectedClip(turn: 0), h.expectedClip(turn: 1)])
-        #expect(h.detector.resets == 3)   // préparation, retour à l'écoute après le tour vide, réflexion du second tour
+        // Le détecteur est remis à neuf avant le premier bloc et entre les deux tours, jamais pendant un passage.
+        expectFreshDetectorForEachTurn(h)
     }
 
     // MARK: Règle 4
@@ -328,7 +342,7 @@ struct ConversationTurnTests {
         let firstBlockOfTheSecondTurn = try #require(h.detector.blocks.dropFirst(6).first)
         #expect(firstBlockOfTheSecondTurn == rampSamples(1_000_000..<1_001_000))   // le premier bloc du second tour est le sien
         #expect(!h.detector.blocks.joined().contains { $0 >= 90 })
-        #expect(h.detector.resets == 3)   // à la préparation, puis au début de chaque réflexion
+        expectFreshDetectorForEachTurn(h)
     }
 }
 

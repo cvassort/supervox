@@ -1,32 +1,32 @@
 import Foundation
 import os
 
+/// Ce qui arrive à l'entretien, dans un seul flux ordonné : les tranches du micro, la fin d'une transcription, les entrées de la
+/// réplique (texte et fin du modèle, fin d'une synthèse, fin d'un clip). Une seule tâche le lit, dans l'ordre : aucune course entre
+/// le micro, la transcription et la voix. La transcription et la réplique portent un **numéro de génération** : une entrée d'une
+/// transcription ou d'une réplique abandonnée (interruption, conclusion, annulation) est jetée à la lecture.
+enum ConversationInput: Sendable {
+    case chunk(AudioChunk)
+    case transcribed(generation: Int, Result<String, any Error>)
+    case reply(generation: Int, ConversationChain.ReplyInput)
+}
+
 /// L'entretien vocal : écoute, transcription, réflexion du modèle rapide, parole phrase par phrase, conclusion du modèle fort.
 ///
 /// Fonctionnement :
-/// - **Trois rappels hors de l'acteur, trois flux ordonnés.** Le micro (`onChunk`), la fin d'un clip (`onEnd`) et le texte du modèle
-///   (`onText`) ne font qu'un `yield` dans un `AsyncStream` : jamais un appel à l'`AudioIO`, jamais une `Task` par rappel (l'ordre
-///   entre tâches indépendantes n'est pas garanti).
-/// - **Un flux de tranches par écoute.** `ChunkIntake` ne livre les tranches qu'à l'écoute en cours : tout ce que le micro capte
-///   pendant la transcription, la réflexion et la parole est écarté **à l'arrivée**, et rien de ce qui reste dans un flux
-///   d'écoute abandonné n'est lu par la suivante. L'outil ne se transcrit donc pas lui-même et l'échantillon d'un tour n'apparaît
-///   jamais dans le suivant. (Conséquence : un passage de voix qui s'ouvre pendant la parole n'est pas gardé ; la tâche suivante,
-///   l'interruption, devra y toucher.)
-/// - **Deux tâches de premier niveau.** `talk` mène la conversation (préparation, micro, écoute, tours) ; `run` l'attend puis
-///   referme : micro arrêté, conclusion, `.finished`. `conclude()` et `cancel()` n'écrivent qu'un drapeau et annulent `talk`
-///   (`cancel()` annule aussi `run`, donc la requête de conclusion) ; chaque étape d'`talk` relit ces drapeaux au retour de ses
-///   attentes (`interruption()`).
-/// - **Une étape annulée se range avant de rendre.** L'écoute annule et attend l'aperçu ; la réplique annule et attend la requête et la
-///   synthèse, coupe la lecture (`stopPlayback`) si des clips sont en file, attend leurs fins puis compte ce qui a été joué. Rien
-///   ne survit donc à `talk`, et `run` n'a plus qu'à arrêter le chien de garde.
-/// - **La transcription d'un tour n'est coupée ni par `conclude()` ni par une panne du micro** : elle part dans une tâche à part, bornée
-///   par `Deadline` (`transcriptionTimeout`), que seul `cancel()` annule (et même un moteur sourd à l'annulation ne retient pas
-///   `cancel()`). Ce que la personne vient de dire n'est pas perdu.
+/// - **Des rappels hors de l'acteur, un flux ordonné.** Le micro (`onChunk`), la fin d'un clip (`onEnd`), le texte du modèle
+///   (`onText`) et la fin d'une transcription ne font qu'un `yield` dans le flux d'entrées (`ConversationInput`) : jamais un appel à
+///   l'`AudioIO`, jamais une `Task` par rappel. Une seule boucle, `converse`, le lit.
+/// - **Deux tâches de premier niveau.** `talk` mène la conversation (préparation, micro, boucle) ; `run` l'attend puis referme :
+///   micro arrêté, conclusion, `.finished`. `conclude()`, `cancel()` et une panne du micro n'écrivent qu'un drapeau et annulent
+///   `talk` ; la boucle relit ces drapeaux **avant chaque entrée** (`interruption()`), donc rien de ce qui attend dans le flux n'est
+///   lu après eux.
+/// - **Une fin rangée, qui garde ce qui a été dit.** Sur une conclusion ou une panne, `windDown` coupe la réplique (les phrases
+///   jouées restent), puis transcrit ce que la personne a dit et qui ne l'est pas encore (transcription en cours, passages fermés,
+///   passage encore ouvert), chaque transcription bornée par `Deadline` ; sur une annulation, rien n'est transcrit. Tout ce qui a
+///   été lancé est annulé et attendu avant que `talk` rende la main.
 /// - **Une seule fin.** `.finished` est émis une fois, après le retour de `audio.stop()`, et le flux d'événements se termine
 ///   juste après.
-///
-/// Limites connues, laissées à la tâche suivante : un passage de voix encore ouvert quand on conclut n'est pas transcrit ; une
-/// `ConversationChain` libérée sans `cancel()` n'est pas libérée (sa tâche la retient).
 public actor ConversationChain: ConversationEngine {
     // MARK: Dépendances
 
@@ -81,9 +81,13 @@ public actor ConversationChain: ConversationEngine {
         self.makeResampler = makeResampler ?? { StreamingResampler(from: $0, to: $1) }
         self.eventTap = eventTap
         timeline = SpeechTimeline(blockSize: detector.blockSize, sampleRate: transcriberSampleRate)
+        gate = InterruptionGate(minDuration: config.interruptMinDuration, level: config.interruptLevel)
         let (stream, sink) = AsyncStream<ConversationEvent>.makeStream()
         pendingStream = stream
         self.sink = sink
+        let (inputs, inputSink) = AsyncStream<ConversationInput>.makeStream()
+        pendingInputs = inputs
+        self.inputSink = inputSink
     }
 
     // MARK: État
@@ -102,6 +106,9 @@ public actor ConversationChain: ConversationEngine {
     let sink: AsyncStream<ConversationEvent>.Continuation
     /// Le flux, tant que `start()` ne l'a pas rendu : l'acteur ne le garde pas (un lecteur qui l'abandonne doit pouvoir le terminer).
     var pendingStream: AsyncStream<ConversationEvent>?
+    let inputSink: AsyncStream<ConversationInput>.Continuation
+    /// Le flux d'entrées, tant que `talk` ne l'a pas pris.
+    var pendingInputs: AsyncStream<ConversationInput>?
     var started = false
     var stage = Stage.talking
     var request: Request?
@@ -110,12 +117,11 @@ public actor ConversationChain: ConversationEngine {
     var talkTask: Task<TalkOutcome, Never>?
     var watchdogTask: Task<Void, Never>?
     var previewTask: Task<Void, Never>?
-    var transcribeTask: Task<String, any Error>?
     var audioOpen = false
     let intake = ChunkIntake()
 
     var conversation = Conversation()
-    /// Le nombre de questions posées (une phrase de la réplique a été mise en file ou affichée).
+    /// Le nombre de questions posées (la première phrase de la réplique a commencé à être jouée, ou a été affichée).
     var questionsAsked = 0
     /// Faux dès qu'une voix ne parle plus : le reste de l'entretien est en texte seul.
     var voiceUsable = true
@@ -123,13 +129,33 @@ public actor ConversationChain: ConversationEngine {
 
     // Écoute
     var timeline: SpeechTimeline
+    /// Les échantillons reçus par la ligne de temps en cours (et par la porte, remise à zéro en même temps).
+    var timelineSamples = 0
+    /// Les passages fermés de la ligne de temps en cours déjà traités (pris pour un tour, ou jetés).
+    var handledSegments = 0
+    /// D'où vient le passage ouvert : il décide de ce qu'il devient à sa fermeture.
+    var passageOrigin = PassageOrigin.listening
+    var gate: InterruptionGate
     var resampler: StreamingResampler?
     var inputRate: Double?
 
+    // Transcription
+    /// Les passages fermés à transcrire, dans l'ordre ; un seul part à la fois.
+    var clipsToTranscribe: [AudioClip] = []
+    var transcription: (generation: Int, task: Task<Result<String, any Error>, Never>)?
+    var transcriptionGeneration = 0
+    /// Faux après une panne du moteur de transcription : rien d'autre ne lui est demandé.
+    var transcriberUsable = true
+    /// Le dernier tour de la personne attend une réplique.
+    var awaitingReply = false
+
     // Réplique
     var reply = ReplyState()
-    var replyInputs: AsyncStream<ReplyInput>.Continuation?
+    /// Une réplique est en cours (réflexion ou parole).
+    var replyActive = false
+    var replyGeneration = 0
     var replyTracker: ReplyPlayback?
+    var modelTask: Task<Void, Never>?
     var synthesisTask: Task<Void, Never>?
 
     // MARK: Interface
@@ -168,7 +194,7 @@ public actor ConversationChain: ConversationEngine {
         if request != .cancel {
             request = .cancel
             talkTask?.cancel()
-            transcribeTask?.cancel()
+            transcription?.task.cancel()
             runTask?.cancel()
         }
         await runTask?.value
@@ -188,6 +214,7 @@ public actor ConversationChain: ConversationEngine {
         emit(.state(.finished))
         emit(.finished(end))
         sink.finish()
+        inputSink.finish()
     }
 
     func close(_ outcome: TalkOutcome) async -> ConversationEnd {
@@ -247,13 +274,20 @@ public actor ConversationChain: ConversationEngine {
         return Task.isCancelled ? .cancelled : nil
     }
 
-    /// Une panne : arrête la conversation en cours (la panne l'emporte sur une conclusion demandée, pas sur une annulation). La
-    /// transcription d'un tour déjà capté n'est PAS annulée : elle va à son terme, ou à sa limite de temps, pour que ce tour soit dans la
-    /// conversation que rend la fin. Seul `cancel()` l'annule.
+    /// Une panne vue hors de la boucle (le chien de garde) : arrête la conversation en cours (la panne l'emporte sur une conclusion
+    /// demandée, pas sur une annulation). La transcription d'un tour déjà capté n'est PAS annulée : la fin la mène à son terme, ou à
+    /// sa limite de temps, pour que ce tour soit dans la conversation que rend la fin. Seul `cancel()` l'annule.
     func fail(_ failure: ConversationFailure) {
-        guard pendingFailure == nil, request != .cancel else { return }
-        pendingFailure = failure
+        guard note(failure) else { return }
         talkTask?.cancel()
+    }
+
+    /// Note une panne ; la première cause reste. Faux si rien n'a été noté (une panne déjà notée, ou une annulation).
+    @discardableResult
+    func note(_ failure: ConversationFailure) -> Bool {
+        guard pendingFailure == nil, request != .cancel else { return false }
+        pendingFailure = failure
+        return true
     }
 
     func talk() async -> TalkOutcome {
@@ -270,8 +304,11 @@ public actor ConversationChain: ConversationEngine {
         }
         await renew()
         if let stop = interruption() { return stop }
+        guard let inputs = pendingInputs else { return .cancelled }
+        pendingInputs = nil
         let intake = intake
         let clock = now
+        intake.open(inputSink)
         do {
             try audio.start { chunk in intake.deliver(chunk, at: clock()) }
         } catch {
@@ -281,57 +318,96 @@ public actor ConversationChain: ConversationEngine {
         // Le délai de la première tranche court depuis l'ouverture du micro, non depuis le début de la préparation.
         intake.stamp(now())
         startWatchdog()
-        return await converse()
+        return await converse(inputs)
     }
 
-    func converse() async -> TalkOutcome {
-        while true {
+    /// La boucle de l'entretien : une entrée à la fois, puis ce qui doit en suivre (`proceed`). Les drapeaux de fin sont relus
+    /// avant chaque entrée et après chacune.
+    func converse(_ inputs: AsyncStream<ConversationInput>) async -> TalkOutcome {
+        enterListening()
+        for await input in inputs {
+            if let stop = interruption() { return await windDown(stop) }
+            switch input {
+            case .chunk(let chunk):
+                await hear(chunk)
+            case .transcribed(let generation, let result):
+                guard generation == transcription?.generation else { continue }
+                transcription = nil
+                take(result, closing: false)
+            case .reply(let generation, let input):
+                guard generation == replyGeneration, replyActive else { continue }
+                handle(input)
+                if reply.isComplete, let end = await finishReply() { return await windDown(end) }
+            }
+            if let stop = interruption() { return await windDown(stop) }
+            if let end = await proceed() { return await windDown(end) }
+        }
+        return await windDown(interruption() ?? .cancelled)
+    }
+
+    /// Ce qui suit une entrée : la transcription suivante, ou la réplique quand plus rien de la personne n'est en attente.
+    func proceed() async -> TalkOutcome? {
+        if transcription == nil, !clipsToTranscribe.isEmpty {
+            // L'aperçu est annulé et attendu avant : le moteur de transcription n'a jamais deux appels en même temps.
+            await stopPreview()
             if let stop = interruption() { return stop }
-            switch await listen() {
-            case .interrupted:
-                return interruption() ?? .cancelled
-            case .failed(let failure):
-                return request == .cancel ? .cancelled : .failed(failure)
-            case .turn(let clip):
-                let text: String
-                switch await transcribe(clip) {
-                case .cancelled: return interruption() ?? .cancelled
-                case .failed(let code):
-                    // Une panne du micro déjà notée est la première cause ; sinon c'est celle du moteur de transcription.
-                    return request == .cancel ? .cancelled : .failed(pendingFailure ?? .engine(code))
-                case .text(let raw):
-                    if request == .cancel { return .cancelled }   // annulé pendant la transcription : rien n'entre dans la conversation
-                    text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                }
-                // Ce que la personne vient de dire entre dans la conversation même si l'on conclut, annule ou tombe en panne ensuite.
-                if !text.isEmpty {
-                    conversation.appendUser(text)
-                    emit(.turnEnded(text))
-                }
-                if let stop = interruption() { return stop }
-                guard !text.isEmpty else {
-                    emit(.notice(.notUnderstood))
-                    await renew()
-                    continue
-                }
-                guard questionsAsked < config.maxQuestions else { return .concluding }
-                let remaining = config.maxQuestions - questionsAsked
-                await renew()   // une ligne de temps et un détecteur neufs au début de chaque réflexion
-                if let stop = interruption() { return stop }
-                emit(.state(.thinking))
-                let result = await speak(remaining: remaining)
-                if let stop = interruption() { return stop }
-                if result.signal == .conclude { return .concluding }
-                if let failure = result.failure { emit(.notice(.modelFailed(failure))) }
+            startTranscription(clipsToTranscribe.removeFirst())
+            return nil
+        }
+        guard awaitingReply, transcription == nil, clipsToTranscribe.isEmpty, !replyActive, !interruptingPassageIsOpen else {
+            return nil
+        }
+        guard questionsAsked < config.maxQuestions else { return .concluding }
+        awaitingReply = false
+        await stopPreview()
+        if timeline.openSegmentStart == nil { await renew() }   // une ligne de temps neuve, sauf si la personne parle déjà
+        if let stop = interruption() { return stop }
+        startReply(remaining: config.maxQuestions - questionsAsked)
+        return nil
+    }
+
+    /// La fin de la conversation. Sur une annulation, tout est arrêté et rien n'est ajouté. Sinon (conclusion, panne), la réplique est
+    /// coupée en gardant ce qui a été entendu, puis ce que la personne a dit est transcrit et ajouté avant de rendre la main.
+    func windDown(_ outcome: TalkOutcome) async -> TalkOutcome {
+        if replyActive { await abortReply(interrupted: false) }
+        await stopPreview()
+        if case .cancelled = outcome {
+            await abandonTranscription()
+            return .cancelled
+        }
+        if let clip = openPassageClip() { clipsToTranscribe.append(clip) }
+        while transcriberUsable, request != .cancel {
+            if let running = transcription {
+                let result = await running.task.value
+                transcription = nil
+                guard request != .cancel else { break }
+                take(result, closing: true)
+            } else if !clipsToTranscribe.isEmpty {
+                startTranscription(clipsToTranscribe.removeFirst())
+            } else {
+                break
             }
         }
+        await abandonTranscription()
+        if request == .cancel { return .cancelled }
+        if let failure = pendingFailure { return .failed(failure) }
+        return outcome
     }
 
-    /// Ligne de temps, rééchantillonneur et détecteur neufs : la prochaine écoute ne voit rien de la précédente.
+    /// L'écoute reprend : l'interface le montre, l'aperçu repart.
+    func enterListening() {
+        emit(.state(.listening))
+        if previewTask == nil { startPreview() }
+    }
+
+    /// Ligne de temps, porte et détecteur neufs : la prochaine écoute ne voit rien de la précédente. Jamais pendant un passage ouvert
+    /// (le détecteur perdrait la voix en cours, et le passage son début) : l'appelant le vérifie.
     func renew() async {
         timeline = SpeechTimeline(blockSize: detector.blockSize, sampleRate: transcriberSampleRate)
-        resampler = nil
-        inputRate = nil
+        gate.reset()
+        timelineSamples = 0
+        handledSegments = 0
+        passageOrigin = .listening
         await detector.reset()
     }
 
