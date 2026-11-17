@@ -56,6 +56,12 @@ public enum CopyState: Equatable, Sendable {
     case failed
 }
 
+/// Ce que le panneau montre au centre. Un seul des deux à la fois : la dictée ne peut pas être dessinée sous l'entretien.
+public enum PanelContent: Equatable, Sendable {
+    case interview(InterviewViewState)
+    case dictation
+}
+
 /// État du panneau : ouvert ou fermé, mode choisi. Ne connaît ni AppKit ni le disque.
 @MainActor @Observable
 public final class PanelModel {
@@ -73,6 +79,9 @@ public final class PanelModel {
     /// L'entretien tel que la vue le montre, `nil` hors entretien ; mis à jour par le contrôleur de l'entretien (`setInterview`). Tant
     /// qu'il n'est pas `nil`, la vue de l'entretien prend la place de celle de la dictée.
     public private(set) var interview: InterviewViewState?
+    /// « Conclure » a été demandé pendant cet entretien : un second clic n'appelle plus `onConclude`. Remis à zéro quand l'entretien
+    /// commence ou finit (pas à chaque mise à jour de l'état : le niveau du micro arrive à chaque tranche).
+    public private(set) var concludeRequested = false
     /// Ce qu'a donné le dernier clic sur « Copier » ; oublié à la fermeture du panneau, à l'ouverture, quand le dernier texte
     /// de la dictée change et au début d'une nouvelle dictée.
     public private(set) var copyState = CopyState.idle
@@ -148,6 +157,7 @@ public final class PanelModel {
     /// (`onAnnounce`) ; le niveau du micro, qui change à chaque tranche, ne l'est jamais.
     public func setInterview(_ state: InterviewViewState?) {
         let announcements = InterviewViewState.announcements(from: interview, to: state)
+        if (interview == nil) != (state == nil) { concludeRequested = false }
         interview = state
         for announcement in announcements { onAnnounce?(announcement) }
     }
@@ -156,12 +166,19 @@ public final class PanelModel {
     /// entretien est ouvert, à toute phase.
     public var holdsPanel: Bool { dictation.stage.holdsPanel || interview != nil }
 
+    /// Ce que le panneau montre au centre : l'entretien ou la dictée, jamais les deux. `PanelView` choisit par un `switch` exhaustif.
+    public var content: PanelContent {
+        if let interview { .interview(interview) } else { .dictation }
+    }
+
     /// Les pastilles sont inactives pendant l'entretien : changer de mode le quitterait sans le dire.
     public var modesLocked: Bool { interview != nil }
 
-    /// « Conclure » : sans effet en préparation et en conclusion (le bouton y est grisé), et hors entretien.
+    /// « Conclure » : sans effet en préparation et en conclusion (le bouton y est grisé), hors entretien, et une fois la demande faite
+    /// (la phase ne passe à « conclusion » que quand le moteur le dit : un second clic arriverait avant).
     public func concludeInterview() {
-        guard interview?.canConclude == true else { return }
+        guard interview?.canConclude == true, !concludeRequested else { return }
+        concludeRequested = true
         onConclude?()
     }
 

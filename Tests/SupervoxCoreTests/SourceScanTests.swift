@@ -289,6 +289,22 @@ import Testing
         #expect(offending.isEmpty, "\(offending)")
     }
 
+    /// Aucune annonce réelle du système dans la suite : l'annonce VoiceOver n'est postée que par `Panel/AccessibilityAnnouncing.swift`,
+    /// que le contrôleur du panneau reçoit par `AccessibilityAnnouncing` (un double dans les tests). Aucun test ne nomme la
+    /// réalisation du système. Limite : un test qui construit `AppController` ou `PanelController` sans annonceur et pose un entretien
+    /// en posterait une ; aucun ne le fait aujourd'hui.
+    @Test func theSystemAnnouncementIsPostedInOnePlaceAndNoTestNamesIt() throws {
+        let sources = try Self.sources(under: "Sources/SupervoxApp")
+        let home = try #require(sources.first { $0.place == "Panel/AccessibilityAnnouncing.swift" }, "le fichier de l'annonce a disparu")
+        #expect(home.code.contains("AccessibilityNotification"))
+        let offending = sources.filter { $0.place != "Panel/AccessibilityAnnouncing.swift" && $0.code.contains("AccessibilityNotification") }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+        let tests = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasSuffix("SourceScanTests.swift") && ($0.code.contains("AccessibilityNotification") || $0.code.contains("SystemAccessibilityAnnouncer")) }
+            .map(\.place)
+        #expect(tests.isEmpty, "\(tests)")
+    }
+
     @Test(arguments: [
         "let log = Logger(subsystem: \"x\", category: \"y\")", "os_log(\"%@\", text)", "print(turn.text)", "NSLog(\"%@\", text)",
         "debugPrint (reply)",

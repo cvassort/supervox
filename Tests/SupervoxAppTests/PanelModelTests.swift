@@ -670,4 +670,48 @@ import Testing
         model.setInterview(nil)
         #expect(announced == ["Préparation de l'entretien…", "À vous", "Un avis.", "Réflexion…"])
     }
+
+    // MARK: - Tour de correction 1 : un seul contenu, « Conclure » une seule fois
+
+    @Test("I1 : le contenu du panneau est l'entretien OU la dictée, jamais les deux")
+    func theContentIsTheInterviewOrTheDictationNeverBoth() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(model.content == .dictation)
+        // Une dictée en cours : tant qu'un entretien est posé, le contenu est l'entretien, quelle que soit la dictée.
+        model.setDictation(DictationViewState(stage: .recording, liveText: "du texte"))
+        #expect(model.content == .dictation)
+        model.setInterview(Self.interview(.speaking))
+        #expect(model.content == .interview(Self.interview(.speaking)))
+        model.setDictation(DictationViewState(stage: .idle))
+        #expect(model.content == .interview(Self.interview(.speaking)))
+        model.setInterview(nil)
+        #expect(model.content == .dictation)
+    }
+
+    @Test("M10 : un second clic sur « Conclure » n'appelle pas onConclude ; un nouvel entretien le permet de nouveau")
+    func aSecondConcludeClickDoesNothingUntilTheNextInterview() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var calls = 0
+        model.onConclude = { calls += 1 }
+        model.setInterview(Self.interview(.listening))
+        model.concludeInterview()
+        model.concludeInterview()
+        #expect(calls == 1)
+        #expect(model.concludeRequested)
+        // Le niveau du micro arrive à chaque tranche : il ne rend pas le clic.
+        var louder = Self.interview(.listening)
+        louder.level = 0.9
+        model.setInterview(louder)
+        model.concludeInterview()
+        #expect(calls == 1, "une mise à jour de l'état a remis le clic à neuf")
+        // Un clic refusé (phase grisée) ne compte pas comme une demande.
+        model.setInterview(nil)
+        #expect(!model.concludeRequested)
+        model.setInterview(Self.interview(.preparing))
+        model.concludeInterview()
+        #expect(calls == 1 && !model.concludeRequested)
+        model.setInterview(Self.interview(.listening))
+        model.concludeInterview()
+        #expect(calls == 2)
+    }
 }

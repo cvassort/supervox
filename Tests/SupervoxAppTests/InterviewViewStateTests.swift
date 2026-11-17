@@ -293,14 +293,15 @@ import Testing
         }
     }
 
-    private func panelImage(_ interview: InterviewViewState?) throws -> Data {
+    private func panelImage(_ interview: InterviewViewState?, dictation: DictationViewState? = nil) throws -> Data {
         let model = PanelModel(lastModeID: "dictee-brute")
+        if let dictation { model.setDictation(dictation) }
         model.setInterview(interview)
         let view = PanelView(model: model, permissions: PermissionsModel(probe: GrantedProbe()), openSettings: {}, quit: {})
         return try image(of: view)
     }
 
-    @Test("le panneau montre la vue de l'entretien à la place de la dictée tant qu'un entretien est posé")
+    @Test("I1 : le panneau montre la vue de l'entretien à la place de la dictée, quelle que soit la dictée")
     func thePanelShowsTheInterviewInsteadOfTheDictation() throws {
         let ready = try panelImage(nil)
         let listening = try panelImage(state(.listening, question: 1, questionText: "Une question ?"))
@@ -308,6 +309,15 @@ import Testing
         #expect(listening != ready)
         #expect(thinking != listening, "la vue de l'entretien ne suit pas la phase")
         #expect(try panelImage(nil) == ready, "retirer l'entretien ramène la dictée")
+        // La dictée occupée (texte en direct, barres) ne se dessine pas sous l'entretien : l'image est la même qu'au repos.
+        let busy = DictationViewState(stage: .recording, liveText: "un texte dit pendant l'entretien", levels: [0.3, 0.8, 0.5], elapsed: 4)
+        let review = DictationViewState(stage: .review, lastTranscript: "Un texte à relire.", draft: "Un texte à relire.")
+        for dictation in [busy, review] {
+            #expect(try panelImage(state(.listening, question: 1, questionText: "Une question ?"), dictation: dictation) == listening,
+                    "la dictée \(dictation.stage) est dessinée avec l'entretien")
+        }
+        // Sans entretien, ces mêmes dictées se dessinent : le test voit bien une différence quand elle existe.
+        #expect(try panelImage(nil, dictation: busy) != ready)
     }
 
     private func image(of view: some View) throws -> Data {

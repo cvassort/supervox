@@ -91,7 +91,8 @@ public final class PanelController: PanelOpening {
 
     public init(
         model: PanelModel, escapeRegistrar: any HotKeyRegistrar,
-        clickMonitor: any OutsideClickMonitor, surface: any PanelSurface
+        clickMonitor: any OutsideClickMonitor, surface: any PanelSurface,
+        announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         self.model = model
         self.escapeRegistrar = escapeRegistrar
@@ -100,8 +101,8 @@ public final class PanelController: PanelOpening {
         (surface as? any ContentSizeObserving)?.onContentSizeChange = { [weak self] in self?.contentChanged() }
         // La frappe du panneau, telle que la surface la voit : seule source de ce que l'aide de la relecture annonce.
         (surface as? any KeyStateObserving)?.onKeyChange = { [weak self] isKey in self?.model.panelHasKeyboard = isKey }
-        // Le titre de l'entretien qui change est annoncé à VoiceOver : seul endroit où l'annonce du système est postée.
-        model.onAnnounce = { AccessibilityNotification.Announcement($0).post() }
+        // Le titre de l'entretien qui change et ses avis sont annoncés à VoiceOver, par l'annonceur reçu (le système, ou un double).
+        model.onAnnounce = { announcer.announce($0) }
     }
 
     /// Le contenu du panneau a changé (l'état de la dictée, un texte, une permission) : si sa hauteur n'est plus celle de la

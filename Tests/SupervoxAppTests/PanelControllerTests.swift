@@ -61,6 +61,12 @@ import Testing
     func signalKeyChange(_ isKey: Bool) { onKeyChange?(isKey) }
 }
 
+/// Annonceur double : rien n'est posé au système, le test lit ce qui l'aurait été.
+@MainActor final class RecordingAnnouncer: AccessibilityAnnouncing {
+    private(set) var spoken: [String] = []
+    func announce(_ text: String) { spoken.append(text) }
+}
+
 /// Moniteur de clics double : le test déclenche lui-même un clic hors de l'application.
 @MainActor final class FakeClickMonitor: OutsideClickMonitor {
     private var handler: (@MainActor () -> Void)?
@@ -88,9 +94,10 @@ import Testing
     let escape = HotKeyTests.FakeRegistrar()
     let clicks = FakeClickMonitor()
     let surface = FakePanelSurface()
+    let announcer = RecordingAnnouncer()
 
     func makeController() -> PanelController {
-        PanelController(model: model, escapeRegistrar: escape, clickMonitor: clicks, surface: surface)
+        PanelController(model: model, escapeRegistrar: escape, clickMonitor: clicks, surface: surface, announcer: announcer)
     }
 
     // MARK: - Hauteur du panneau
@@ -483,5 +490,22 @@ import Testing
         clicks.clickOutside()
         #expect(!model.isOpen)
         #expect(surface.calls.last == .hide)
+    }
+
+    @Test("I4 : le titre qui change et l'avis qui apparaît arrivent à l'annonceur du contrôleur, le niveau du micro jamais")
+    func theControllerHandsTitlesAndNoticesToItsAnnouncer() {
+        _ = makeController()
+        var state = InterviewViewState(maxQuestions: 6, privacy: "La vie privée.")
+        model.setInterview(state)
+        state.phase = .listening
+        model.setInterview(state)
+        for level: Float in [0.2, 0.7] {
+            state.level = level
+            model.setInterview(state)
+        }
+        state.notice = "Un avis."
+        model.setInterview(state)
+        model.setInterview(nil)
+        #expect(announcer.spoken == ["Préparation de l'entretien…", "À vous", "Un avis."])
     }
 }
