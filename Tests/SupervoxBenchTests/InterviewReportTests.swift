@@ -24,7 +24,8 @@ private final class FixedEventsModel: LanguageModel {
             defer { next += 1 }
             return next
         }
-        let reply = replies[index]
+        // Une requête de plus que prévu est une panne du double, pas un plantage du processus de test.
+        let reply = replies.indices.contains(index) ? replies[index] : .fail(EndpointError.malformedResponse)
         return AsyncThrowingStream { continuation in
             switch reply {
             case .events(let events):
@@ -79,7 +80,7 @@ private func drain(_ stream: AsyncThrowingStream<CompletionEvent, Error>) async 
     }
 }
 
-@Suite struct InterviewRedactionTests {
+@Suite(.timeLimit(.minutes(1))) struct InterviewRedactionTests {
     private let config = EndpointConfig(baseURL: URL(string: "https://exemple.invalid/v1")!, apiKey: "cle-exemple-secrete")
 
     @Test func aModelNameIsRemovedAsAWholeWordOnlyAndTheKeyAndTheAddressAlways() {
@@ -103,7 +104,7 @@ private func drain(_ stream: AsyncThrowingStream<CompletionEvent, Error>) async 
     }
 }
 
-@Suite struct InterviewReportFormatTests {
+@Suite(.timeLimit(.minutes(1))) struct InterviewReportFormatTests {
     @Test func aFenceIsLongerThanAnyRunOfBackticksInsideIt() {
         #expect(InterviewReport.fenced("texte") == "```\ntexte\n```\n")
         #expect(InterviewReport.fenced("a ``` b") == "````\na ``` b\n````\n")

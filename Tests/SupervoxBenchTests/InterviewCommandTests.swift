@@ -527,11 +527,48 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         #expect(engines.fast is OpenAICompatibleClient && engines.strong is OpenAICompatibleClient)
     }
 
-    @Test func theBenchWatchdogCanNeverFire() {
-        let watchdog = InterviewCommand.watchdog(sleep: { _ in })
-        #expect(watchdog.timeout.isInfinite && watchdog.firstChunkTimeout.isInfinite)
-        // Celui de l'application échouerait après une seconde de silence : la fenêtre où le banc ne livre rien le dépasse.
-        #expect(MicrophoneWatchdog.system.timeout < 2)
+    /// Le comportement, sur le vrai moteur : un son qui ne livre aucune tranche pendant longtemps (le banc, pendant que le modèle
+    /// réfléchit et que la réplique « joue ») fait échouer le chien de garde de l'application (`MicrophoneWatchdog.system`), pas celui du
+    /// banc. L'horloge est celle du test : 100 s passent d'un coup, puis le chien de garde est interrogé une fois.
+    @Test(arguments: [false, true])
+    func aFeedThatDeliversNothingFailsTheApplicationWatchdogButNotTheBenchOne(bench: Bool) async throws {
+        let clock = InterviewClock()
+        let polls = WaitBoard()
+        var watchdog = bench ? InterviewCommand.watchdog(sleep: { await polls.wait($0) }) : MicrophoneWatchdog.system
+        if !bench { watchdog.sleep = { await polls.wait($0) } }
+        let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
+        let session = ConversationSession(
+            audio: WavTurnFeed(turns: [], wait: { _ in }, now: { clock.now() }), detector: EnergyDetector(),
+            transcriber: AmplitudeTranscriber(), fastModel: ScriptedLanguageModel([]), strongModel: ScriptedLanguageModel([]),
+            voice: QuarterSecondVoice(),
+            config: InterviewCommand.conversationConfig(fastModel: fastName, strongModel: strongName, maxQuestions: 8),
+            watchdog: watchdog, now: { clock.now() }, sleep: never, transcriptionSleep: never)
+        let stream = await session.start()
+        var events = stream.makeAsyncIterator()
+        var listening = false
+        while !listening, let event = await events.next() { listening = event == .state(.listening) }
+        try #require(listening)
+
+        // Le chien de garde attend sa prochaine vérification ; 100 s plus tard, il la fait.
+        try #require(await settle { polls.pendingSeconds.count == 1 })
+        clock.advance(100)
+        #expect(polls.release(seconds: polls.pendingSeconds[0]))
+        if bench {
+            // Il a vérifié et n'a rien trouvé : il attend la suivante. L'entretien tourne toujours, il s'arrête sur demande.
+            try #require(await settle { polls.requests.count == 2 })
+            await session.cancel()
+        }
+        var end: ConversationEnd?
+        while let event = await events.next() { if case .finished(let ended) = event { end = ended } }
+        if bench {
+            #expect(end == .cancelled)
+        } else {
+            guard case .failed(.microphone(let code), _)? = end else {
+                Issue.record("panne du micro attendue, reçu \(String(describing: end))")
+                return
+            }
+            #expect(code == ConversationFailure.Code.silent)
+        }
     }
 }
 
