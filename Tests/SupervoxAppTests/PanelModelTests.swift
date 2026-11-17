@@ -650,8 +650,8 @@ import Testing
         #expect(calls == 0)
     }
 
-    @Test("règle 5 : seul un changement de titre est annoncé, au rythme où l'état est posé")
-    func onlyATitleChangeIsAnnounced() {
+    @Test("règle 5 : seul un changement de titre, ou un nouvel avis, est annoncé, au rythme où l'état est posé")
+    func onlyATitleChangeOrANewNoticeIsAnnounced() {
         let model = PanelModel(lastModeID: "dictee-brute")
         var announced: [String] = []
         model.onAnnounce = { announced.append($0) }
@@ -662,8 +662,12 @@ import Testing
             listening.level = level
             model.setInterview(listening)
         }
+        listening.notice = "Un avis."
+        model.setInterview(listening)
+        listening.level = 0.2
+        model.setInterview(listening)
         model.setInterview(Self.interview(.thinking))
         model.setInterview(nil)
-        #expect(announced == ["Préparation de l'entretien…", "À vous", "Réflexion…"])
+        #expect(announced == ["Préparation de l'entretien…", "À vous", "Un avis.", "Réflexion…"])
     }
 }

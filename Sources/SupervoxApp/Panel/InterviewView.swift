@@ -57,9 +57,8 @@ struct InterviewView: View {
             Text(InterviewText.supervoxLabel)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(DetailText.systemSecondary)
-            Text(state.shownQuestion)
+            Text(state.questionText)
                 .font(.callout)
-                .lineLimit(5)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -75,7 +74,6 @@ struct InterviewView: View {
                 .foregroundStyle(DetailText.systemSecondary)
             Text(reply)
                 .font(.callout)
-                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

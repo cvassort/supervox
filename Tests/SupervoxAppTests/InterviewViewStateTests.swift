@@ -41,7 +41,7 @@ import Testing
     @Test("règle 2 : chaque phase a son titre, et deux phases n'ont jamais le même")
     func everyPhaseHasItsOwnTitle() {
         let titles = InterviewTextTests.phases.map { state($0).title }
-        #expect(titles == InterviewTextTests.phases.map(InterviewText.title))
+        #expect(titles == InterviewTextTests.phases.map { InterviewText.title($0) })
         #expect(Set(titles).count == titles.count)
         #expect(!titles.contains(""))
     }
@@ -95,15 +95,27 @@ import Testing
         #expect(state(lastReply: "Je voudrais un résumé.").shownReply == "Je voudrais un résumé.")
     }
 
-    @Test("la question et la réplique montrées sont bornées, la fin gardée, la limite est réelle")
-    func theShownTextsAreBoundedAndKeepTheirEnd() throws {
+    @Test("I6 : l'état garde le texte entier de la réplique et de la réponse, rien n'est coupé par le début")
+    func theStateKeepsTheWholeText() throws {
         let long = Array(repeating: "mot", count: 2_000).joined(separator: " ") + " fin"
-        let question = state(questionText: long).shownQuestion
-        #expect(question.count <= InterviewText.questionLimit && question.hasSuffix("fin") && question.hasPrefix("…"))
-        let reply = try #require(state(lastReply: long).shownReply)
-        #expect(reply.count <= DictationText.transcriptLimit && reply.hasSuffix("fin"))
-        let fits = "Quelle est la durée du projet ?"
-        #expect(state(questionText: fits).shownQuestion == fits)
+        var long1 = state(questionText: long, lastReply: long)
+        #expect(long1.questionText == long && long1.lastReply == long)
+        #expect(try #require(long1.shownReply) == long, "la réponse montrée est coupée")
+        long1.questionText = "Début. " + long
+        #expect(long1.questionText.hasPrefix("Début."))
+    }
+
+    @Test("M8 : sans voix (texte seul) la parole prend un autre titre et une autre aide ; avec voix rien ne change")
+    func aTextOnlyInterviewRenamesTheSpeakingPhase() {
+        var text = state(.speaking)
+        #expect(text.title == "Supervox parle" && text.hint == InterviewText.hint(.speaking))
+        text.textOnly = true
+        #expect(text.title == "Supervox répond")
+        #expect(text.hint == "Lisez la réponse à l'écran, puis parlez.")
+        #expect(InterviewViewState(maxQuestions: 3, privacy: "x").textOnly == false)
+        var listening = state(.listening)
+        listening.textOnly = true
+        #expect(listening.title == "À vous", "le texte seul ne change que la phase de parole")
     }
 
     // MARK: Règle 4 : Conclure
@@ -233,15 +245,32 @@ import Testing
 
     @Test("règle 5 : le titre change, l'annonce est le nouveau titre ; le même titre ne s'annonce pas deux fois")
     func aNewTitleIsAnnouncedAndTheSameTitleIsNot() {
-        #expect(InterviewViewState.announcement(from: nil, to: state(.preparing)) == "Préparation de l'entretien…")
-        #expect(InterviewViewState.announcement(from: state(.preparing), to: state(.listening)) == "À vous")
-        #expect(InterviewViewState.announcement(from: state(.listening), to: state(.thinking)) == "Réflexion…")
+        #expect(InterviewViewState.announcements(from: nil, to: state(.preparing)) == ["Préparation de l'entretien…"])
+        #expect(InterviewViewState.announcements(from: state(.preparing), to: state(.listening)) == ["À vous"])
+        #expect(InterviewViewState.announcements(from: state(.listening), to: state(.thinking)) == ["Réflexion…"])
         // Le niveau, la question, les textes changent sans cesse : aucun ne change le titre.
         let before = state(.listening, question: 1, level: 0.1)
-        let after = state(.listening, question: 2, questionText: "Autre ?", lastReply: "Oui.", level: 0.9, notice: "Avis.")
-        #expect(InterviewViewState.announcement(from: before, to: after) == nil)
-        #expect(InterviewViewState.announcement(from: state(.speaking), to: nil) == nil)
-        #expect(InterviewViewState.announcement(from: nil, to: nil) == nil)
+        let after = state(.listening, question: 2, questionText: "Autre ?", lastReply: "Oui.", level: 0.9)
+        #expect(InterviewViewState.announcements(from: before, to: after).isEmpty)
+        #expect(InterviewViewState.announcements(from: state(.speaking), to: nil).isEmpty)
+        #expect(InterviewViewState.announcements(from: nil, to: nil).isEmpty)
+    }
+
+    @Test("I4 : un avis est annoncé une fois, quand il apparaît ; pas à chaque niveau ; de nouveau s'il revient après avoir été effacé")
+    func aNoticeIsAnnouncedOncePerAppearance() {
+        let plain = state(.listening)
+        let noticed = state(.listening, notice: "Rien n'a été compris.")
+        #expect(InterviewViewState.announcements(from: plain, to: noticed) == ["Rien n'a été compris."])
+        var louder = noticed
+        louder.level = 0.8
+        #expect(InterviewViewState.announcements(from: noticed, to: louder).isEmpty, "le même avis est annoncé à chaque niveau")
+        #expect(InterviewViewState.announcements(from: noticed, to: plain).isEmpty, "un avis effacé ne s'annonce pas")
+        #expect(InterviewViewState.announcements(from: plain, to: noticed) == ["Rien n'a été compris."], "l'avis revenu n'est pas redit")
+        // Un autre avis : annoncé ; avec un titre qui change en même temps : le titre d'abord.
+        let other = state(.listening, notice: "Autre avis.")
+        #expect(InterviewViewState.announcements(from: noticed, to: other) == ["Autre avis."])
+        let both = state(.thinking, notice: "Autre avis.")
+        #expect(InterviewViewState.announcements(from: noticed, to: both) == ["Réflexion…", "Autre avis."])
     }
 
     // MARK: La vue elle-même
@@ -250,16 +279,6 @@ import Testing
     private func height(of state: InterviewViewState) -> CGFloat {
         let host = NSHostingView(rootView: InterviewView(state: state, conclude: {}).frame(width: 488))
         return host.fittingSize.height
-    }
-
-    @Test("un texte démesuré ne fait pas grandir la vue : question et réplique sont bornées")
-    func anEnormousTextDoesNotGrowTheView() {
-        let words = Array(repeating: "précision", count: 1_000).joined(separator: " ")
-        let big = state(.listening, question: 2, questionText: words, lastReply: words)
-        let bigger = state(.listening, question: 2, questionText: words + " " + words, lastReply: words + " " + words)
-        #expect(height(of: big) == height(of: bigger))
-        let short = state(.listening, question: 2, questionText: "Pourquoi ?", lastReply: "Parce que.")
-        #expect(height(of: big) > height(of: short), "le texte long prend plus de place que le court")
     }
 
     @Test("chaque état dessine sa propre vue, en clair comme en sombre")

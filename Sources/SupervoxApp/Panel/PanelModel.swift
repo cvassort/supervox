@@ -144,12 +144,12 @@ public final class PanelModel {
         if textChanged || state.stage.isActive { copyState = .idle }
     }
 
-    /// L'état de l'entretien ; `nil` le retire (la vue de la dictée revient). Un nouveau titre est annoncé à VoiceOver (`onAnnounce`),
-    /// le niveau du micro, qui change à chaque tranche, ne l'est jamais.
+    /// L'état de l'entretien ; `nil` le retire (la vue de la dictée revient). Un nouveau titre, un nouvel avis, est annoncé à VoiceOver
+    /// (`onAnnounce`) ; le niveau du micro, qui change à chaque tranche, ne l'est jamais.
     public func setInterview(_ state: InterviewViewState?) {
-        let announcement = InterviewViewState.announcement(from: interview, to: state)
+        let announcements = InterviewViewState.announcements(from: interview, to: state)
         interview = state
-        if let announcement { onAnnounce?(announcement) }
+        for announcement in announcements { onAnnounce?(announcement) }
     }
 
     /// Le panneau ne doit pas se fermer de lui-même : une dictée est en cours (ou son texte attend d'être relu ou collé), ou un

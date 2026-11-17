@@ -5,50 +5,62 @@ import SupervoxCore
 /// d'une erreur (`localizedDescription`), jamais le corps d'une réponse HTTP, jamais un code de panne brut. Chacune tient dans
 /// `DictationText.detailLimit` (`allSentences`, que `InterviewTextTests` mesure).
 public enum InterviewText {
+    // MARK: Typographie
+
+    /// Les espaces insécables du français, comme `DictationText` : avant « : ; ? ! », après « « » et avant « » ». Une ligne ne finit
+    /// donc pas sur un « « » ni ne commence par un « : ». Chaque phrase de ce fichier passe par là.
+    private static func fr(_ text: String) -> String {
+        var typeset = text
+        for mark in [":", ";", "?", "!"] { typeset = typeset.replacingOccurrences(of: " " + mark, with: "\u{00A0}" + mark) }
+        return typeset.replacingOccurrences(of: "« ", with: "«\u{00A0}").replacingOccurrences(of: " »", with: "\u{00A0}»")
+    }
+
     // MARK: Titres et aides
 
-    public static func title(_ phase: InterviewPhase) -> String {
+    /// Le titre de la phase. `textOnly` : aucune voix ne parle (la réplique n'est qu'affichée), la phase de parole s'appelle alors
+    /// « Supervox répond ».
+    public static func title(_ phase: InterviewPhase, textOnly: Bool = false) -> String {
         switch phase {
-        case .preparing: "Préparation de l'entretien…"
-        case .listening: "À vous"
-        case .thinking: "Réflexion…"
-        case .speaking: "Supervox parle"
-        case .concluding: "Rédaction du prompt…"
+        case .preparing: fr("Préparation de l'entretien…")
+        case .listening: fr("À vous")
+        case .thinking: fr("Réflexion…")
+        case .speaking: textOnly ? fr("Supervox répond") : fr("Supervox parle")
+        case .concluding: fr("Rédaction du prompt…")
         }
     }
 
-    /// L'aide sous le titre ; vide en préparation et en conclusion (pas d'aide : `InterviewViewState.hint` rend alors `nil`).
-    public static func hint(_ phase: InterviewPhase) -> String {
+    /// L'aide sous le titre ; vide en préparation et en conclusion (pas d'aide : `InterviewViewState.hint` rend alors `nil`). Sans
+    /// voix (`textOnly`), la phase de parole dit de lire, jamais de couper la parole : personne ne parle.
+    public static func hint(_ phase: InterviewPhase, textOnly: Bool = false) -> String {
         switch phase {
         case .preparing, .concluding: ""
-        case .listening: "Parlez : Supervox attend la fin de votre phrase. Appuyez sur Conclure quand vous avez tout dit."
-        case .thinking: "Parlez pour ajouter quelque chose : Supervox reprendra avec."
-        case .speaking: "Parlez pour couper la parole à Supervox."
+        case .listening: fr("Parlez : Supervox attend la fin de votre phrase. Appuyez sur Conclure quand vous avez tout dit.")
+        case .thinking: fr("Parlez pour ajouter quelque chose : Supervox reprendra avec.")
+        case .speaking: textOnly ? fr("Lisez la réponse à l'écran, puis parlez.") : fr("Parlez pour couper la parole à Supervox.")
         }
     }
 
     /// Le pied : ce que fait Échap, à tout état sauf la conclusion.
-    public static let cancelHint = "Échap annule l'entretien sans rien garder."
+    public static let cancelHint = fr("Échap annule l'entretien sans rien garder.")
 
     // MARK: Compteur, bouton, rôles
 
     /// « Question n sur m » ; la vue ne l'affiche qu'à partir de la première question (`InterviewViewState.counter`).
-    public static func questionCounter(_ n: Int, of m: Int) -> String { "Question \(n) sur \(m)" }
+    public static func questionCounter(_ n: Int, of m: Int) -> String { fr("Question \(n) sur \(m)") }
 
-    public static let concludeLabel = "Conclure"
+    public static let concludeLabel = fr("Conclure")
     /// Ce que VoiceOver lit après le nom du bouton.
-    public static let concludeHelp = "Rédige le prompt à partir de ce qui a été dit."
+    public static let concludeHelp = fr("Rédige le prompt à partir de ce qui a été dit.")
 
     /// Les deux étiquettes au-dessus des textes : la réplique de Supervox, et la dernière réplique de la personne.
-    public static let supervoxLabel = "Supervox"
-    public static let youLabel = "Vous"
+    public static let supervoxLabel = fr("Supervox")
+    public static let youLabel = fr("Vous")
+
+    /// L'aide VoiceOver des pastilles de modes pendant un entretien : elles ne répondent plus.
+    public static let modeLockedHint = fr("Indisponible pendant un entretien.")
 
     /// Montrée quand le réglage du raccourci est « maintien » : en entretien, un appui conclut.
-    public static let holdNote = "En entretien, le raccourci fonctionne toujours en bascule : un appui conclut."
-
-    /// Les caractères montrés de la réplique de Supervox : cinq lignes de `callout` au plus (une ligne en tient 80 à 90, relevé sur
-    /// les images de la dictée), avec la marge d'une coupe à une limite de mot. Choix de mise en page, non mesuré sur l'entretien.
-    public static let questionLimit = 330
+    public static let holdNote = fr("En entretien, le raccourci fonctionne toujours en bascule : un appui conclut.")
 
     // MARK: Avis
 
@@ -56,13 +68,13 @@ public enum InterviewText {
     /// `ConversationNotice` ne compile pas tant qu'il n'a pas sa phrase.
     public static func notice(_ notice: ConversationNotice) -> String {
         switch notice {
-        case .notUnderstood: "Rien n'a été compris : répétez, un peu plus près du micro."
+        case .notUnderstood: fr("Rien n'a été compris : répétez, un peu plus près du micro.")
         case .modelFailed(let failure): turnFailure(failure)
-        case .voiceFellBack: "La voix choisie ne répond pas : l'entretien continue avec la voix du système."
-        case .voiceUnavailable: "La voix ne fonctionne pas : lisez la question à l'écran, puis répondez à voix haute."
-        case .proposal: "Supervox propose de conclure : dites-le s'il vous convient, ou continuez à préciser."
-        case .lastQuestion: "Dernière question : après votre réponse, Supervox rédige le prompt."
-        case .lastWordsLost: "Votre dernière phrase n'a pas pu être transcrite : le prompt est rédigé sans elle."
+        case .voiceFellBack: fr("La voix choisie ne répond pas : l'entretien continue avec la voix du système.")
+        case .voiceUnavailable: fr("La voix ne fonctionne pas : lisez la question à l'écran, puis répondez à voix haute.")
+        case .proposal: fr("Supervox propose de conclure : dites-le s'il vous convient, ou continuez à préciser.")
+        case .lastQuestion: fr("Dernière question : après votre réponse, Supervox rédige le prompt.")
+        case .lastWordsLost: fr("Votre dernière phrase n'a pas pu être transcrite : le prompt est rédigé sans elle.")
         }
     }
 
@@ -71,14 +83,14 @@ public enum InterviewText {
     public static func turnFailure(_ failure: RewriteFailure) -> String {
         switch failure {
         case .unauthorized, .noKey, .keychain:
-            "Le fournisseur refuse la clé : vérifiez-la dans Réglages, onglet Fournisseurs, puis relancez l'entretien."
+            fr("Le fournisseur refuse la clé : vérifiez-la dans Réglages, onglet Fournisseurs, puis relancez l'entretien.")
         case .notFound:
-            "Le modèle rapide n'existe pas chez ce fournisseur : choisissez-en un autre en tête de Réglages, onglet Modes."
+            fr("Le modèle rapide n'existe pas chez ce fournisseur : choisissez-en un autre en tête de Réglages, onglet Modes.")
         case .rateLimited:
-            "Le fournisseur limite les requêtes : attendez un peu, puis répétez votre réponse."
+            fr("Le fournisseur limite les requêtes : attendez un peu, puis répétez votre réponse.")
         case .noModel, .providerMissing, .rejected, .server, .unreachable, .redirected, .interrupted, .stalled, .providerError,
             .truncated, .refused, .empty, .timedOut, .malformed:
-            "Supervox n'a pas pu formuler sa question : répétez votre réponse, ou appuyez sur Conclure."
+            fr("Supervox n'a pas pu formuler sa question : répétez votre réponse, ou appuyez sur Conclure.")
         }
     }
 
@@ -87,10 +99,10 @@ public enum InterviewText {
     /// Le pied de la vue (D11) : où part le texte, et que l'audio reste sur l'ordinateur. Avec une voix de fournisseur, où part aussi
     /// le texte que dit Supervox. Les noms sont rognés comme partout (`Provider.shortName`) : la ligne tient quel que soit le nom.
     public static func privacy(provider: String, voiceProvider: String?) -> String {
-        let line =
-            "Le texte de vos réponses part chez « \(Provider.shortName(provider)) » ; l'audio du micro reste sur cet ordinateur."
+        let line = fr(
+            "Le texte de vos réponses part chez « \(Provider.shortName(provider)) » ; l'audio du micro reste sur cet ordinateur.")
         guard let voiceProvider else { return line }
-        return line + " Le texte que dit Supervox part chez « \(Provider.shortName(voiceProvider)) »."
+        return line + " " + fr("Le texte que dit Supervox part chez « \(Provider.shortName(voiceProvider)) ».")
     }
 
     // MARK: Pannes de l'entretien
@@ -99,9 +111,9 @@ public enum InterviewText {
     /// le texte d'une erreur ; un test relit la liste des codes dans le moteur et exige une phrase propre à chacun.
     private static let failureSentences: [String: String] = [
         ConversationFailure.Code.microphoneAccessDenied:
-            "L'accès au micro est refusé : autorisez Supervox dans Réglages Système, Confidentialité et sécurité, Micro, puis relancez l'entretien.",
+            "L'accès au micro est refusé : autorisez Supervox à utiliser le micro dans les Réglages Système (Confidentialité et sécurité), puis relancez l'entretien.",
         ConversationFailure.Code.noInputDevice:
-            "Aucun micro n'est disponible : branchez-en un ou choisissez une entrée dans Réglages Système, Son, puis relancez l'entretien.",
+            "Aucun micro n'est disponible : branchez-en un, puis relancez l'entretien.",
         ConversationFailure.Code.alreadyRunning:
             "Le micro est déjà utilisé : terminez l'autre dictée ou l'autre écoute de Supervox, puis relancez l'entretien.",
         ConversationFailure.Code.engineFailed:
@@ -109,32 +121,34 @@ public enum InterviewText {
         ConversationFailure.Code.notRunning:
             "Le moteur audio n'était pas démarré quand Supervox a voulu parler : relancez l'entretien.",
         ConversationFailure.Code.silent:
-            "Le micro ne donne plus aucun son : vérifiez qu'il est branché et choisi comme entrée dans Réglages Système, Son, puis relancez l'entretien.",
+            "Le micro ne donne plus aucun son : vérifiez qu'il est branché, puis relancez l'entretien.",
         ConversationFailure.Code.unusableSampleRate:
-            "Le micro utilise une fréquence que Supervox ne sait pas lire : choisissez une autre entrée dans Réglages Système, Son, puis relancez l'entretien.",
+            "Le micro utilise une fréquence que Supervox ne sait pas lire : relancez l'entretien ; si cela se répète, essayez une autre entrée audio.",
         ConversationFailure.Code.conversionFailed:
-            "Le son du micro n'a pas pu être converti : choisissez une autre entrée dans Réglages Système, Son, puis relancez l'entretien.",
+            "Le son du micro n'a pas pu être converti : relancez l'entretien ; si cela se répète, essayez une autre entrée audio.",
         ConversationFailure.Code.detectorFailed:
             "Le détecteur de voix a échoué : relancez l'entretien ; si cela se répète, vérifiez dans Réglages, onglet Transcription, que son modèle est téléchargé.",
         ConversationFailure.Code.transcriptionUnsupportedSampleRate:
-            "Le moteur de transcription a reçu un son à une fréquence qu'il ne lit pas : relancez l'entretien ; si cela se répète, choisissez une autre entrée dans Réglages Système, Son.",
+            "Le moteur de transcription a reçu un son à une fréquence qu'il ne lit pas : relancez l'entretien ; si cela se répète, essayez une autre entrée audio.",
         ConversationFailure.Code.transcriptionNotPrepared:
             "Le moteur de transcription n'était pas prêt : relancez l'entretien ; si cela se répète, vérifiez dans Réglages, onglet Transcription, que son modèle est téléchargé.",
         ConversationFailure.Code.transcriptionUnsupportedLocale:
             "Le moteur de transcription ne gère pas cette langue : changez de moteur ou de langue dans Réglages, onglet Transcription, puis relancez l'entretien.",
+        // Une panne de WhisperKit quand le vocabulaire dépasse la place du prompt d'amorce : elle se répète à l'identique, donc la
+        // consigne vient avant « relancez ».
         ConversationFailure.Code.transcriptionVocabularyUnavailable:
-            "Le moteur de transcription n'a pas pu prendre en compte votre vocabulaire : relancez l'entretien ; si cela se répète, videz le vocabulaire dans Réglages, onglet Transcription.",
+            "Réduisez ou videz le vocabulaire personnel dans Réglages, onglet Transcription, puis relancez l'entretien.",
         ConversationFailure.Code.transcriptionFailed:
             "La transcription a échoué : relancez l'entretien ; si cela se répète, changez de moteur dans Réglages, onglet Transcription.",
         ConversationFailure.Code.transcriptionTimedOut:
             "Le moteur de transcription n'a rien rendu à temps : relancez l'entretien ; si cela se répète, changez de moteur dans Réglages, onglet Transcription.",
         ConversationFailure.Code.unexpected:
             "Une panne inattendue a arrêté l'entretien : relancez-le.",
-    ]
+    ].mapValues(fr)
 
     /// Pour un code que cette version ne connaît pas : jamais le code brut.
-    private static let generalFailure =
-        "L'entretien s'est arrêté sur une panne que cette version ne sait pas décrire : relancez-le, ou mettez Supervox à jour."
+    private static let generalFailure = fr(
+        "L'entretien s'est arrêté sur une panne que cette version ne sait pas décrire : relancez-le, ou mettez Supervox à jour.")
 
     /// Les codes qui ont leur phrase (pour les tests, qui les comparent à ceux du moteur).
     static var knownFailureCodes: [String] { failureSentences.keys.sorted() }
@@ -162,8 +176,12 @@ public enum InterviewText {
         let notices: [ConversationNotice] = [
             .notUnderstood, .voiceFellBack, .voiceUnavailable, .proposal, .lastQuestion, .lastWordsLost,
         ]
-        var sentences = phases.map(title) + phases.map(hint).filter { !$0.isEmpty }
-        sentences += [cancelHint, concludeLabel, concludeHelp, supervoxLabel, youLabel, holdNote, questionCounter(99, of: 99)]
+        var sentences: [String] = []
+        for textOnly in [false, true] {
+            sentences += phases.map { title($0, textOnly: textOnly) } + phases.map { hint($0, textOnly: textOnly) }.filter { !$0.isEmpty }
+        }
+        sentences += [cancelHint, concludeLabel, concludeHelp, supervoxLabel, youLabel, holdNote, modeLockedHint]
+        sentences += [questionCounter(99, of: 99)]
         sentences += [privacy(provider: forty, voiceProvider: nil), privacy(provider: forty, voiceProvider: forty)]
         sentences += notices.map(notice) + failures.map(turnFailure) + failures.map { notice(.modelFailed($0)) }
         sentences += knownFailureCodes.flatMap { code in [failure(.microphone(code)), failure(.engine(code))] }
