@@ -48,6 +48,46 @@ import Testing
         #expect(quiet.lowerBound < engines.lowerBound)
     }
 
+    /// Amendement A de la tâche 9 : le son réel et la voix du système ne sont construits que par le programme (`main.swift`), hors de
+    /// leur fichier de définition. Tests, outil de rendu et constructeurs par défaut n'en ont pas (`InterviewEnvironment.unavailable`).
+    /// Les tests du cœur (`Tests/SupervoxCoreTests`) en ont le droit : leurs essais sur le matériel sont gardés par une variable
+    /// d'environnement (`SUPERVOX_MIC`, `SUPERVOX_SPEAKER`, `SUPERVOX_SPEECH`), et `LiveAudioIO(device:)` y reçoit un double.
+    static let realAudioOrSystemVoice = #"\b(?:LiveAudioIO|SystemSpeechSynthesizer)\s*(?:\(|\.\s*init\b)"#
+
+    @Test func theRealSoundAndTheSystemVoiceAreBuiltOnlyByTheProgram() throws {
+        let pattern = try Regex(Self.realAudioOrSystemVoice)
+        let allowed: Set<String> = [
+            "Supervox/main.swift", "SupervoxCore/Audio/AudioIO.swift", "SupervoxCore/Speech/SystemSpeechSynthesizer.swift",
+        ]
+        let sources = try Self.sources(under: "Sources")
+        let main = try #require(sources.first { $0.place == "Supervox/main.swift" })
+        #expect(main.code.contains(pattern), "le balayage doit voir le programme les construire")
+        let offending = sources.filter { !allowed.contains($0.place) && $0.code.contains(pattern) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+        let tests = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasPrefix("SupervoxCoreTests/") && $0.code.contains(pattern) }
+            .map(\.place)
+        #expect(tests.isEmpty, "\(tests)")
+    }
+
+    @Test(arguments: [
+        "LiveAudioIO()", "LiveAudioIO ( )", "LiveAudioIO.init()", "SystemSpeechSynthesizer(language: \"fr-FR\")",
+        "SystemSpeechSynthesizer . init(language: x)", "{ LiveAudioIO() }",
+    ])
+    func theRealSoundPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realAudioOrSystemVoice)))
+    }
+
+    @Test func theRealSoundPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.realAudioOrSystemVoice)
+        for code in [
+            "let io: LiveAudioIO", "ScriptedAudioIO()", "public final class LiveAudioIO: AudioIO {", "MyLiveAudioIO()",
+            "makeSystemVoice: { made.systemVoice($0) }", "x is SystemSpeechSynthesizer",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
     /// Formes interdites hors de `EndpointSession.swift` : la session partagée, quelle que soit la coupure de ligne
     /// (`URLSession.shared`, `session: .shared`, `URLSession = .shared`), et toute session construite à la main
     /// (`URLSession(`), qui pourrait recevoir une configuration avec cache.

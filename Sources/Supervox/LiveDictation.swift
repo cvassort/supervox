@@ -205,7 +205,8 @@ final class LiveDictationEngines: Sendable {
     let cache: EngineCache
     private let makeFeed: @Sendable () -> any MicrophoneFeed
     private let watchdog: MicrophoneWatchdog?
-    private let gate = PreloadGate()
+    /// La porte du préchargement du lancement : la session de dictée, les téléchargements et l'entretien (`LiveInterview`) l'attendent.
+    let gate = PreloadGate()
 
     /// - Parameters:
     ///   - base: le catalogue sous-jacent (les tests en donnent un double ; en production, `LocalModelCatalog`).
