@@ -291,25 +291,60 @@ private let providerID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1"
         #expect(try names(in: directory) == ["settings.json"])
     }
 
-    /// Un fichier de la version 3 dont un des champs neufs a une autre forme est illisible : comportement de l'étape 5, mis de
-    /// côté avec un avis, réglages par défaut, rien d'écrasé.
+    /// Un bloc neuf (`interview`, `voice`, `history`) qui n'est pas un objet prend ses défauts : tout champ neuf est optionnel au
+    /// décodage. Le reste du fichier (fournisseur, modes, raccourcis) est lu normalement, rien n'est mis de côté ni avisé, et le
+    /// fichier n'est pas touché à la lecture.
     @Test(arguments: [
-        #"{"version": 3, "interview": "une autre forme"}"#,
-        #"{"version": 3, "voice": ["une", "autre", "forme"]}"#,
-        #"{"version": 3, "history": 12}"#,
+        #""interview": "une autre forme""#, #""voice": ["une", "autre", "forme"]"#, #""history": 12"#,
+        #""interview": 3, "voice": null, "history": [1]"#,
     ])
-    func aVersionThreeFileWithAFieldOfAnotherShapeIsSetAside(json: String) throws {
+    func aNewBlockThatIsNotAnObjectTakesItsDefaultsAndTheRestOfTheFileIsRead(block: String) throws {
         let directory = try makeDirectory()
         defer { removeDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        let original = Data(json.utf8)
+        let store = SettingsStore(file: file, now: fixedClock)
+        let original = Data(
+            """
+            {"version": 3, \(block), "lastModeID": "prompt", "hotKey": {"keyCode": 40, "modifiers": 768},
+             "providers": [{"id": "00000000-0000-0000-0000-0000000000A1", "name": "Fournisseur d'exemple",
+                            "baseURL": "https://example.com/v1", "kind": "anthropic", "models": ["modele-exemple-fort"]}],
+             "modes": [{"id": "dictee-brute", "name": "Dictée brute"}, {"id": "perso-1", "name": "Courriel", "instruction": "Écris."},
+                       {"id": "entretien", "name": "Entretien"}]}
+            """.utf8)
+        try original.write(to: file)
+
+        let result = store.load()
+        #expect(result.notice == nil)
+        #expect(result.saveRefusal == nil)
+        #expect(try names(in: directory) == ["settings.json"])
+        #expect(try Data(contentsOf: file) == original)
+        let settings = result.settings
+        #expect(settings.lastModeID == "prompt")
+        #expect(settings.hotKey == HotKey(keyCode: 40, modifiers: [.command, .shift]))
+        #expect(settings.providers.map(\.name) == ["Fournisseur d'exemple"])
+        #expect(settings.mode("perso-1")?.instruction == "Écris.")
+        #expect(settings.interview == .defaults)
+        #expect(settings.voice == .system)
+        #expect(settings.history == .defaults)
+
+        // La première écriture remet des objets à la place.
+        try store.save(settings)
+        let written = try jsonObject(Data(contentsOf: file))
+        for key in newKeys { #expect(written[key] is [String: Any], "\(key)") }
+    }
+
+    /// Ce qui reste illisible (comportement de l'étape 5) : un champ ancien d'une autre forme.
+    @Test func aVersionThreeFileWithAnOldFieldOfAnotherShapeIsStillSetAside() throws {
+        let directory = try makeDirectory()
+        defer { removeDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let original = Data(#"{"version": 3, "providers": "une autre forme", "history": 12}"#.utf8)
         try original.write(to: file)
 
         let result = SettingsStore(file: file, now: fixedClock).load()
         #expect(result.settings == .defaults)
         #expect(result.saveRefusal == nil)
-        let notice = try #require(result.notice)
-        #expect(notice.contains(asideName))
+        #expect(try #require(result.notice).contains(asideName))
         #expect(try names(in: directory) == [asideName])
         #expect(try Data(contentsOf: directory.appendingPathComponent(asideName)) == original)
     }

@@ -97,7 +97,9 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 ///   de ces types ne compare que leurs champs connus. Ce qui est gardé l'est d'une lecture à la réécriture de la même valeur :
 ///   un type reconstruit à neuf (`HotKey(keyCode:modifiers:)` à la place de l'ancien) repart sans champ inconnu ;
 /// - un champ connu d'une autre forme dans les types de la version 3 (`InterviewSettings`, `VoiceChoice`, `HistorySettings`)
-///   retombe sur son défaut, les autres champs restant lus ; réécrit, il l'est avec ce défaut.
+///   retombe sur son défaut, les autres champs restant lus ; réécrit, il l'est avec ce défaut. Un bloc `interview`, `voice` ou
+///   `history` qui n'est pas un objet prend tous ses défauts, sans que le reste du fichier soit mis de côté ;
+///   une valeur hors borne de `InterviewSettings` ou de `HistorySettings` est ramenée dans sa borne à la lecture.
 ///
 /// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, `TranscriptionEngine`, ou toute énumération
 /// ajoutée plus tard) est un tel format : il exige d'augmenter `current`. Sans cela, une application plus ancienne lit un cas
@@ -193,9 +195,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
             ?? defaults.transcription
         strongModel = try container.decodeIfPresent(ModelChoice.self, forKey: key(.strongModel))
         fastModel = try container.decodeIfPresent(ModelChoice.self, forKey: key(.fastModel))
-        interview = try container.decodeIfPresent(InterviewSettings.self, forKey: key(.interview)) ?? defaults.interview
-        voice = try container.decodeIfPresent(VoiceChoice.self, forKey: key(.voice)) ?? defaults.voice
-        history = try container.decodeIfPresent(HistorySettings.self, forKey: key(.history)) ?? defaults.history
+        // Les trois blocs de la version 3 sont optionnels : un bloc qui n'est pas un objet prend ses défauts, sans faire perdre
+        // le reste du fichier (fournisseurs, modes, raccourcis).
+        interview = (try? container.decodeIfPresent(InterviewSettings.self, forKey: key(.interview))) ?? defaults.interview
+        voice = (try? container.decodeIfPresent(VoiceChoice.self, forKey: key(.voice))) ?? defaults.voice
+        history = (try? container.decodeIfPresent(HistorySettings.self, forKey: key(.history))) ?? defaults.history
         if let modes = try container.decodeIfPresent([Mode].self, forKey: key(.modes)) {
             self.modes = Mode.normalized(modes)
         } else if version < 2 {
