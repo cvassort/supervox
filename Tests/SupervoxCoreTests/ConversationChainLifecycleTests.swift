@@ -175,6 +175,28 @@ struct ConversationCancelTests {
 
 @Suite(.timeLimit(.minutes(1)))
 struct ConversationConcludeTests {
+    /// `conclude()` a fini la conversation ; pendant que `run` arrête le chien de garde (une attente sourde à l'annulation), `cancel()`
+    /// arrive : la fin est `.cancelled`, et l'entretien n'a jamais annoncé qu'il concluait.
+    @Test func aCancelThatArrivesWhileTheWatchdogIsBeingStoppedEndsCancelledWithoutAConcludingState() async {
+        let latch = DeafLatch()
+        let h = ConversationHarness(watchdogSleep: { _ in await latch.wait() })
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        await h.chain.conclude()
+        _ = await waitUntil { await h.chain.isClosing }   // `run` attend maintenant la tâche du chien de garde, qui ne répond pas
+        let cancelling = Task { await h.cancel() }
+        _ = await waitUntil { await h.chain.cancelIsRequested }
+
+        latch.open()
+        await cancelling.value
+
+        await log.waitForEnd()
+        #expect(log.end == .cancelled)
+        #expect(!log.items.contains(.state(.concluding)))   // « conclut » puis « annulé » serait une annonce fausse
+        #expect(h.strong.calls == 0)
+        expectCleanEnd(h)
+    }
+
     @Test func concludeWhileThinkingCancelsTheFastRequestAndConcludesWithWhatWasSaid() async throws {
         let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [ScriptedModel([])])
         let log = await h.start()
@@ -413,6 +435,27 @@ struct ConversationBreakdownTests {
     }
 
     // MARK: La voix
+
+    /// Toutes les phrases d'une réplique ne donnent rien à dire (`SpeechError.empty`) : ni dite ni montrée, la réplique n'est pas une
+    /// question muette. Même avis qu'une réponse vide du modèle ; la question n'est pas comptée et la réponse suivante est fusionnée.
+    @Test func aReplyWhoseEverySentenceHasNothingToSayIsAFailureNotASilentQuestion() async throws {
+        let h = ConversationHarness(
+            turns: twoTurns, transcripts: texts("t1", "t2"), fast: [question("Un. Deux."), modelReply("[CONCLURE]\nMerci.")],
+            speech: ScriptedSpeech(reply: { _, _ in .fail(SpeechError.empty) }))
+        let log = await h.start()
+
+        await h.say(0)
+        await log.wait(.state(.listening), count: 2)
+        #expect(log.trace.contains(.notice(.modelFailed(.empty))))
+        #expect(!log.items.contains(where: isSpeakingStarted))
+        #expect(!log.items.contains { if case .notice(.voiceUnavailable) = $0 { true } else { false } })   // la voix n'est pas en panne
+        await h.say(1)
+        await log.waitForEnd()
+
+        #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
+        #expect(h.fast.requests.map(\.instruction) == Array(repeating: InterviewPrompt.instruction(remainingQuestions: 8), count: 2))
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2")))
+    }
 
     @Test func aSentenceWithNothingToSayIsSkippedAndTheVoiceStays() async {
         let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [question("Un. Deux.")],

@@ -152,6 +152,10 @@ public actor ConversationChain: ConversationEngine {
 
     /// Pour les tests : une panne est notée (le chien de garde l'a vue) et attend la fin de la transcription en cours.
     var failureIsPending: Bool { pendingFailure != nil }
+    /// Pour les tests : `cancel()` a été demandé.
+    var cancelIsRequested: Bool { request == .cancel }
+    /// Pour les tests : la conversation est finie, `run` referme (arrêt du chien de garde, micro, conclusion).
+    var isClosing: Bool { stage == .closing }
 
     public func conclude() async {
         guard started, stage == .talking, request == nil else { return }
@@ -175,10 +179,11 @@ public actor ConversationChain: ConversationEngine {
     private func run(_ talk: Task<TalkOutcome, Never>) async {
         var outcome = await talk.value
         stage = .closing
-        if request == .cancel { outcome = .cancelled }
         watchdogTask?.cancel()
         await watchdogTask?.value
         watchdogTask = nil
+        // Relu APRÈS l'attente : un `cancel()` arrivé pendant l'arrêt du chien de garde l'emporte, sans annonce de conclusion.
+        if request == .cancel { outcome = .cancelled }
         let end = await close(outcome)
         emit(.state(.finished))
         emit(.finished(end))
@@ -602,8 +607,10 @@ public actor ConversationChain: ConversationEngine {
         var failure: RewriteFailure?
         if case .failed(let reason)? = reply.modelEnd { failure = reason }
         let signal = reply.filter.signal
-        // Une réplique sans aucune phrase (le marqueur seul) n'est pas une question : c'est un modèle qui n'a rien dit.
-        if case .done? = reply.modelEnd, reply.sentences.isEmpty, signal != .conclude { failure = .empty }
+        // Une réplique dont aucune phrase n'a été dite ni montrée (le marqueur seul, ou des phrases sans rien à dire) n'est pas une
+        // question : c'est un modèle qui n'a rien dit. Dès qu'une phrase a été dite ou montrée, elle reste.
+        let spoken = reply.sentences.indices.contains { reply.outcomes[$0] == .played || reply.outcomes[$0] == .shown }
+        if case .done? = reply.modelEnd, !spoken, signal != .conclude { failure = .empty }
         replyInputs = nil
         replyTracker = nil
         reply = ReplyState()

@@ -418,12 +418,14 @@ final class ConversationHarness: @unchecked Sendable {
     /// - Parameters:
     ///   - transcripts: la réponse du moteur de transcription à son n-ième appel (aperçus compris).
     ///   - detectorFailure: le bloc de rang global donné fait échouer le détecteur.
+    ///   - watchdogSleep: l'attente du chien de garde à la place du `TickSleeper` (pour une attente sourde à l'annulation).
     ///   - transcriberHonorsCancellation: faux, le moteur de transcription est sourd à l'annulation (un appel retenu ne rend la main qu'à `release`).
     init(turns: [TurnScript] = [], transcripts: @escaping @Sendable (Int) -> ScriptedTranscriber.Reply = { _ in .text("réponse") },
          fast: [ScriptedModel] = [], strong: [ScriptedModel] = [modelReply("Prompt final")], speech: ScriptedSpeech = ScriptedSpeech(),
          completion: ScriptedAudioIO.Completion = .immediate, startError: AudioCaptureError? = nil,
          config baseConfig: ConversationConfig = makeConversationConfig(), detectorPrepareError: (any Error)? = nil,
          detectorFailure: (block: Int, error: any Error)? = nil, transcriberHonorsCancellation: Bool = true,
+         watchdogSleep: (@Sendable (Double) async throws -> Void)? = nil,
          makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) {
         self.turns = turns
         var config = baseConfig
@@ -453,12 +455,14 @@ final class ConversationHarness: @unchecked Sendable {
             default: break
             }
         }
+        let watchdog = watchdogSleep.map { MicrophoneWatchdog(timeout: 1, firstChunkTimeout: 3, pollInterval: 0.25, sleep: $0) }
+            ?? watchdogSleeper.watchdog
         let sleeper = previewSleeper
         let transcriptionWait = transcriptionSleeper
         let audioIO = audio
         chain = ConversationChain(
             audio: audioIO, detector: detector, transcriber: transcriber, fastModel: self.fast, strongModel: self.strong,
-            voice: speech, config: config, watchdog: watchdogSleeper.watchdog, now: self.clock.reader,
+            voice: speech, config: config, watchdog: watchdog, now: self.clock.reader,
             sleep: { try await sleeper.sleep($0) }, transcriptionSleep: { try await transcriptionWait.sleep($0) },
             makeResampler: makeResampler, eventTap: tap)
         let seen = self.state
