@@ -49,24 +49,16 @@ public enum LiveRewriter {
         onText: @escaping @MainActor (String) -> Void
     ) async -> RewriteOutcome {
         guard let choice = job.model ?? settings.strongModel else { return .failed(.noModel) }
-        guard let provider = settings.providers.first(where: { $0.id == choice.providerID }) else {
-            return .failed(.providerMissing)
-        }
-        // L'adresse avant la clé : une adresse refusée ne coûte pas une invite du trousseau.
-        guard let address = try? ProvidersModel.validatedBaseURL(provider.baseURL), let url = URL(string: address) else {
-            return .failed(.unreachable)
-        }
-        let key: String?
+        // Le fournisseur, l'adresse, puis la clé : l'ordre et les refus sont ceux de `ProviderResolver`.
+        let resolved: ResolvedProvider
         do {
-            key = try await secrets.read(account: provider.id.uuidString)
+            resolved = try await ProviderResolver.resolve(choice.providerID, settings: settings, secrets: secrets)
+        } catch let failure as RewriteFailure {
+            return .failed(failure)
         } catch {
-            return Task.isCancelled ? .cancelled : .failed(.keychain)
+            return .cancelled
         }
-        if Task.isCancelled { return .cancelled }
-        guard let apiKey = key?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
-            return .failed(.noKey(provider: Provider.shortName(provider.name)))
-        }
-        let model = makeModel(provider.kind, EndpointConfig(baseURL: url, apiKey: apiKey))
+        let model = makeModel(resolved.kind, resolved.config)
 
         // Les morceaux passent par un flux ordonné jusqu'au fil principal, et tous sont rendus avant l'issue : aucun ne la suit.
         let (texts, sink) = AsyncStream<String>.makeStream()
