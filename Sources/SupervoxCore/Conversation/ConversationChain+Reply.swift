@@ -24,8 +24,11 @@ extension ConversationChain {
         /// Mise en file de lecture, pas encore finie.
         case queued
         case played
-        /// Coupée avant la fin : pas entendue.
+        /// Coupée avant la moitié de sa durée : pas entendue.
         case stopped
+        /// Coupée après la moitié au moins de sa durée (`cutSentenceHeardFraction`) : comptée comme entendue, en entier (revue de la
+        /// tâche 6, m-9). Pas de `.sentencePlayed` : elle n'a pas été jouée jusqu'au bout.
+        case mostlyPlayed
         /// Affichée seule (plus de voix) : comptée comme entendue, elle a été montrée.
         case shown
         /// Rien à dire (la voix n'a rien rendu) : sautée, la voix reste.
@@ -39,6 +42,10 @@ extension ConversationChain {
         var visible = ""
         var sentences: [String] = []
         var outcomes: [Int: SentenceOutcome] = [:]
+        /// La durée de chaque clip mis en file, en secondes (pour savoir quelle part d'une phrase coupée a été jouée).
+        var durations: [Int: Double] = [:]
+        /// La question de cette réplique a été comptée (`beginSpeaking`) : défait si rien n'en a été entendu (m-10).
+        var countedQuestion = false
         var queue = SpeechQueue()
         var modelEnd: ModelEnd?
         var started = false
@@ -52,6 +59,10 @@ extension ConversationChain {
     func replySnapshot() -> ReplySnapshot {
         ReplySnapshot(queuedClips: reply.queue.queuedClips, synthesizing: reply.queue.synthesizing, pending: reply.queue.pending)
     }
+
+    /// Une phrase coupée compte comme entendue si au moins cette part de sa durée a été jouée (choix du contrôleur au tour de
+    /// correction 1 de la tâche 6 ; choix non mesuré).
+    static let cutSentenceHeardFraction = 0.5
 
     /// Comment une réplique se termine.
     enum ReplyClosing {
@@ -137,18 +148,32 @@ extension ConversationChain {
         synthesisTask?.cancel()
         await synthesisTask?.value
         synthesisTask = nil
+        var mostlyPlayed: Int?
         if let tracker, tracker.outstanding > 0 {
+            // La position du clip en cours se lit AVANT l'arrêt (après, plus aucun clip n'est en cours). Le clip en cours est le
+            // premier en file dont la fin n'est pas encore arrivée ; s'il finit de lui-même avant l'arrêt, sa fin est `.played` et la
+            // position ne sert à rien.
+            let position = audio.playbackPosition
+            let ended = tracker.ends
+            let playing = reply.outcomes.filter { $0.value == .queued && ended[$0.key] == nil }.map(\.key).min()
             audio.stopPlayback()
             await tracker.waitUntilIdle()
+            if let playing, let position, let duration = reply.durations[playing], duration > 0,
+               position >= duration * Self.cutSentenceHeardFraction {
+                mostlyPlayed = playing
+            }
         }
         for (index, end) in (tracker?.ends ?? [:]).sorted(by: { $0.key < $1.key }) where reply.outcomes[index] == .queued {
             finishClip(index, end)
         }
+        if let mostlyPlayed, reply.outcomes[mostlyPlayed] == .stopped { reply.outcomes[mostlyPlayed] = .mostlyPlayed }
 
         let heard = reply.sentences.indices
-            .filter { reply.outcomes[$0] == .played || reply.outcomes[$0] == .shown }
+            .filter { reply.outcomes[$0].map(Self.isHeard) ?? false }
             .map { reply.sentences[$0] }
             .joined(separator: " ")
+        // Une question dont rien n'a été entendu (coupée avant la moitié de sa première phrase) ne compte pas (m-10).
+        if reply.countedQuestion, heard.isEmpty { questionsAsked -= 1 }
         conversation.appendInterviewer(heard)
         switch closing {
         case .interrupted: emit(.interrupted(heard: heard))
@@ -160,11 +185,19 @@ extension ConversationChain {
         let signal = reply.filter.signal
         // Une réplique dont aucune phrase n'a été dite ni montrée (le marqueur seul, ou des phrases sans rien à dire) n'est pas une
         // question : c'est un modèle qui n'a rien dit. Dès qu'une phrase a été dite ou montrée, elle reste.
-        let spoken = reply.sentences.indices.contains { reply.outcomes[$0] == .played || reply.outcomes[$0] == .shown }
+        let spoken = reply.sentences.indices.contains { reply.outcomes[$0].map(Self.isHeard) ?? false }
         if case .done? = reply.modelEnd, !spoken, signal != .conclude { failure = .empty }
         replyTracker = nil
         reply = ReplyState()
         return (heard, signal, failure)
+    }
+
+    /// Une phrase entendue : jouée jusqu'au bout, jouée au-delà de la moitié puis coupée, ou montrée.
+    static func isHeard(_ outcome: SentenceOutcome) -> Bool {
+        switch outcome {
+        case .played, .mostlyPlayed, .shown: true
+        case .queued, .stopped, .skipped: false
+        }
     }
 
     func handle(_ input: ReplyInput) {
@@ -251,6 +284,7 @@ extension ConversationChain {
             }
             reply.queue.clipQueued()
             reply.outcomes[index] = .queued
+            reply.durations[index] = speech.clip.sampleRate > 0 ? Double(speech.clip.samples.count) / speech.clip.sampleRate : 0
             beginSpeaking()
         }
     }
@@ -278,7 +312,8 @@ extension ConversationChain {
     }
 
     /// La première phrase de la réplique commence à être jouée (ou est affichée) : la question compte, avec les avis qui la
-    /// concernent. Le premier clip d'une réplique part dès `play()` : la file de lecture est vide, la réplique précédente a attendu
+    /// concernent. Si rien n'en est finalement entendu (coupée avant la moitié de sa première phrase), `closeReply` défait ce compte ;
+    /// `.speakingStarted(question:)` et `.lastQuestion` ont alors déjà été émis, et le même numéro reviendra à la question suivante. Le premier clip d'une réplique part dès `play()` : la file de lecture est vide, la réplique précédente a attendu
     /// la fin de tous ses clips (code lu ; l'`AudioIO` ne signale pas le début d'un clip). Coupée avant, la question ne compte pas.
     func beginSpeaking() {
         guard !reply.started else { return }
@@ -286,6 +321,7 @@ extension ConversationChain {
         let signal = reply.filter.signal
         if signal != .conclude {
             questionsAsked += 1
+            reply.countedQuestion = true
             if reply.remainingAtStart == 1 { emit(.notice(.lastQuestion)) }
             if signal == .propose { emit(.notice(.proposal)) }
         }

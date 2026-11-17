@@ -148,6 +148,7 @@ struct ConversationInterruptionTests {
         await log.wait(.sentencePlayed("Deux."))
         await h.audio.plays.wait(atLeast: 4)   // « Trois. » joue, « Quatre. » attend derrière, « Cinq. » attend sa synthèse
 
+        h.audio.inner.scriptedPosition = 0.002   // « Trois. » est coupée à 20 % de sa durée : moins de la moitié, pas entendue
         pushLoud(h, from: 0, count: 5)
         await log.wait(where: isInterrupted)
 
@@ -408,7 +409,10 @@ struct ConversationInterruptionTests {
     /// La première phrase a commencé à être jouée (son clip est parti à `play()`, la file était vide), puis la personne coupe avant
     /// qu'elle finisse : la question compte (elle a commencé à être entendue), mais rien n'en est entendu en entier, donc rien n'entre
     /// pour l'intervieweur et la réponse suivante est fusionnée au tour d'avant.
-    @Test func anInterruptionDuringTheFirstSentenceCountsTheQuestionButKeepsNoInterviewerText() async {
+    /// Règles 3 et 6 amendées (revue de la tâche 6, m-9 et m-10) : la première phrase (« Un. », un clip de 0,01 s) est coupée à 40 %
+    /// de sa durée (position lue avant `stopPlayback()`). Moins de la moitié : rien n'est entendu, la question ne compte pas (la
+    /// requête suivante a encore 8 questions), le tour suivant est fusionné au précédent.
+    @Test func anInterruptionBeforeHalfOfTheFirstSentenceHearsNothingAndDoesNotCountTheQuestion() async {
         let h = ConversationHarness(
             turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un. Deux."), modelReply("[CONCLURE]\nMerci.")],
             completion: .manual, events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
@@ -416,6 +420,7 @@ struct ConversationInterruptionTests {
         await h.say(0)
         await log.wait(.speakingStarted(question: 1))
 
+        h.audio.inner.scriptedPosition = 0.004   // 40 % de 160 échantillons à 16 kHz
         pushLoud(h, from: 0, count: 5)
         await log.wait(where: isInterrupted)
         #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "")])
@@ -427,7 +432,34 @@ struct ConversationInterruptionTests {
 
         #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
         #expect(h.fast.requests.map(\.instruction) == [InterviewPrompt.instruction(remainingQuestions: 8),
+                                                       InterviewPrompt.instruction(remainingQuestions: 8)])
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2", "Merci.")))
+    }
+
+    /// La même coupure à 60 % : plus de la moitié a été jouée, la phrase est entendue en entier (dans `heard` et la conversation), la
+    /// question compte, et le tour suivant est une réponse à part.
+    @Test func anInterruptionAfterHalfOfTheFirstSentenceHearsItAndCountsTheQuestion() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un. Deux."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.speakingStarted(question: 1))
+
+        h.audio.inner.scriptedPosition = 0.006   // 60 %
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "Un.")])
+        pushLoud(h, from: 5000, count: 2)
+        await h.audio.plays.wait(atLeast: 3)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        #expect(h.fast.requests.map(\.input) == ["t1", "t2"])
+        #expect(h.fast.requests.map(\.instruction) == [InterviewPrompt.instruction(remainingQuestions: 8),
                                                        InterviewPrompt.instruction(remainingQuestions: 7)])
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
     }
 
     // MARK: Règle 12 : un passage né pendant la transcription du tour
