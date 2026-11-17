@@ -154,21 +154,71 @@ final class SetupModelFactory: Sendable {
             makeModel: models.make, makeVoice: voices.make)
     }
 
+    // MARK: - La clé ne se laisse pas voir
+
+    /// Un client qui tient sa configuration comme le vrai (`OpenAICompatibleClient` garde un `EndpointConfig`) : le reflet de
+    /// l'`InterviewSetup` passe donc par lui.
+    struct ConfigHoldingModel: LanguageModel {
+        let config: EndpointConfig
+        func complete(_ request: CompletionRequest) -> AsyncThrowingStream<CompletionEvent, Error> {
+            AsyncThrowingStream { $0.finish() }
+        }
+    }
+
+    /// Les trois façons d'afficher une valeur : `String(describing:)`, `String(reflecting:)` et `dump`.
+    static func displays(_ value: Any) -> [String] {
+        var dumped = ""
+        dump(value, to: &dumped)
+        return [String(describing: value), String(reflecting: value), dumped]
+    }
+
+    @Test("un fournisseur résolu ne montre jamais sa clé : ni description, ni reflet, ni dump")
+    func aResolvedProviderNeverShowsItsKey() async throws {
+        let store = SetupAccountStore(keys: [fastProvider.id: "cle-double-reconnaissable-123"])
+
+        let resolved = try await ProviderResolver.resolve(fastProvider.id, settings: settings(), secrets: access(store))
+
+        #expect(resolved.config.apiKey == "cle-double-reconnaissable-123", "la clé est bien là, pour le client")
+        for text in Self.displays(resolved) {
+            #expect(!text.contains("cle-double-reconnaissable-123"), "la clé apparaît : \(text.prefix(300))")
+        }
+    }
+
+    @Test("une préparation d'entretien ne montre aucune clé : ni description, ni reflet, ni dump")
+    func anInterviewSetupNeverShowsAKey() async throws {
+        let keys = [
+            fastProvider.id: "cle-double-rapide-456", strongProvider.id: "cle-double-forte-789",
+            voiceProvider.id: "cle-double-voix-012",
+        ]
+
+        let setup = try await InterviewSetup.resolve(
+            settings: settings(voice: providerVoice), engine: nil, secrets: access(SetupAccountStore(keys: keys)),
+            makeModel: { _, config in ConfigHoldingModel(config: config) }, makeVoice: SetupVoiceFactory().make)
+
+        let held = try #require(setup.fastModel as? ConfigHoldingModel)
+        #expect(held.config.apiKey == "cle-double-rapide-456", "le client tient bien sa clé")
+        for text in Self.displays(setup) {
+            for key in keys.values { #expect(!text.contains(key), "une clé apparaît : \(text.prefix(300))") }
+        }
+    }
+
     // MARK: - Les modèles
 
     @Test("le modèle rapide et le modèle fort viennent chacun de leur fournisseur, avec leur nom de modèle et leur clé")
     func eachModelIsBuiltFromItsOwnProvider() async throws {
         let models = SetupModelFactory()
+        let fastURL = try #require(URL(string: "https://exemple.invalid/rapide"))
+        let strongURL = try #require(URL(string: "https://exemple.invalid/fort"))
 
         let setup = try await resolve(settings(), models: models)
 
         #expect(
             models.made == [
-                .init(kind: .openAICompatible, baseURL: URL(string: "https://exemple.invalid/rapide")!, apiKey: "cle-rapide"),
-                .init(kind: .anthropic, baseURL: URL(string: "https://exemple.invalid/fort")!, apiKey: "cle-forte"),
+                .init(kind: .openAICompatible, baseURL: fastURL, apiKey: "cle-rapide"),
+                .init(kind: .anthropic, baseURL: strongURL, apiKey: "cle-forte"),
             ])
-        let fast = try #require(models.model(at: URL(string: "https://exemple.invalid/rapide")!))
-        let strong = try #require(models.model(at: URL(string: "https://exemple.invalid/fort")!))
+        let fast = try #require(models.model(at: fastURL))
+        let strong = try #require(models.model(at: strongURL))
         #expect((setup.fastModel as AnyObject) === fast)
         #expect((setup.strongModel as AnyObject) === strong)
         #expect(setup.config.fastModel == "modele-exemple-rapide")
