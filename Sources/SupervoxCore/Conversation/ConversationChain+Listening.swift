@@ -110,7 +110,8 @@ extension ConversationChain {
         passageOrigin = .interrupting
         guard replyActive else { return }   // pendant la transcription, rien à couper : la réplique attendra ce passage
         await abortReply(interrupted: true)
-        enterListening()
+        // Une fin demandée pendant que la réplique se rangeait (revue de la tâche 6, m-2) : l'écoute ne reprend pas, la fin suit.
+        if interruption() == nil { enterListening() }
     }
 
     /// L'outil n'a plus rien en cours : un passage ouvert pendant qu'il était occupé ne compte plus qu'à partir d'ici.
@@ -253,9 +254,11 @@ extension ConversationChain {
         }
     }
 
-    /// Faux quand la tâche doit s'arrêter : l'entretien ne parle plus au micro, ou le micro s'est tu (l'entretien échoue alors).
+    /// Faux quand la tâche doit s'arrêter : l'entretien ne parle plus au micro, une fin est demandée, ou le micro s'est tu
+    /// (l'entretien échoue alors). Une fois `conclude()` (ou `cancel()`) demandé, le micro ne sert plus : qu'il se taise ne fait pas
+    /// d'une conclusion une panne (revue de la tâche 6, I-1).
     func microphoneIsAlive() -> Bool {
-        guard stage == .talking, audioOpen else { return false }
+        guard stage == .talking, audioOpen, request == nil else { return false }
         // Avant toute tranche, la tolérance est celle de l'ouverture du micro ; ensuite, celle de l'écart entre deux tranches.
         let limit = intake.hasSeenAChunk ? watchdog.timeout : watchdog.firstChunkTimeout
         guard now() - intake.lastArrival >= limit else { return true }

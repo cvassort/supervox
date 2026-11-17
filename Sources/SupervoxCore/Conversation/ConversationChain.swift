@@ -119,6 +119,9 @@ public actor ConversationChain: ConversationEngine {
     var previewTask: Task<Void, Never>?
     var audioOpen = false
     let intake = ChunkIntake()
+    /// `.state(.concluding)` a été émis : il ne l'est qu'une fois (par la fin rangée, ou par `close` quand la conclusion arrive
+    /// avant toute conversation, pendant la préparation).
+    var concludingAnnounced = false
 
     var conversation = Conversation()
     /// Le nombre de questions posées (la première phrase de la réplique a commencé à être jouée, ou a été affichée).
@@ -226,8 +229,9 @@ public actor ConversationChain: ConversationEngine {
             closeAudio()
             return .failed(failure, conversation)
         case .concluding:
-            emit(.state(.concluding))
-            // Le micro est arrêté, et a rendu la main, avant que le modèle fort soit sollicité.
+            announceConclusion()
+            // Le micro est arrêté, et a rendu la main, avant que le modèle fort soit sollicité (déjà fait par la fin rangée, sauf
+            // quand la conclusion arrive pendant la préparation).
             closeAudio()
             guard conversation.hasUserTurn else { return .nothingSaid }
             return await conclusion()
@@ -256,6 +260,12 @@ public actor ConversationChain: ConversationEngine {
         guard audioOpen else { return }
         audioOpen = false
         audio.stop()
+    }
+
+    func announceConclusion() {
+        guard !concludingAnnounced else { return }
+        concludingAnnounced = true
+        emit(.state(.concluding))
     }
 
     func emit(_ event: ConversationEvent) {
@@ -368,6 +378,11 @@ public actor ConversationChain: ConversationEngine {
 
     /// La fin de la conversation. Sur une annulation, tout est arrêté et rien n'est ajouté. Sinon (conclusion, panne), la réplique est
     /// coupée en gardant ce qui a été entendu, puis ce que la personne a dit est transcrit et ajouté avant de rendre la main.
+    ///
+    /// Le passage encore ouvert est pris **avant** l'arrêt du micro, puis le micro est arrêté et, sur une conclusion, celle-ci est
+    /// annoncée : les transcriptions finales tournent micro fermé (témoin éteint, plus aucune tranche accumulée, chien de garde arrêté
+    /// avec lui ; revue de la tâche 6, I-1). La réplique est rangée avant : `stopPlayback()` n'est jamais appelé après `stop()`.
+    /// Reste avant l'arrêt du micro une attente sans limite : la synthèse en cours, si la voix n'écoute pas l'annulation.
     func windDown(_ outcome: TalkOutcome) async -> TalkOutcome {
         if replyActive { await abortReply(interrupted: false) }
         await stopPreview()
@@ -376,6 +391,8 @@ public actor ConversationChain: ConversationEngine {
             return .cancelled
         }
         if let clip = openPassageClip() { clipsToTranscribe.append(clip) }
+        if case .concluding = outcome, request != .cancel { announceConclusion() }
+        closeAudio()
         while transcriberUsable, request != .cancel {
             if let running = transcription {
                 let result = await running.task.value

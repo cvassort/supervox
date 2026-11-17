@@ -134,6 +134,9 @@ final class ScriptedSpeech: SpeechSynthesizer, @unchecked Sendable {
         case fellBack
         case fail(any Error)
         case hold
+        /// Une voix sourde à l'annulation : l'appel ne rend la main qu'à l'ouverture du verrou (comme une vraie voix qui n'écoute
+        /// pas l'annulation ; l'entretien attend sa synthèse sans limite de temps).
+        case deaf(DeafLatch)
     }
 
     private let reply: @Sendable (Int, String) -> Reply
@@ -181,6 +184,13 @@ final class ScriptedSpeech: SpeechSynthesizer, @unchecked Sendable {
         case .fail(let error): throw error
         case .hold:
             await gate(index).wait()
+            if Task.isCancelled {
+                state.withLock { $0.cancelled += 1 }
+                throw CancellationError()
+            }
+            return Speech(clip: clip)
+        case .deaf(let latch):
+            await latch.wait()
             if Task.isCancelled {
                 state.withLock { $0.cancelled += 1 }
                 throw CancellationError()

@@ -116,6 +116,68 @@ struct ConversationFailureTests {
         #expect(h.previewSleeper.started == 0 && h.watchdogSleeper.started == 0)
     }
 
+    /// Revue de la tâche 6, I-1 (sonde S1) : « conclure » en pleine phrase, transcription finale retenue. Avant même que cette
+    /// transcription parte, le micro est arrêté (`stop()` a rendu la main) et la conclusion est annoncée, une seule fois ; la suite
+    /// tourne micro fermé. Le chien de garde qui se réveille alors, longtemps après la dernière tranche, ne fait pas de la conclusion
+    /// demandée une panne : le modèle fort rédige le prompt.
+    @Test func concludeInTheMiddleOfAPassageStopsTheMicrophoneAndAnnouncesTheConclusionBeforeTheFinalTranscription() async throws {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: { _ in .hold })
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        for block in 0..<3 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }
+        await log.wait(3, where: isLevel)
+
+        await h.chain.conclude()
+        await h.transcriber.waitForCalls(1)   // la fin transcrit le passage ouvert : elle est retenue
+        #expect(!h.audio.inner.isRunning && h.journal.count(of: "audio.stop.returned") == 1)
+        #expect(log.items.contains(.state(.concluding)))
+        for block in 3..<6 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }   // micro fermé : rien n'est livré
+        await h.watchdogSleeper.waitForSleeps(1)
+        h.clock.advance(by: 10)
+        h.watchdogSleeper.tick()
+        h.transcriber.release(call: 0, text: "mon besoin")
+        await log.waitForEnd()
+
+        #expect(log.end == .prompt("Prompt final", conversation("mon besoin")))
+        #expect(h.strong.calls == 1)
+        let trace = log.trace
+        #expect(trace.filter { $0 == .state(.concluding) }.count == 1)
+        let concluding = try #require(trace.firstIndex(of: .state(.concluding)))
+        let turnEnded = try #require(trace.firstIndex(of: .turnEnded("mon besoin")))
+        #expect(concluding < turnEnded)
+        expectCleanEnd(h)
+    }
+
+    /// Le moment d'avant : `conclude()` pendant la parole, la fin range la réplique (elle attend la synthèse de la deuxième phrase,
+    /// sourde à l'annulation), micro encore ouvert. Le chien de garde s'éveille alors après 10 s sans tranche : une conclusion
+    /// demandée ne devient pas une panne du micro.
+    @Test func aMicrophoneThatFallsSilentWhileTheReplyIsCutForTheConclusionDoesNotTurnItIntoAFailure() async throws {
+        let latch = DeafLatch()
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [question("Un. Deux.")],
+                                    speech: ScriptedSpeech(reply: { index, _ in index == 1 ? .deaf(latch) : .clip }),
+                                    completion: .manual)
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+        await h.speech.waitForCalls(2)
+        let watchdog = try #require(await h.chain.watchdogTask)
+
+        await h.chain.conclude()
+        _ = await waitUntil { await !h.chain.replyActive }   // la fin range la réplique, retenue par la synthèse
+        #expect(h.audio.inner.isRunning)
+        await h.watchdogSleeper.waitForSleeps(1)
+        h.clock.advance(by: 10)
+        h.watchdogSleeper.tick()
+        await untilDoneOrCancelled { await watchdog.value }   // le chien de garde a regardé le micro, et s'est arrêté
+        #expect(await !h.chain.failureIsPending)
+        latch.open()
+        await log.waitForEnd()
+
+        #expect(log.end == .prompt("Prompt final", conversation("t1")))
+        #expect(h.strong.calls == 1)
+        expectCleanEnd(h)
+    }
+
     /// I-4 : la personne dicte son besoin et appuie sur « conclure » avant que le silence ait fermé le passage. Le passage est
     /// transcrit et ajouté : la fin n'est pas `.nothingSaid`.
     @Test func concludeWithAnOpenPassageBeforeAnyTurnTranscribesItAndIsNotNothingSaid() async throws {

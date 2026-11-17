@@ -174,6 +174,31 @@ struct ConversationInterruptionTests {
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un. Deux.", "t2", "Merci.")))
     }
 
+    /// Revue de la tâche 6, m-2 : `conclude()` arrive pendant que la réplique coupée se range (elle attend la synthèse de la deuxième
+    /// phrase, sourde à l'annulation). L'écoute ne reprend pas : aucun `.state(.listening)` après l'interruption, la conclusion suit.
+    @Test func aConcludeThatArrivesWhileTheInterruptedReplyIsPutAwayDoesNotResumeListening() async throws {
+        let latch = DeafLatch()
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un. Deux.")],
+                                    speech: ScriptedSpeech(reply: { index, _ in index == 1 ? .deaf(latch) : .clip }),
+                                    completion: .manual, events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+        await h.speech.waitForCalls(2)   // « Deux. » est en synthèse, sourde
+
+        pushLoud(h, from: 0, count: 5)
+        _ = await waitUntil { await !h.chain.replyActive }   // la porte a coupé : la réplique se range, retenue par la synthèse
+        await h.chain.conclude()
+        latch.open()
+        await log.waitForEnd()
+
+        let trace = log.trace
+        let interrupted = try #require(trace.firstIndex(where: isInterrupted))
+        #expect(!trace[interrupted...].contains(.state(.listening)))
+        #expect(trace.contains(.state(.concluding)))
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2")))   // rien d'entendu : le tour qui coupe est fusionné
+    }
+
     // MARK: Règle 4 : le passage qui coupe est gardé
 
     /// Le passage commence au milieu d'une trame (échantillon 1 000) : la porte ne compte que les trames qui commencent après, et coupe
