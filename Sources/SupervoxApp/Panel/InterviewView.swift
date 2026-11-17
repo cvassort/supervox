@@ -3,28 +3,34 @@ import SwiftUI
 /// L'entretien dans le panneau : l'orbe et l'état, la question de Supervox, la dernière réplique de la personne, le compteur, l'avis,
 /// « Conclure », puis le pied (Échap, vie privée). Elle ne décide de rien : `InterviewViewState` dit quoi montrer, ceci le dessine.
 ///
-/// Hauteur naturelle, comme la dictée : le panneau suit son contenu. La réplique de Supervox et celle de la personne vivent dans une
-/// zone qui défile, plafonnée (`scrollMaxHeight`) et ancrée en haut : un texte long ne coupe jamais le début de la réplique, et le
-/// pied et le menu « … » ne sont jamais poussés hors du panneau (`panelHeightBudget`, que `InterviewViewStateTests` mesure au pire cas).
+/// Hauteur naturelle, comme la dictée : le panneau suit son contenu. La réplique de Supervox vit seule dans une zone qui défile,
+/// plafonnée (`scrollMaxHeight`) et ancrée en haut, avec un fondu en bas tant qu'il reste du texte dessous : un texte long ne coupe
+/// jamais le début de la réplique. La carte « Vous » est posée dessous, hors de la zone : toujours visible, bornée à sa fin (trois
+/// lignes). Le pied et le menu « … » ne sont jamais poussés hors du panneau (`panelHeightBudget`, que `InterviewViewStateTests`
+/// mesure au pire cas).
 struct InterviewView: View {
     let state: InterviewViewState
     /// « Conclure » : `PanelModel.concludeInterview`.
     let conclude: @MainActor () -> Void
     /// « Réduire les animations » : lu ici, donné à l'orbe, qui ne bouge plus.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Il reste du texte sous la zone qui défile : le fondu du bas est montré.
+    @State private var moreBelow = false
 
-    /// Hauteur de la zone qui défile : 200 points, de l'ordre de treize lignes de `callout` (15 points la ligne, relevé sur les images de
-    /// la dictée). Choix de mise en page, non mesuré sur un écran réel.
-    static let scrollMaxHeight: CGFloat = 200
+    /// Hauteur de la zone qui défile : 128 points, de l'ordre de huit lignes de `callout` (15 points la ligne, relevé sur les
+    /// images de la dictée), de quoi tenir le pire cas réaliste sous `panelHeightBudget` avec la carte « Vous » dessous. Choix de mise
+    /// en page, non mesuré sur un écran réel.
+    static let scrollMaxHeight: CGFloat = 128
     /// Ce que le panneau d'entretien ne doit jamais dépasser au pire cas réaliste (textes très longs, avis le plus long, note de
-    /// maintien, deux fournisseurs dans la vie privée) : 600 points, pour 591 mesurés sur l'image `entretien-pire-cas` (largeur de 520
+    /// maintien, deux fournisseurs dans la vie privée) : 600 points, pour 594 mesurés sur l'image `entretien-pire-cas` (largeur de 520
     /// points). Choix de mise en page ; la hauteur utile d'un écran réel n'est pas établie ici.
     static let panelHeightBudget: CGFloat = 600
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {  // espacements : choix de mise en page, non mesurés
             header
-            if !state.questionText.isEmpty || state.shownReply != nil { texts }
+            if !state.questionText.isEmpty { supervoxZone }
+            if let reply = state.shownReply { replyCard(reply) }
             if let notice = state.notice { noticeLine(notice) }
             if let note = state.shownHoldNote { DetailText(text: note) }
             HStack {
@@ -59,17 +65,22 @@ struct InterviewView: View {
         }
     }
 
-    /// La réplique de Supervox et celle de la personne, entières, dans une zone qui défile ; la zone prend la hauteur du texte
-    /// jusqu'à `scrollMaxHeight`, et reste ancrée en haut (le début de la réplique est ce qu'on lit d'abord).
-    private var texts: some View {
+    /// La réplique de Supervox, entière, dans une zone qui défile ; la zone prend la hauteur du texte jusqu'à `scrollMaxHeight`, reste
+    /// ancrée en haut (le début de la réplique est ce qu'on lit d'abord) et s'estompe en bas tant qu'il reste du texte dessous
+    /// (`ScrollFade`), jamais sur une réplique qui tient.
+    private var supervoxZone: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                if !state.questionText.isEmpty { supervoxText }
-                if let reply = state.shownReply { replyCard(reply) }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            supervoxText
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            ScrollFade.hasMoreBelow(
+                contentHeight: geometry.contentSize.height, offset: geometry.contentOffset.y, visibleHeight: geometry.containerSize.height)
+        } action: { _, hasMore in
+            moreBelow = hasMore
+        }
+        .bottomFade(moreBelow)
         .frame(maxHeight: Self.scrollMaxHeight)
     }
 
@@ -119,6 +130,36 @@ struct InterviewView: View {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Fondu
+
+/// Le fondu du bas de la zone qui défile : montré seulement quand du texte est caché dessous.
+enum ScrollFade {
+    /// Écart, en points, en deçà duquel il ne reste rien sous la zone (arrondis de mise en page). Choix non mesuré.
+    static let tolerance: CGFloat = 1
+    /// Hauteur du fondu : 24 points, une ligne et demie de `callout`. Choix de mise en page.
+    static let height: CGFloat = 24
+
+    /// Reste-t-il du texte sous la zone visible ? Faux quand le contenu tient, faux une fois tout en bas (la dernière ligne reste nette).
+    static func hasMoreBelow(contentHeight: CGFloat, offset: CGFloat, visibleHeight: CGFloat) -> Bool {
+        contentHeight - (offset + visibleHeight) > tolerance
+    }
+}
+
+extension View {
+    /// Estompe le bas de la vue sur `ScrollFade.height` quand `visible` ; la vue est inchangée sinon.
+    func bottomFade(_ visible: Bool) -> some View {
+        mask(
+            VStack(spacing: 0) {
+                Rectangle()
+                if visible {
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: ScrollFade.height)
+                } else {
+                    Rectangle().frame(height: ScrollFade.height)
+                }
+            })
     }
 }
 

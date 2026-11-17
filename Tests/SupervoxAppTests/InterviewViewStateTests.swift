@@ -95,14 +95,16 @@ import Testing
         #expect(state(lastReply: "Je voudrais un résumé.").shownReply == "Je voudrais un résumé.")
     }
 
-    @Test("I6 : l'état garde le texte entier de la réplique et de la réponse, rien n'est coupé par le début")
-    func theStateKeepsTheWholeText() throws {
+    @Test("I6 : l'état garde le texte entier de la réplique et de la réponse ; la réponse montrée garde sa fin")
+    func theStateKeepsTheWholeTextAndTheShownReplyKeepsItsEnd() throws {
         let long = Array(repeating: "mot", count: 2_000).joined(separator: " ") + " fin"
-        var long1 = state(questionText: long, lastReply: long)
-        #expect(long1.questionText == long && long1.lastReply == long)
-        #expect(try #require(long1.shownReply) == long, "la réponse montrée est coupée")
-        long1.questionText = "Début. " + long
-        #expect(long1.questionText.hasPrefix("Début."))
+        let full = state(questionText: long, lastReply: long)
+        #expect(full.questionText == long && full.lastReply == long, "l'état coupe le texte")
+        // La réponse montrée (la carte « Vous », qui ne défile pas) est bornée à trois lignes, par sa fin : ce que la personne vient
+        // de dire, ou la transcription provisoire qui grandit par la fin.
+        let shown = try #require(full.shownReply)
+        #expect(shown.count <= DictationText.transcriptLimit && shown.hasSuffix("fin") && shown.hasPrefix("…"))
+        #expect(state(lastReply: "Une réponse courte.").shownReply == "Une réponse courte.")
     }
 
     @Test("M8 : sans voix (texte seul) la parole prend un autre titre et une autre aide ; avec voix rien ne change")
@@ -376,13 +378,63 @@ import Testing
     func theWorstCasePanelStaysUnderTheHeightBudget() {
         let long = panelHeight(worstCase(words: 300))
         #expect(long <= InterviewView.panelHeightBudget, "\(long) pt pour un budget de \(InterviewView.panelHeightBudget) pt")
-        // Des textes dix fois plus longs ne le font pas grandir : la zone défile, plafonnée.
+        // Des textes dix fois plus longs ne le font pas grandir : la zone défile, plafonnée, et la réponse est bornée.
         #expect(panelHeight(worstCase(words: 3_000)) == long)
-        // La zone se plafonne vraiment : sans plafond, 300 mots feraient bien plus que la zone ; avec un texte court elle est plus basse.
+        // Les plafonds sont réels : un texte court prend moins de place.
         var short = worstCase(words: 300)
         short.questionText = "Pourquoi ?"
         short.lastReply = "Parce que."
         #expect(panelHeight(short) < long - 50, "un texte court prend autant de place qu'un texte long")
+    }
+
+    @Test("la carte « Vous » n'est jamais dans la zone qui défile : une réplique qui remplit la zone ne la cache pas")
+    func theYouCardStaysOutsideTheScrollingZone() {
+        // La réplique de Supervox remplit (et déborde) la zone : si la carte « Vous » y était, la réponse ne changerait pas la hauteur
+        // du panneau, elle défilerait avec le reste.
+        var question = state(.listening, question: 2, questionText: words(300), lastReply: "Oui.")
+        let short = panelHeight(question)
+        question.lastReply = "Je voudrais un prompt qui résume des courriels longs en trois points, avec un ton neutre, des phrases courtes, sans jargon, et une conclusion qui rappelle les trois points les plus importants du message."
+        let long = panelHeight(question)
+        #expect(long >= short + 25, "la réponse n'agrandit pas le panneau : la carte « Vous » défile avec la réplique (\(short) pt, \(long) pt)")
+        // Sans réponse, la carte n'est pas là du tout.
+        question.lastReply = ""
+        #expect(panelHeight(question) < short - 40)
+    }
+
+    @Test("la réponse « Vous » a sa propre borne : très longue, elle ne fait pas grandir le panneau")
+    func theYouCardHasItsOwnBound() {
+        var question = state(.listening, question: 2, questionText: words(300), lastReply: words(40))
+        let bounded = panelHeight(question)
+        question.lastReply = words(4_000)
+        #expect(panelHeight(question) == bounded)
+    }
+
+    // MARK: Le fondu du bas de la zone
+
+    @Test("le fondu n'est là que s'il reste du texte sous la zone : contenu qui dépasse et pas encore tout en bas")
+    func theFadeShowsOnlyWhileThereIsMoreTextBelow() {
+        // contenu 300, zone visible 110.
+        #expect(ScrollFade.hasMoreBelow(contentHeight: 300, offset: 0, visibleHeight: 110))
+        #expect(ScrollFade.hasMoreBelow(contentHeight: 300, offset: 150, visibleHeight: 110))
+        #expect(!ScrollFade.hasMoreBelow(contentHeight: 300, offset: 190, visibleHeight: 110), "tout en bas : la dernière ligne doit être nette")
+        #expect(!ScrollFade.hasMoreBelow(contentHeight: 300, offset: 195, visibleHeight: 110), "au-delà du bas (rebond)")
+        // Une réplique courte ne dépasse pas : pas de fondu, sa dernière ligne reste nette.
+        #expect(!ScrollFade.hasMoreBelow(contentHeight: 80, offset: 0, visibleHeight: 80))
+        #expect(!ScrollFade.hasMoreBelow(contentHeight: 110, offset: 0, visibleHeight: 110))
+        // Un demi-point d'écart d'arrondi ne compte pas pour du texte caché.
+        #expect(!ScrollFade.hasMoreBelow(contentHeight: 110.4, offset: 0, visibleHeight: 110))
+        #expect(ScrollFade.hasMoreBelow(contentHeight: 112, offset: 0, visibleHeight: 110))
+    }
+
+    @Test("le fondu se dessine quand il est demandé, et seulement alors")
+    func theFadeIsDrawnOnlyWhenAsked() throws {
+        let block = VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<8, id: \.self) { Text("Une ligne de texte numéro \($0 + 1)").font(.callout) }
+        }.frame(width: 300)
+        let plain = try image(of: block.bottomFade(false))
+        #expect(try image(of: block.bottomFade(false)) == plain, "le rendu n'est pas reproductible")
+        #expect(try image(of: block.bottomFade(true)) != plain, "le fondu n'est pas dessiné")
+        #expect(try image(of: block) == plain, "sans fondu demandé, le bloc est celui d'avant")
     }
 
     @Test("chaque état dessine sa propre vue, en clair comme en sombre")

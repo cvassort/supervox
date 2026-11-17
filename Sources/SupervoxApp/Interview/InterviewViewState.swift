@@ -81,9 +81,12 @@ extension InterviewViewState {
     /// « Conclure » est actif quand il y a quelque chose à conclure et que la conclusion n'est pas déjà lancée.
     var canConclude: Bool { phase != .preparing && phase != .concluding }
 
-    /// La dernière réplique de la personne, entière (la vue la fait défiler si elle est longue) ; `nil` si elle est blanche.
+    /// La dernière réplique de la personne, ou sa transcription provisoire, telle que la carte « Vous » la montre : la fin si elle est
+    /// longue (`DictationText.transcriptLimit`, trois lignes), parce que ce qui compte est ce que la personne vient de dire ; `nil` si
+    /// elle est blanche. L'état garde le texte entier (`lastReply`). La carte ne défile pas : elle est toujours visible.
     var shownReply: String? {
-        lastReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : lastReply
+        guard !lastReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return DictationText.tail(lastReply, maxCharacters: DictationText.transcriptLimit)
     }
 
     /// Ce que VoiceOver doit annoncer quand l'état passe de `old` à `new`, dans l'ordre : le titre de la nouvelle phase quand il change
