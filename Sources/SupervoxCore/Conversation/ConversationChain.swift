@@ -197,6 +197,9 @@ public actor ConversationChain: ConversationEngine {
         if request != .cancel {
             request = .cancel
             talkTask?.cancel()
+            // Pas redondant avec `abandonTranscription()` : quand la fin rangée attend déjà une transcription finale (conclusion avec
+            // un passage ouvert), elle attend la tâche directement, et seule cette ligne l'en libère avec un moteur sourd (revue de la
+            // tâche 6, I-4 ; test `cancelDuringTheFinalTranscriptionOfAConclusionWithADeafEngineReturnsAtOnce`).
             transcription?.task.cancel()
             runTask?.cancel()
         }

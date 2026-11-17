@@ -278,6 +278,29 @@ struct ConversationFailureTests {
         expectCleanEnd(h)
     }
 
+    /// Revue de la tâche 6, I-4 (sonde S5) : `conclude()` avec un passage ouvert, moteur de transcription sourd à l'annulation et
+    /// retenu ; `cancel()` arrive pendant que la fin attend cette transcription. Il rend la main sans attendre le moteur (seule la
+    /// ligne `transcription?.task.cancel()` de `cancel()` le permet : la fin attend la tâche directement), micro fermé, `.cancelled`,
+    /// le modèle fort jamais sollicité.
+    @Test func cancelDuringTheFinalTranscriptionOfAConclusionWithADeafEngineReturnsAtOnce() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: { _ in .hold }, transcriberHonorsCancellation: false)
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        for block in 0..<3 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }
+        await log.wait(3, where: isLevel)
+        await h.chain.conclude()
+        await h.transcriber.waitForCalls(1)
+
+        await h.cancel()
+        await log.waitForEnd()
+
+        #expect(log.end == .cancelled)
+        #expect(!h.audio.inner.isRunning)
+        #expect(h.strong.calls == 0)
+        expectCleanEnd(h)
+        h.transcriber.release(call: 0, text: "trop tard")
+    }
+
     /// Pendant la réflexion : à l'instant de `.finished`, aucune attente de l'entretien ne vit (aperçu, chien de garde, limite de
     /// transcription) et le micro est arrêté ; la requête au modèle rapide est fermée par l'annulation. Elle l'est **après** coup :
     /// l'appel au modèle vit dans la tâche de travail de `Deadline`, que `Deadline` annule sans l'attendre (un moteur peut être sourd) ;
