@@ -16,7 +16,8 @@ extension ConversationChain {
         /// Ouvert pendant que l'outil était occupé, et la porte a dit oui : c'est un tour, transcrit depuis son début.
         case interrupting
         /// Ouvert pendant que l'outil était occupé, et encore ouvert quand il a fini : il ne compte qu'à partir de cet échantillon,
-        /// et seulement s'il dure ensuite `interruptMinDuration` au moins.
+        /// et seulement si la porte d'interruption passe sur ce qui suit (mêmes seuils, même fenêtre). L'écho qui traîne après la
+        /// parole est sous le seuil par hypothèse : il ne fait pas un tour fantôme (revue de la tâche 6, I-3).
         case rebased(at: Int)
     }
 
@@ -31,9 +32,6 @@ extension ConversationChain {
         let seconds = config.padding.isFinite ? min(max(config.padding, 0), 60) : 0
         return Int((seconds * transcriberSampleRate).rounded())
     }
-
-    /// Un passage qui ne compte qu'après un échantillon donné doit durer au moins ceci (réglage `interruptMinDuration`).
-    var minimumSamplesAfterRebase: Double { config.interruptMinDuration * transcriberSampleRate }
 
     // MARK: Écoute
 
@@ -96,8 +94,10 @@ extension ConversationChain {
             case .busy:
                 break   // fermé sous le seuil pendant que l'outil était occupé : jamais transcrit
             case .rebased(let floor):
+                // La porte, sur la seule partie du passage qui suit la fin de la parole (une trame qui finit après le passage ne
+                // compte pas) ; elle implique `interruptMinDuration` au moins de cette partie.
                 let from = max(floor, segment.lowerBound)
-                guard Double(segment.upperBound - from) >= minimumSamplesAfterRebase else { break }
+                guard gate.passes(from: from, to: segment.upperBound) else { break }
                 clipsToTranscribe.append(timeline.clip(of: from..<(segment.upperBound + paddingSamples)))
             }
         }
@@ -123,17 +123,20 @@ extension ConversationChain {
     func openPassageClip() -> AudioClip? {
         guard let start = turnStartOfOpenPassage else { return nil }
         let clip = timeline.clip(of: start..<timelineSamples)
-        if case .rebased = passageOrigin, Double(timelineSamples - start) < minimumSamplesAfterRebase { return nil }
         return clip.samples.isEmpty ? nil : clip
     }
 
-    /// Où commence le tour que forme le passage ouvert (remplissage compris) ; `nil` sans passage ouvert, ou s'il ne compte pas.
+    /// Où commence le tour que forme le passage ouvert (remplissage compris) ; `nil` sans passage ouvert, ou s'il ne compte pas
+    /// (encore) : un passage rebasé ne compte qu'une fois la porte passée sur ce qui suit la fin de la parole. L'aperçu et la fin de
+    /// l'entretien passent par ici : ni l'un ni l'autre n'envoie l'écho au moteur de transcription.
     var turnStartOfOpenPassage: Int? {
         guard let start = timeline.openSegmentStart else { return nil }
         switch passageOrigin {
         case .listening, .interrupting: return max(start - paddingSamples, 0)
         case .busy: return nil
-        case .rebased(let floor): return max(floor, start)
+        case .rebased(let floor):
+            let from = max(floor, start)
+            return gate.passes(from: from, to: timelineSamples) ? from : nil
         }
     }
 
