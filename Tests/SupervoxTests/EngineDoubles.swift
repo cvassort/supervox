@@ -162,7 +162,7 @@ final class DoubleEngines: Sendable {
     var factory: EngineFactory {
         EngineFactory(
             parakeet: { [self] in parakeet },
-            detector: { [self] in detector },
+            detector: { [self] _ in detector },
             whisper: { [self] model, _ in whisper(model) },
             whisperLoadsOffline: { [self] _, _ in loadsOffline.withLock { $0 } },
             setOffline: { [network] in network.set($0) })

@@ -20,7 +20,8 @@ typealias LoadableDetector = StreamingVoiceDetector & Loadable
 /// Fabriquer ne charge, ne prépare et ne télécharge rien.
 struct EngineFactory: Sendable {
     var parakeet: @Sendable () -> any LoadableTranscriber
-    var detector: @Sendable () -> any LoadableDetector
+    /// Un détecteur de voix qui ferme un passage après ce silence, en secondes (celui de la dictée, ou celui de l'entretien).
+    var detector: @Sendable (_ minSilence: Double) -> any LoadableDetector
     var whisper: @Sendable (_ model: String, _ modelsRoot: URL) -> any LoadableTranscriber
     /// Vrai si ce modèle se charge sans réseau (dossier prêt et tokenizer qui se charge depuis le disque) : condition du
     /// préchargement.
@@ -30,7 +31,7 @@ struct EngineFactory: Sendable {
 
     static let real = EngineFactory(
         parakeet: { ParakeetTranscriber() },
-        detector: { FluidStreamingVoiceDetector() },
+        detector: { FluidStreamingVoiceDetector(minSilence: $0) },
         whisper: { WhisperKitTranscriber(model: $0, downloadBase: $1) },
         whisperLoadsOffline: { await WhisperKitTranscriber.canLoadWithoutNetwork(model: $0, downloadBase: $1) },
         setOffline: { EngineNetwork.setOffline($0) })
@@ -51,9 +52,17 @@ final class EngineCache: Sendable {
         let final: any LoadableTranscriber
     }
 
+    /// Le silence minimal du détecteur de la dictée, en secondes : 0,6 s, code lu (le défaut de `FluidStreamingVoiceDetector.init`,
+    /// qui était celui de la dictée avant que l'entretien ne choisisse le sien).
+    static let dictationMinSilence = 0.6
+
     private struct Held {
         var parakeet: any LoadableTranscriber
+        /// Le détecteur de la dictée, à `dictationMinSilence`.
         var detector: any LoadableDetector
+        /// Le détecteur de l'entretien : une seule case, à la valeur courante du curseur « silence de fin de tour » (continu : jamais
+        /// une case par valeur). Reconstruite quand la valeur change, vidée avec le modèle du détecteur.
+        var interview: (minSilence: Double, detector: any LoadableDetector)?
         /// La variante WhisperKit chargée, gardée tant que le modèle choisi ne change pas.
         var whisper: (model: String, engine: any LoadableTranscriber)?
     }
@@ -65,7 +74,7 @@ final class EngineCache: Sendable {
     init(modelsRoot: URL, factory: EngineFactory = .real) {
         self.modelsRoot = modelsRoot
         self.factory = factory
-        held = Mutex(Held(parakeet: factory.parakeet(), detector: factory.detector()))
+        held = Mutex(Held(parakeet: factory.parakeet(), detector: factory.detector(Self.dictationMinSilence)))
     }
 
     /// Un seul exemplaire de chaque moteur, un seul chargement : Parakeet sert d'aperçu et, au réglage Parakeet, de moteur
@@ -84,6 +93,18 @@ final class EngineCache: Sendable {
         }
     }
 
+    /// Le détecteur de voix de l'entretien, à ce silence minimal : le même exemplaire tant que la valeur ne change pas, un neuf
+    /// (l'ancien est lâché) quand elle change. Jamais celui de la dictée, même à valeur égale : les deux ne partagent aucun état.
+    func detector(minSilence: Double) -> any LoadableDetector {
+        let factory = factory
+        return held.withLock { held in
+            if let current = held.interview, current.minSilence == minSilence { return current.detector }
+            let made = factory.detector(minSilence)
+            held.interview = (minSilence, made)
+            return made
+        }
+    }
+
     /// Ce modèle Whisper se charge-t-il sans réseau ?
     func whisperLoadsOffline(_ model: String) async -> Bool { await factory.whisperLoadsOffline(model, modelsRoot) }
 
@@ -98,7 +119,8 @@ final class EngineCache: Sendable {
             case LocalModelID.parakeet, LocalModelID.parakeetVocabulary:
                 held.parakeet = factory.parakeet()
             case LocalModelID.voiceDetector:
-                held.detector = factory.detector()
+                held.detector = factory.detector(Self.dictationMinSilence)
+                held.interview = nil
             default:
                 if let variant = LocalModelID.whisperVariant(of: id), held.whisper?.model == variant {
                     held.whisper = nil
