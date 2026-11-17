@@ -199,7 +199,7 @@ import Testing
     /// Une ligne de journal de la couche de mise en forme de l'application n'interpole que la nature d'une panne
     /// (`kind(of:)`) : jamais la panne elle-même (`\(failure)`, qui porterait le nom du fournisseur), le travail, la consigne ni
     /// le texte. Toute interpolation d'une ligne `log.` autre que `kind(of:` est refusée.
-    static let forbiddenLogInterpolation = #"\blog\s*\.\s*\w+\s*\(.*\\\((?!\s*kind\s*\(\s*of\s*:)"#
+    static let forbiddenLogInterpolation = #"\blog\s*\.\s*\w+\s*\(.*\\\((?!\s*(?:self\s*\.\s*)?kind\s*\(\s*of\s*:)"#
 
     @Test func theRewritingLayerLogsOnlyTheKindOfAFailure() throws {
         let pattern = try Regex(Self.forbiddenLogInterpolation)
@@ -212,7 +212,7 @@ import Testing
 
     @Test(arguments: [
         #"log.notice("mise en forme échouée : \(failure)")"#, #"log.notice("\(job.input)")"#, #"log.error("x \(error, privacy: .public)")"#,
-        #"log . notice ( "\(provider.name)" )"#,
+        #"log . notice ( "\(provider.name)" )"#, #"log.notice("\(self.view.lastReply)")"#, #"log.notice("\(self.kindOf(end))")"#,
     ])
     func theLogInterpolationPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenLogInterpolation)))
@@ -222,6 +222,7 @@ import Testing
         let pattern = try Regex(Self.forbiddenLogInterpolation)
         for code in [
             #"log.notice("mise en forme échouée : \(kind(of: failure), privacy: .public)")"#, #"log.notice("fini")"#,
+            #"log.notice("entretien fini : \(self.kind(of: end), privacy: .public)")"#,
             #"let kind = String(describing: failure)"#,
         ] {
             #expect(!code.contains(pattern), "\(code)")
@@ -279,13 +280,28 @@ import Testing
 
     /// La vue de l'entretien ne montre que des phrases fixes (`InterviewText`) : jamais le texte brut d'une erreur, et aucun journal
     /// (le texte dit pourrait y passer). Le balayage voit l'état, la table de phrases et la vue ; sans eux il ne vérifierait rien.
+    /// Seul le contrôleur de l'entretien journalise, sous la règle de `theInterviewControllerLogsOnlyTheKindOfAnEvent`.
     @Test func theInterviewViewShowsNoRawErrorTextAndLogsNothing() throws {
         let state = try Self.sources(under: "Sources/SupervoxApp/Interview")
         #expect(state.contains { $0.place == "InterviewText.swift" }, "le balayage doit voir la table de phrases")
+        #expect(state.contains { $0.place == "InterviewViewState.swift" }, "le balayage doit voir l'état de la vue")
         let view = try Self.sources(under: "Sources/SupervoxApp/Panel").filter { $0.place == "InterviewView.swift" }
         #expect(view.count == 1, "le balayage doit voir la vue de l'entretien")
         let logging = try Regex(Self.forbiddenLogging)
-        let offending = (state + view).filter { $0.code.contains("localizedDescription") || $0.code.contains(logging) }.map(\.place)
+        let raw = (state + view).filter { $0.code.contains("localizedDescription") }.map(\.place)
+        #expect(raw.isEmpty, "\(raw)")
+        let logs = (state + view).filter { $0.place != "InterviewController.swift" && $0.code.contains(logging) }.map(\.place)
+        #expect(logs.isEmpty, "\(logs)")
+    }
+
+    /// Règle 12 : une ligne de journal de `App/Interview` n'interpole que la nature d'une fin ou d'un refus (`kind(of:)`) : ni le
+    /// texte dit, ni la réplique, ni le prompt, ni le nom d'un fournisseur.
+    @Test func theInterviewControllerLogsOnlyTheKindOfAnEvent() throws {
+        let pattern = try Regex(Self.forbiddenLogInterpolation)
+        let sources = try Self.sources(under: "Sources/SupervoxApp/Interview")
+        let controller = try #require(sources.first { $0.place == "InterviewController.swift" }, "le balayage doit voir le contrôleur")
+        #expect(controller.code.contains("log.notice"), "le balayage doit voir au moins une ligne de journal")
+        let offending = sources.filter { $0.code.contains(pattern) }.map(\.place)
         #expect(offending.isEmpty, "\(offending)")
     }
 
