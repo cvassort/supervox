@@ -10,6 +10,9 @@ import os
 final class Gate: @unchecked Sendable {
     private let state = OSAllocatedUnfairLock(initialState: (isOpen: false, waiters: [UUID: CheckedContinuation<Void, Never>]()))
 
+    /// La porte a été ouverte (lu sans attendre).
+    var isOpen: Bool { state.withLock { $0.isOpen } }
+
     func wait() async {
         let id = UUID()
         await withTaskCancellationHandler {

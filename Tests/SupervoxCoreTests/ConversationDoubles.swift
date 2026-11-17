@@ -379,13 +379,15 @@ struct TurnScript {
 /// La configuration des tests : noms d'exemple, aucune attente réelle (la limite de chaque requête ne rend jamais, sauf
 /// annulation).
 func makeConversationConfig(maxQuestions: Int = 8, template: String = "", vocabulary: [String] = ["Supervox"],
-                            padding: Double = 0, previewInterval: Double = 1, transcriptionTimeout: Double = 12.5) -> ConversationConfig {
+                            padding: Double = 0, previewInterval: Double = 1, transcriptionTimeout: Double = 12.5,
+                            interruptMinDuration: Double = 0.3, interruptLevel: Double = -30) -> ConversationConfig {
     // Des nombres DISTINCTS de `RewritePolicy.turn` (1 024 / 30) et de `.standard` (16 000 / 120) : une politique écrite en dur dans le
     // moteur ne passerait pas pour celle de la configuration. Le harnais remplace l'attente (`sleep`) par un `TickSleeper`.
     let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
     return ConversationConfig(
         fastModel: "modele-exemple-rapide", strongModel: "modele-exemple-fort", maxQuestions: maxQuestions,
-        template: template, language: "fr", vocabulary: vocabulary, interruptMinDuration: 0.3, interruptLevel: -30,
+        template: template, language: "fr", vocabulary: vocabulary, interruptMinDuration: interruptMinDuration,
+        interruptLevel: interruptLevel,
         padding: padding, previewInterval: previewInterval, transcriptionTimeout: transcriptionTimeout,
         turnPolicy: RewritePolicy(maxTokens: 777, timeout: 17, sleep: never),
         conclusionPolicy: RewritePolicy(maxTokens: 4_321, timeout: 43, sleep: never))
@@ -414,19 +416,22 @@ final class ConversationHarness: @unchecked Sendable {
     let chain: ConversationChain
     let turns: [TurnScript]
     private let state = OSAllocatedUnfairLock(initialState: (log: nil as EventLog?, said: 0, strongSeen: [(log: [String], running: Bool)]()))
+    private let finishObserver = OSAllocatedUnfairLock(initialState: nil as (@Sendable () -> Void)?)
 
     /// - Parameters:
     ///   - transcripts: la réponse du moteur de transcription à son n-ième appel (aperçus compris).
     ///   - detectorFailure: le bloc de rang global donné fait échouer le détecteur.
     ///   - watchdogSleep: l'attente du chien de garde à la place du `TickSleeper` (pour une attente sourde à l'annulation).
     ///   - transcriberHonorsCancellation: faux, le moteur de transcription est sourd à l'annulation (un appel retenu ne rend la main qu'à `release`).
+    ///   - events: des événements du détecteur en plus de ceux des tours, par rang **global** de bloc (tous les blocs que le détecteur
+    ///     a reçus depuis le début, tours et tranches poussées à la main).
     init(turns: [TurnScript] = [], transcripts: @escaping @Sendable (Int) -> ScriptedTranscriber.Reply = { _ in .text("réponse") },
          fast: [ScriptedModel] = [], strong: [ScriptedModel] = [modelReply("Prompt final")], speech: ScriptedSpeech = ScriptedSpeech(),
          completion: ScriptedAudioIO.Completion = .immediate, startError: AudioCaptureError? = nil,
          config baseConfig: ConversationConfig = makeConversationConfig(), detectorPrepareError: (any Error)? = nil,
          detectorFailure: (block: Int, error: any Error)? = nil, transcriberHonorsCancellation: Bool = true,
          watchdogSleep: (@Sendable (Double) async throws -> Void)? = nil,
-         makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) {
+         makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil, events extra: [Int: VoiceEvent] = [:]) {
         self.turns = turns
         var config = baseConfig
         let turnWait = turnSleeper, conclusionWait = conclusionSleeper
@@ -440,6 +445,7 @@ final class ConversationHarness: @unchecked Sendable {
             events[offset + turn.blocks - 1] = .speechEnd(sample: turn.end * 1000)
             offset += turn.blocks
         }
+        events.merge(extra) { _, added in added }
         detector = ScriptedDetector(blockSize: 1000, events: events)
         detector.prepareError = detectorPrepareError
         detector.processFailure = detectorFailure
@@ -448,10 +454,13 @@ final class ConversationHarness: @unchecked Sendable {
         self.strong = ModelSequence("strong", strong, journal: journal)
         self.speech = speech
         let journal = journal
+        let observer = finishObserver
         let tap: @Sendable (ConversationEvent) -> Void = { event in
             switch event {
             case .state(let state): journal.add("event.state.\(state)")
-            case .finished: journal.add("event.finished")
+            case .finished:
+                journal.add("event.finished")
+                observer.withLock { $0 }?()
             default: break
             }
         }
@@ -477,6 +486,10 @@ final class ConversationHarness: @unchecked Sendable {
     }
 
     var log: EventLog? { state.withLock { $0.log } }
+
+    /// Appelée à l'instant où `.finished` est émis, avant que le lecteur du flux le voie : le test y relève l'état des doubles (une
+    /// tâche de l'entretien encore vivante à cet instant serait une tâche non attendue).
+    func atFinish(_ body: @escaping @Sendable () -> Void) { finishObserver.withLock { $0 = body } }
 
     /// Ce que le son était à chaque requête au modèle fort : son journal et s'il tournait encore.
     var audioAtStrongRequests: [(log: [String], running: Bool)] { state.withLock { $0.strongSeen } }
@@ -523,6 +536,22 @@ final class ConversationHarness: @unchecked Sendable {
         let turn = turns[index]
         return AudioClip(samples: rampSamples((turn.base + turn.start * 1000)..<(turn.base + turn.end * 1000)), sampleRate: 16000)
     }
+}
+
+// MARK: - Tranches à un niveau donné
+
+/// Une tranche forte (de −20 à −19,2 dB) qui porte le rang de chaque échantillon : l'échantillon de rang `p` vaut 0,1 + p / 10⁷
+/// (p < 100 000). Au-dessus du seuil de −30 dB des tests.
+func loudSamples(_ range: Range<Int>) -> [Float] { range.map { 0.1 + Float($0) / 10_000_000 } }
+func loudChunk(_ range: Range<Int>) -> AudioChunk { AudioChunk(samples: loudSamples(range), sampleRate: 16000) }
+
+/// Une tranche faible (−60 dB au plus) qui porte le rang de chaque échantillon : p / 10⁸ (p < 100 000). Sous le seuil des tests.
+func quietSamples(_ range: Range<Int>) -> [Float] { range.map { Float($0) / 100_000_000 } }
+func quietChunk(_ range: Range<Int>) -> AudioChunk { AudioChunk(samples: quietSamples(range), sampleRate: 16000) }
+
+/// Une tranche de 1 000 échantillons d'un signal constant (0,1 : −20 dB ; 0,01 : −40 dB).
+func constantChunk(_ amplitude: Float) -> AudioChunk {
+    AudioChunk(samples: [Float](repeating: amplitude, count: 1000), sampleRate: 16000)
 }
 
 /// Une conversation dont les tours sont `texts` (la personne puis l'intervieweur, en alternance).

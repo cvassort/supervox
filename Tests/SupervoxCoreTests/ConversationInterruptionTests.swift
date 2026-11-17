@@ -1,0 +1,473 @@
+import Foundation
+import Testing
+@testable import SupervoxCore
+
+// L'interruption (règles 2 à 6 et 12 de la tâche 6). Tout tourne sur des doubles, compté en échantillons, jamais en temps machine.
+//
+// Repères : le tour 0 (`TurnScript(base: 0)`) occupe les blocs globaux 0 à 5 du détecteur. Son passage fermé, l'écoute repart d'une
+// ligne de temps neuve : le bloc global 6 porte les échantillons 0 à 999 de cette ligne, le bloc 7 les échantillons 1 000 à 1 999,
+// etc. (et c'est encore vrai à la réflexion, qui renouvelle la ligne si aucun passage n'est ouvert). Les événements du détecteur
+// (`events:`) sont donnés par rang global de bloc. La porte des tests : 0,30 s à −30 dB, soit 15 trames de 320 échantillons.
+
+private let firstTurn = [TurnScript(base: 0)]
+
+/// Pousse `count` tranches fortes de 1 000 échantillons, la première au rang `from` de la ligne de temps.
+private func pushLoud(_ h: ConversationHarness, from: Int, count: Int) {
+    for k in 0..<count { h.audio.inner.push(loudChunk((from + k * 1000)..<(from + (k + 1) * 1000))) }
+}
+
+private func pushQuiet(_ h: ConversationHarness, from: Int, count: Int) {
+    for k in 0..<count { h.audio.inner.push(quietChunk((from + k * 1000)..<(from + (k + 1) * 1000))) }
+}
+
+func isInterrupted(_ event: ConversationEvent) -> Bool {
+    if case .interrupted = event { return true }
+    return false
+}
+
+func isSpeakingEnded(_ event: ConversationEvent) -> Bool {
+    if case .speakingEnded = event { return true }
+    return false
+}
+
+func isTurnEnded(_ event: ConversationEvent) -> Bool {
+    if case .turnEnded = event { return true }
+    return false
+}
+
+/// Termine les clips en file un à un (mode `.manual`), jusqu'au `upTo`-ième accepté par `play`.
+private func playAll(_ h: ConversationHarness, upTo plays: Int) async {
+    for played in 1...plays {
+        await h.audio.plays.wait(atLeast: played)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+    }
+}
+
+@Suite(.timeLimit(.minutes(1)))
+struct ConversationInterruptionTests {
+    // MARK: Règle 2 : l'écho
+
+    /// Pendant la parole, le détecteur annonce de la voix sur 5 s d'un signal à −40 dB (l'écho de l'outil) : la parole n'est jamais
+    /// coupée, la réplique est lue en entier.
+    @Test func anEchoBelowTheLevelNeverInterruptsAndTheReplyIsReadInFull() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux.")], completion: .manual,
+                                    events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        for _ in 0..<80 { h.audio.inner.push(constantChunk(0.01)) }   // 80 × 1 000 échantillons = 5 s
+        await log.wait(6 + 80, where: isLevel)
+
+        #expect(h.detector.blocks.count == 86)   // l'écho est bien passé au détecteur, qui l'annonce comme de la voix
+        #expect(h.audio.inner.stopPlaybackCount == 0)
+        #expect(!log.items.contains(where: isInterrupted))
+        await playAll(h, upTo: 2)
+        await log.wait(.speakingEnded(heard: "Un. Deux."))
+        #expect(h.audio.inner.stopPlaybackCount == 0)
+        await finish(h)
+    }
+
+    /// Le même détecteur sur un signal à −20 dB coupe la parole dès que 0,30 s de ce signal a été reçu depuis le début du passage :
+    /// 4 000 échantillons ne suffisent pas, 5 000 (dont 15 trames complètes) oui.
+    @Test func theSameVoiceAboveTheLevelInterruptsAfterThirtyHundredthsOfASecondOfSamples() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux.")], completion: .manual,
+                                    events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        for _ in 0..<4 { h.audio.inner.push(constantChunk(0.1)) }
+        await log.wait(6 + 4, where: isLevel)
+        #expect(h.audio.inner.stopPlaybackCount == 0 && !log.items.contains(where: isInterrupted))
+
+        h.audio.inner.push(constantChunk(0.1))
+        await log.wait(where: isInterrupted)
+        #expect(h.audio.inner.stopPlaybackCount == 1)
+        #expect(h.detector.blocks.count == 11)   // c'est le cinquième bloc qui a décidé
+        await finish(h)
+    }
+
+    /// La durée et le niveau viennent de la configuration : à 0,1 s et −45 dB, un signal à −40 dB coupe après 2 000 échantillons (6
+    /// trames) et pas après 1 000 (3 trames). Avec la porte par défaut des autres tests (0,30 s, −30 dB), il ne couperait jamais.
+    @Test func theInterruptionNumbersAreThoseOfTheConfiguration() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux.")], completion: .manual,
+                                    config: makeConversationConfig(interruptMinDuration: 0.1, interruptLevel: -45),
+                                    events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        h.audio.inner.push(constantChunk(0.01))
+        await log.wait(6 + 1, where: isLevel)
+        #expect(!log.items.contains(where: isInterrupted))
+        h.audio.inner.push(constantChunk(0.01))
+        await log.wait(where: isInterrupted)
+        #expect(h.audio.inner.stopPlaybackCount == 1)
+        await finish(h)
+    }
+
+    // MARK: Règle 3 : au milieu d'une phrase
+
+    @Test func anInterruptionInTheMiddleOfASentenceStopsThePlaybackOnceAndKeepsWhatWasHeard() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"),
+            fast: [question("Un. Deux. Trois. Quatre. Cinq."), modelReply("[CONCLURE]\nMerci.")], completion: .manual,
+            events: [6: .speechStart(sample: 0), 13: .speechEnd(sample: 8000)])
+        let log = await h.start()
+        await h.say(0)
+        await playAll(h, upTo: 2)
+        await log.wait(.sentencePlayed("Deux."))
+        await h.audio.plays.wait(atLeast: 4)   // « Trois. » joue, « Quatre. » attend derrière, « Cinq. » attend sa synthèse
+
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+
+        #expect(h.audio.inner.stopPlaybackCount == 1)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "Un. Deux.")])
+        await log.wait(.state(.listening), count: 2)
+        let trace = log.trace
+        let interrupted = try #require(trace.firstIndex(where: isInterrupted))
+        let listening = try #require(trace.lastIndex(of: .state(.listening)))
+        #expect(interrupted < listening)
+        #expect(!trace.contains(where: isSpeakingEnded))   // la réplique coupée n'a pas de fin ordinaire
+        pushLoud(h, from: 5000, count: 3)   // le passage qui a coupé continue, puis se ferme
+        await h.audio.plays.wait(atLeast: 5)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        // La file a été vidée : rien après « Quatre. », ni synthèse ni lecture, hors de la réplique suivante.
+        #expect(h.speech.texts == ["Un.", "Deux.", "Trois.", "Quatre.", "Merci."])
+        #expect(h.audio.inner.played.count == 5)
+        let second = try #require(h.fast.requests.dropFirst().first)
+        #expect(second.input == "t2")
+        #expect(second.history == [CompletionTurn(role: .user, text: "t1"), CompletionTurn(role: .assistant, text: "Un. Deux.")])
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un. Deux.", "t2", "Merci.")))
+    }
+
+    // MARK: Règle 4 : le passage qui coupe est gardé
+
+    /// Le passage commence au milieu d'une trame (échantillon 1 000) : la porte ne compte que les trames qui commencent après, et coupe
+    /// au sixième bloc fort. Le passage est ensuite transcrit depuis son début, remplissage compris (ici 1 000 échantillons, l'audio
+    /// faible qui le précède), pas depuis l'instant où il a coupé.
+    @Test func thePassageThatInterruptsIsTranscribedFromItsStartMinusThePadding() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, config: makeConversationConfig(padding: 0.0625),
+            events: [7: .speechStart(sample: 1000), 14: .speechEnd(sample: 9000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        pushQuiet(h, from: 0, count: 1)
+        pushLoud(h, from: 1000, count: 5)
+        await log.wait(6 + 6, where: isLevel)
+        #expect(!log.items.contains(where: isInterrupted))   // trames 4 à 17 : 14 seulement
+        pushLoud(h, from: 6000, count: 1)
+        await log.wait(where: isInterrupted)
+        pushLoud(h, from: 7000, count: 2)
+        await log.wait(.turnEnded("t2"))
+
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: quietSamples(0..<1000) + loudSamples(1000..<9000), sampleRate: 16000))
+        await finish(h)
+    }
+
+    // MARK: Règle 5 : rien de capté pendant la parole n'est transcrit sans interruption
+
+    @Test func aPassageOpenedAndClosedDuringTheSpeechBelowTheLevelIsNeverTranscribed() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual,
+            events: [6: .speechStart(sample: 0), 9: .speechEnd(sample: 3000), 11: .speechStart(sample: 1000), 15: .speechEnd(sample: 4000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        pushQuiet(h, from: 0, count: 4)   // blocs 6 à 9 : un passage faible, ouvert et fermé pendant la parole
+        await log.wait(6 + 4, where: isLevel)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.wait(.speakingEnded(heard: "Un."))
+        for block in 0..<6 { h.audio.inner.push(rampChunk((1_000_000 + block * 1000)..<(1_000_000 + (block + 1) * 1000))) }
+        await h.audio.plays.wait(atLeast: 2)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        #expect(h.audio.inner.stopPlaybackCount == 0)
+        #expect(h.transcriber.calls.map(\.clip) == [
+            h.expectedClip(turn: 0), AudioClip(samples: rampSamples(1_001_000..<1_004_000), sampleRate: 16000)])
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
+    }
+
+    /// Un passage faible encore ouvert à la fin de la parole ne compte qu'à partir de là (échantillon 2 000) : fermé 2 000 échantillons
+    /// plus tard (moins de 0,30 s), il est jeté.
+    @Test func aPassageStillOpenAtTheEndOfTheSpeechThatClosesSoonAfterIsDropped() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual,
+            events: [6: .speechStart(sample: 0), 9: .speechEnd(sample: 4000), 11: .speechStart(sample: 1000), 15: .speechEnd(sample: 4000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        pushQuiet(h, from: 0, count: 2)
+        h.audio.inner.finishPlayback(.played)   // après les deux tranches, dans l'ordre du flux : la parole finit à l'échantillon 2 000
+        h.audio.inner.flushEnds()
+        await log.wait(.speakingEnded(heard: "Un."))
+        pushQuiet(h, from: 2000, count: 2)
+        for block in 0..<6 { h.audio.inner.push(rampChunk((1_000_000 + block * 1000)..<(1_000_000 + (block + 1) * 1000))) }
+        await h.audio.plays.wait(atLeast: 2)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        #expect(h.transcriber.calls.map(\.clip) == [
+            h.expectedClip(turn: 0), AudioClip(samples: rampSamples(1_001_000..<1_004_000), sampleRate: 16000)])
+    }
+
+    /// Le même passage, fermé 6 000 échantillons après la fin de la parole (plus de 0,30 s) : il est transcrit à partir de la fin de
+    /// la parole, sans ce qui a été capté pendant.
+    @Test func aPassageStillOpenAtTheEndOfTheSpeechThatLastsIsTranscribedFromTheEndOfTheSpeech() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, events: [6: .speechStart(sample: 0), 13: .speechEnd(sample: 8000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        pushQuiet(h, from: 0, count: 2)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.wait(.speakingEnded(heard: "Un."))
+        pushQuiet(h, from: 2000, count: 6)
+        await log.wait(.turnEnded("t2"))
+
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: quietSamples(2000..<8000), sampleRate: 16000))
+        await finish(h)
+    }
+
+    // MARK: Règle 6 : coupé avant la première phrase
+
+    @Test func anInterruptionWhileThinkingCancelsTheRequestAddsNothingAndMergesTheNextTurn() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [ScriptedModel([]), modelReply("[CONCLURE]\nMerci.")],
+            events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.fast.model(at: 0).started.wait()   // la requête est partie, rien ne vient
+
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+        await h.fast.model(at: 0).terminated.wait()
+        #expect(h.fast.model(at: 0).wasCancelled)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "")])
+        #expect(!log.items.contains(where: isSpeakingStarted))
+        pushLoud(h, from: 5000, count: 2)
+        await log.waitForEnd()
+
+        #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])   // rien pour l'intervieweur : la réponse est fusionnée
+        #expect(h.fast.requests.map(\.instruction) == Array(repeating: InterviewPrompt.instruction(remainingQuestions: 8), count: 2))
+        #expect(log.items.filter(isSpeakingStarted) == [.speakingStarted(question: 0)])   // seule la phrase de fin, aucune question
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2", "Merci.")))
+    }
+
+    @Test func anInterruptionWhileTheFirstSentenceIsSynthesizedCancelsTheRequestAndTheSynthesis() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"),
+            fast: [ScriptedModel([.text("[SUITE]\nUn. Deux.")]), modelReply("[CONCLURE]\nMerci.")],
+            speech: ScriptedSpeech(reply: { index, _ in index == 0 ? .hold : .clip }),
+            events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.speech.waitForCalls(1)
+
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+
+        #expect(h.speech.cancelledCalls == 1)
+        await h.fast.model(at: 0).terminated.wait()
+        #expect(h.fast.model(at: 0).wasCancelled)
+        #expect(h.speech.texts == ["Un."] && h.audio.inner.played.isEmpty)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "")])
+        #expect(!log.items.contains(where: isSpeakingStarted))
+        pushLoud(h, from: 5000, count: 2)
+        await log.waitForEnd()
+
+        #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
+        #expect(h.fast.requests.map(\.instruction) == Array(repeating: InterviewPrompt.instruction(remainingQuestions: 8), count: 2))
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2", "Merci.")))
+    }
+
+    /// La première phrase a commencé à être jouée (son clip est parti à `play()`, la file était vide), puis la personne coupe avant
+    /// qu'elle finisse : la question compte (elle a commencé à être entendue), mais rien n'en est entendu en entier, donc rien n'entre
+    /// pour l'intervieweur et la réponse suivante est fusionnée au tour d'avant.
+    @Test func anInterruptionDuringTheFirstSentenceCountsTheQuestionButKeepsNoInterviewerText() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un. Deux."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.speakingStarted(question: 1))
+
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "")])
+        pushLoud(h, from: 5000, count: 2)
+        await h.audio.plays.wait(atLeast: 3)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
+        #expect(h.fast.requests.map(\.instruction) == [InterviewPrompt.instruction(remainingQuestions: 8),
+                                                       InterviewPrompt.instruction(remainingQuestions: 7)])
+    }
+
+    // MARK: Règle 12 : un passage né pendant la transcription du tour
+
+    /// La personne reprend pendant que son tour est transcrit, assez fort et assez longtemps : ce passage est gardé depuis son début et
+    /// fusionné au tour, et la réflexion attend qu'il soit fini.
+    @Test func aPassageBornDuringTheTranscriptionThatReachesTheGateIsMergedIntoTheTurn() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: { $0 == 0 ? .hold : .text("t2") }, fast: [modelReply("[CONCLURE]\nMerci.")],
+            events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.transcriber.waitForCalls(1)
+
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(6 + 5, where: isLevel)
+        h.transcriber.release(call: 0, text: "t1")
+        await log.wait(.turnEnded("t1"))
+        pushLoud(h, from: 5000, count: 2)
+        await log.waitForEnd()
+
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: loudSamples(0..<7000), sampleRate: 16000))
+        let trace = log.trace
+        let first = try #require(trace.firstIndex(of: .turnEnded("t1")))
+        let second = try #require(trace.firstIndex(of: .turnEnded("t2")))
+        let thinking = try #require(trace.firstIndex(of: .state(.thinking)))
+        #expect(first < second && second < thinking)   // aucune réflexion sur « t1 » seul
+        #expect(h.fast.requests.map(\.input) == ["t1 t2"])
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2", "Merci.")))
+    }
+
+    @Test func aPassageBornDuringTheTranscriptionBelowTheGateIsDropped() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: { $0 == 0 ? .hold : .text("jamais") }, fast: [modelReply("[CONCLURE]\nMerci.")],
+            events: [6: .speechStart(sample: 0), 8: .speechEnd(sample: 3000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.transcriber.waitForCalls(1)
+
+        pushQuiet(h, from: 0, count: 3)
+        await log.wait(6 + 3, where: isLevel)
+        h.transcriber.release(call: 0, text: "t1")
+        await log.waitForEnd()
+
+        #expect(h.transcriber.calls.count == 1)
+        #expect(h.fast.requests.map(\.input) == ["t1"])
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Merci.")))
+    }
+
+    /// Le passage naît pendant la transcription, sous le seuil ; la réflexion commence (la ligne de temps n'est PAS remise à neuf : un
+    /// passage est ouvert), puis il atteint le seuil : la requête est annulée, et le passage est transcrit depuis son début, né avant la
+    /// réflexion.
+    @Test func aPassageBornDuringTheTranscriptionKeepsItsStartWhenItInterruptsTheThinking() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: { $0 == 0 ? .hold : .text("t2") },
+            fast: [ScriptedModel([]), modelReply("[CONCLURE]\nMerci.")],
+            events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.transcriber.waitForCalls(1)
+
+        pushLoud(h, from: 0, count: 2)
+        await log.wait(6 + 2, where: isLevel)
+        h.transcriber.release(call: 0, text: "t1")
+        await h.fast.model(at: 0).started.wait()
+        pushLoud(h, from: 2000, count: 3)
+        await log.wait(where: isInterrupted)
+        await h.fast.model(at: 0).terminated.wait()
+        #expect(h.fast.model(at: 0).wasCancelled)
+        pushLoud(h, from: 5000, count: 2)
+        await log.waitForEnd()
+
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: loudSamples(0..<7000), sampleRate: 16000))
+        #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
+    }
+
+    // MARK: Ce qui attend dans le flux est abandonné (I-3)
+
+    /// La fin du clip « Un. » est déjà dans le flux quand la personne coupe (le bloc qui décide est retenu dans le détecteur pendant
+    /// qu'elle arrive) : elle ne lance pas la synthèse de « Trois. », aucune lecture ne part, et « Un. » n'est annoncée qu'une fois.
+    @Test func afterAnInterruptionWhatWaitsInTheStreamStartsNoSynthesisNorPlayback() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux. Trois.")], completion: .manual,
+                                    events: [6: .speechStart(sample: 0)])
+        let deciding = h.detector.hold(block: 10)
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 2)
+        pushLoud(h, from: 0, count: 5)
+        await deciding.entered.wait()
+
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()   // la fin de « Un. » est dans le flux, derrière le bloc retenu
+        deciding.release.open()
+        await log.wait(where: isInterrupted)
+        h.audio.inner.push(constantChunk(0.01))   // une entrée de plus : tout ce qui précédait dans le flux a été lu
+        await log.wait(6 + 6, where: isLevel)
+
+        #expect(h.speech.texts == ["Un.", "Deux."])
+        #expect(h.audio.plays.count == 2)
+        #expect(log.count { $0 == .sentencePlayed("Un.") } == 1)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "Un.")])
+        await finish(h)
+    }
+
+    @Test func afterConcludeWhatWaitsInTheStreamStartsNoSynthesisNorPlayback() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux. Trois.")], completion: .manual)
+        let held = h.detector.hold(block: 6)
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 2)
+        h.audio.inner.push(constantChunk(0.01))
+        await held.entered.wait()
+
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await h.chain.conclude()
+        await log.waitForEnd()
+
+        #expect(h.speech.texts == ["Un.", "Deux."])
+        #expect(h.audio.plays.count == 2)
+        #expect(log.count { $0 == .sentencePlayed("Un.") } == 1)
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.")))
+    }
+
+    @Test func afterCancelWhatWaitsInTheStreamStartsNoSynthesisNorPlayback() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux. Trois.")], completion: .manual)
+        let held = h.detector.hold(block: 6)
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 2)
+        h.audio.inner.push(constantChunk(0.01))
+        await held.entered.wait()
+
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await h.cancel()
+        await log.waitForEnd()
+
+        #expect(h.speech.texts == ["Un.", "Deux."])
+        #expect(h.audio.plays.count == 2)
+        #expect(log.end == .cancelled)
+    }
+}

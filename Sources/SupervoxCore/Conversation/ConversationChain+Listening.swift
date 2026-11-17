@@ -40,8 +40,10 @@ extension ConversationChain {
     /// Une tranche du micro : ramenée à 16 kHz, donnée à la porte puis à la ligne de temps et au détecteur, bloc après bloc. Après
     /// chaque bloc, un passage fermé est pris pour un tour ou jeté, et la porte est consultée tant qu'un passage ouvert pendant que
     /// l'outil était occupé n'a pas encore coupé la parole.
+    ///
+    /// L'écoute est continue : pendant la transcription d'un tour, la réflexion et la parole aussi. C'est la porte, pas l'état, qui
+    /// décide si ce qui est entendu alors devient un tour.
     func hear(_ chunk: AudioChunk) async {
-        guard !isBusy else { return }   // étape intermédiaire : hors écoute, la tranche est écartée
         if resampler == nil || inputRate != chunk.sampleRate {
             guard let made = makeResampler(chunk.sampleRate, transcriberSampleRate) else {
                 note(.microphone(ConversationFailure.Code.unusableSampleRate))
@@ -69,6 +71,9 @@ extension ConversationChain {
             }
             if !wasOpen, timeline.openSegmentStart != nil { passageOrigin = isBusy ? .busy : .listening }
             settleClosedPassages()
+            // Conclure, annuler ou une panne pendant l'attente du détecteur : la fin s'occupe du reste (un passage fermé est en file, un
+            // passage ouvert a déjà tout l'audio de la tranche).
+            if interruption() != nil { return }
             await consultGate()
         }
         // Une ligne de temps par passage : le passage fermé est traité, aucun n'est ouvert, l'écoute repart d'une ligne neuve (la

@@ -157,9 +157,10 @@ struct ConversationTurnTests {
         let level = try #require(levels.first)
         #expect(levels.count >= 8 && level > 0)
         #expect(levels.allSatisfy { $0 == AudioLevel.display(of: wave) })
-        // Le détecteur reçoit l'audio à 16 kHz, bloc après bloc ; le passage transcrit est découpé dans cet audio-là.
-        #expect(h.detector.blocks.count == 8)
-        #expect(h.detector.blocks.first == Array(converted[0..<1000]))
+        // Le détecteur reçoit l'audio à 16 kHz, bloc après bloc ; le passage transcrit est découpé dans cet audio-là. (L'écoute est
+        // continue : les tranches qui suivent la fermeture du passage vont aussi au détecteur, d'où « au moins » huit blocs.)
+        try #require(converted.count >= 8000 && h.detector.blocks.count >= 8)
+        #expect(Array(h.detector.blocks.prefix(8)) == (0..<8).map { Array(converted[($0 * 1000)..<(($0 + 1) * 1000)]) })
         let call = try #require(h.transcriber.calls.first)
         #expect(call.clip == AudioClip(samples: Array(converted[1000..<4000]), sampleRate: 16000))
     }
@@ -321,28 +322,38 @@ struct ConversationTurnTests {
     // MARK: Règle 10
 
     @Test func eachTurnStartsFromAFreshTimelineAndAFreshDetector() async throws {
-        // Pendant la réplique, le micro continue de livrer : ces tranches-là ne sont ni vues du détecteur ni transcrites.
-        let h = ConversationHarness(turns: twoTurns, transcripts: texts("t1", "t2"),
-                                    fast: [question("Une question ?"), modelReply("[CONCLURE]\nMerci.")], completion: .manual)
+        // Pendant la réplique, le micro continue de livrer : l'écoute est continue, ces tranches vont au détecteur, mais sans voix
+        // annoncée elles ne sont jamais transcrites. Le second tour (blocs globaux 9 à 14) est poussé à la main : ses événements sont
+        // donnés par rang global, décalés des trois blocs de la réplique.
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1", "t2"),
+                                    fast: [question("Une question ?"), modelReply("[CONCLURE]\nMerci.")], completion: .manual,
+                                    events: [10: .speechStart(sample: 1000), 14: .speechEnd(sample: 4000)])
         let log = await h.start()
 
         await h.say(0)
         await h.audio.plays.wait(atLeast: 1)   // l'intervieweur parle
         for block in 0..<3 { h.audio.inner.push(rampChunk((9_000_000 + block * 1000)..<(9_000_000 + (block + 1) * 1000))) }
+        await log.wait(6 + 3, where: isLevel)
         h.audio.inner.finishPlayback(.played)
         h.audio.inner.flushEnds()
-        await h.say(1)
+        await log.wait(.state(.listening), count: 2)
+        for block in 0..<6 { h.audio.inner.push(rampChunk((1_000_000 + block * 1000)..<(1_000_000 + (block + 1) * 1000))) }
         await h.audio.plays.wait(atLeast: 2)
         h.audio.inner.finishPlayback(.played)
         h.audio.inner.flushEnds()
         await log.waitForEnd()
 
-        #expect(h.transcriber.calls.map(\.clip) == [h.expectedClip(turn: 0), h.expectedClip(turn: 1)])
-        #expect(h.detector.blocks.count == 12)   // les deux tours de six blocs, rien de la réplique
-        let firstBlockOfTheSecondTurn = try #require(h.detector.blocks.dropFirst(6).first)
+        #expect(h.transcriber.calls.map(\.clip) == [
+            h.expectedClip(turn: 0), AudioClip(samples: rampSamples(1_001_000..<1_004_000), sampleRate: 16000)])
+        #expect(h.detector.blocks.count == 15)   // les deux tours de six blocs, et les trois blocs entendus pendant la réplique
+        let replyBlocks = h.detector.blocks.dropFirst(6).prefix(3).joined()
+        #expect(Array(replyBlocks) == rampSamples(9_000_000..<9_003_000))
+        let firstBlockOfTheSecondTurn = try #require(h.detector.blocks.dropFirst(9).first)
         #expect(firstBlockOfTheSecondTurn == rampSamples(1_000_000..<1_001_000))   // le premier bloc du second tour est le sien
-        #expect(!h.detector.blocks.joined().contains { $0 >= 90 })
-        expectFreshDetectorForEachTurn(h)
+        // Le détecteur est remis à neuf avant chaque tour (avant le bloc 0, avant le bloc 9), jamais pendant un passage.
+        let marks = h.detector.resetMarks
+        #expect(marks.contains(0) && marks.contains(9))
+        #expect(!marks.contains { (2...5).contains($0) || (11...14).contains($0) })
     }
 }
 

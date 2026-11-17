@@ -71,7 +71,8 @@ public enum ConversationEnd: Equatable, Sendable {
 /// Ce que l'entretien raconte à l'interface, dans l'ordre où cela arrive.
 public enum ConversationEvent: Equatable, Sendable {
     case state(ConversationState)
-    /// Le niveau (0 à 1) de la tranche de micro qui vient d'être traitée, pendant l'écoute.
+    /// Le niveau (0 à 1) de la tranche de micro qui vient d'être traitée. L'écoute est continue : pendant que l'outil transcrit,
+    /// réfléchit ou parle aussi.
     case level(Float)
     /// Le texte provisoire du passage encore ouvert.
     case partialTranscript(String)
@@ -79,14 +80,17 @@ public enum ConversationEvent: Equatable, Sendable {
     case turnEnded(String)
     /// Le texte de la réplique de l'intervieweur, cumulé, sans marqueur.
     case replyText(String)
-    /// La première phrase de la réplique est mise en file (ou affichée seule, sans voix). `question` : le numéro de la question
-    /// posée (la première est la 1), ou celui de la dernière posée quand la réplique est la phrase de fin.
+    /// La première phrase de la réplique commence à être jouée (ou est affichée seule, sans voix). `question` : le numéro de la
+    /// question posée (la première est la 1), ou celui de la dernière posée quand la réplique est la phrase de fin. Une réplique coupée
+    /// avant ce moment n'est pas une question, et cet événement n'est pas émis.
     case speakingStarted(question: Int)
     /// Une phrase a fini d'être jouée, jusqu'au dernier échantillon.
     case sentencePlayed(String)
     /// La réplique est finie ; `heard` : les phrases entendues, jointes par une espace (ce que la conversation retient).
     case speakingEnded(heard: String)
-    /// La personne a coupé la parole : `heard` est ce qu'elle avait entendu. (Réservé à l'interruption.)
+    /// La personne a coupé la parole (assez fort et assez longtemps pour la porte d'interruption), pendant la réflexion ou la parole :
+    /// la réplique est abandonnée, `heard` est ce qu'elle en avait entendu (vide si elle a coupé avant la fin de la première phrase),
+    /// et c'est ce que la conversation retient. Remplace `speakingEnded` pour cette réplique ; l'écoute reprend ensuite.
     case interrupted(heard: String)
     case notice(ConversationNotice)
     /// Le dernier événement : émis une seule fois, après le retour de `AudioIO.stop()`, puis le flux se termine.
@@ -113,9 +117,11 @@ public struct ConversationConfig: Sendable {
     public var template: String
     public var language: String
     public var vocabulary: [String]
-    /// La durée de voix au-dessus de `interruptLevel` qui coupe la parole de l'outil (lue par l'interruption).
+    /// Secondes de voix au niveau `interruptLevel` au moins, depuis le début d'un passage, qui coupent la parole de l'outil (lues par
+    /// `InterruptionGate`). Un réglage (0,30 s par défaut, non confirmé sur le matériel).
     public var interruptMinDuration: Double
-    /// Le niveau, en dB pleine échelle, au-dessus duquel la voix compte pour couper la parole (lu par l'interruption).
+    /// Le niveau, en dB pleine échelle, à partir duquel une trame de voix compte pour couper la parole (lu par `InterruptionGate`).
+    /// Un réglage (−30 dB par défaut, non confirmé sur le matériel : un bruit ambiant a été mesuré une fois jusqu'à −20,5 dB).
     public var interruptLevel: Double
     /// Secondes de silence gardées de chaque côté d'un passage transcrit : 0,3 s, choix non mesuré (même valeur que la dictée).
     public var padding: Double
