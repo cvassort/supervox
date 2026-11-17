@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import SupervoxCore
 
-// La porte d'interruption (règle 1 de la tâche 6) : pure, sans horloge. L'audio est à 16 kHz, découpé en trames de 20 ms
-// (320 échantillons) ; une trame compte si son niveau atteint le seuil, et seulement si elle commence au début du passage ou après.
+// La porte d'interruption (règle 1 de la tâche 6, amendée au tour de correction 1) : pure, sans horloge. L'audio est à 16 kHz,
+// découpé en trames de 20 ms (320 échantillons) ; une trame compte si son niveau atteint le seuil, et seulement si elle commence au
+// début du passage ou après. Il faut `minDuration` de trames au niveau **dans une fenêtre glissante** de 2 × `minDuration`.
 
 /// `count` trames d'un signal constant d'amplitude `amplitude` (0,1 : −20 dB ; 0,01 : −40 dB).
 private func frames(_ count: Int, amplitude: Float) -> [Float] {
@@ -56,7 +57,9 @@ struct InterruptionGateTests {
         #expect(gate.shouldInterrupt(passageStart: 320))   // une trame qui commence au début du passage compte
     }
 
-    @Test func nonConsecutiveLoudFramesAreSummed() {
+    /// Des trames fortes non consécutives s'additionnent, **dans la fenêtre** : 15 trames fortes sur 23 (la fenêtre de 0,30 s en
+    /// fait 0,60, soit 30 trames).
+    @Test func nonConsecutiveLoudFramesAreSummedInsideTheWindow() {
         var gate = InterruptionGate(minDuration: 0.30, level: -30)
         gate.append(frames(8, amplitude: loud))
         gate.append(frames(5, amplitude: quiet))
@@ -65,6 +68,63 @@ struct InterruptionGateTests {
         gate.append(frames(3, amplitude: quiet))
         gate.append(frames(1, amplitude: loud))
         #expect(gate.shouldInterrupt(passageStart: 0))   // 15, sur 23 trames
+    }
+
+    /// Des clics de 20 ms, un toutes les 200 ms pendant 3 s (15 trames fortes en tout) : jamais plus de 3 dans une fenêtre de 30
+    /// trames, la porte ne coupe pas (sonde S3 de la revue : sans fenêtre, ils coupaient).
+    @Test func clicksSpreadOverThreeSecondsNeverInterrupt() {
+        var gate = InterruptionGate(minDuration: 0.30, level: -30)
+        for _ in 0..<15 {
+            gate.append(frames(1, amplitude: loud))
+            gate.append(frames(9, amplitude: quiet))
+        }
+        #expect(!gate.shouldInterrupt(passageStart: 0))
+    }
+
+    /// La limite de la fenêtre : 15 trames fortes une sur deux, la dernière décalée d'une trame. Toutes tenues dans 30 trames :
+    /// la porte coupe ; étalées sur 31 trames, aucune fenêtre de 30 n'en tient 15 : elle ne coupe pas.
+    @Test func halfDenseFramesInterruptAtTheWindowLimitAndNotJustBeyond() {
+        func gate(lastLoudFrame: Int) -> InterruptionGate {
+            var gate = InterruptionGate(minDuration: 0.30, level: -30)
+            for index in 0...lastLoudFrame {
+                let isLoud = (index < 28 && index % 2 == 0) || index == lastLoudFrame
+                gate.append(frames(1, amplitude: isLoud ? loud : quiet))
+            }
+            gate.append(frames(20, amplitude: quiet))
+            return gate
+        }
+        #expect(gate(lastLoudFrame: 29).shouldInterrupt(passageStart: 0))    // trames 0, 2, …, 26 et 29 : 15 dans [0, 30)
+        #expect(!gate(lastLoudFrame: 30).shouldInterrupt(passageStart: 0))   // trames 0, 2, …, 26 et 30 : 14 au plus par fenêtre
+    }
+
+    /// La fenêtre glisse sur tout le passage, pas seulement sur sa fin : 15 trames fortes puis 40 trames calmes coupent encore (la
+    /// porte est consultée par bloc du détecteur, et un passage se ferme sur du silence).
+    @Test func aLoudStretchFollowedBySilenceStillInterrupts() {
+        var gate = InterruptionGate(minDuration: 0.30, level: -30)
+        gate.append(frames(15, amplitude: loud))
+        gate.append(frames(40, amplitude: quiet))
+        #expect(gate.shouldInterrupt(passageStart: 0))
+    }
+
+    /// Bornée à la fin d'un passage : une trame qui finit après `end` ne compte pas.
+    @Test func framesThatEndAfterTheGivenEndAreNotCounted() {
+        var gate = InterruptionGate(minDuration: 0.30, level: -30)
+        gate.append(frames(15, amplitude: loud))
+        #expect(!gate.passes(from: 0, to: 15 * 320 - 1))
+        #expect(gate.passes(from: 0, to: 15 * 320))
+        #expect(!gate.passes(from: 320, to: 15 * 320))
+    }
+
+    /// Une durée non numérique, infinie ou démesurée ne coupe jamais, et ne fait pas planter le calcul de la fenêtre ; nulle, elle
+    /// coupe tout de suite.
+    @Test func anUnusableDurationNeverInterruptsAndNeverCrashes() {
+        for duration in [Double.nan, .infinity, 1e300] {
+            var gate = InterruptionGate(minDuration: duration, level: -30)
+            gate.append(frames(40, amplitude: loud))
+            #expect(!gate.shouldInterrupt(passageStart: 0), "durée \(duration)")
+        }
+        let zero = InterruptionGate(minDuration: 0, level: -30)
+        #expect(zero.shouldInterrupt(passageStart: 0))
     }
 
     /// Les tranches du micro ne tombent pas sur les trames : le reste d'une tranche attend la suivante, une trame incomplète ne
@@ -94,6 +154,14 @@ struct InterruptionGateTests {
         #expect(!gate.shouldInterrupt(passageStart: 0))   // 0,08 s
         gate.append(frames(1, amplitude: quiet))
         #expect(gate.shouldInterrupt(passageStart: 0))   // 0,10 s
+
+        // La fenêtre suit la durée : 0,20 s, soit 10 trames. 5 trames une sur deux tiennent dans 9 : coupe ; dans 11 : non.
+        var spread = InterruptionGate(minDuration: 0.1, level: -50)
+        for index in 0..<11 { spread.append(frames(1, amplitude: [0, 2, 4, 6, 10].contains(index) ? quiet : 0.0001)) }
+        #expect(!spread.shouldInterrupt(passageStart: 0))
+        var tight = InterruptionGate(minDuration: 0.1, level: -50)
+        for index in 0..<11 { tight.append(frames(1, amplitude: [0, 2, 4, 6, 8].contains(index) ? quiet : 0.0001)) }
+        #expect(tight.shouldInterrupt(passageStart: 0))
     }
 
     /// Trente secondes au plus sont gardées ; les indices restent ceux de l'audio reçu depuis la dernière remise à zéro.

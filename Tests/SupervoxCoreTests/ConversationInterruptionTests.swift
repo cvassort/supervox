@@ -20,6 +20,12 @@ private func pushQuiet(_ h: ConversationHarness, from: Int, count: Int) {
     for k in 0..<count { h.audio.inner.push(quietChunk((from + k * 1000)..<(from + (k + 1) * 1000))) }
 }
 
+/// Une tranche à −40 dB dont les trames de 320 échantillons de rang multiple de 10 (depuis l'échantillon 0 de la ligne de temps)
+/// sont à −20 dB : un clic de 20 ms toutes les 200 ms (sonde S3 de la revue de la tâche 6).
+private func clickyChunk(_ range: Range<Int>) -> AudioChunk {
+    AudioChunk(samples: range.map { ($0 / 320) % 10 == 0 ? Float(0.1) : Float(0.01) }, sampleRate: 16000)
+}
+
 func isInterrupted(_ event: ConversationEvent) -> Bool {
     if case .interrupted = event { return true }
     return false
@@ -105,6 +111,27 @@ struct ConversationInterruptionTests {
         h.audio.inner.push(constantChunk(0.01))
         await log.wait(where: isInterrupted)
         #expect(h.audio.inner.stopPlaybackCount == 1)
+        await finish(h)
+    }
+
+    /// Revue de la tâche 6, I-2 (sonde S3) : un passage ouvert par le détecteur sur l'écho (−40 dB), et un clic de 20 ms à −20 dB
+    /// toutes les 200 ms pendant 3,2 s (16 clics, plus que les 15 trames de la porte). Dispersés, ils ne coupent jamais : il n'y en a
+    /// jamais plus de 3 dans la fenêtre de 0,60 s. La réplique est lue en entier.
+    @Test func clicksSpreadOverAnEchoPassageNeverInterrupt() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux.")], completion: .manual,
+                                    events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        for k in 0..<50 { h.audio.inner.push(clickyChunk((k * 1000)..<((k + 1) * 1000))) }
+        await log.wait(6 + 50, where: isLevel)
+
+        #expect(h.detector.blocks.count == 56)
+        #expect(h.audio.inner.stopPlaybackCount == 0)
+        #expect(!log.items.contains(where: isInterrupted))
+        await playAll(h, upTo: 2)
+        await log.wait(.speakingEnded(heard: "Un. Deux."))
         await finish(h)
     }
 
