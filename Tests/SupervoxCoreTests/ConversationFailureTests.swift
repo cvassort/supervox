@@ -407,7 +407,7 @@ struct ConversationFailureTests {
     /// arrêté une fois, le flux finit sur `.finished(.cancelled)`.
     @Test func aSessionReleasedWithoutCancelStopsTheMicrophoneAndEndsCancelled() async throws {
         let h = ConversationHarness()
-        var session: ConversationSession? = ConversationSession(h.chain)
+        var session: ConversationSession? = h.makeSession()   // une façade construite à partir des doubles, jamais d'un acteur
         let stream = try #require(await session?.start())
         let log = EventLog.reading(stream)
         await log.wait(.state(.listening))

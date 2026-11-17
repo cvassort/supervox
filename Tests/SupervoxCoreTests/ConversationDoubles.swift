@@ -427,6 +427,7 @@ final class ConversationHarness: @unchecked Sendable {
     let turns: [TurnScript]
     private let state = OSAllocatedUnfairLock(initialState: (log: nil as EventLog?, said: 0, strongSeen: [(log: [String], running: Bool)]()))
     private let finishObserver = OSAllocatedUnfairLock(initialState: nil as (@Sendable () -> Void)?)
+    private let sessionFactory: @Sendable () -> ConversationSession
 
     /// - Parameters:
     ///   - transcripts: la réponse du moteur de transcription à son n-ième appel (aperçus compris).
@@ -484,6 +485,16 @@ final class ConversationHarness: @unchecked Sendable {
             voice: speech, config: config, watchdog: watchdog, now: self.clock.reader,
             sleep: { try await sleeper.sleep($0) }, transcriptionSleep: { try await transcriptionWait.sleep($0) },
             makeResampler: makeResampler, eventTap: tap)
+        let detectorDouble = detector, transcriberDouble = transcriber, fastModel = self.fast, strongModel = self.strong
+        let reader = self.clock.reader
+        let sessionConfig = config
+        sessionFactory = {
+            ConversationSession(
+                audio: audioIO, detector: detectorDouble, transcriber: transcriberDouble, fastModel: fastModel,
+                strongModel: strongModel, voice: speech, config: sessionConfig, watchdog: watchdog, now: reader,
+                sleep: { try await sleeper.sleep($0) }, transcriptionSleep: { try await transcriptionWait.sleep($0) },
+                makeResampler: makeResampler, eventTap: tap)
+        }
         let seen = self.state
         let log = audioIO
         self.strong.onComplete {
@@ -496,6 +507,10 @@ final class ConversationHarness: @unchecked Sendable {
     }
 
     var log: EventLog? { state.withLock { $0.log } }
+
+    /// Une façade (`ConversationSession`) neuve, construite à partir des mêmes doubles que `chain` : son propre acteur, jamais
+    /// démarré par le harnais. Pour le test de la libération de la façade.
+    func makeSession() -> ConversationSession { sessionFactory() }
 
     /// Appelée à l'instant où `.finished` est émis, avant que le lecteur du flux le voie : le test y relève l'état des doubles (une
     /// tâche de l'entretien encore vivante à cet instant serait une tâche non attendue).

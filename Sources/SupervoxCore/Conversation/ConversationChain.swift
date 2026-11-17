@@ -48,7 +48,9 @@ public actor ConversationChain: ConversationEngine {
     /// Pour les tests : reçoit chaque événement au moment où il est émis, dans l'ordre exact, avant le flux.
     let eventTap: (@Sendable (ConversationEvent) -> Void)?
 
-    public init(audio: any AudioIO, detector: any StreamingVoiceDetector, transcriber: any Transcriber,
+    /// Interne : un appelant hors du module tient une `ConversationSession`, qui construit son moteur elle-même (revue de la tâche 6,
+    /// m-6).
+    init(audio: any AudioIO, detector: any StreamingVoiceDetector, transcriber: any Transcriber,
                 fastModel: any LanguageModel, strongModel: any LanguageModel, voice: any SpeechSynthesizer,
                 config: ConversationConfig, watchdog: MicrophoneWatchdog = .system,
                 now: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
