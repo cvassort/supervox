@@ -1,13 +1,40 @@
 import Carbon.HIToolbox
 
-/// Raccourci clavier global : une touche (code virtuel) et ses modificateurs.
+/// Raccourci clavier global : une touche (code virtuel) et ses modificateurs. Un champ que cette version ne connaît pas est gardé
+/// et réécrit tel quel (`UnknownFields`) ; l'égalité ne compare que la touche et les modificateurs.
 public struct HotKey: Codable, Equatable, Sendable {
     public var keyCode: UInt32
     public var modifiers: Modifiers
+    /// Ce que cette version ne connaît pas, réécrit tel quel.
+    var unknown = UnknownFields()
 
     public init(keyCode: UInt32, modifiers: Modifiers) {
         self.keyCode = keyCode
         self.modifiers = modifiers
+    }
+
+    /// La touche et les modificateurs seulement : un champ inconnu ne change pas l'égalité.
+    public static func == (lhs: HotKey, rhs: HotKey) -> Bool {
+        lhs.keyCode == rhs.keyCode && lhs.modifiers == rhs.modifiers
+    }
+
+    private enum CodingKeys: String, CaseIterable { case keyCode, modifiers }
+
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    /// La touche et les modificateurs sont obligatoires : un raccourci à moitié n'a pas de sens.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: JSONKey.self)
+        keyCode = try container.decode(UInt32.self, forKey: JSONKey(CodingKeys.keyCode.rawValue))
+        modifiers = try container.decode(Modifiers.self, forKey: JSONKey(CodingKeys.modifiers.rawValue))
+        unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: JSONKey.self)
+        try container.encode(keyCode, forKey: JSONKey(CodingKeys.keyCode.rawValue))
+        try container.encode(modifiers, forKey: JSONKey(CodingKeys.modifiers.rawValue))
+        try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 
     /// Contrôle + option + espace.

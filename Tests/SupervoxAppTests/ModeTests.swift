@@ -257,9 +257,9 @@ import Testing
 
     // MARK: - Lire les réglages
 
-    @Test func theCurrentVersionIsTwoAndTheModelChoicesAreStoredButNotYetUsed() throws {
-        #expect(AppSettings.current == 2)
-        #expect(AppSettings.defaults.version == 2)
+    @Test func theCurrentVersionIsThreeAndTheModelChoicesAreStored() throws {
+        #expect(AppSettings.current == 3)
+        #expect(AppSettings.defaults.version == 3)
         #expect(AppSettings.defaults.strongModel == nil)
         #expect(AppSettings.defaults.fastModel == nil)
 

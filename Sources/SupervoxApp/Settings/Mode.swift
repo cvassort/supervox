@@ -1,14 +1,41 @@
 import Foundation
 
 /// Un fournisseur et l'un de ses modèles, tels que les réglages les retiennent. Le fournisseur se retrouve par son
-/// identifiant dans `AppSettings.providers`.
+/// identifiant dans `AppSettings.providers`. Un champ que cette version ne connaît pas est gardé et réécrit tel quel
+/// (`UnknownFields`) ; l'égalité ne compare que les champs connus.
 public struct ModelChoice: Codable, Equatable, Sendable {
     public var providerID: UUID
     public var model: String
+    /// Ce que cette version ne connaît pas, réécrit tel quel.
+    var unknown = UnknownFields()
 
     public init(providerID: UUID, model: String) {
         self.providerID = providerID
         self.model = model
+    }
+
+    /// Les champs connus seulement : un champ inconnu ne change pas l'égalité.
+    public static func == (lhs: ModelChoice, rhs: ModelChoice) -> Bool {
+        lhs.providerID == rhs.providerID && lhs.model == rhs.model
+    }
+
+    private enum CodingKeys: String, CaseIterable { case providerID, model }
+
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+
+    /// Le fournisseur et le modèle sont tous deux obligatoires : un choix à moitié n'a pas de sens.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: JSONKey.self)
+        providerID = try container.decode(UUID.self, forKey: JSONKey(CodingKeys.providerID.rawValue))
+        model = try container.decode(String.self, forKey: JSONKey(CodingKeys.model.rawValue))
+        unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: JSONKey.self)
+        try container.encode(providerID, forKey: JSONKey(CodingKeys.providerID.rawValue))
+        try container.encode(model, forKey: JSONKey(CodingKeys.model.rawValue))
+        try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 }
 
