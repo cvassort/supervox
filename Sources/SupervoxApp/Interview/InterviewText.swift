@@ -221,7 +221,7 @@ public enum InterviewText {
 
     // MARK: La fin : sans relecture (rien à garder)
 
-    public static let nothingSaid = fr("Rien n'a été dit : il n'y a pas de prompt à rédiger.")
+    public static let nothingSaid = fr("Rien n'a été dit : il n'y a pas de prompt à rédiger. Relancez l'entretien pour recommencer.")
 
     public static let microphoneSentNothing = fr(
         "Le micro n'a rien envoyé : vérifiez qu'il est branché et autorisé, puis relancez l'entretien.")
