@@ -25,11 +25,16 @@ private final class EnergyDetector: StreamingVoiceDetector {
         var quietStart = 0
     }
     private let state = Mutex(State())
+    private let totalProcessed = Mutex(0)
+
+    /// Les échantillons reçus depuis le début, toutes prises confondues (`reset()` ne les remet pas à zéro).
+    var total: Int { totalProcessed.withLock { $0 } }
 
     func prepare() async throws {}
     func reset() async { state.withLock { $0 = State() } }
 
     func process(_ block: [Float]) async throws -> VoiceEvent? {
+        totalProcessed.withLock { $0 += block.count }
         let loud = block.reduce(0) { $0 + abs($1) } / Float(max(block.count, 1)) > 0.05
         return state.withLock { state in
             let start = state.processed
@@ -323,7 +328,8 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
 
     @Test(arguments: [
         ["--max-questions", "0"], ["--interrupt-after=0"], ["--interrupt-after=-1"], ["--interrupt-after", "nan"],
-        ["--turn-silence", "0"], ["--turn-silence", "1.5"], ["--turn-silence", "inf"], ["--turn-silence=-0.5"],
+        ["--turn-silence", "0"], ["--turn-silence", "0.29"], ["--turn-silence", "2.01"], ["--turn-silence", "inf"], ["--turn-silence", "nan"],
+        ["--turn-silence=-0.5"],
     ])
     func anUnreasonableOptionIsRefusedBeforeAnythingIsBuilt(extra: [String]) async throws {
         let session = InterviewRig(fast: [])
@@ -332,6 +338,20 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         guard case .invalidOption? = error else {
             Issue.record("refus attendu, reçu \(String(describing: error))")
             return
+        }
+        #expect(session.builtSetups.isEmpty)
+    }
+
+    @Test func aTurnSilenceOutsideTheBoundsIsRefusedWithASentenceThatGivesThem() async throws {
+        let session = InterviewRig(fast: [])
+        for value in ["0.29", "2.01"] {
+            let command = try parse(["a.wav"] + models + ["--turn-silence", value])
+            let error = await refusal { try await command.run(runtime: session.runtime()) }
+            guard case .invalidOption(let sentence)? = error else {
+                Issue.record("refus attendu pour \(value), reçu \(String(describing: error))")
+                continue
+            }
+            #expect(sentence.contains("0,3") && sentence.contains("2,0"), "\(sentence)")
         }
         #expect(session.builtSetups.isEmpty)
     }
@@ -551,6 +571,22 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         #expect(text.contains("- Tours poussés : 2 sur 3 ; textes rendus par la transcription : 2."))
         #expect(text.contains("Vous : tour 1\n\nSupervox : Quelle est la première question ?\n\nVous : tour 2"))
         #expect(text.contains("- Fin : prompt rédigé."))
+    }
+
+    /// Les bornes de l'application (0,3 à 2,0 s) sont acceptées, et le silence poussé après chaque tour suit la valeur : le détecteur
+    /// double (blocs de 0,1 s) reçoit la voix du tour (0,6 s) et le silence qui lui convient, dont la somme est mesurée à un bloc près.
+    @Test(arguments: [(0.3, 2.0), (0.5, 2.0), (2.0, 3.1)])
+    func theSilencePushedAfterATurnFollowsTheTurnSilence(silence: Double, trailing: Double) async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6)], in: folder)
+        let session = InterviewRig(fast: [question("Quelle est la première question ?")])
+
+        try await parse(wavs + models + ["--turn-silence", "\(silence)"]).run(runtime: session.runtime())
+
+        #expect(session.builtSetups.map(\.turnSilence) == [silence])
+        let pushed = Int(((0.6 + trailing) * 16_000).rounded())
+        let received = session.detector.total
+        #expect(received <= pushed && received >= pushed - 2 * 1_600, "\(received) échantillons reçus, \(pushed) poussés")
     }
 
     @Test func aReplyThatConcludesEndsTheInterviewWithoutPushingTheNextFileOrAskingForTheConclusionTwice() async throws {

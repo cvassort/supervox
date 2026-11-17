@@ -33,6 +33,37 @@ import Testing
         #expect(feed.pushedTurns == [0])
     }
 
+    @Test func theSilenceAfterATurnHasTheGivenDuration() throws {
+        let feed = WavTurnFeed(
+            turns: [tone(seconds: 0.1)], trailingSilence: 3, wait: { _ in }, now: { 0 })
+        let recorder = ChunkRecorder()
+        try feed.start(onChunk: recorder.record)
+
+        feed.pushTurn(0)
+
+        // 0,1 s de voix : 5 tranches ; puis 3 s de silence : 150 tranches de 20 ms.
+        #expect(recorder.count == 155)
+        #expect(recorder.chunks.dropFirst(5).allSatisfy { $0.samples.allSatisfy { $0 == 0 } })
+    }
+
+    @Test(arguments: [(0.3, 0.256, 2.0), (0.5, 0.256, 2.0), (2.0, 0.256, 3.304), (2.0, 0.1, 3.1)])
+    func theSilenceAfterATurnCoversTheBlocksTheDetectorNeedsPlusAMargin(silence: Double, block: Double, expected: Double) {
+        let pushed = WavTurnFeed.trailingSilence(detectorSilence: silence, blockSeconds: block)
+        #expect(abs(pushed - expected) < 1e-9, "\(pushed) au lieu de \(expected)")
+    }
+
+    @Test func theSilenceAfterATurnNeverFallsShortOfTheDetectorWhateverItsSilence() {
+        // Le détecteur ferme un passage après 1 + ⌈silence / bloc⌉ blocs silencieux entiers (code lu, `FluidStreamingVoiceDetector`) :
+        // le silence poussé les couvre, avec une demi-seconde au moins de marge, et n'est jamais sous le minimum du brief (2 s).
+        let block = 0.256
+        for hundredths in 30...200 {
+            let silence = Double(hundredths) / 100
+            let needed = Double(1 + Int((silence / block).rounded(.up))) * block
+            let pushed = WavTurnFeed.trailingSilence(detectorSilence: silence, blockSeconds: block)
+            #expect(pushed >= needed + 0.5 && pushed >= WavTurnFeed.minimumTrailingSilence, "silence \(silence) : \(pushed) s")
+        }
+    }
+
     @Test func aLastPartialSliceKeepsItsSamples() throws {
         let clip = tone(seconds: 0.05)   // 800 échantillons : 320 + 320 + 160
         let feed = makeFeed([clip])

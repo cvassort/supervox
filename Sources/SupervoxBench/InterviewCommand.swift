@@ -143,7 +143,7 @@ struct InterviewCommand: AsyncParsableCommand {
     var interruptAfter: Double?
 
     /// 0,5 s : le défaut des réglages de l'application (`InterviewSettings.turnSilence`, code lu).
-    @Option(name: .long, help: "Silence qui ferme un tour pour le détecteur de voix, en secondes (0 exclu, 1 au plus).")
+    @Option(name: .long, help: "Silence qui ferme un tour pour le détecteur de voix, en secondes (0,3 à 2,0).")
     var turnSilence = 0.5
 
     @Option(name: .long, help: "Fichier du rapport (Markdown). Sans lui, le rapport est écrit sur la sortie standard.")
@@ -153,10 +153,10 @@ struct InterviewCommand: AsyncParsableCommand {
     var overwrite = false
 
     static let language = "fr"
-    /// Silence maximal du détecteur : 1 s, choix non mesuré. Code lu (`FluidStreamingVoiceDetector`) : il faut 1 + ⌈silence / 0,256 s⌉
-    /// blocs silencieux pour fermer un passage, soit 5 blocs (1,28 s) à 1 s ; les 2 s de silence poussées après chaque tour
-    /// (`WavTurnFeed.trailingSilence`) n'en ferment plus un au-delà (1,5 s : 7 blocs, 1,79 s, sans marge).
-    static let maxTurnSilence = 1.0
+    /// Les bornes du silence de fin de tour : 0,3 à 2,0 s, celles des réglages de l'application (`InterviewSettings.turnSilenceRange`,
+    /// code lu ; le banc ne dépend pas de l'application, donc la valeur est recopiée). Le silence poussé après chaque tour suit la
+    /// valeur choisie (`WavTurnFeed.trailingSilence(detectorSilence:blockSeconds:)`).
+    static let turnSilenceRange: ClosedRange<Double> = 0.3...2.0
     /// Seuil d'interruption : 0,30 s de voix à −30 dB pleine échelle ; valeurs par défaut des réglages de l'application
     /// (`InterviewSettings`, code lu), non confirmées sur le matériel.
     static let interruptMinDuration = 0.30
@@ -218,7 +218,11 @@ struct InterviewCommand: AsyncParsableCommand {
 
         let engines = runtime.makeEngines(
             InterviewSetup(endpoint: endpoint, voiceModel: voiceModel, voice: voice, turnSilence: turnSilence))
-        let feed = WavTurnFeed(turns: turns, wait: runtime.wait, now: runtime.now)
+        // Le silence poussé après chaque tour couvre les blocs dont le détecteur a besoin pour fermer le passage ; la durée d'un bloc
+        // est celle du détecteur (`blockSize` à 16 kHz), pas une valeur recopiée.
+        let trailing = WavTurnFeed.trailingSilence(
+            detectorSilence: turnSilence, blockSeconds: Double(engines.detector.blockSize) / transcriberSampleRate)
+        let feed = WavTurnFeed(turns: turns, trailingSilence: trailing, wait: runtime.wait, now: runtime.now)
         let fast = SignalRecordingModel(engines.fast)
         // 1 000 000 s (onze jours), choix non mesuré : une attente qui ne se termine qu'à l'annulation de sa tâche.
         let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
@@ -269,10 +273,11 @@ struct InterviewCommand: AsyncParsableCommand {
         if let interruptAfter, !(interruptAfter.isFinite && interruptAfter > 0) {
             throw InterviewError.invalidOption("--interrupt-after doit être un nombre de secondes positif.")
         }
-        guard turnSilence.isFinite, turnSilence > 0, turnSilence <= Self.maxTurnSilence else {
+        guard turnSilence.isFinite, Self.turnSilenceRange.contains(turnSilence) else {
+            let bounds = Self.turnSilenceRange
             throw InterviewError.invalidOption(
-                "--turn-silence doit être compris entre 0 (exclu) et \(Reports.decimal(Self.maxTurnSilence, digits: 0)) seconde : "
-                    + "au-delà, les 2 secondes de silence poussées après chaque tour ne ferment plus le passage de voix.")
+                "--turn-silence doit être compris entre \(Reports.decimal(bounds.lowerBound, digits: 1)) et "
+                    + "\(Reports.decimal(bounds.upperBound, digits: 1)) secondes (les bornes des réglages de l'application).")
         }
     }
 

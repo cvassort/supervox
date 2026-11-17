@@ -17,10 +17,22 @@ final class WavTurnFeed: AudioIO {
     /// Durée d'une tranche poussée : 20 ms, la trame de la porte d'interruption (320 échantillons à 16 kHz) ; valeur du brief,
     /// choix non mesuré.
     static let chunkSeconds = 0.02
-    /// Silence poussé après chaque tour : 2 s, valeur du brief, choix non mesuré. Code lu (`FluidStreamingVoiceDetector`) : le
-    /// passage se ferme après 1 + ⌈`minSilence` / 0,256 s⌉ blocs silencieux de 0,256 s ; 2 s ferment un passage jusqu'à
-    /// `minSilence` = 1 s (5 blocs, 1,28 s), d'où la borne de `--turn-silence`.
-    static let trailingSilence = 2.0
+    /// Silence poussé après chaque tour, au moins : 2 s, valeur du brief, choix non mesuré.
+    static let minimumTrailingSilence = 2.0
+
+    /// Marge ajoutée aux blocs silencieux nécessaires : 1 s, choix non mesuré (couvre le bloc où la voix s'arrête et l'alignement des
+    /// blocs).
+    static let trailingMargin = 1.0
+
+    /// Le silence à pousser pour que le détecteur ferme le passage, pour un silence de fin de tour `detectorSilence` et des blocs de
+    /// `blockSeconds`. Code lu (`FluidStreamingVoiceDetector`) : le passage se ferme après 1 + ⌈silence / bloc⌉ blocs silencieux
+    /// entiers (bloc de 0,256 s avec le vrai détecteur) ; on pousse ces blocs et la marge, jamais moins que `minimumTrailingSilence`.
+    /// Formule du code lu, non confirmée sur le vrai détecteur.
+    static func trailingSilence(detectorSilence: Double, blockSeconds: Double) -> Double {
+        guard blockSeconds > 0, detectorSilence.isFinite else { return minimumTrailingSilence }
+        let blocks = 1 + (detectorSilence / blockSeconds).rounded(.up)
+        return max(minimumTrailingSilence, blocks * blockSeconds + trailingMargin)
+    }
 
     private struct State {
         var pushed: [Int] = []
@@ -33,15 +45,21 @@ final class WavTurnFeed: AudioIO {
 
     private let turns: [AudioClip]
     private let inner: ScriptedAudioIO
+    private let trailingSilence: Double
     private let now: @Sendable () -> Double
     private let state = Mutex(State())
 
     /// - Parameters:
     ///   - turns: un clip par tour de la personne, dans l'ordre (à la fréquence où ils seront poussés).
     ///   - wait: l'attente de la durée d'un clip ; elle rend la main quand le clip est « fini ».
+    ///   - trailingSilence: secondes de silence poussées après chaque tour.
     ///   - now: l'horloge, en secondes.
-    init(turns: [AudioClip], wait: @escaping @Sendable (Double) async -> Void, now: @escaping @Sendable () -> Double) {
+    init(
+        turns: [AudioClip], trailingSilence: Double = WavTurnFeed.minimumTrailingSilence,
+        wait: @escaping @Sendable (Double) async -> Void, now: @escaping @Sendable () -> Double
+    ) {
         self.turns = turns
+        self.trailingSilence = trailingSilence
         self.now = now
         inner = ScriptedAudioIO(completion: .afterDuration(wait))
     }
@@ -64,7 +82,7 @@ final class WavTurnFeed: AudioIO {
         send(clip.samples, rate: clip.sampleRate)
         let voiceEnd = now()
         state.withLock { $0.voiceEnds[index] = voiceEnd }
-        send([Float](repeating: 0, count: Int((Self.trailingSilence * clip.sampleRate).rounded())), rate: clip.sampleRate)
+        send([Float](repeating: 0, count: Int((trailingSilence * clip.sampleRate).rounded())), rate: clip.sampleRate)
         return true
     }
 
