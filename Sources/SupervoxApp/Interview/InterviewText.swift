@@ -161,6 +161,70 @@ public enum InterviewText {
         }
     }
 
+    // MARK: Le départ
+
+    /// Ce que dit le panneau quand l'entretien ne peut pas démarrer : aucun environnement branché (`InterviewEnvironment.unavailable`),
+    /// ou une panne que la préparation ne sait pas dire.
+    public static let couldNotStart = fr("L'entretien n'a pas pu démarrer : relancez Supervox.")
+
+    /// Le refus de démarrer, dit avant d'ouvrir le micro. Un cas par cause : ce qu'il faut régler, et où. `ProviderResolver` ne rend que
+    /// quatre pannes du fournisseur ; les autres, que le type permet, disent la phrase générale (jamais le texte de l'erreur, jamais un
+    /// code HTTP). `switch` exhaustif, sans `default`.
+    public static func setupFailure(_ failure: InterviewSetupFailure) -> String {
+        switch failure {
+        case .noFastModel:
+            fr("Aucun modèle rapide n'est choisi : choisissez-en un en tête de Réglages, onglet Modes, pour mener l'entretien.")
+        case .noStrongModel:
+            fr("Aucun modèle fort n'est choisi : choisissez-en un en tête de Réglages, onglet Modes, pour rédiger le prompt de l'entretien.")
+        case .provider(let failure):
+            switch failure {
+            case .providerMissing:
+                fr("Le fournisseur du modèle de l'entretien n'existe plus : choisissez un autre modèle en tête de Réglages, onglet Modes.")
+            case .noKey(let provider):
+                fr("Aucune clé n'est enregistrée pour « \(Provider.shortName(provider)) » : ajoutez-la dans Réglages, onglet Fournisseurs.")
+            case .keychain:
+                fr("Le trousseau n'a pas donné la clé du fournisseur : relancez l'entretien et autorisez Supervox si le système le demande.")
+            case .unreachable:
+                fr("L'adresse du fournisseur n'est pas valide : corrigez-la dans Réglages, onglet Fournisseurs.")
+            case .noModel, .unauthorized, .notFound, .rejected, .rateLimited, .server, .redirected, .interrupted, .stalled,
+                .providerError, .truncated, .refused, .empty, .timedOut, .malformed:
+                couldNotStart
+            }
+        }
+    }
+
+    // MARK: La fin : avec une relecture
+
+    /// La phrase de la relecture quand le prompt est rédigé.
+    public static let promptReview = fr("Prompt rédigé à partir de l'entretien : relisez-le, puis collez-le ou copiez-le.")
+
+    /// La même, quand l'entretien a signalé que les derniers mots n'ont pas pu être transcrits (`ConversationNotice.lastWordsLost`) :
+    /// l'avis disparaîtrait avec la vue de l'entretien, la relecture le garde.
+    public static let promptReviewWithoutLastWords = fr(
+        "Prompt rédigé à partir de l'entretien, sans vos derniers mots, qui n'ont pas pu être transcrits : relisez-le, puis collez-le ou copiez-le.")
+
+    /// Le modèle fort n'a pas rédigé : la relecture porte la conversation.
+    public static let conclusionFailedReview = fr(
+        "Le prompt n'a pas pu être rédigé : le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.")
+
+    /// Le micro s'est arrêté après au moins un tour : la relecture porte la conversation jusque-là.
+    public static let microphoneStoppedReview = fr(
+        "Le micro s'est arrêté pendant l'entretien : le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.")
+
+    /// La transcription s'est arrêtée après au moins un tour : la relecture porte la conversation jusque-là.
+    public static let transcriptionStoppedReview = fr(
+        "La transcription s'est arrêtée pendant l'entretien : le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.")
+
+    // MARK: La fin : sans relecture (rien à garder)
+
+    public static let nothingSaid = fr("Rien n'a été dit : il n'y a pas de prompt à rédiger.")
+
+    public static let microphoneSentNothing = fr(
+        "Le micro n'a rien envoyé : vérifiez qu'il est branché et autorisé, puis relancez l'entretien.")
+
+    public static let transcriptionDidNotStart = fr(
+        "La transcription n'a pas démarré : relancez l'entretien ; si cela se répète, choisissez un autre moteur pour le mode Entretien dans Réglages, onglet Modes.")
+
     // MARK: Pour le test de longueur
 
     /// Toutes les phrases que ce fichier peut dire, avec des noms de fournisseur de 40 caractères (la limite de `Provider.shortName`)
@@ -186,6 +250,11 @@ public enum InterviewText {
         sentences += notices.map(notice) + failures.map(turnFailure) + failures.map { notice(.modelFailed($0)) }
         sentences += knownFailureCodes.flatMap { code in [failure(.microphone(code)), failure(.engine(code))] }
         sentences.append(failure(.engine("code-inconnu")))
+        sentences += [
+            couldNotStart, promptReview, promptReviewWithoutLastWords, conclusionFailedReview, microphoneStoppedReview,
+            transcriptionStoppedReview, nothingSaid, microphoneSentNothing, transcriptionDidNotStart,
+        ]
+        sentences += ([.noFastModel, .noStrongModel] + failures.map(InterviewSetupFailure.provider)).map(setupFailure)
         return sentences
     }
 }
