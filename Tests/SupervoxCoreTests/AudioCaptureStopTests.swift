@@ -93,3 +93,45 @@ private final class Log: Sendable {
     tracker.stopAll(force: false) { calls.add("non forcé") }
     #expect(calls.all == ["forcé"])
 }
+
+// MARK: - L'ordre que `AudioCapture.stop()` lui-même donne : lecteur, puis moteur (contre-revue de la tâche 2, point d)
+
+/// `stopSequence` ne prouve que l'ordre de la fonction ; ce test prouve ce que `stop()` lui passe. Sans moteur : `running` est posé à la
+/// main, `playerStop` et `engineStopHook` remplacent `player.stop()` et `engine.stop()` + `removeTap`. Le « moteur » rappelle le
+/// gestionnaire du lecteur pendant son arrêt, comme `engine.stop()` (mesuré, panne F2c du rapport de la tâche 2) : si le moteur passait
+/// avant la lecture, le clip en file serait rendu `.played` au lieu de `.stopped`.
+@Test func captureStopStopsThePlayerThenTheEngineAndACutClipIsStopped() {
+    let order = Log()
+    let ends = Log()
+    // Les crochets ont besoin de la capture et de la génération du clip : la capture est créée d'abord, les crochets lisent une boîte.
+    final class Box: @unchecked Sendable {   // @unchecked : écrit une fois avant `stop()`, lu après, sur le même fil (le test)
+        var capture: AudioCapture?
+        var generation = 0
+    }
+    let box = Box()
+    let capture = AudioCapture(
+        playerStop: { order.add("lecteur") },
+        engineStopHook: {
+            order.add("moteur")
+            if let capture = box.capture { capture.playback.settle(box.generation) }
+        })
+    box.capture = capture
+    capture.running = true
+    capture.playerStarted = true
+    box.generation = capture.playback.register(frames: 100, sampleRate: 100, nowSample: 0) { ends.add("a:\($0)") }
+
+    _ = capture.stop()
+    capture.playback.flushEvents()
+
+    #expect(order.all == ["lecteur", "moteur"])
+    #expect(ends.all == ["a:stopped"])
+    #expect(!capture.running)
+}
+
+/// Sans moteur démarré (`running` faux : dictée jamais lancée, ou second `stop()`), le moteur n'est pas touché.
+@Test func captureStopDoesNotTouchAnEngineThatIsNotRunning() {
+    let order = Log()
+    let capture = AudioCapture(playerStop: { order.add("lecteur") }, engineStopHook: { order.add("moteur") })
+    _ = capture.stop()
+    #expect(order.all.isEmpty)
+}

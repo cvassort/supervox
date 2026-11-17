@@ -72,7 +72,8 @@ public final class AudioCapture: @unchecked Sendable {
     /// ni aucun `onEnd` ne le prend : le lecteur les appelle de façon synchrone depuis `stop()`.
     private let lifecycle = NSLock()
     private var wired = false
-    private var running = false
+    /// Interne (et non `private`) pour que les tests le posent sans moteur, comme `playerStarted`. Protégé par `lifecycle`.
+    var running = false
     /// `true` quand le lecteur est attaché au moteur (seulement avec le traitement de la voix) : sans cela, planifier un tampon
     /// lèverait une exception Objective-C. Protégé par `lifecycle`, comme `wired`.
     private var playerAttached = false
@@ -83,19 +84,23 @@ public final class AudioCapture: @unchecked Sendable {
     var playerStarted = false
     /// Pour les tests : remplace `player.stop()`, que rien ne peut observer sans moteur. `nil` en production.
     private let playerStop: (@Sendable () -> Void)?
+    /// Pour les tests : remplace `engine.stop()` et le retrait du tap dans `stop()`, pour observer l'ordre réel « lecteur, puis moteur ». `nil` en production.
+    private let engineStopHook: (@Sendable () -> Void)?
     private let inputText = OSAllocatedUnfairLock(initialState: "entrée audio non initialisée")
 
     /// - Parameter promptsForAccess: `false` pour une application qui a déjà son propre parcours d'autorisation :
     ///   un statut « non déterminé » lève alors `microphoneAccessDenied` au lieu d'afficher l'invite système et d'attendre
     ///   la réponse (ce qui bloquerait l'appelant).
     public convenience init(voiceProcessing: Bool = true, promptsForAccess: Bool = true) {
-        self.init(voiceProcessing: voiceProcessing, promptsForAccess: promptsForAccess, playerStop: nil)
+        self.init(voiceProcessing: voiceProcessing, promptsForAccess: promptsForAccess, playerStop: nil, engineStopHook: nil)
     }
 
-    init(voiceProcessing: Bool = true, promptsForAccess: Bool = true, playerStop: (@Sendable () -> Void)?) {
+    init(voiceProcessing: Bool = true, promptsForAccess: Bool = true, playerStop: (@Sendable () -> Void)?,
+         engineStopHook: (@Sendable () -> Void)? = nil) {
         self.voiceProcessing = voiceProcessing
         self.promptsForAccess = promptsForAccess
         self.playerStop = playerStop
+        self.engineStopHook = engineStopHook
     }
 
     /// La raison d'une panne du moteur audio, telle qu'elle peut être montrée dans le panneau : le code d'erreur du système, et
@@ -233,8 +238,12 @@ public final class AudioCapture: @unchecked Sendable {
             stopPlayback: { stopPlayerLocked(engineStop: true) },
             stopEngine: {
                 if running {
-                    engine.stop()
-                    engine.inputNode.removeTap(onBus: 0)
+                    if let engineStopHook {
+                        engineStopHook()
+                    } else {
+                        engine.stop()
+                        engine.inputNode.removeTap(onBus: 0)
+                    }
                     running = false
                 }
             })
