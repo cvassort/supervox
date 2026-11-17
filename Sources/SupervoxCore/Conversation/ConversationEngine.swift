@@ -20,6 +20,9 @@ public enum ConversationNotice: Equatable, Sendable {
     case proposal
     /// La question qui vient est la dernière.
     case lastQuestion
+    /// « Conclure » est demandé, mais les derniers mots de la personne n'ont pas pu être transcrits (panne ou délai du moteur) :
+    /// le prompt est rédigé avec les tours déjà là, sans eux. Sans aucun tour avant, c'est une panne (`.failed`), pas cet avis.
+    case lastWordsLost
 }
 
 /// Pourquoi un entretien s'est arrêté sur une panne. La chaîne est un **code** stable (voir `Code`), jamais une phrase ni le message

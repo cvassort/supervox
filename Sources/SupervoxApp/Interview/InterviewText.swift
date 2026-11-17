@@ -62,6 +62,7 @@ public enum InterviewText {
         case .voiceUnavailable: "La voix ne fonctionne pas : lisez la question à l'écran, puis répondez à voix haute."
         case .proposal: "Supervox propose de conclure : dites-le s'il vous convient, ou continuez à préciser."
         case .lastQuestion: "Dernière question : après votre réponse, Supervox rédige le prompt."
+        case .lastWordsLost: "Votre dernière phrase n'a pas pu être transcrite : le prompt est rédigé sans elle."
         }
     }
 
@@ -158,7 +159,9 @@ public enum InterviewText {
             .rateLimited, .server(503), .unreachable, .redirected, .interrupted, .stalled(30), .providerError, .truncated,
             .refused, .empty, .timedOut(30), .malformed,
         ]
-        let notices: [ConversationNotice] = [.notUnderstood, .voiceFellBack, .voiceUnavailable, .proposal, .lastQuestion]
+        let notices: [ConversationNotice] = [
+            .notUnderstood, .voiceFellBack, .voiceUnavailable, .proposal, .lastQuestion, .lastWordsLost,
+        ]
         var sentences = phases.map(title) + phases.map(hint).filter { !$0.isEmpty }
         sentences += [cancelHint, concludeLabel, concludeHelp, supervoxLabel, youLabel, holdNote, questionCounter(99, of: 99)]
         sentences += [privacy(provider: forty, voiceProvider: nil), privacy(provider: forty, voiceProvider: forty)]

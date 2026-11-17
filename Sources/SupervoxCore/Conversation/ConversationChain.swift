@@ -401,6 +401,14 @@ public actor ConversationChain: ConversationEngine {
                 let result = await running.task.value
                 transcription = nil
                 guard request != .cancel else { break }
+                // Sur une conclusion, des derniers mots perdus (panne ou délai du moteur) ne font pas une panne quand des tours sont
+                // déjà là : on conclut avec eux, et un avis le dit (revue de la tâche 6, m-5). Sans aucun tour, `take` note la panne.
+                if case .concluding = outcome, case .failure(let error) = result, !(error is CancellationError),
+                   conversation.hasUserTurn {
+                    transcriberUsable = false
+                    emit(.notice(.lastWordsLost))
+                    break
+                }
                 take(result, closing: true)
             } else if !clipsToTranscribe.isEmpty {
                 startTranscription(clipsToTranscribe.removeFirst())

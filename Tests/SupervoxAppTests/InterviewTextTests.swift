@@ -55,6 +55,9 @@ import Testing
         #expect(
             InterviewText.notice(.lastQuestion)
                 == "Dernière question : après votre réponse, Supervox rédige le prompt.")
+        #expect(
+            InterviewText.notice(.lastWordsLost)
+                == "Votre dernière phrase n'a pas pu être transcrite : le prompt est rédigé sans elle.")
     }
 
     @Test("un échec du modèle rapide se dit par la phrase du tour, jamais par le texte de l'erreur")
@@ -187,7 +190,7 @@ import Testing
         ]
         expected += Self.everyRewriteFailure.map(InterviewText.turnFailure)
         expected += [
-            ConversationNotice.notUnderstood, .voiceFellBack, .voiceUnavailable, .proposal, .lastQuestion,
+            ConversationNotice.notUnderstood, .voiceFellBack, .voiceUnavailable, .proposal, .lastQuestion, .lastWordsLost,
         ].map(InterviewText.notice)
         expected += InterviewText.knownFailureCodes.flatMap { code in
             [InterviewText.failure(.microphone(code)), InterviewText.failure(.engine(code))]

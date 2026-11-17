@@ -218,6 +218,66 @@ struct ConversationFailureTests {
         expectCleanEnd(h)
     }
 
+    /// Revue de la tâche 6, m-5 : « conclure » après un tour, avec un passage ouvert dont la transcription échoue. Les tours déjà là
+    /// suffisent : le prompt est rédigé sans cette dernière phrase, et un avis le dit (avant la fin), au lieu d'une panne.
+    @Test func concludeWhenTheLastWordsCannotBeTranscribedConcludesWithTheEarlierTurnsAndSaysSo() async throws {
+        let second = try #require(twoTurns.dropFirst().first)
+        let h = ConversationHarness(turns: twoTurns, transcripts: { $0 == 0 ? .text("t1") : .fail(TranscriberError.engine("panne")) },
+                                    fast: [question("Une question ?")])
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.state(.listening), count: 2)
+        pushPart(of: second, blocks: 0..<3, into: h)
+        await log.wait(9, where: isLevel)
+
+        await h.chain.conclude()
+        await log.waitForEnd()
+
+        #expect(h.transcriber.calls.count == 2)
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Une question ?")))
+        #expect(log.items.filter { $0 == .notice(.lastWordsLost) }.count == 1)
+        #expect(h.strong.calls == 1)
+        expectCleanEnd(h)
+    }
+
+    /// La même chose quand la transcription de ces derniers mots dépasse son délai (attente pilotée, jamais un vrai délai).
+    @Test func concludeWhenTheLastWordsTimeOutConcludesWithTheEarlierTurnsAndSaysSo() async throws {
+        let second = try #require(twoTurns.dropFirst().first)
+        let h = ConversationHarness(turns: twoTurns, transcripts: { $0 == 0 ? .text("t1") : .hold }, fast: [question("Une question ?")])
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.state(.listening), count: 2)
+        pushPart(of: second, blocks: 0..<3, into: h)
+        await log.wait(9, where: isLevel)
+
+        await h.chain.conclude()
+        await h.transcriber.waitForCalls(2)
+        await h.transcriptionSleeper.waitForSleeps(2)   // la limite de la transcription finale attend
+        h.transcriptionSleeper.tick()
+        await log.waitForEnd()
+
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Une question ?")))
+        #expect(log.items.contains(.notice(.lastWordsLost)))
+        expectCleanEnd(h)
+    }
+
+    /// Sans aucun tour avant, il n'y a rien pour conclure : la panne de la transcription reste une panne, sans cet avis.
+    @Test func concludeWhenTheOnlyWordsCannotBeTranscribedStillEndsFailed() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: { _ in .fail(TranscriberError.engine("panne")) })
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        for block in 0..<3 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }
+        await log.wait(3, where: isLevel)
+
+        await h.chain.conclude()
+        await log.waitForEnd()
+
+        #expect(log.end == .failed(.engine(ConversationFailure.Code.transcriptionFailed), Conversation()))
+        #expect(!log.items.contains(.notice(.lastWordsLost)))
+        #expect(h.strong.calls == 0)
+        expectCleanEnd(h)
+    }
+
     @Test func cancelWithAnOpenPassageTranscribesNothing() async {
         let turn = TurnScript(base: 0)
         let h = ConversationHarness(turns: [turn], transcripts: texts("jamais"))
