@@ -49,7 +49,8 @@ func expectFreshDetectorForEachTurn(_ h: ConversationHarness, sourceLocation: So
     var offset = 0
     for turn in h.turns {
         #expect(marks.contains(offset), "aucune remise à neuf avant le bloc \(offset)", sourceLocation: sourceLocation)
-        let inside = (offset + turn.start + 1)...(offset + turn.blocks - 1)
+        // Intervalle semi-ouvert, vide (et non fatal) pour un tour trop court pour avoir un intérieur.
+        let inside = (offset + turn.start + 1)..<max(offset + turn.blocks, offset + turn.start + 1)
         #expect(!marks.contains(where: inside.contains), "remise à neuf pendant le passage \(inside)", sourceLocation: sourceLocation)
         offset += turn.blocks
     }

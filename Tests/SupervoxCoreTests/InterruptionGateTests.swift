@@ -86,7 +86,7 @@ struct InterruptionGateTests {
     @Test func halfDenseFramesInterruptAtTheWindowLimitAndNotJustBeyond() {
         func gate(lastLoudFrame: Int) -> InterruptionGate {
             var gate = InterruptionGate(minDuration: 0.30, level: -30)
-            for index in 0...lastLoudFrame {
+            for index in stride(from: 0, through: lastLoudFrame, by: 1) {
                 let isLoud = (index < 28 && index % 2 == 0) || index == lastLoudFrame
                 gate.append(frames(1, amplitude: isLoud ? loud : quiet))
             }

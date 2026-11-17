@@ -43,7 +43,7 @@ func isTurnEnded(_ event: ConversationEvent) -> Bool {
 
 /// Termine les clips en file un à un (mode `.manual`), jusqu'au `upTo`-ième accepté par `play`.
 private func playAll(_ h: ConversationHarness, upTo plays: Int) async {
-    for played in 1...plays {
+    for played in stride(from: 1, through: plays, by: 1) {   // vide pour 0 ou moins, jamais fatal
         await h.audio.plays.wait(atLeast: played)
         h.audio.inner.finishPlayback(.played)
         h.audio.inner.flushEnds()
@@ -536,6 +536,32 @@ struct ConversationInterruptionTests {
         let call = try #require(h.transcriber.calls.dropFirst().first)
         #expect(call.clip == AudioClip(samples: loudSamples(0..<7000), sampleRate: 16000))
         #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
+    }
+
+    // MARK: Une phrase qui n'existe pas (revue de la tâche 6, m-1)
+
+    /// La garde de génération écarte déjà toute entrée d'une réplique abandonnée ; si un glissement futur en laissait passer une, la
+    /// fin d'un clip d'une phrase qui n'existe pas est ignorée, sans planter le processus (sans garde : indice hors limites).
+    @Test func theEndOfAClipForASentenceThatDoesNotExistIsIgnoredWithoutCrashing() async {
+        let h = ConversationHarness()
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        await h.chain.finishClip(3, .played)
+        await finish(h)
+        #expect(!log.items.contains { if case .sentencePlayed = $0 { true } else { false } })
+    }
+
+    /// Une synthèse, réussie ou en panne, pour une phrase qui n'existe pas : ignorée. Ni avis de voix, ni question comptée.
+    @Test func aSynthesisForASentenceThatDoesNotExistIsIgnored() async {
+        let h = ConversationHarness()
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        await h.chain.deliver(3, .failure(SpeechError.timedOut))
+        await h.chain.deliver(4, .success(Speech(clip: AudioClip(samples: [0.1], sampleRate: 16000))))
+        #expect(await h.chain.voiceUsable)
+        #expect(await h.chain.questionsAsked == 0)
+        await finish(h)
+        #expect(!log.items.contains(.notice(.voiceUnavailable)) && !log.items.contains(.state(.speaking)))
     }
 
     // MARK: Ce qui attend dans le flux est abandonné (I-3)

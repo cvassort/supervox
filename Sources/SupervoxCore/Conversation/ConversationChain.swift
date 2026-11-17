@@ -361,7 +361,9 @@ public actor ConversationChain: ConversationEngine {
     /// Ce qui suit une entrée : la transcription suivante, ou la réplique quand plus rien de la personne n'est en attente.
     func proceed() async -> TalkOutcome? {
         if transcription == nil, !clipsToTranscribe.isEmpty {
-            // L'aperçu est annulé et attendu avant : le moteur de transcription n'a jamais deux appels en même temps.
+            // L'aperçu est annulé et attendu avant : le moteur de transcription n'a pas deux appels en même temps, **pour un moteur
+            // qui écoute l'annulation**. Un aperçu abandonné par `Deadline` (moteur sourd) peut encore tourner quand la transcription
+            // du tour démarre ; la réentrance des moteurs locaux n'est pas vérifiée (revue de la tâche 6, m-8).
             await stopPreview()
             if let stop = interruption() { return stop }
             startTranscription(clipsToTranscribe.removeFirst())

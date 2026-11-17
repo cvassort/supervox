@@ -202,11 +202,12 @@ struct ConversationFailureTests {
     }
 
     @Test func concludeWithAnOpenPassageAfterATurnAddsItAfterTheReply() async throws {
+        let second = try #require(twoTurns.dropFirst().first)
         let h = ConversationHarness(turns: twoTurns, transcripts: texts("t1", "t2"), fast: [question("Une question ?")])
         let log = await h.start()
         await h.say(0)
         await log.wait(.state(.listening), count: 2)
-        pushPart(of: twoTurns[1], blocks: 0..<3, into: h)   // la voix s'ouvre au bloc 1 du second tour
+        pushPart(of: second, blocks: 0..<3, into: h)   // la voix s'ouvre au bloc 1 du second tour
         await log.wait(9, where: isLevel)
 
         await h.chain.conclude()

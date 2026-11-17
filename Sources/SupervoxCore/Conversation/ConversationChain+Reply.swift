@@ -238,6 +238,9 @@ extension ConversationChain {
         if !voiceUsable {
             for index in reply.queue.takeAllPending() { show(index) }
         } else if let index = reply.queue.nextToSynthesize() {
+            // Garde d'indice : la garde de génération écarte déjà toute entrée d'une réplique abandonnée ; un glissement futur doit
+            // échouer sans planter le processus (revue de la tâche 6, m-1).
+            guard reply.sentences.indices.contains(index) else { return }
             let text = reply.sentences[index]
             let voice = voice
             let inputs = inputSink
@@ -253,6 +256,7 @@ extension ConversationChain {
     }
 
     func deliver(_ index: Int, _ result: Result<Speech, any Error>) {
+        guard reply.sentences.indices.contains(index) else { return }   // une phrase qui n'existe pas : ignorée (m-1)
         switch result {
         case .failure(let error):
             // Rien à dire n'est la panne d'aucune voix : la phrase est sautée. Une synthèse annulée aussi (la réplique se range).
@@ -302,6 +306,7 @@ extension ConversationChain {
     }
 
     func finishClip(_ index: Int, _ end: PlaybackEnd) {
+        guard reply.sentences.indices.contains(index) else { return }   // une phrase qui n'existe pas : ignorée, sans planter (m-1)
         switch end {
         case .played:
             reply.outcomes[index] = .played
