@@ -194,6 +194,28 @@ struct ConversationFailureTests {
         expectCleanEnd(h)
     }
 
+    /// Même instant, `cancel()` : la synthèse est annulée et attendue avant `.finished` (relevé à cet instant), rien n'est joué,
+    /// aucune question n'est comptée, et le modèle fort n'est jamais sollicité.
+    @Test func cancelWhileTheFirstSentenceIsSynthesizedCancelsTheSynthesisBeforeTheEnd() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [question("Un. Deux.")],
+                                    speech: ScriptedSpeech(reply: { _, _ in .hold }))
+        let cancelledAtFinish = CallbackBox<Int>()
+        let speech = h.speech
+        h.atFinish { cancelledAtFinish.set(speech.cancelledCalls) }
+        let log = await h.start()
+        await h.say(0)
+        await h.speech.waitForCalls(1)
+
+        await h.cancel()
+        await log.waitForEnd()
+
+        #expect(cancelledAtFinish.value == 1)
+        #expect(h.speech.texts == ["Un."] && h.audio.inner.played.isEmpty)
+        #expect(!log.items.contains(where: isSpeakingStarted))
+        #expect(log.end == .cancelled && h.strong.calls == 0)
+        expectCleanEnd(h)
+    }
+
     /// Pendant la réflexion : à l'instant de `.finished`, aucune attente de l'entretien ne vit (aperçu, chien de garde, limite de
     /// transcription) et le micro est arrêté ; la requête au modèle rapide est fermée par l'annulation. Elle l'est **après** coup :
     /// l'appel au modèle vit dans la tâche de travail de `Deadline`, que `Deadline` annule sans l'attendre (un moteur peut être sourd) ;
