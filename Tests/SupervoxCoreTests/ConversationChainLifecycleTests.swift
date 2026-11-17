@@ -259,7 +259,7 @@ struct ConversationBreakdownTests {
         await log.waitForEnd()
 
         // La raison est un code, jamais le message de l'erreur.
-        #expect(log.end == .failed(.engine("transcription : engine"), conversation("t1", "Une question ?")))
+        #expect(log.end == .failed(.engine("transcriptionFailed"), conversation("t1", "Une question ?")))
         #expect(h.strong.calls == 0)
         expectCleanEnd(h)
     }
@@ -271,7 +271,7 @@ struct ConversationBreakdownTests {
         await h.say(0)
         await log.waitForEnd()
 
-        #expect(log.end == .failed(.engine("erreur inattendue"), Conversation()))
+        #expect(log.end == .failed(.engine("detectorFailed"), Conversation()))
         expectCleanEnd(h)
     }
 
@@ -282,7 +282,7 @@ struct ConversationBreakdownTests {
         await h.say(0)
         await log.waitForEnd()
 
-        #expect(log.end == .failed(.microphone("fréquence du micro inutilisable (16000 Hz)"), Conversation()))
+        #expect(log.end == .failed(.microphone("unusableSampleRate"), Conversation()))
         expectCleanEnd(h)
     }
 
@@ -300,7 +300,7 @@ struct ConversationBreakdownTests {
         h.watchdogSleeper.tick()
 
         await log.waitForEnd()
-        #expect(log.end == .failed(.microphone("le micro s'est arrêté pendant l'entretien"), Conversation()))
+        #expect(log.end == .failed(.microphone("silent"), Conversation()))
         expectCleanEnd(h)
     }
 
@@ -335,7 +335,7 @@ struct ConversationBreakdownTests {
         h.watchdogSleeper.tick()
 
         await log.waitForEnd()
-        #expect(log.end == .failed(.microphone("le micro s'est arrêté pendant l'entretien"), conversation("t1", "Une question ?")))
+        #expect(log.end == .failed(.microphone("silent"), conversation("t1", "Une question ?")))
         expectCleanEnd(h)
     }
 
@@ -350,7 +350,7 @@ struct ConversationBreakdownTests {
         h.watchdogSleeper.tick()
 
         await log.waitForEnd()
-        #expect(log.end == .failed(.microphone("le micro s'est arrêté pendant l'entretien"), conversation("t1")))
+        #expect(log.end == .failed(.microphone("silent"), conversation("t1")))
         #expect(h.audio.inner.stopPlaybackCount == 1)
         expectCleanEnd(h)
     }

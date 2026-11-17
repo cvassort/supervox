@@ -243,9 +243,13 @@ public actor ConversationChain: ConversationEngine {
         emit(.state(.preparing))
         do {
             try await detector.prepare()
+        } catch {
+            return interruption() ?? .failed(.engine(ConversationFailure.Code.detectorFailed))
+        }
+        do {
             try await transcriber.prepare()
         } catch {
-            return interruption() ?? .failed(.engine(Self.reason(of: error)))
+            return interruption() ?? .failed(.engine(Self.transcriptionCode(of: error)))
         }
         await renew()
         if let stop = interruption() { return stop }
@@ -254,7 +258,7 @@ public actor ConversationChain: ConversationEngine {
         do {
             try audio.start { chunk in intake.deliver(chunk, at: clock()) }
         } catch {
-            return .failed(.microphone(Self.reason(of: error)))
+            return .failed(.microphone(Self.microphoneCode(of: error)))
         }
         audioOpen = true
         // Le délai de la première tranche court depuis l'ouverture du micro, non depuis le début de la préparation.
@@ -348,20 +352,19 @@ public actor ConversationChain: ConversationEngine {
     private func process(_ chunk: AudioChunk) async -> Listening? {
         if resampler == nil || inputRate != chunk.sampleRate {
             guard let made = makeResampler(chunk.sampleRate, transcriberSampleRate) else {
-                let rate = chunk.sampleRate.isFinite ? "\(Int(chunk.sampleRate.rounded()))" : "?"
-                return .failed(.microphone("fréquence du micro inutilisable (\(rate) Hz)"))
+                return .failed(.microphone(ConversationFailure.Code.unusableSampleRate))
             }
             resampler = made
             inputRate = chunk.sampleRate
         }
         guard let resampler else { return nil }
         let converted = resampler.push(chunk.samples)
-        if resampler.hasFailed { return .failed(.microphone("la conversion de l'audio a échoué")) }
+        if resampler.hasFailed { return .failed(.microphone(ConversationFailure.Code.conversionFailed)) }
         for block in timeline.append(converted) {
             do {
                 if let event = try await detector.process(block) { timeline.apply(event) }
             } catch {
-                return Task.isCancelled ? .interrupted : .failed(.engine(Self.reason(of: error)))
+                return Task.isCancelled ? .interrupted : .failed(.engine(ConversationFailure.Code.detectorFailed))
             }
             // Le silence qui termine le tour est celui du détecteur : le premier passage fermé est le tour.
             if let segment = timeline.closedSegments.first { return .turn(paddedClip(of: segment)) }
@@ -424,7 +427,7 @@ public actor ConversationChain: ConversationEngine {
         case .success(let text):
             return .text(text)
         case .failure(let error):
-            return error is CancellationError || task.isCancelled ? .cancelled : .failed(Self.reason(of: error))
+            return error is CancellationError || task.isCancelled ? .cancelled : .failed(Self.transcriptionCode(of: error))
         }
     }
 
@@ -446,7 +449,7 @@ public actor ConversationChain: ConversationEngine {
         // Avant toute tranche, la tolérance est celle de l'ouverture du micro ; ensuite, celle de l'écart entre deux tranches.
         let limit = intake.hasSeenAChunk ? watchdog.timeout : watchdog.firstChunkTimeout
         guard now() - intake.lastArrival >= limit else { return true }
-        fail(.microphone("le micro s'est arrêté pendant l'entretien"))
+        fail(.microphone(ConversationFailure.Code.silent))
         return false
     }
 
@@ -694,23 +697,30 @@ public actor ConversationChain: ConversationEngine {
         emit(.speakingStarted(question: questionsAsked))
     }
 
-    // MARK: Raisons de panne
+    // MARK: Codes de panne
 
-    /// Une raison technique de panne : un code, jamais le texte d'une erreur (qui peut porter une adresse ou du texte dit).
-    private static func reason(of error: any Error) -> String {
-        switch error {
-        case let capture as AudioCaptureError:
-            return capture.reason
-        case let engine as TranscriberError:
-            switch engine {
-            case .unsupportedSampleRate: return "transcription : unsupportedSampleRate"
-            case .notPrepared: return "transcription : notPrepared"
-            case .unsupportedLocale: return "transcription : unsupportedLocale"
-            case .vocabularyUnavailable: return "transcription : vocabularyUnavailable"
-            case .engine: return "transcription : engine"
-            }
-        default:
-            return "erreur inattendue"
+    /// Le code d'une panne à l'ouverture du micro : le genre de l'erreur de la capture, jamais son message (qui peut citer un
+    /// périphérique ou une erreur du système).
+    private static func microphoneCode(of error: any Error) -> String {
+        switch error as? AudioCaptureError {
+        case .microphoneAccessDenied?: return ConversationFailure.Code.microphoneAccessDenied
+        case .noInputDevice?: return ConversationFailure.Code.noInputDevice
+        case .alreadyRunning?: return ConversationFailure.Code.alreadyRunning
+        case .engineFailed?: return ConversationFailure.Code.engineFailed
+        case .notRunning?: return ConversationFailure.Code.notRunning
+        case nil: return ConversationFailure.Code.unexpected
+        }
+    }
+
+    /// Le code d'une panne du moteur de transcription : le genre de l'erreur, jamais son texte (qui peut porter une adresse ou du
+    /// texte dit).
+    private static func transcriptionCode(of error: any Error) -> String {
+        switch error as? TranscriberError {
+        case .unsupportedSampleRate?: return ConversationFailure.Code.transcriptionUnsupportedSampleRate
+        case .notPrepared?: return ConversationFailure.Code.transcriptionNotPrepared
+        case .unsupportedLocale?: return ConversationFailure.Code.transcriptionUnsupportedLocale
+        case .vocabularyUnavailable?: return ConversationFailure.Code.transcriptionVocabularyUnavailable
+        case .engine?, nil: return ConversationFailure.Code.transcriptionFailed
         }
     }
 }

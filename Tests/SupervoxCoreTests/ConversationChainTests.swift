@@ -68,9 +68,26 @@ struct ConversationPreparationTests {
         let events = await log.waitForEnd()
 
         #expect(events == [.state(.preparing), .state(.finished),
-                           .finished(.failed(.microphone("aucun micro utilisable n'a été trouvé"), Conversation()))])
+                           .finished(.failed(.microphone("noInputDevice"), Conversation()))])
         #expect(h.audio.inner.log.isEmpty && !h.audio.inner.isRunning)   // jamais ouvert, donc jamais fermé
         #expect(h.previewSleeper.started == 0 && h.watchdogSleeper.started == 0)   // aucune tâche de surveillance lancée
+    }
+
+    /// Une panne du micro ne porte qu'un code stable : jamais la phrase de `AudioCaptureError.reason`, jamais le message venu de la
+    /// capture (qui peut citer un périphérique ou une erreur du système).
+    @Test(arguments: [
+        (AudioCaptureError.microphoneAccessDenied("Autorisez le micro dans les Réglages"), "microphoneAccessDenied"),
+        (AudioCaptureError.noInputDevice, "noInputDevice"),
+        (AudioCaptureError.alreadyRunning, "alreadyRunning"),
+        (AudioCaptureError.engineFailed("détail du moteur audio : périphérique « Casque »"), "engineFailed"),
+        (AudioCaptureError.notRunning, "notRunning"),
+    ])
+    func aMicrophoneThatCannotStartGivesAStableCodeAndNeverTheCaptureMessage(error: AudioCaptureError, code: String) async {
+        let h = ConversationHarness(startError: error)
+
+        let events = await h.start().waitForEnd()
+
+        #expect(events.last == .finished(.failed(.microphone(code), Conversation())))
     }
 
     @Test func anEngineThatCannotBePreparedEndsTheEntretienBeforeTheMicrophoneOpens() async {
@@ -78,7 +95,7 @@ struct ConversationPreparationTests {
 
         let events = await h.start().waitForEnd()
 
-        #expect(events == [.state(.preparing), .state(.finished), .finished(.failed(.engine("erreur inattendue"), Conversation()))])
+        #expect(events == [.state(.preparing), .state(.finished), .finished(.failed(.engine("detectorFailed"), Conversation()))])
         #expect(h.audio.inner.log.isEmpty)
     }
 

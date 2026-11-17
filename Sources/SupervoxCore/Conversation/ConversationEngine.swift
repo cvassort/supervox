@@ -22,10 +22,35 @@ public enum ConversationNotice: Equatable, Sendable {
     case lastQuestion
 }
 
-/// Pourquoi un entretien s'est arrêté sur une panne. La chaîne est une raison technique (un code), jamais montrée.
+/// Pourquoi un entretien s'est arrêté sur une panne. La chaîne est un **code** stable (voir `Code`), jamais une phrase ni le message
+/// d'une erreur : l'interface le traduit par une table de phrases fixes.
 public enum ConversationFailure: Equatable, Sendable {
     case microphone(String)
     case engine(String)
+
+    /// Les codes que rend le moteur, par genre de panne. Une valeur ne change pas de sens d'une version à l'autre.
+    public enum Code {
+        // Micro (`.microphone`) : le genre de `AudioCaptureError`, puis les pannes en cours d'entretien.
+        public static let microphoneAccessDenied = "microphoneAccessDenied"
+        public static let noInputDevice = "noInputDevice"
+        public static let alreadyRunning = "alreadyRunning"
+        public static let engineFailed = "engineFailed"
+        public static let notRunning = "notRunning"
+        /// Plus aucune tranche n'arrive du micro (casque débranché, entrée changée).
+        public static let silent = "silent"
+        /// La fréquence du micro ne peut pas être convertie à 16 kHz.
+        public static let unusableSampleRate = "unusableSampleRate"
+        public static let conversionFailed = "conversionFailed"
+        // Moteurs (`.engine`).
+        public static let detectorFailed = "detectorFailed"
+        public static let transcriptionUnsupportedSampleRate = "transcriptionUnsupportedSampleRate"
+        public static let transcriptionNotPrepared = "transcriptionNotPrepared"
+        public static let transcriptionUnsupportedLocale = "transcriptionUnsupportedLocale"
+        public static let transcriptionVocabularyUnavailable = "transcriptionVocabularyUnavailable"
+        public static let transcriptionFailed = "transcriptionFailed"
+        /// Une erreur dont le genre n'est pas connu (jamais son texte).
+        public static let unexpected = "unexpected"
+    }
 }
 
 /// Comment l'entretien s'est terminé. Toute fin après au moins un tour de la personne rend la conversation : l'appelant ne perd
