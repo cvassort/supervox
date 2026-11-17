@@ -483,8 +483,8 @@ private let providerID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1"
         #expect(one != HotKey(keyCode: 49, modifiers: [.control]))
     }
 
-    /// Les comparaisons existantes ne voient pas le champ inconnu : le raccourci déjà signalé (`systemConflictShown`) reste
-    /// reconnu, un conflit de raccourcis se détecte comme avant.
+    /// La comparaison que fait `AppController` ne voit pas le champ inconnu : le raccourci déjà signalé
+    /// (`systemConflictShown`) reste reconnu comme tel.
     @Test func theComparisonsOfTheAppDoNotSeeAnUnknownFieldOfAHotKey() throws {
         let shown = try decode(HotKey.self, #"{"keyCode": 49, "modifiers": 256, "futur": 1}"#)
         let settings = AppSettings(
