@@ -10,7 +10,7 @@ import Testing
 private let twoTurns = [TurnScript(base: 0), TurnScript(base: 1_000_000)]
 
 /// Ce qui doit être vrai de toute fin d'entretien.
-private func expectCleanEnd(_ h: ConversationHarness, sourceLocation: SourceLocation = #_sourceLocation) {
+func expectCleanEnd(_ h: ConversationHarness, sourceLocation: SourceLocation = #_sourceLocation) {
     guard let log = h.log else {
         Issue.record("l'entretien n'a pas été démarré", sourceLocation: sourceLocation)
         return
