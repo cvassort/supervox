@@ -153,52 +153,123 @@ private let responses: [(text: String, shown: String, signal: ReplySignal)] = [
         #expect(filter.finish() == "")
     }
 
-    // MARK: Retenue bornée (m-3, m-4)
+    // MARK: Marqueurs imbriqués fournis par morceaux (contre-revue N1)
 
-    /// Une suite de `[` qui ne peut pas devenir un marqueur n'est pas retenue sans borne : au plus 12 caractères restent en
-    /// attente, le reste est rendu tout de suite ; `finish` rend ces 12 derniers.
-    @Test func aLongRunOfOpeningBracketsIsReleasedAtOnceExceptTheLastTwelve() {
+    /// Un marqueur connu écrit dans un autre, des préfixes longs, des suites qui recomposent un marqueur : tout ce que la retenue du
+    /// filtre doit tenir pour que le texte rendu ne dépende pas du découpage.
+    private static let nestedPieces = [
+        "[CONC", "[PROPOSER]", "LURE]", "[SU", "[SUITE]", "ITE]", "[", "abcde", " ", "[conclure]", "[Pro", "poser]", "[SUIT", "E]",
+    ]
+
+    /// Les textes de la famille : tous les assemblages de 1 à 3 morceaux, et de 4 morceaux pris parmi les cinq premiers, précédés
+    /// de « x » (la tête n'est donc pas un marqueur : seul le retrait « ailleurs » est en jeu), plus les cas de la contre-revue
+    /// mot pour mot.
+    private static let nestedTexts: [String] = {
+        var texts = [
+            "x [CONC[PROPOSER]LURE] et la suite",
+            "a [SU[SUITE]ITE] b [CONC[PROPOSER]LURE] c",
+            "Merci [SUIT[CONCLURE]E] au revoir",
+            "Merci [CONC[PROPOSER]LURE]abcdeLURE] fin",
+            "x [SU[SU[SUITE]ITE]ITE] fin", "x [CONC[PRO[PROPOSER]poser]LURE] fin", "x [[[[[[[[[[[[[[[[[[ y",
+        ]
+        for length in 1...3 {
+            var partial: [String] = [""]
+            for _ in 0..<length { partial = partial.flatMap { head in nestedPieces.map { head + $0 } } }
+            texts += partial.map { "x " + $0 }
+        }
+        var four: [String] = [""]
+        for _ in 0..<4 { four = four.flatMap { head in nestedPieces.prefix(5).map { head + $0 } } }
+        return texts + four.map { "x " + $0 }
+    }()
+
+    /// Le texte attendu, calculé sans le filtre : retirer les trois marqueurs (casse ignorée) tant qu'il en reste. Le système de
+    /// réécriture est confluent (aucun marqueur n'en contient un autre), l'ordre des retraits ne compte pas.
+    private static func withoutMarkers(_ text: String) -> String {
+        var current = text
+        while true {
+            var next = current
+            for marker in ["[suite]", "[proposer]", "[conclure]"] {
+                while let range = next.range(of: marker, options: .caseInsensitive) { next.removeSubrange(range) }
+            }
+            if next == current { return current }
+            current = next
+        }
+    }
+
+    private func checkNested(_ text: String, cuts: [Int], _ how: String) {
+        let block = run(text)
+        let chunked = run(text, cuts: cuts)
+        #expect(block.shown == Self.withoutMarkers(text), "en bloc : \(text.debugDescription)")
+        #expect(chunked.shown == block.shown, "\(how) : \(text.debugDescription) → \(chunked.shown.debugDescription), en bloc \(block.shown.debugDescription)")
+        #expect(chunked.signal == block.signal, "\(how) : \(text.debugDescription) : signal")
+        var soFar = ""
+        for step in chunked.steps {
+            soFar += step
+            #expect(block.shown.hasPrefix(soFar), "\(how) : \(text.debugDescription) : « \(soFar) » n'est pas un début du texte final")
+            let lowered = soFar.lowercased()
+            #expect(!lowered.contains("[suite]") && !lowered.contains("[proposer]") && !lowered.contains("[conclure]"),
+                    "\(how) : \(text.debugDescription) : un marqueur est sorti : \(soFar.debugDescription)")
+        }
+    }
+
+    /// Le texte est fourni en deux morceaux, à chaque point de coupure : rendu, signal et chaque étape comme d'un bloc.
+    @Test(.timeLimit(.minutes(2))) func nestedMarkersGiveTheSameTextForEveryCutInTwo() {
+        for text in Self.nestedTexts {
+            for cut in 0...text.unicodeScalars.count { checkNested(text, cuts: [cut], "coupure à \(cut)") }
+        }
+    }
+
+    /// Le texte est fourni un scalaire à la fois.
+    @Test(.timeLimit(.minutes(2))) func nestedMarkersGiveTheSameTextOneScalarAtATime() {
+        for text in Self.nestedTexts {
+            checkNested(text, cuts: Array(1..<max(text.unicodeScalars.count, 1)), "un scalaire à la fois")
+        }
+    }
+
+    /// Les deux cas du relecteur, mot pour mot, avec ce qu'ils doivent rendre.
+    @Test func theReviewersCasesGiveTheTextOfTheWholeReply() {
+        for (text, expected) in [("x [CONC[PROPOSER]LURE] et la suite", "x  et la suite"),
+                                 ("Merci [CONC[PROPOSER]LURE]abcdeLURE] fin", "Merci abcdeLURE] fin")] {
+            let single = run(text, cuts: Array(1..<text.unicodeScalars.count))
+            #expect(single.shown == expected)
+            #expect(run(text).shown == expected)
+        }
+    }
+
+    // MARK: Retenue non bornée (m-3 et m-4 parqués : la borne de `ca44394` a été retirée, voir N1)
+
+    /// Une suite de `[` qui ne peut pas devenir un marqueur reste retenue jusqu'à `finish`, comme avant `ca44394` : c'est le prix
+    /// d'un texte rendu indépendant du découpage. Les 42 `[` sortent à `finish`, dans l'ordre, sans rien perdre.
+    @Test func aLongRunOfOpeningBracketsIsHeldUntilFinish() {
         let brackets = String(repeating: "[", count: 42)
 
         var filter = ReplyFilter()
-        #expect(filter.feed("Bonjour " + brackets) == "Bonjour " + String(repeating: "[", count: 30))
-        #expect(filter.finish() == String(repeating: "[", count: 12))
+        #expect(filter.feed("Bonjour " + brackets) == "Bonjour ")
+        #expect(filter.finish() == brackets)
         #expect(filter.signal == .continue)
 
-        // Même chose quand la réponse commence par les crochets (la tête est décidée au 12ᵉ caractère : ce n'est pas un marqueur).
+        // Même chose quand la réponse commence par les crochets : la tête n'est pas un marqueur, mais tout est retenu.
         var leading = ReplyFilter()
-        #expect(leading.feed(brackets) == String(repeating: "[", count: 30))
-        #expect(leading.finish() == String(repeating: "[", count: 12))
+        #expect(leading.feed(brackets) == "")
+        #expect(leading.finish() == brackets)
     }
 
-    @Test func aLongRunOfMarkerStartsIsReleasedAtOnceExceptTheLastTwelve() {
-        let starts = String(repeating: "[s", count: 30)   // 60 caractères, chaque `[s` est un début de `[suite]`
+    @Test func aLongRunOfMarkerStartsIsHeldUntilItCannotBecomeAMarkerOrUntilFinish() {
+        let starts = String(repeating: "[s", count: 30)
         var filter = ReplyFilter()
-        let shown = filter.feed("Voir " + starts)
+        #expect(filter.feed("Voir " + starts) == "Voir ")
+        #expect(filter.finish() == starts)
 
-        #expect(shown == "Voir " + String(starts.dropLast(12)))
-        #expect(filter.finish() == String(starts.suffix(12)))
+        var broken = ReplyFilter()
+        #expect(broken.feed("Voir " + starts + "x") == "Voir " + starts + "x")
     }
 
-    /// Le texte rendu est le même qu'avant la borne tant que le texte retenu tient dans les 12 caractères : le marqueur de la fin
-    /// du flux coupé en deux, imbriqué sur moins de 12 caractères, reste retiré.
-    @Test func theBoundDoesNotChangeWhatIsRemovedWithinTheTwelveCharacters() {
+    /// Ce qui est retiré ne dépend d'aucune fenêtre : un marqueur imbriqué sur plus de 12 caractères est retiré comme les autres.
+    @Test func aMarkerNestedOverMoreThanTwelveCharactersIsStillRemoved() {
         #expect(run("a [SU[SUITE]ITE] b").shown == "a  b")
         #expect(run("a [SUITE] b [[SUITE]").shown == "a  b [")
         #expect(run("fin [SUIT", cuts: Array(1..<9)).shown == "fin [SUIT")
-    }
-
-    /// Pour chaque début de chacune des six réponses, ce que `finish` rend en plus de ce que `feed` a rendu tient en 12 scalaires.
-    @Test(arguments: responses.indices)
-    func whatIsHeldNeverExceedsTwelveCharacters(index: Int) {
-        let scalars = Array(responses[index].text.unicodeScalars)
-        for count in 0...scalars.count {
-            var prefix = String.UnicodeScalarView()
-            prefix.append(contentsOf: scalars[0..<count])
-            var filter = ReplyFilter()
-            _ = filter.feed(String(prefix))
-            #expect(filter.finish().unicodeScalars.count <= 12, "début de \(count) caractères")
-        }
+        #expect(run("x [SU[SU[SUITE]ITE]ITE] fin", cuts: Array(1..<27)).shown == "x  fin")
     }
 
     // MARK: Absent, inconnu, plus loin (règle 7)
