@@ -19,13 +19,14 @@ import os
 /// - **Une étape annulée se range avant de rendre.** L'écoute annule et attend l'aperçu ; la réplique annule et attend la requête et la
 ///   synthèse, coupe la lecture (`stopPlayback`) si des clips sont en file, attend leurs fins puis compte ce qui a été joué. Rien
 ///   ne survit donc à `talk`, et `run` n'a plus qu'à arrêter le chien de garde.
-/// - **La transcription d'un tour n'est pas coupée par `conclude()`** : elle part dans une tâche à part, que seuls `cancel()` ou une
-///   panne annulent. Ce que la personne vient de dire n'est pas perdu.
+/// - **La transcription d'un tour n'est coupée ni par `conclude()` ni par une panne du micro** : elle part dans une tâche à part, bornée
+///   par `Deadline` (`transcriptionTimeout`), que seul `cancel()` annule (et même un moteur sourd à l'annulation ne retient pas
+///   `cancel()`). Ce que la personne vient de dire n'est pas perdu.
 /// - **Une seule fin.** `.finished` est émis une fois, après le retour de `audio.stop()`, et le flux d'événements se termine
 ///   juste après.
 ///
 /// Limites connues, laissées à la tâche suivante : un passage de voix encore ouvert quand on conclut n'est pas transcrit ; une
-/// `ConversationChain` libérée sans `cancel()` n'est pas libérée (sa tâche la retient) ; la transcription n'a pas de délai.
+/// `ConversationChain` libérée sans `cancel()` n'est pas libérée (sa tâche la retient).
 public actor ConversationChain: ConversationEngine {
     // MARK: Dépendances
 
@@ -40,6 +41,9 @@ public actor ConversationChain: ConversationEngine {
     private let now: @Sendable () -> Double
     /// L'attente entre deux transcriptions provisoires.
     private let sleep: @Sendable (Double) async throws -> Void
+    /// L'attente de la limite de temps d'une transcription (`ConversationConfig.transcriptionTimeout`), injectée pour que les tests
+    /// la pilotent ; par défaut, la même que `sleep`.
+    private let transcriptionSleep: @Sendable (Double) async throws -> Void
     private let makeResampler: @Sendable (Double, Double) -> StreamingResampler?
     /// Pour les tests : reçoit chaque événement au moment où il est émis, dans l'ordre exact, avant le flux.
     private let eventTap: (@Sendable (ConversationEvent) -> Void)?
@@ -48,9 +52,11 @@ public actor ConversationChain: ConversationEngine {
                 fastModel: any LanguageModel, strongModel: any LanguageModel, voice: any SpeechSynthesizer,
                 config: ConversationConfig, watchdog: MicrophoneWatchdog = .system,
                 now: @escaping @Sendable () -> Double = { ProcessInfo.processInfo.systemUptime },
-                sleep: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
+                sleep: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+                transcriptionSleep: (@Sendable (Double) async throws -> Void)? = nil) {
         self.init(audio: audio, detector: detector, transcriber: transcriber, fastModel: fastModel, strongModel: strongModel,
                   voice: voice, config: config, watchdog: watchdog, now: now, sleep: sleep,
+                  transcriptionSleep: transcriptionSleep ?? sleep,
                   makeResampler: { StreamingResampler(from: $0, to: $1) }, eventTap: nil)
     }
 
@@ -58,6 +64,7 @@ public actor ConversationChain: ConversationEngine {
          fastModel: any LanguageModel, strongModel: any LanguageModel, voice: any SpeechSynthesizer,
          config: ConversationConfig, watchdog: MicrophoneWatchdog, now: @escaping @Sendable () -> Double,
          sleep: @escaping @Sendable (Double) async throws -> Void,
+         transcriptionSleep: @escaping @Sendable (Double) async throws -> Void,
          makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)?,
          eventTap: (@Sendable (ConversationEvent) -> Void)?) {
         self.audio = audio
@@ -70,6 +77,7 @@ public actor ConversationChain: ConversationEngine {
         self.watchdog = watchdog
         self.now = now
         self.sleep = sleep
+        self.transcriptionSleep = transcriptionSleep
         self.makeResampler = makeResampler ?? { StreamingResampler(from: $0, to: $1) }
         self.eventTap = eventTap
         timeline = SpeechTimeline(blockSize: detector.blockSize, sampleRate: transcriberSampleRate)
@@ -141,6 +149,9 @@ public actor ConversationChain: ConversationEngine {
         runTask = Task { await self.run(talk) }
         return stream
     }
+
+    /// Pour les tests : une panne est notée (le chien de garde l'a vue) et attend la fin de la transcription en cours.
+    var failureIsPending: Bool { pendingFailure != nil }
 
     public func conclude() async {
         guard started, stage == .talking, request == nil else { return }
@@ -231,12 +242,13 @@ public actor ConversationChain: ConversationEngine {
         return Task.isCancelled ? .cancelled : nil
     }
 
-    /// Une panne : annule la conversation en cours (la panne l'emporte sur une conclusion demandée, pas sur une annulation).
+    /// Une panne : arrête la conversation en cours (la panne l'emporte sur une conclusion demandée, pas sur une annulation). La
+    /// transcription d'un tour déjà capté n'est PAS annulée : elle va à son terme, ou à sa limite de temps, pour que ce tour soit dans la
+    /// conversation que rend la fin. Seul `cancel()` l'annule.
     private func fail(_ failure: ConversationFailure) {
         guard pendingFailure == nil, request != .cancel else { return }
         pendingFailure = failure
         talkTask?.cancel()
-        transcribeTask?.cancel()
     }
 
     private func talk() async -> TalkOutcome {
@@ -279,8 +291,12 @@ public actor ConversationChain: ConversationEngine {
                 let text: String
                 switch await transcribe(clip) {
                 case .cancelled: return interruption() ?? .cancelled
-                case .failed(let reason): return request == .cancel ? .cancelled : .failed(.engine(reason))
-                case .text(let raw): text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                case .failed(let code):
+                    // Une panne du micro déjà notée est la première cause ; sinon c'est celle du moteur de transcription.
+                    return request == .cancel ? .cancelled : .failed(pendingFailure ?? .engine(code))
+                case .text(let raw):
+                    if request == .cancel { return .cancelled }   // annulé pendant la transcription : rien n'entre dans la conversation
+                    text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 }
                 // Ce que la personne vient de dire entre dans la conversation même si l'on conclut, annule ou tombe en panne ensuite.
                 if !text.isEmpty {
@@ -398,7 +414,13 @@ public actor ConversationChain: ConversationEngine {
     private func previewPass() async {
         // `.infinity` : le passage ouvert en entier, pour que le texte provisoire soit celui du passage et non de sa fin.
         guard let start = timeline.openSegmentStart, let clip = timeline.openClip(maxSeconds: .infinity) else { return }
-        let text = try? await transcriber.transcribe(clip, language: config.language, vocabulary: config.vocabulary)
+        let engine = transcriber
+        let language = config.language
+        let vocabulary = config.vocabulary
+        // Bornée par `Deadline` : un moteur sourd à l'annulation ne retient pas l'écoute (qui attend cette passe) ni les passes suivantes.
+        let text = try? await Deadline.run(seconds: config.transcriptionTimeout, sleep: transcriptionSleep) {
+            try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
+        }
         // Le résultat d'une passe qui revient après la fermeture du passage, ou après l'écoute, ne se montre pas.
         guard let text, !Task.isCancelled, timeline.openSegmentStart == start else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -413,13 +435,22 @@ public actor ConversationChain: ConversationEngine {
         case cancelled
     }
 
-    /// La transcription part dans une tâche à part : `conclude()` n'annule pas ce qui vient d'être dit. Seuls `cancel()` et une
-    /// panne l'annulent.
+    /// La transcription part dans une tâche à part : `conclude()` et une panne du micro n'annulent pas ce qui vient d'être dit. Seul
+    /// `cancel()` l'annule ; et `Deadline` la borne (`transcriptionTimeout`) sans attendre un moteur qui n'écoute pas l'annulation :
+    /// `cancel()` rend donc la main même avec un moteur sourd. Rien ne part après une annulation.
     private func transcribe(_ clip: AudioClip) async -> Transcription {
+        if request == .cancel { return .cancelled }
         let engine = transcriber
         let language = config.language
         let vocabulary = config.vocabulary
-        let task = Task { try await engine.transcribe(clip, language: language, vocabulary: vocabulary) }
+        let timeout = config.transcriptionTimeout
+        let sleep = transcriptionSleep
+        // Aucune suspension entre le contrôle ci-dessus et la case `transcribeTask` : `cancel()` ne peut pas passer entre les deux.
+        let task = Task {
+            try await Deadline.run(seconds: timeout, sleep: sleep) {
+                try await engine.transcribe(clip, language: language, vocabulary: vocabulary)
+            }
+        }
         transcribeTask = task
         let result = await task.result
         transcribeTask = nil
@@ -427,6 +458,7 @@ public actor ConversationChain: ConversationEngine {
         case .success(let text):
             return .text(text)
         case .failure(let error):
+            if error is DeadlineExceeded { return .failed(ConversationFailure.Code.transcriptionTimedOut) }
             return error is CancellationError || task.isCancelled ? .cancelled : .failed(Self.transcriptionCode(of: error))
         }
     }

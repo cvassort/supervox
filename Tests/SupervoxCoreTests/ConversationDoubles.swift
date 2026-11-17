@@ -379,14 +379,14 @@ struct TurnScript {
 /// La configuration des tests : noms d'exemple, aucune attente réelle (la limite de chaque requête ne rend jamais, sauf
 /// annulation).
 func makeConversationConfig(maxQuestions: Int = 8, template: String = "", vocabulary: [String] = ["Supervox"],
-                            padding: Double = 0, previewInterval: Double = 1) -> ConversationConfig {
+                            padding: Double = 0, previewInterval: Double = 1, transcriptionTimeout: Double = 12.5) -> ConversationConfig {
     // Des nombres DISTINCTS de `RewritePolicy.turn` (1 024 / 30) et de `.standard` (16 000 / 120) : une politique écrite en dur dans le
     // moteur ne passerait pas pour celle de la configuration. Le harnais remplace l'attente (`sleep`) par un `TickSleeper`.
     let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
     return ConversationConfig(
         fastModel: "modele-exemple-rapide", strongModel: "modele-exemple-fort", maxQuestions: maxQuestions,
         template: template, language: "fr", vocabulary: vocabulary, interruptMinDuration: 0.3, interruptLevel: -30,
-        padding: padding, previewInterval: previewInterval,
+        padding: padding, previewInterval: previewInterval, transcriptionTimeout: transcriptionTimeout,
         turnPolicy: RewritePolicy(maxTokens: 777, timeout: 17, sleep: never),
         conclusionPolicy: RewritePolicy(maxTokens: 4_321, timeout: 43, sleep: never))
 }
@@ -404,6 +404,9 @@ final class ConversationHarness: @unchecked Sendable {
     /// L'attente de l'aperçu (`sleep` de l'entretien) et celle du chien de garde du micro : deux `TickSleeper`, aucune durée réelle.
     let previewSleeper = TickSleeper()
     let watchdogSleeper = TickSleeper()
+    /// L'attente de la limite de temps d'une transcription (tour ou aperçu), distincte de celle de l'aperçu : elle ne compte que les
+    /// limites demandées au moteur de transcription.
+    let transcriptionSleeper = TickSleeper()
     /// Les attentes des politiques de requête (délai du tour, délai de la conclusion) : elles enregistrent la durée que le moteur leur
     /// demande, ce qui prouve d'où vient chaque politique.
     let turnSleeper = TickSleeper()
@@ -415,11 +418,12 @@ final class ConversationHarness: @unchecked Sendable {
     /// - Parameters:
     ///   - transcripts: la réponse du moteur de transcription à son n-ième appel (aperçus compris).
     ///   - detectorFailure: le bloc de rang global donné fait échouer le détecteur.
+    ///   - transcriberHonorsCancellation: faux, le moteur de transcription est sourd à l'annulation (un appel retenu ne rend la main qu'à `release`).
     init(turns: [TurnScript] = [], transcripts: @escaping @Sendable (Int) -> ScriptedTranscriber.Reply = { _ in .text("réponse") },
          fast: [ScriptedModel] = [], strong: [ScriptedModel] = [modelReply("Prompt final")], speech: ScriptedSpeech = ScriptedSpeech(),
          completion: ScriptedAudioIO.Completion = .immediate, startError: AudioCaptureError? = nil,
          config baseConfig: ConversationConfig = makeConversationConfig(), detectorPrepareError: (any Error)? = nil,
-         detectorFailure: (block: Int, error: any Error)? = nil,
+         detectorFailure: (block: Int, error: any Error)? = nil, transcriberHonorsCancellation: Bool = true,
          makeResampler: (@Sendable (Double, Double) -> StreamingResampler?)? = nil) {
         self.turns = turns
         var config = baseConfig
@@ -437,7 +441,7 @@ final class ConversationHarness: @unchecked Sendable {
         detector = ScriptedDetector(blockSize: 1000, events: events)
         detector.prepareError = detectorPrepareError
         detector.processFailure = detectorFailure
-        transcriber = ScriptedTranscriber(honorsCancellation: true, reply: transcripts)
+        transcriber = ScriptedTranscriber(honorsCancellation: transcriberHonorsCancellation, reply: transcripts)
         self.fast = ModelSequence("fast", fast, journal: journal)
         self.strong = ModelSequence("strong", strong, journal: journal)
         self.speech = speech
@@ -450,11 +454,13 @@ final class ConversationHarness: @unchecked Sendable {
             }
         }
         let sleeper = previewSleeper
+        let transcriptionWait = transcriptionSleeper
         let audioIO = audio
         chain = ConversationChain(
             audio: audioIO, detector: detector, transcriber: transcriber, fastModel: self.fast, strongModel: self.strong,
             voice: speech, config: config, watchdog: watchdogSleeper.watchdog, now: self.clock.reader,
-            sleep: { try await sleeper.sleep($0) }, makeResampler: makeResampler, eventTap: tap)
+            sleep: { try await sleeper.sleep($0) }, transcriptionSleep: { try await transcriptionWait.sleep($0) },
+            makeResampler: makeResampler, eventTap: tap)
         let seen = self.state
         let log = audioIO
         self.strong.onComplete {

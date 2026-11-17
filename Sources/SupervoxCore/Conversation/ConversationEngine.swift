@@ -48,6 +48,8 @@ public enum ConversationFailure: Equatable, Sendable {
         public static let transcriptionUnsupportedLocale = "transcriptionUnsupportedLocale"
         public static let transcriptionVocabularyUnavailable = "transcriptionVocabularyUnavailable"
         public static let transcriptionFailed = "transcriptionFailed"
+        /// Le moteur de transcription n'a rien rendu dans `ConversationConfig.transcriptionTimeout`.
+        public static let transcriptionTimedOut = "transcriptionTimedOut"
         /// Une erreur dont le genre n'est pas connu (jamais son texte).
         public static let unexpected = "unexpected"
     }
@@ -115,16 +117,19 @@ public struct ConversationConfig: Sendable {
     public var interruptMinDuration: Double
     /// Le niveau, en dB pleine échelle, au-dessus duquel la voix compte pour couper la parole (lu par l'interruption).
     public var interruptLevel: Double
-    /// Secondes de silence gardées de chaque côté d'un passage transcrit.
+    /// Secondes de silence gardées de chaque côté d'un passage transcrit : 0,3 s, choix non mesuré (même valeur que la dictée).
     public var padding: Double
-    /// Secondes entre deux transcriptions provisoires d'un passage ouvert.
+    /// Secondes entre deux transcriptions provisoires d'un passage ouvert : 1 s, choix non mesuré (même valeur que la dictée).
     public var previewInterval: Double
+    /// Secondes accordées au moteur de transcription pour un passage (le tour, ou un aperçu) : au-delà, le moteur est abandonné
+    /// (`Deadline`, qui n'attend pas un moteur sourd à l'annulation). 120 s, comme `DictationConfig.finalTimeout` : choix non mesuré.
+    public var transcriptionTimeout: Double
     public var turnPolicy: RewritePolicy
     public var conclusionPolicy: RewritePolicy
 
     public init(fastModel: String, strongModel: String, maxQuestions: Int, template: String, language: String, vocabulary: [String],
                 interruptMinDuration: Double, interruptLevel: Double, padding: Double = 0.3, previewInterval: Double = 1,
-                turnPolicy: RewritePolicy = .turn, conclusionPolicy: RewritePolicy = .standard) {
+                transcriptionTimeout: Double = 120, turnPolicy: RewritePolicy = .turn, conclusionPolicy: RewritePolicy = .standard) {
         self.fastModel = fastModel
         self.strongModel = strongModel
         self.maxQuestions = maxQuestions
@@ -135,6 +140,7 @@ public struct ConversationConfig: Sendable {
         self.interruptLevel = interruptLevel
         self.padding = padding
         self.previewInterval = previewInterval
+        self.transcriptionTimeout = transcriptionTimeout
         self.turnPolicy = turnPolicy
         self.conclusionPolicy = conclusionPolicy
     }

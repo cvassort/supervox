@@ -22,7 +22,8 @@ private func expectCleanEnd(_ h: ConversationHarness, sourceLocation: SourceLoca
     } else {
         Issue.record("`audio.stop()` n'a pas rendu la main, ou `.finished` n'a pas été émis", sourceLocation: sourceLocation)
     }
-    #expect(!h.previewSleeper.isSleeping && !h.watchdogSleeper.isSleeping, sourceLocation: sourceLocation)
+    #expect(!h.previewSleeper.isSleeping && !h.watchdogSleeper.isSleeping && !h.transcriptionSleeper.isSleeping,
+            sourceLocation: sourceLocation)
     #expect(log.count(isFinished) == 1 && log.items.last.map(isFinished) == true, sourceLocation: sourceLocation)
     #expect(log.items.dropLast().last == .state(.finished), sourceLocation: sourceLocation)
     #expect(log.ended, sourceLocation: sourceLocation)
@@ -501,6 +502,144 @@ struct ConversationDoublesTests {
 
         let log = h.log
         #expect(log?.end == .cancelled)   // l'entretien a été arrêté par le double, sans attendre la limite de temps
+        expectCleanEnd(h)
+    }
+}
+
+// MARK: - La transcription d'un tour : délai, annulation, panne du micro
+
+@Suite(.timeLimit(.minutes(1)))
+struct ConversationTranscriptionTests {
+    // MARK: Annulation (I-2)
+
+    /// Un moteur de transcription peut être sourd à l'annulation (`Deadline.swift` le dit) : `cancel()` rend quand même la main, et le
+    /// micro est fermé. Le test est borné par la limite de la suite et `h.cancel()` rend la main à l'annulation du test.
+    @Test func cancelReturnsAndClosesTheMicrophoneEvenWhenTheTranscriptionEngineIgnoresCancellation() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: { _ in .hold }, transcriberHonorsCancellation: false)
+        let log = await h.start()
+        await h.say(0)
+        await h.transcriber.waitForCalls(1)
+
+        await h.cancel()
+
+        #expect(log.end == .cancelled)   // la fin est arrivée : `cancel()` n'a pas attendu le moteur
+        #expect(!h.audio.inner.isRunning)
+        h.transcriber.release(call: 0, text: "arrivé trop tard")   // le moteur répond enfin : rien n'en sort
+        #expect(!log.items.contains { if case .turnEnded = $0 { true } else { false } })
+        expectCleanEnd(h)
+    }
+
+    /// Le détecteur finit le passage pendant que `cancel()` arrive : le tour fermé ne part pas au moteur de transcription. (Le bloc qui
+    /// ferme le passage est retenu ; l'annulation de la tâche le libère, comme le ferait un détecteur qui l'écoute.)
+    @Test func noTranscriptionStartsAfterACancelThatArrivedWhileTheClosingBlockWasProcessed() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"))
+        let closing = h.detector.hold(block: 5)   // le dernier bloc du tour : le détecteur y annonce la fin du passage
+        let log = await h.start()
+        await h.say(0)
+        await closing.entered.wait()
+
+        await h.cancel()
+
+        #expect(h.transcriber.calls.isEmpty)
+        #expect(!log.items.contains { if case .turnEnded = $0 { true } else { false } })
+        #expect(log.end == .cancelled)
+        expectCleanEnd(h)
+    }
+
+    // MARK: Délai (I-2)
+
+    @Test func aTranscriptionThatNeverAnswersEndsFailedAfterTheTimeoutAndKeepsTheEarlierTurns() async {
+        let h = ConversationHarness(
+            turns: twoTurns, transcripts: { $0 == 0 ? .text("t1") : .hold }, fast: [question("Une question ?")],
+            transcriberHonorsCancellation: false)
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.state(.listening), count: 2)
+        await h.say(1)
+        await h.transcriber.waitForCalls(2)
+        await h.transcriptionSleeper.waitForSleeps(2)   // une limite par tour : la seconde est celle du tour retenu
+
+        h.transcriptionSleeper.tick()
+
+        await log.waitForEnd()
+        #expect(log.end == .failed(.engine("transcriptionTimedOut"), conversation("t1", "Une question ?")))
+        #expect(h.transcriptionSleeper.requested == [12.5, 12.5])   // la valeur vient de la configuration
+        h.transcriber.release(call: 1, text: "arrivé trop tard")
+        expectCleanEnd(h)
+    }
+
+    @Test func aPreviewThatNeverAnswersIsAbandonedAfterTheTimeoutAndTheNextOneGoesOut() async {
+        let h = ConversationHarness(
+            turns: [TurnScript(blocks: 6, start: 1, end: 4, base: 0)], transcripts: { $0 == 0 ? .hold : .text("bon") },
+            transcriberHonorsCancellation: false)
+        let log = await h.start()
+        await log.wait(.state(.listening))
+        await h.previewSleeper.waitForSleeps(1)
+        for block in 0..<3 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }   // la voix commence au bloc 1
+        await log.wait(3, where: isLevel)
+        h.previewSleeper.tick()
+        await h.transcriber.waitForCalls(1)   // le premier aperçu est retenu dans le moteur
+        await h.transcriptionSleeper.waitForSleeps(1)
+
+        h.transcriptionSleeper.tick()   // sa limite de temps est écoulée
+        await h.previewSleeper.waitForSleeps(2)   // la passe est finie : l'attente de la suivante commence
+        h.previewSleeper.tick()
+        await log.wait(.partialTranscript("bon"))   // la seconde passe a répondu
+
+        #expect(h.transcriber.calls.count == 2)
+        #expect(h.transcriptionSleeper.requested == [12.5, 12.5])
+        h.transcriber.release(call: 0, text: "arrivé trop tard")
+        await h.cancel()
+        await log.waitForEnd()
+        #expect(log.items.filter(isPartial) == [.partialTranscript("bon")])   // l'aperçu abandonné n'a rien montré
+    }
+
+    // MARK: Panne du micro pendant la transcription (I-1)
+
+    /// Le casque se débranche pendant qu'un tour est transcrit : la transcription (d'un audio déjà capté) va à son terme, et le tour
+    /// est dans la conversation que rend la fin.
+    @Test func aMicrophoneThatDiesWhileTheTurnIsBeingTranscribedDoesNotLoseThatTurn() async {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: { _ in .hold })
+        let log = await h.start()
+        await h.say(0)
+        await h.transcriber.waitForCalls(1)
+        await h.watchdogSleeper.waitForSleeps(1)
+
+        h.clock.advance(by: 10)
+        h.watchdogSleeper.tick()
+        _ = await waitUntil { await h.chain.failureIsPending }   // la panne est vue, la transcription est encore en cours
+        #expect(log.end == nil)
+        h.transcriber.release(call: 0, text: "ce que j'ai dit")
+
+        await log.waitForEnd()
+        #expect(log.items.contains(.turnEnded("ce que j'ai dit")))
+        #expect(log.end == .failed(.microphone("silent"), conversation("ce que j'ai dit")))
+        #expect(h.fast.calls == 0)   // la panne ne lance pas de réflexion
+        expectCleanEnd(h)
+    }
+
+    /// Si en plus le moteur ne répond jamais, le délai tranche : la fin porte la panne du micro (la première cause) et tout ce qui a
+    /// déjà été transcrit ; le tour en cours, que le moteur n'a pas rendu dans le délai, est perdu.
+    @Test func aMicrophoneThatDiesWhileAnEngineNeverAnswersEndsOnTheMicrophoneAfterTheTimeout() async {
+        let h = ConversationHarness(
+            turns: twoTurns, transcripts: { $0 == 0 ? .text("t1") : .hold }, fast: [question("Une question ?")],
+            transcriberHonorsCancellation: false)
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.state(.listening), count: 2)
+        await h.say(1)
+        await h.transcriber.waitForCalls(2)
+        await h.transcriptionSleeper.waitForSleeps(2)
+        await h.watchdogSleeper.waitForSleeps(1)
+
+        h.clock.advance(by: 10)
+        h.watchdogSleeper.tick()
+        _ = await waitUntil { await h.chain.failureIsPending }
+        h.transcriptionSleeper.tick()
+
+        await log.waitForEnd()
+        #expect(log.end == .failed(.microphone("silent"), conversation("t1", "Une question ?")))
+        h.transcriber.release(call: 1, text: "arrivé trop tard")
         expectCleanEnd(h)
     }
 }
