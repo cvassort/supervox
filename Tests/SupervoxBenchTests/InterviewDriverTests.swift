@@ -6,8 +6,9 @@ import Testing
 @testable import SupervoxBench
 
 // `InterviewDriver` : quand le banc pousse un tour, quand il conclut, ce qu'il note. Le moteur est un double qui n'émet que ce que le
-// test lui fait émettre, dans l'ordre exact que les tests du moteur établissent (aucun brief ne fait foi) ; le son est le vrai
-// `WavTurnFeed`, dont le test lit les tours poussés.
+// test lui fait émettre, dans l'ordre lu dans le code du moteur (`ConversationChain` et ses extensions) et dans ses doubles de test,
+// non d'après le brief ; le son est le vrai `WavTurnFeed`, dont le test lit les tours poussés. Ce que le vrai moteur émet est
+// vérifié à part, dans `InterviewCommandTests`.
 
 /// Un moteur d'entretien dont les événements viennent du test, et qui compte les appels qu'on lui fait.
 private final class EventScriptEngine: ConversationEngine {

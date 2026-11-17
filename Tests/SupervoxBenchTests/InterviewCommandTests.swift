@@ -362,10 +362,10 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
     @Test func neitherTheKeyNorTheAddressNorAModelNameIsWrittenAnywhere() async throws {
         // Le modèle répète tout ce qu'il connaît : sans retrait, la conversation du rapport porterait la clé, l'adresse et les noms.
         let echo = "Je suis joignable à \(endpointAddress), sur \(endpointAddress.dropFirst(8)), avec la clé \(endpointKey), "
-            + "modèles \(fastName) et \(strongName), voix \(voiceName) du modèle \(voiceModelName). Autre question ?"
+            + "modèles \(fastName) et \(strongName), voix du modèle \(voiceModelName). Autre question ?"
         let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
         let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6)], in: folder)
-        let secrets = [endpointKey, endpointAddress, "exemple.invalid", fastName, strongName, voiceModelName, voiceName]
+        let secrets = [endpointKey, endpointAddress, "exemple.invalid", fastName, strongName, voiceModelName]
 
         // Une fois avec un fichier de rapport, une fois sur la sortie standard.
         let report = folder.appendingPathComponent("rapport.md")
@@ -514,6 +514,29 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         let text = try report(file)
         #expect(text.contains("- Tours poussés : 2 sur 3 ; textes rendus par la transcription : 2."))
         #expect(text.contains("Vous : tour 1\n\nSupervox : Quelle est la première question ?\n\nVous : tour 2"))
+        #expect(text.contains("- Fin : prompt rédigé."))
+    }
+
+    @Test func aReplyThatConcludesEndsTheInterviewWithoutPushingTheNextFileOrAskingForTheConclusionTwice() async throws {
+        // Une réplique `[CONCLURE]` : le vrai moteur émet `.speakingEnded` puis `.state(.concluding)` et ne reprend pas l'écoute. Un
+        // pilote qui poussait le tour suivant dès `.speakingEnded` (au lieu du `.state(.listening)` qui suit) pousserait le tour 2.
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs((0..<3).map { .voice(turn: $0, seconds: 0.6) }, in: folder)
+        let session = InterviewRig(fast: [question("[CONCLURE]", "Merci, c'est noté.")])
+        let file = folder.appendingPathComponent("rapport.md")
+
+        try await parse(wavs + models + ["--output", file.path]).run(runtime: session.runtime())
+
+        #expect(session.transcriber.seen.count == 1)
+        #expect(session.fast.requests.count == 1)
+        #expect(session.strong.requests.count == 1)
+        #expect(session.voice.texts == ["Merci, c'est noté."])
+        let text = try report(file)
+        #expect(text.contains("- Tours poussés : 1 sur 3 ; textes rendus par la transcription : 1."))
+        // Une conclusion n'est pas une question : `.speakingStarted(question: 0)`.
+        #expect(text.contains("- Questions posées : 0 (au plus 8)."))
+        #expect(text.contains("- Signal de chaque réplique du modèle rapide : conclusion."))
+        #expect(text.contains("Vous : tour 1\n\nSupervox : Merci, c'est noté."))
         #expect(text.contains("- Fin : prompt rédigé."))
     }
 

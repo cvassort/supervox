@@ -79,6 +79,30 @@ private func drain(_ stream: AsyncThrowingStream<CompletionEvent, Error>) async 
     }
 }
 
+@Suite struct InterviewRedactionTests {
+    private let config = EndpointConfig(baseURL: URL(string: "https://exemple.invalid/v1")!, apiKey: "cle-exemple-secrete")
+
+    @Test func aModelNameIsRemovedAsAWholeWordOnlyAndTheKeyAndTheAddressAlways() {
+        let redact = interviewRedactor(config, names: ["rapide", "modele-fort-exemple"])
+        // Mot entier, casse ignorée ; jamais au milieu d'un mot ordinaire ni collé à un chiffre ou à une lettre.
+        #expect(redact("rapidement et rapide. Rapide, xrapide, rapide2, modele-fort-exemple2 puis modele-fort-exemple")
+                == "rapidement et <modèle>. <modèle>, xrapide, rapide2, modele-fort-exemple2 puis <modèle>")
+        // La clé et l'adresse partent où qu'elles soient, y compris collées à un mot.
+        #expect(redact("clé cle-exemple-secrete sur https://exemple.invalid/v1 ou exemple.invalid") == "clé *** sur <endpoint> ou <endpoint>")
+        #expect(redact("xcle-exemple-secretex") == "x***x")
+    }
+
+    @Test func aNameWithRegularExpressionCharactersIsTakenLiterally() {
+        let redact = interviewRedactor(config, names: ["modele.v2+(a|b)"])
+        #expect(redact("modele.v2+(a|b) et modeleXv2+(a|b)") == "<modèle> et modeleXv2+(a|b)")
+    }
+
+    @Test func theLongestNameIsRemovedFirst() {
+        let redact = interviewRedactor(config, names: ["voix", "modele-voix-exemple"])
+        #expect(redact("modele-voix-exemple et voix") == "<modèle> et <modèle>")
+    }
+}
+
 @Suite struct InterviewReportFormatTests {
     @Test func aFenceIsLongerThanAnyRunOfBackticksInsideIt() {
         #expect(InterviewReport.fenced("texte") == "```\ntexte\n```\n")

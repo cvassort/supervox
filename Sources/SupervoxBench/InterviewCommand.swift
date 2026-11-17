@@ -129,12 +129,14 @@ struct InterviewCommand: AsyncParsableCommand {
     @Option(name: .long, help: "L'identifiant de la voix du service (avec --voice-model).")
     var voice: String?
 
+    /// 8 questions : le défaut des réglages de l'application (`InterviewSettings.maxQuestions`, code lu).
     @Option(name: .long, help: "Nombre de questions au plus avant que l'entretien se conclue de lui-même.")
     var maxQuestions = 8
 
     @Option(name: .long, help: "Pousse chaque tour suivant ce nombre de secondes après le début de la lecture de la réplique : une interruption.")
     var interruptAfter: Double?
 
+    /// 0,5 s : le défaut des réglages de l'application (`InterviewSettings.turnSilence`, code lu).
     @Option(name: .long, help: "Silence qui ferme un tour pour le détecteur de voix, en secondes (0 exclu, 1 au plus).")
     var turnSilence = 0.5
 
@@ -176,7 +178,7 @@ struct InterviewCommand: AsyncParsableCommand {
         } catch EndpointError.missingVariable {
             throw InterviewError.missingEndpoint
         }
-        let redact = interviewRedactor(endpoint, names: [fastModel, strongModel, voiceModel, voice].compactMap { $0 })
+        let redact = interviewRedactor(endpoint, names: [fastModel, strongModel, voiceModel].compactMap { $0 })
         let say: @Sendable (String) -> Void = { runtime.say(redact($0)) }
         let warn: @Sendable (String) -> Void = { runtime.warn(redact($0)) }
         let reportFile = output.map { URL(fileURLWithPath: $0) }
@@ -194,6 +196,7 @@ struct InterviewCommand: AsyncParsableCommand {
             InterviewSetup(endpoint: endpoint, voiceModel: voiceModel, voice: voice, turnSilence: turnSilence))
         let feed = WavTurnFeed(turns: turns, wait: runtime.wait, now: runtime.now)
         let fast = SignalRecordingModel(engines.fast)
+        // 1 000 000 s (onze jours), choix non mesuré : une attente qui ne se termine qu'à l'annulation de sa tâche.
         let never: @Sendable (Double) async throws -> Void = { _ in try await Task.sleep(for: .seconds(1_000_000)) }
         // Sans aperçu : le passage est poussé d'un coup, un aperçu toutes les secondes ne montrerait rien et chargerait le moteur de
         // transcription pendant la mesure (son attente ne revient jamais). La limite de temps d'une transcription, elle, est réelle.

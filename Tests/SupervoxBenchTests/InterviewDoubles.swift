@@ -6,12 +6,12 @@ import SupervoxCore
 // modèle : le temps vient d'une horloge que le test fait avancer, et chaque attente est une porte que le test ouvre (ou qui rend la
 // main à l'annulation de la tâche : la limite de temps d'une suite échoue un test suspendu, elle ne le laisse pas en vie).
 
-/// Rend la main quand `condition` est vraie, en cédant le fil entre deux lectures (aucune durée : un compte de passages, borné).
-/// `false` si la borne est atteinte ou si la tâche est annulée : l'appelant l'exige par `#require`.
+/// Rend la main quand `condition` est vraie, en cédant le fil entre deux lectures (aucune durée, aucune borne qui dépende de la
+/// vitesse de la machine : comme `waitUntil` des tests du cœur, c'est la limite de temps de la suite qui fait échouer un test
+/// suspendu). `false` seulement si la tâche est annulée : l'appelant l'exige par `#require`.
 func settle(_ condition: @Sendable () -> Bool) async -> Bool {
-    for _ in 0..<2_000_000 {
+    while !Task.isCancelled {
         if condition() { return true }
-        if Task.isCancelled { return false }
         await Task.yield()
     }
     return condition()

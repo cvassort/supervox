@@ -67,12 +67,19 @@ final class SignalRecordingModel: LanguageModel {
 /// Retire d'un texte la clé, l'adresse (complète et nom d'hôte) et les noms de modèle de la ligne de commande. Tout ce que la commande
 /// écrit (rapport, sortie standard, sortie d'erreur) passe par elle : la conversation y est reproduite, et un modèle peut répéter ce
 /// qu'on lui a envoyé.
+///
+/// Un nom de modèle n'est retiré que **mot entier** (ni précédé ni suivi d'une lettre ou d'un chiffre), casse ignorée : un nom court
+/// ne doit pas abîmer les mots ordinaires de la conversation ni du prompt.
 func interviewRedactor(_ config: EndpointConfig, names: [String]) -> @Sendable (String) -> String {
     let endpoint = endpointRedactor(config)
-    let hidden = names.filter { !$0.isEmpty }.sorted { $0.count > $1.count }
+    let patterns = names.filter { !$0.isEmpty }.sorted { $0.count > $1.count }.map {
+        "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: $0) + "(?![\\p{L}\\p{N}])"
+    }
     return { text in
         var out = endpoint(text)
-        for name in hidden { out = out.replacingOccurrences(of: name, with: "<modèle>", options: .caseInsensitive) }
+        for pattern in patterns {
+            out = out.replacingOccurrences(of: pattern, with: "<modèle>", options: [.regularExpression, .caseInsensitive])
+        }
         return out
     }
 }
@@ -166,7 +173,10 @@ struct InterviewReport: Equatable {
             + "(`latency`) : la forme des requêtes est différente (historique de la conversation, consigne de système avec le nombre de "
             + "questions restantes). « Fin de tour » est la date où la dernière voix du fichier WAV a fini d'être poussée, avant le "
             + "silence qui la suit ; la lecture est simulée (aucun haut-parleur) : « fin de lecture simulée » compte la durée réelle du "
-            + "clip. Les dates sont lues quand la commande reçoit l'événement.\n\n"
+            + "clip. Les dates sont lues quand la commande reçoit l'événement. La voix d'un tour et les 2 secondes de silence qui la "
+            + "suivent sont poussées d'un coup, sans attente réelle : le silence de fin de tour n'est donc pas dans ces durées (la "
+            + "commande n'attend pas ce silence avant la transcription, comme le ferait un micro), et elles comprennent le temps que le "
+            + "détecteur et la transcription mettent à rattraper le fichier entier.\n\n"
 
         text += "## Résumé\n\n"
         text += "- Fin : \(endReason).\n"
