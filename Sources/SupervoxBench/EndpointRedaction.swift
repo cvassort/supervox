@@ -4,10 +4,11 @@ import SupervoxCore
 /// Partagée par `transcribe` et `latency` : tout message d'erreur qui sort d'une commande (rapport, JSON, console)
 /// passe par elle quand un endpoint est configuré.
 /// Retire d'un message l'adresse de l'endpoint (complète et nom d'hôte) et la clé.
-func endpointRedactor(_ config: EndpointConfig) -> (String) -> String {
+func endpointRedactor(_ config: EndpointConfig) -> @Sendable (String) -> String {
     let address = config.baseURL.absoluteString
-    var secrets = [address, address.hasSuffix("/") ? String(address.dropLast()) : address]
-    if let host = config.baseURL.host(), !host.isEmpty { secrets.append(host) }
+    var found = [address, address.hasSuffix("/") ? String(address.dropLast()) : address]
+    if let host = config.baseURL.host(), !host.isEmpty { found.append(host) }
+    let secrets = found
     let key = config.apiKey
     return { text in
         var out = key.isEmpty ? text : text.replacingOccurrences(of: key, with: "***")
