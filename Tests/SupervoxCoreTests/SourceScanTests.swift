@@ -173,7 +173,7 @@ import Testing
         let pattern = try Regex(Self.forbiddenErrorText)
         let folders = [
             "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Speech", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
-            "Sources/SupervoxApp/Language",
+            "Sources/SupervoxApp/Language", "Sources/SupervoxCore/Conversation",
         ]
         let offending = try folders.flatMap { folder in
             try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
@@ -258,6 +258,38 @@ import Testing
         #expect(!language.isEmpty)
         let offending = language.filter { $0.code.contains("localizedDescription") }.map(\.place)
         #expect(offending.isEmpty, "\(offending)")
+    }
+
+    /// L'entretien (`Core/Conversation`) ne rend que des codes de panne et des phrases fixes : jamais le texte brut d'une erreur
+    /// (`localizedDescription`), et aucun journal (le texte dit pourrait y passer). Ses rappels (`onChunk`, `onEnd`, `onText`) arrivent
+    /// sur le fil que le système choisit : rien n'y suppose le fil principal. Le dossier doit bien contenir le moteur, sans quoi le
+    /// balayage ne vérifierait rien.
+    static let forbiddenLogging = #"\bLogger\s*\(|\bos_log\s*\(|\bprint\s*\(|\bNSLog\s*\(|\bdebugPrint\s*\("#
+
+    @Test func theConversationEngineShowsNoRawErrorTextLogsNothingAndAssumesNoThread() throws {
+        let sources = try Self.sources(under: "Sources/SupervoxCore/Conversation")
+        #expect(sources.contains { $0.place == "ConversationChain.swift" }, "le balayage doit voir le moteur de l'entretien")
+        let logging = try Regex(Self.forbiddenLogging)
+        let mainThread = try Regex(Self.forbiddenMainThreadAssumption)
+        let offending = sources.filter {
+            $0.code.contains("localizedDescription") || $0.code.contains(logging) || $0.code.contains(mainThread)
+        }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "let log = Logger(subsystem: \"x\", category: \"y\")", "os_log(\"%@\", text)", "print(turn.text)", "NSLog(\"%@\", text)",
+        "debugPrint (reply)",
+    ])
+    func theLoggingPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenLogging)))
+    }
+
+    @Test func theLoggingPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenLogging)
+        for code in ["let footprint = 1", "func blueprint() {}", "emit(.notice(.notUnderstood))", "let logger = self.log"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
     }
 
     /// Les identifiants de mode fixes (`ModeChip.rawID`, `cleanedID`, `interviewID`) ne sont écrits qu'à un endroit, dans
