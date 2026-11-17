@@ -355,6 +355,32 @@ let exampleCorrectedStream =
     return "(raison introuvable)"
 }
 
+/// Le panneau pendant un entretien : l'état que le contrôleur de l'entretien y poserait, avec des textes inventés et neutres.
+@MainActor func interviewPanelModel(
+    phase: InterviewPhase, question: Int = 0, level: Float = 0, questionText: String = "", lastReply: String = "",
+    notice: String? = nil, holdNote: Bool = false, voiceProvider: String? = nil
+) -> PanelModel {
+    let model = panelModel(mode: ModeChip.interviewID)
+    var state = InterviewViewState(
+        maxQuestions: 6, privacy: InterviewText.privacy(provider: exampleProvider, voiceProvider: voiceProvider))
+    state.phase = phase
+    state.question = question
+    state.level = level
+    state.questionText = questionText
+    state.lastReply = lastReply
+    state.notice = notice
+    state.holdNote = holdNote
+    model.setInterview(state)
+    model.panelHasKeyboard = true
+    return model
+}
+
+let exampleInterviewQuestion = "Quel est l'objectif principal de ce prompt ?"
+let exampleInterviewReply = "Je voudrais un prompt qui résume des courriels longs en trois points."
+/// Une réplique plus longue que la borne de la vue (330 caractères) : le début est coupé, la fin gardée, la hauteur reste bornée.
+let exampleInterviewLongQuestion =
+    "D'accord, vous voulez des résumés en trois points, et je vous remercie de ces précisions. Avant de continuer, une dernière chose sur le public : pour qui sont-ils écrits, vos collègues, vos clients, ou seulement vous ? Et faut-il garder les noms propres, les dates et les montants, ou les retirer pour que le résumé reste court et lisible, même pour quelqu'un qui n'a pas suivi le dossier ?"
+
 // MARK: - Rendu
 
 /// La vue seule, posée dans une fenêtre hors écran, à la taille donnée ou à sa taille idéale.
@@ -371,7 +397,7 @@ let exampleCorrectedStream =
 ) throws {
     // La fenêtre de réglages et ses feuilles ont la frappe quand on les regarde : elles sont rendues comme une fenêtre clé (contrôles
     // actifs, interrupteurs à la couleur d'accent). Le panneau, lui, dit lui-même s'il a la frappe (`keyWindow`).
-    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme", "correction"].contains { name.hasPrefix($0) }
+    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme", "correction", "entretien"].contains { name.hasPrefix($0) }
     let keyWindow = requested || !isPanel
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
@@ -619,6 +645,35 @@ for dark in [false, true] {
     for (name, model, probe) in correctionCases {
         try render(
             PanelView(model: model, permissions: PermissionsModel(probe: probe), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
+    }
+
+    // L'entretien : un panneau tenu, où la vue de l'entretien prend la place de la dictée et les pastilles sont inactives. Le panneau a
+    // la frappe pendant un entretien (`keyWindow`), le bouton « Conclure » y prend sa couleur ; grisé en préparation et en conclusion.
+    let interviewCases: [(name: String, model: PanelModel)] = [
+        ("entretien-preparation", interviewPanelModel(phase: .preparing)),
+        ("entretien-ecoute", interviewPanelModel(
+            phase: .listening, question: 2, level: 0.7, questionText: exampleInterviewQuestion, lastReply: exampleInterviewReply,
+            holdNote: true)),
+        ("entretien-reflexion", interviewPanelModel(
+            phase: .thinking, question: 2, level: 0.35, questionText: exampleInterviewQuestion,
+            lastReply: exampleInterviewReply + " Et il faudrait garder le ton neutre.")),
+        ("entretien-parole", interviewPanelModel(
+            phase: .speaking, question: 3, level: 0.15, questionText: exampleInterviewLongQuestion,
+            lastReply: exampleInterviewReply, voiceProvider: "Fournisseur de voix d'exemple")),
+        ("entretien-proposition", interviewPanelModel(
+            phase: .listening, question: 5, level: 0.5, questionText: "Avez-vous autre chose à préciser avant que je rédige le prompt ?",
+            lastReply: exampleInterviewReply, notice: InterviewText.notice(.proposal))),
+        ("entretien-voix-indisponible", interviewPanelModel(
+            phase: .speaking, question: 1, level: 0, questionText: exampleInterviewQuestion, lastReply: "",
+            notice: InterviewText.notice(.voiceUnavailable))),
+        ("entretien-conclusion", interviewPanelModel(
+            phase: .concluding, question: 6, level: 0, questionText: "Merci, j'ai tout ce qu'il me faut : je rédige le prompt.",
+            lastReply: exampleInterviewReply)),
+    ]
+    for (name, model) in interviewCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {}),
             name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
     }
 

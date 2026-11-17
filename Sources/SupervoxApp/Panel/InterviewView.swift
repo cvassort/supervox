@@ -23,8 +23,10 @@ struct InterviewView: View {
                 Spacer(minLength: 0)
                 ConcludeButton(enabled: state.canConclude, action: conclude)
             }
-            if let cancel = state.cancelHint { DetailText(text: cancel) }
-            DetailText(text: state.privacy)
+            VStack(alignment: .leading, spacing: 4) {
+                if let cancel = state.cancelHint { DetailText(text: cancel) }
+                DetailText(text: state.privacy)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .top)
     }
@@ -41,7 +43,7 @@ struct InterviewView: View {
                 if let counter = state.counter {
                     Text(counter)
                         .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DetailText.systemSecondary)
                 }
                 if let hint = state.hint { DetailText(text: hint) }
             }
@@ -54,7 +56,7 @@ struct InterviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(InterviewText.supervoxLabel)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DetailText.systemSecondary)
             Text(state.shownQuestion)
                 .font(.callout)
                 .lineLimit(5)
@@ -70,7 +72,7 @@ struct InterviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(InterviewText.youLabel)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DetailText.systemSecondary)
             Text(reply)
                 .font(.callout)
                 .lineLimit(3)
@@ -204,9 +206,11 @@ struct ModeChips: View {
         ChipFlowLayout {
             ForEach(modes) { mode in
                 ModeChipButton(title: mode.title, isSelected: mode.id == selectedID) { select(mode.id) }
+                    // Le mode en cours reste lisible (un bouton inactif est estompé par le système) ; les autres, qu'on ne peut plus
+                    // choisir, s'effacent.
+                    .disabled(locked && mode.id != selectedID)
+                    .opacity(locked && mode.id != selectedID ? 0.5 : 1)
             }
         }
-        .disabled(locked)
-        .opacity(locked ? 0.5 : 1)
     }
 }

@@ -274,6 +274,23 @@ import Testing
         }
     }
 
+    private func panelImage(_ interview: InterviewViewState?) throws -> Data {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setInterview(interview)
+        let view = PanelView(model: model, permissions: PermissionsModel(probe: GrantedProbe()), openSettings: {}, quit: {})
+        return try image(of: view)
+    }
+
+    @Test("le panneau montre la vue de l'entretien à la place de la dictée tant qu'un entretien est posé")
+    func thePanelShowsTheInterviewInsteadOfTheDictation() throws {
+        let ready = try panelImage(nil)
+        let listening = try panelImage(state(.listening, question: 1, questionText: "Une question ?"))
+        let thinking = try panelImage(state(.thinking, question: 1, questionText: "Une question ?"))
+        #expect(listening != ready)
+        #expect(thinking != listening, "la vue de l'entretien ne suit pas la phase")
+        #expect(try panelImage(nil) == ready, "retirer l'entretien ramène la dictée")
+    }
+
     private func image(of view: some View) throws -> Data {
         let host = NSHostingView(rootView: view.padding(8))
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
@@ -282,4 +299,12 @@ import Testing
         host.cacheDisplay(in: host.bounds, to: bitmap)
         return try #require(bitmap.representation(using: .png, properties: [:]))
     }
+}
+
+/// Des permissions toutes accordées, pour que la ligne des permissions n'apparaisse pas.
+private struct GrantedProbe: PermissionsProbe {
+    func microphone() -> PermissionState { .granted }
+    func accessibility() -> PermissionState { .granted }
+    func requestMicrophone() async -> Bool { true }
+    func promptAccessibility() {}
 }

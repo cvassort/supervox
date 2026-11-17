@@ -24,7 +24,11 @@ public struct PanelView: View {
             if let welcome = model.welcome {
                 welcomeLine(welcome)
             }
-            dictation
+            if let interview = model.interview {
+                InterviewView(state: interview, conclude: { model.concludeInterview() })
+            } else {
+                dictation
+            }
             if let summary = permissions.summary {
                 permissionsLine(summary)
             }
