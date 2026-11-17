@@ -358,11 +358,12 @@ let exampleCorrectedStream =
 /// Le panneau pendant un entretien : l'état que le contrôleur de l'entretien y poserait, avec des textes inventés et neutres.
 @MainActor func interviewPanelModel(
     phase: InterviewPhase, question: Int = 0, level: Float = 0, questionText: String = "", lastReply: String = "",
-    notice: String? = nil, holdNote: Bool = false, voiceProvider: String? = nil
+    notice: String? = nil, holdNote: Bool = false, voiceProvider: String? = nil, textOnly: Bool = false, keyboard: Bool = true,
+    maxQuestions: Int = 6
 ) -> PanelModel {
     let model = panelModel(mode: ModeChip.interviewID)
     var state = InterviewViewState(
-        maxQuestions: 6, privacy: InterviewText.privacy(provider: exampleProvider, voiceProvider: voiceProvider))
+        maxQuestions: maxQuestions, privacy: InterviewText.privacy(provider: exampleProvider, voiceProvider: voiceProvider))
     state.phase = phase
     state.question = question
     state.level = level
@@ -370,16 +371,20 @@ let exampleCorrectedStream =
     state.lastReply = lastReply
     state.notice = notice
     state.holdNote = holdNote
+    state.textOnly = textOnly
     model.setInterview(state)
-    model.panelHasKeyboard = true
+    model.panelHasKeyboard = keyboard
     return model
 }
 
 let exampleInterviewQuestion = "Quel est l'objectif principal de ce prompt ?"
 let exampleInterviewReply = "Je voudrais un prompt qui résume des courriels longs en trois points."
-/// Une réplique plus longue que la borne de la vue (330 caractères) : le début est coupé, la fin gardée, la hauteur reste bornée.
+/// Une réplique de quatre lignes : la zone qui défile la montre entière.
 let exampleInterviewLongQuestion =
     "D'accord, vous voulez des résumés en trois points, et je vous remercie de ces précisions. Avant de continuer, une dernière chose sur le public : pour qui sont-ils écrits, vos collègues, vos clients, ou seulement vous ? Et faut-il garder les noms propres, les dates et les montants, ou les retirer pour que le résumé reste court et lisible, même pour quelqu'un qui n'a pas suivi le dossier ?"
+/// Un texte bien plus long que la zone qui défile (plusieurs paragraphes) : la zone est plafonnée, son début est visible.
+let exampleInterviewVeryLongQuestion =
+    (0..<4).map { _ in exampleInterviewLongQuestion }.joined(separator: "\n\n")
 
 // MARK: - Rendu
 
@@ -666,10 +671,21 @@ for dark in [false, true] {
             lastReply: exampleInterviewReply, notice: InterviewText.notice(.proposal))),
         ("entretien-voix-indisponible", interviewPanelModel(
             phase: .speaking, question: 1, level: 0, questionText: exampleInterviewQuestion, lastReply: "",
-            notice: InterviewText.notice(.voiceUnavailable))),
+            notice: InterviewText.notice(.voiceUnavailable), textOnly: true)),
         ("entretien-conclusion", interviewPanelModel(
             phase: .concluding, question: 6, level: 0, questionText: "Merci, j'ai tout ce qu'il me faut : je rédige le prompt.",
             lastReply: exampleInterviewReply)),
+        // Le pire cas réaliste de hauteur : une réplique et une réponse bien plus longues que la zone qui défile, l'avis le plus long,
+        // la note de maintien, la vie privée à deux fournisseurs de 40 caractères, la dernière question de douze.
+        ("entretien-pire-cas", interviewPanelModel(
+            phase: .listening, question: 12, level: 0.8, questionText: exampleInterviewVeryLongQuestion,
+            lastReply: exampleInterviewVeryLongQuestion, notice: InterviewText.failure(.engine("transcriptionNotPrepared")),
+            holdNote: true, voiceProvider: String(repeating: "V", count: 40), maxQuestions: 12)),
+        // Le panneau qui n'a pas la frappe : « Conclure » actif et grisé restent lisibles hors fenêtre clé.
+        ("entretien-preparation-sans-frappe", interviewPanelModel(phase: .preparing, keyboard: false)),
+        ("entretien-ecoute-sans-frappe", interviewPanelModel(
+            phase: .listening, question: 2, level: 0.7, questionText: exampleInterviewQuestion, lastReply: exampleInterviewReply,
+            keyboard: false)),
     ]
     for (name, model) in interviewCases {
         try render(
