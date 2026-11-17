@@ -36,7 +36,8 @@ struct InterviewTrace: Equatable {
 ///   conclusion émet `.speakingEnded` puis `.state(.concluding)`, et le moteur ne reprend pas l'écoute.
 /// - **Interruption** (`interruptAfter`) : le tour suivant est poussé `interruptAfter` secondes (attente injectée) après
 ///   `.speakingStarted`, pendant que la réplique est jouée. Si la réplique finit avant, il est poussé comme sans interruption. Un
-///   `.interrupted` n'est pas la fin d'une réplique à attendre : le tour qui l'a causée est déjà en route.
+///   `.interrupted` causé par le tour que le pilote vient de pousser n'est pas la fin d'une réplique à attendre (le tour est déjà en
+///   route) ; tout autre `.interrupted`, pendant la réplique au tour poussé, la clôt comme un `.speakingEnded`.
 /// - **Conclure.** Quand le prochain tour aurait dû être poussé et qu'il n'y en a plus : `conclude()`, une fois, et seulement si
 ///   `.state(.concluding)` n'a pas déjà été vu. Jamais juste après le dernier tour : le moteur relit ses drapeaux de fin avant chaque
 ///   entrée, les tranches encore en file ne seraient pas lues.

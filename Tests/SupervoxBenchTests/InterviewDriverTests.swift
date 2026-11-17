@@ -377,6 +377,34 @@ private func talk(_ texts: String...) -> Conversation {
         #expect(trace.interruptions == ["", ""])
     }
 
+    @Test func aReplyEndedBeforeAnythingWasHeardGivesItsQuestionBack() async throws {
+        // `.speakingEnded(heard: "")` : la réplique a commencé, puis l'entretien l'a rangée sans rien d'entendu (conclusion demandée
+        // pendant la première phrase) ; le moteur ne compte pas cette question (`closeReply`), le rapport non plus.
+        let rig = try Rig(turns: 1)
+        try await rig.send(.state(.listening), .turnEnded("un"))
+        try await rig.send(.state(.thinking), .speakingStarted(question: 1), .speakingEnded(heard: ""))
+        let first = try await rig.finish()
+        #expect(first.questions == 0)
+
+        let heard = try Rig(turns: 1)
+        try await heard.send(.state(.listening), .turnEnded("un"))
+        try await heard.send(.state(.thinking), .speakingStarted(question: 1), .speakingEnded(heard: "Une question ?"))
+        let second = try await heard.finish()
+        #expect(second.questions == 1)
+    }
+
+    @Test func anInterruptionTheDriverDidNotCauseEndsTheReplyItWasWaitingFor() async throws {
+        // Un `.interrupted` pendant la réplique au tour poussé, sans tour en route : la réplique est finie, l'écoute reprend, le tour
+        // suivant peut partir.
+        let rig = try Rig(turns: 2)
+        try await rig.send(.state(.listening), .turnEnded("un"), .state(.thinking), .replyText("Q"), .speakingStarted(question: 1))
+        try await rig.send(.interrupted(heard: "Q"))
+        #expect(rig.pushed == [0])
+        try await rig.send(.state(.listening))
+        #expect(rig.pushed == [0, 1])
+        _ = try await rig.finish()
+    }
+
     @Test func theNoticesAreKeptInOrder() async throws {
         let rig = try Rig(turns: 1)
         try await rig.send(.state(.listening), .notice(.voiceFellBack), .turnEnded("un"), .notice(.proposal), .notice(.lastQuestion))
