@@ -128,6 +128,22 @@ import Testing
         #expect(running.interview.resolveCount == 1, "pendant un entretien")
     }
 
+    @Test("T9-1 : une sélection refusée par le panneau ne lance rien : ni dictée sur un autre mode, ni panneau, ni entretien")
+    func aRefusedSelectionStartsNothing() async {
+        let rig = InterviewDictationRig()
+        rig.dictation.knobs.modeID = ModeChip.rawID
+        rig.dictation.knobs.refusesSelection = true
+        rig.controller.modeHotKeyPressed(ModeChip.interviewID)
+        rig.controller.modeHotKeyPressed("perso-un")
+        await settle()
+        #expect(rig.dictation.knobs.selectedModes == [ModeChip.interviewID, "perso-un"], "la sélection a été demandée")
+        #expect(rig.dictation.knobs.modeID == ModeChip.rawID)
+        #expect(rig.dictation.engines.sessions.isEmpty, "pas de dictée sur le mode resté choisi")
+        #expect(rig.interview.resolveCount == 0 && rig.view == nil)
+        #expect(!rig.panel.isOpen && rig.panel.openCount == 0)
+        #expect(rig.controller.view == DictationViewState())
+    }
+
     // MARK: - Règle 2 : refus
 
     @Test("règle 2 : micro non autorisé : ni résolution ni préparation, le panneau s'ouvre sur la ligne des permissions")
