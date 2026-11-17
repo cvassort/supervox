@@ -17,6 +17,12 @@ func settle(_ condition: @Sendable () -> Bool) async -> Bool {
     return condition()
 }
 
+/// Cède le fil un grand nombre de fois, pour qu'une tâche lancée plus tôt ait eu l'occasion de s'enregistrer : sert à vérifier
+/// qu'une attente n'a **pas** été armée. Une vérification qui passe à tort si cette tâche tardait davantage, jamais l'inverse.
+func quiesce() async {
+    for _ in 0..<5_000 { await Task.yield() }
+}
+
 /// L'horloge du test : ne bouge que quand le test (ou un double) la fait avancer.
 final class InterviewClock: Sendable {
     private let value = Mutex(0.0)
@@ -104,6 +110,20 @@ final class ChunkRecorder: Sendable {
     func record(_ chunk: AudioChunk) { items.withLock { $0.append(chunk) } }
     var chunks: [AudioChunk] { items.withLock { $0 } }
     var count: Int { items.withLock { $0.count } }
+}
+
+/// Un compteur partagé.
+final class Tally: Sendable {
+    private let count = Mutex(0)
+    func increment() { count.withLock { $0 += 1 } }
+    var value: Int { count.withLock { $0 } }
+}
+
+/// Des lignes de texte reçues, dans l'ordre.
+final class LineLog: Sendable {
+    private let items = Mutex<[String]>([])
+    func add(_ line: String) { items.withLock { $0.append(line) } }
+    var all: [String] { items.withLock { $0 } }
 }
 
 /// Un clip d'amplitude constante.
