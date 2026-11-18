@@ -62,6 +62,10 @@ public struct SettingsView: View {
     /// L'onglet courant, partagé avec le contrôleur (`AppController.settingsNavigation`).
     let navigation: SettingsNavigation
 
+    /// Les onglets montrés, dans l'ordre : UNE seule source, lue par le corps de la vue et par `SettingsContent.tabs` (que les tests
+    /// lisent). Entretien n'y est que si son modèle est donné.
+    var tabs: [SettingsTab] { SettingsTab.visible(hasInterview: interview != nil) }
+
     /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut), quand aucune `navigation` n'est donnée. `interview` :
     /// l'onglet Entretien n'apparaît que s'il est donné.
     public init(
@@ -111,13 +115,12 @@ public struct SettingsView: View {
         permissions: PermissionsModel, openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void,
         interview: InterviewSettingsModel? = nil, navigation: SettingsNavigation = SettingsNavigation()
     ) -> SettingsContent {
-        SettingsContent(
-            view: AnyView(
-                SettingsView(
-                    providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
-                    permissions: permissions, openSystemSettings: openSystemSettings, interview: interview,
-                    navigation: navigation)),
-            tabs: SettingsTab.visible(hasInterview: interview != nil),
+        let view = SettingsView(
+            providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
+            permissions: permissions, openSystemSettings: openSystemSettings, interview: interview,
+            navigation: navigation)
+        return SettingsContent(
+            view: AnyView(view), tabs: view.tabs, navigation: view.navigation,
             onPresent: {
                 // La fenêtre gardée d'une ouverture à l'autre relit les réglages : un mode ou un fournisseur changé entre-temps
                 // (le panneau, un autre onglet, le fichier) s'y voit. Avant les attentes ci-dessous : la fenêtre ne s'affiche pas
@@ -205,7 +208,7 @@ public struct SettingsView: View {
     public var body: some View {
         @Bindable var navigation = navigation
         TabView(selection: $navigation.tab) {
-            ForEach(SettingsTab.visible(hasInterview: interview != nil), id: \.self) { tab in
+            ForEach(tabs, id: \.self) { tab in
                 Tab(tab.title, systemImage: tab.systemImage, value: tab) { pane(for: tab) }
             }
         }

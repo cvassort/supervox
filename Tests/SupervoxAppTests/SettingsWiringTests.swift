@@ -56,6 +56,7 @@ import Testing
         var hotKey: HotKeySettingsModel?
         var modes: ModesModel?
         var interview: InterviewSettingsModel?
+        var content: SettingsContent?
     }
 
     /// La vraie composition de la fenêtre (`SettingsView.content`), avec disposition et moniteur de touches doubles.
@@ -67,13 +68,15 @@ import Testing
             built.modes = modes
             let interview = SettingsView.makeInterviewModel(controller)
             built.interview = interview
-            return SettingsView.content(
+            let content = SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
                 modes: modes,
                 permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview,
                 navigation: controller.settingsNavigation)
+            built.content = content
+            return content
         }
     }
 
@@ -500,53 +503,68 @@ import Testing
 
     // MARK: - Onglet Entretien et navigation (tâche 10)
 
-    /// Règle 6 : `openSettings(tab:)` ouvre la fenêtre sur l'onglet demandé, sans la construire en double.
-    @Test func openingTheSettingsOnATabSelectsItAndPresentsTheWindow() throws {
+    /// Règle 6, sur la VRAIE composition de la fenêtre AVEC l'onglet Entretien (`SettingsView.content`, modèle et navigation du
+    /// contrôleur) : `openSettings(tab:)` ouvre la fenêtre sur l'onglet demandé, sans la construire en double ; l'onglet est dans la
+    /// liste de la vue, et la vue est liée à la navigation du contrôleur.
+    @Test func openingTheSettingsOnATabSelectsItInTheRealCompositionAndPresentsTheWindow() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         let previousMenu = NSApplication.shared.mainMenu
         defer { NSApplication.shared.mainMenu = previousMenu }
-        let controller = makeController()
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
         #expect(controller.settingsNavigation.tab == .providers, "premier affichage : Fournisseurs")
 
         controller.openSettings(tab: .interview)
 
-        #expect(controller.settingsNavigation.tab == .interview)
+        let content = try #require(built.content)
+        #expect(content.tabs.contains(.interview), "l'onglet est dans la barre de la vraie fenêtre")
+        let navigation = try #require(content.navigation)
+        #expect(navigation === controller.settingsNavigation, "la vue suit la navigation du contrôleur")
+        #expect(navigation.tab == .interview)
+        #expect(content.tabs.contains(navigation.tab), "l'onglet choisi existe dans la fenêtre")
         #expect(presenter.windows.count == 1)
         #expect(presenter.windows.first?.presentations == 1)
     }
 
-    /// Règle 6 : la fenêtre déjà ouverte sur un autre onglet est ramenée au premier plan, sur l'onglet demandé.
-    @Test func anOpenWindowIsBroughtBackOnTheRequestedTab() throws {
+    /// Règle 6 : la fenêtre déjà ouverte sur un autre onglet est ramenée au premier plan, sur l'onglet demandé, dans la vraie
+    /// composition.
+    @Test func anOpenRealWindowIsBroughtBackOnTheRequestedTab() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         let previousMenu = NSApplication.shared.mainMenu
         defer { NSApplication.shared.mainMenu = previousMenu }
-        let controller = makeController()
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
         controller.openSettings()
-        controller.settingsNavigation.tab = .modes  // la personne a cliqué sur Modes
+        let navigation = try #require(built.content?.navigation)
+        navigation.tab = .modes  // la personne a cliqué sur Modes
 
         controller.openSettings(tab: .interview)
 
         #expect(presenter.windows.count == 1, "la même fenêtre")
         #expect(presenter.windows.first?.presentations == 2)
-        #expect(controller.settingsNavigation.tab == .interview)
+        #expect(navigation.tab == .interview)
+        #expect(try #require(built.content).tabs.contains(navigation.tab))
     }
 
-    /// Règle 6 : `openSettings()` sans onglet garde l'onglet courant (« Réglages… » du menu rouvre là où l'on s'était arrêté).
-    @Test func openingTheSettingsWithoutATabKeepsTheCurrentTab() throws {
+    /// Règle 6 : `openSettings()` sans onglet garde l'onglet courant (« Réglages… » du menu rouvre là où l'on s'était arrêté), dans
+    /// la vraie composition.
+    @Test func openingTheRealWindowWithoutATabKeepsTheCurrentTab() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = NSApplication.shared
         let previousMenu = NSApplication.shared.mainMenu
         defer { NSApplication.shared.mainMenu = previousMenu }
-        let controller = makeController()
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
         controller.openSettings()
-        #expect(controller.settingsNavigation.tab == .providers)
-        controller.settingsNavigation.tab = .transcription
+        let navigation = try #require(built.content?.navigation)
+        #expect(navigation.tab == .providers)
+        navigation.tab = .transcription
 
         controller.openSettings()
 
-        #expect(controller.settingsNavigation.tab == .transcription)
+        #expect(navigation.tab == .transcription)
         #expect(presenter.windows.first?.presentations == 2)
     }
 
@@ -578,6 +596,7 @@ import Testing
         let content = SettingsView.provider(catalog: catalog, promptTokenLimit: Self.promptTokenLimit)(controller)
         #expect(content.tabs == SettingsTab.visible(hasInterview: true))
         #expect(content.tabs.contains(.interview))
+        #expect(content.navigation === controller.settingsNavigation, "la vraie fenêtre suit la navigation du contrôleur")
     }
 
     /// Règle 1, de bout en bout : le modèle de l'onglet écrit par le contrôleur (réglages en mémoire et fichier), sans écraser ce qui
@@ -618,6 +637,28 @@ import Testing
         #expect(controller.settings.interview.maxQuestions == InterviewSettings.defaults.maxQuestions)
         #expect(interview.message?.contains("settings.json") == true)
         #expect(try Data(contentsOf: store.file) == Data("pas du json".utf8), "le fichier n'a pas été touché")
+    }
+
+    /// La présentation de la fenêtre efface le message d'un refus d'avant : la personne rouvre la fenêtre, le bandeau d'erreur ne
+    /// reste pas.
+    @Test func presentingTheWindowClearsAnOldRefusalOfTheInterviewTab() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+        try Data("pas du json".utf8).write(to: store.file)
+        interview.maxQuestions = 5
+        #expect(interview.message != nil, "le refus est affiché")
+
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+
+        #expect(interview.message == nil, "rouverte, la fenêtre n'affiche plus le refus d'avant")
     }
 
     /// La présentation de la fenêtre relit l'onglet Entretien : un réglage écrit ailleurs s'y voit.

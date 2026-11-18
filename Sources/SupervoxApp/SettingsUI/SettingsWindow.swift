@@ -6,6 +6,8 @@ public struct SettingsContent {
     public var view: AnyView
     /// Les onglets que `view` montre, dans l'ordre (pour les tests : la vue elle-même ne se parcourt pas).
     public var tabs: [SettingsTab]
+    /// L'onglet courant de la vue, partagé avec le contrôleur (`AppController.settingsNavigation`) ; `nil` pour une vue sans onglets.
+    public var navigation: SettingsNavigation?
     /// À chaque présentation de la fenêtre (par exemple : demander quelles clés existent).
     public var onPresent: @MainActor () async -> Void
     /// Quand l'utilisateur quitte la fenêtre : fermée, plus au premier plan, ou application passée en arrière-plan.
@@ -13,11 +15,12 @@ public struct SettingsContent {
     public var onLeave: @MainActor () -> Void
 
     public init(
-        view: AnyView, tabs: [SettingsTab] = [], onPresent: @escaping @MainActor () async -> Void = {},
-        onLeave: @escaping @MainActor () -> Void = {}
+        view: AnyView, tabs: [SettingsTab] = [], navigation: SettingsNavigation? = nil,
+        onPresent: @escaping @MainActor () async -> Void = {}, onLeave: @escaping @MainActor () -> Void = {}
     ) {
         self.view = view
         self.tabs = tabs
+        self.navigation = navigation
         self.onPresent = onPresent
         self.onLeave = onLeave
     }

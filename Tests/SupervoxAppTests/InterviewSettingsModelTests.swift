@@ -224,6 +224,20 @@ import Testing
         #expect(rig.settings.interview.turnSilence == 1)
     }
 
+    /// `clearMessage()` efface le message d'un refus, sans toucher à ce qui est affiché ni au brouillon du gabarit.
+    @Test func clearMessageClearsTheRefusalAndNothingElse() {
+        let rig = Rig()
+        let model = rig.makeModel()
+        model.template = "Brouillon."
+        rig.failure = ForeignError()
+        model.maxQuestions = 5
+        #expect(model.message == InterviewSettingsModel.saveFailure)
+        model.clearMessage()
+        #expect(model.message == nil)
+        #expect(model.template == "Brouillon.")
+        #expect(model.maxQuestions == InterviewSettings.defaults.maxQuestions)
+    }
+
     /// `reload` relit : une écriture faite ailleurs s'y voit ; avant, l'écran garde ce qu'il avait.
     @Test func reloadShowsWhatWasWrittenElsewhere() {
         let rig = Rig()
