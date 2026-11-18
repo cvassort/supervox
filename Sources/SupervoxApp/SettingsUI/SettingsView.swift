@@ -216,8 +216,12 @@ public struct SettingsView: View {
             // Un autre onglet : le gabarit tapé dans celui-ci est enregistré.
             interview?.commitTemplate()
         }
-        .frame(width: 600, height: 460)
+        .frame(width: Self.windowSize.width, height: Self.windowSize.height)
     }
+
+    /// La taille de la fenêtre de réglages, en points : fixe. Les onglets s'y règlent sans que la fenêtre grandisse ; les images de
+    /// l'outil de rendu et les mesures de hauteur la lisent ici.
+    public static let windowSize = CGSize(width: 600, height: 460)
 
     @ViewBuilder
     private func pane(for tab: SettingsTab) -> some View {

@@ -535,6 +535,13 @@ import Testing
                 == "L'entretien vous pose des questions à voix haute, une à la fois, puis rédige un prompt à partir de vos réponses. Il passe toujours par la relecture. Les changements s'appliquent au prochain entretien."
         )
         #expect(
+            InterviewSettingsModel.introduction
+                == "L'entretien vous pose des questions à voix haute, une à la fois, puis rédige un prompt à partir de vos réponses.")
+        #expect(
+            InterviewSettingsModel.introductionRest
+                == "Il passe toujours par la relecture. Les changements s'appliquent au prochain entretien.")
+        #expect(InterviewSettingsModel.questionsTitle == "Questions")
+        #expect(
             InterviewSettingsModel.modelsNote
                 == "Le modèle rapide pose les questions, le modèle fort rédige le prompt\u{00A0}: ils se choisissent en tête de l'onglet Modes."
         )
@@ -571,7 +578,8 @@ import Testing
         let model = Rig(settings).makeModel()
         let sentences: [String] =
             [
-                InterviewSettingsModel.header, InterviewSettingsModel.modelsNote, InterviewSettingsModel.maxQuestionsNote,
+                InterviewSettingsModel.header, InterviewSettingsModel.introduction, InterviewSettingsModel.introductionRest,
+                InterviewSettingsModel.modelsNote, InterviewSettingsModel.maxQuestionsNote,
                 InterviewSettingsModel.templateNote, InterviewSettingsModel.interruptNote, InterviewSettingsModel.saveFailure,
                 model.privacyText, model.effectiveSilenceText, model.holdNote ?? "", Self.systemPrivacy,
             ]

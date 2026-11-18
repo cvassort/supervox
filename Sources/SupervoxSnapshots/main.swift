@@ -477,7 +477,7 @@ let application = ActiveApplication.shared
 application.setActivationPolicy(.accessory)
 
 /// La taille de la vraie fenêtre (`SettingsView`).
-let settingsSize = NSSize(width: 600, height: 460)
+let settingsSize = NSSize(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
 for dark in [false, true] {
     let panelBackground = dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.95, alpha: 1)
     let window = NSColor.windowBackgroundColor
