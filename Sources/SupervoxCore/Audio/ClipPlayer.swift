@@ -9,14 +9,21 @@ import UniformTypeIdentifiers
 /// - `play` rend la main quand le clip est fini, ou arrêté : par `stop()`, par l'annulation de la tâche appelante ou par un `play`
 ///   suivant, qui arrête la lecture en cours. Une lecture arrêtée rend la main **normalement**, sans lever ;
 /// - un clip **vide** n'a rien à jouer : il arrête la lecture en cours, puis `play` rend la main tout de suite ;
-/// - `play` lève `ClipPlayerError.failed` quand la lecture ne peut pas se faire ;
-/// - l'annulation de la tâche appelante n'arrête que **sa** lecture, jamais celle d'un autre appel ; c'est le moyen sûr d'arrêter ;
-/// - `stop()` ne vaut que pour la lecture **commencée** : entre l'appel de `play` et le début réel de la lecture (encodage, attente du
-///   fil principal dans le vrai lecteur), un `stop()` est perdu, et la lecture va à son terme. Il peut aussi rendre la main avant que
-///   l'arrêt ait eu lieu (le vrai lecteur le confie au fil principal) : `play` rend la main peu après.
+/// - `play` lève `ClipPlayerError.failed` quand la lecture ne peut pas se faire. Un `play` qui lève peut avoir arrêté, ou non, la
+///   lecture en cours : une fréquence refusée lève avant tout arrêt (la lecture en cours continue) ; un lecteur du système qui refuse
+///   d'ouvrir le clip lève après avoir arrêté la lecture en cours ;
+/// - l'annulation de la tâche appelante n'arrête que **sa** lecture, jamais celle d'un autre appel ; c'est le moyen sûr d'arrêter.
+///   Un `play` lancé par une tâche déjà annulée ne touche à rien. Fenêtre résiduelle : un `play` annulé **pendant** son démarrage
+///   (après avoir arrêté la lecture précédente, avant de commencer la sienne) a pu arrêter la lecture précédente, et ne joue rien ;
+/// - `stop()` s'appelle de partout, ne vaut que pour la lecture **commencée**, et peut rendre la main **avant** que l'arrêt ait eu lieu
+///   (le vrai lecteur le confie au fil principal) : `play` rend la main peu après. Entre l'appel de `play` et le début réel de la
+///   lecture (encodage, attente du fil principal dans le vrai lecteur), un `stop()` est perdu, et la lecture va à son terme ;
+/// - `stopNow()`, sur le fil principal, arrête la lecture commencée **avant** de rendre la main : pour qui va ouvrir le micro juste
+///   après. Même fenêtre perdue que `stop()` avant le début réel.
 public protocol ClipPlayer: Sendable {
     func play(_ clip: AudioClip) async throws
     func stop()
+    @MainActor func stopNow()
 }
 
 public enum ClipPlayerError: Error, Equatable, Sendable {
@@ -31,10 +38,16 @@ public final class SystemClipPlayer: ClipPlayer {
         var nextToken = 0
         /// La lecture commencée, avec le jeton de l'appel de `play` qui l'a posée ; `nil` sans lecture.
         var current: (token: Int, playback: Playback)?
+        /// Lectures finies par la fin de secours (le système n'a pas appelé le délégué de fin à temps).
+        var fallbackEnds = 0
     }
     private let state = Mutex(State())
 
     public init() {}
+
+    /// Nombre de lectures finies par la fin de secours. Les essais matériels exigent 0 : sinon le système n'a pas appelé le délégué
+    /// de fin, et chaque écoute finirait `fallbackMargin` secondes après son clip.
+    var fallbackEndCount: Int { state.withLock { $0.fallbackEnds } }
 
     /// Marge ajoutée à la durée du clip avant la fin de secours : 2 s (valeur du plan, choix non mesuré).
     static let fallbackMargin = 2.0
@@ -76,6 +89,11 @@ public final class SystemClipPlayer: ClipPlayer {
         stop(token: nil)
     }
 
+    /// Arrête la lecture commencée sur place, sans tâche intermédiaire : le lecteur du système est arrêté avant le retour.
+    @MainActor public func stopNow() {
+        state.withLock { $0.current?.playback }?.stop()
+    }
+
     /// Demande l'arrêt au fil principal ; `play` rend la main dès que l'arrêt y est passé. Avec un jeton, seulement si la lecture
     /// commencée est celle de cet appel.
     private func stop(token: Int?) {
@@ -88,6 +106,8 @@ public final class SystemClipPlayer: ClipPlayer {
     }
 
     @MainActor private func run(_ data: Data?, token: Int, fallbackDelay: Double) async throws {
+        // Déjà annulée : ne touche à rien, ni à la lecture en cours (comme le double).
+        if Task.isCancelled { return }
         guard let data else {
             let previous = state.withLock { s -> Playback? in
                 defer { s.current = nil }
@@ -96,14 +116,15 @@ public final class SystemClipPlayer: ClipPlayer {
             previous?.stop()
             return
         }
-        let playback = Playback(fallbackDelay: fallbackDelay)
+        let playback = Playback(fallbackDelay: fallbackDelay, onFallbackEnd: { self.state.withLock { $0.fallbackEnds += 1 } })
         let previous = state.withLock { s -> Playback? in
             defer { s.current = (token, playback) }
             return s.current?.playback
         }
         previous?.stop()
         defer { state.withLock { s in if s.current?.token == token { s.current = nil } } }
-        // Annulée avant d'être enregistrée, la tâche n'a pas pu arrêter cette lecture : on n'en commence pas une.
+        // Annulée entre le contrôle du début et la pose, la tâche n'a pas pu arrêter cette lecture : on n'en commence pas une (la
+        // précédente est déjà arrêtée : fenêtre résiduelle écrite sur le protocole).
         if Task.isCancelled { return }
         try await playback.play(data)
     }
@@ -119,16 +140,18 @@ public final class SystemClipPlayer: ClipPlayer {
 ///
 /// Le délégué : ses deux méthodes sont `nonisolated` et repassent par le fil principal. Si le système les appelait d'un autre fil
 /// (non établi ; l'en-tête annonce le fil principal), rien ne plante. Si le système ne les appelait jamais (non établi non plus), la
-/// fin de secours arrête le lecteur et rend la main à `durée du clip + 2 s`.
+/// fin de secours arrête le lecteur, rend la main à `durée du clip + 2 s` et se fait compter (`SystemClipPlayer.fallbackEndCount`).
 @MainActor private final class Playback: NSObject, AVAudioPlayerDelegate {
     private let fallbackDelay: Double
+    private let onFallbackEnd: @Sendable () -> Void
     private var player: AVAudioPlayer?
     private var continuation: CheckedContinuation<Void, any Error>?
     private var fallback: Task<Void, Never>?
     private var stopped = false
 
-    init(fallbackDelay: Double) {
+    init(fallbackDelay: Double, onFallbackEnd: @escaping @Sendable () -> Void) {
         self.fallbackDelay = fallbackDelay
+        self.onFallbackEnd = onFallbackEnd
     }
 
     func play(_ data: Data) async throws {
@@ -150,9 +173,10 @@ public final class SystemClipPlayer: ClipPlayer {
             let delay = fallbackDelay
             fallback = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(delay))
-                guard !Task.isCancelled else { return }
-                self?.player?.stop()
-                self?.end(.success(()))
+                guard !Task.isCancelled, let self, self.continuation != nil else { return }
+                self.onFallbackEnd()
+                self.player?.stop()
+                self.end(.success(()))
             }
         }
     }
@@ -194,9 +218,12 @@ public final class SystemClipPlayer: ClipPlayer {
 /// Un test attend les lectures par `waitForPlays(_:)` (jamais par un sommeil), qui rend la main à l'annulation. Le clip reçu, la
 /// lecture en cours et le réveil de `waitForPlays` sont posés sous un même verrou : un test qui a vu la lecture arriver peut l'arrêter.
 ///
-/// Écarts restants avec le vrai lecteur : ici `stop()` arrête avant de rendre la main ; la lecture est posée dès l'appel (la fenêtre
-/// où un `stop()` est perdu n'existe pas) ; un clip reçu par une tâche déjà annulée est gardé dans `clips` ; une lecture commencée ne
-/// peut pas échouer en cours de route.
+/// `stopNow()` arrête comme `stop()` et se compte à part (`stopNowCount`).
+///
+/// Écarts restants avec le vrai lecteur : ici `stop()` arrête avant de rendre la main ; la lecture est posée dès l'appel (ni la
+/// fenêtre où un `stop()` est perdu, ni celle où un `play` annulé pendant son démarrage a déjà arrêté la lecture précédente
+/// n'existent) ; un clip reçu par une tâche déjà annulée est gardé dans `clips` ; une lecture commencée ne peut pas échouer en cours
+/// de route ; `.failing` lève sans arrêter la lecture en cours (le vrai lecteur, quand l'ouverture échoue, l'a déjà arrêtée).
 public final class ScriptedClipPlayer: ClipPlayer {
     public enum Completion: Sendable {
         case manual, immediate, failing
@@ -205,6 +232,7 @@ public final class ScriptedClipPlayer: ClipPlayer {
     private struct State {
         var clips: [AudioClip] = []
         var stops = 0
+        var stopNows = 0
         var nextToken = 0
         var playing: (token: Int, continuation: CheckedContinuation<Void, Never>)?
         var waiters: [Int: (need: Int, continuation: CheckedContinuation<Void, Never>)] = [:]
@@ -229,6 +257,8 @@ public final class ScriptedClipPlayer: ClipPlayer {
     public var clips: [AudioClip] { state.withLock { $0.clips } }
     /// Nombre d'appels à `stop()`, plus le nombre de `play` annulés.
     public var stopCount: Int { state.withLock { $0.stops } }
+    /// Nombre d'appels à `stopNow()`.
+    public var stopNowCount: Int { state.withLock { $0.stopNows } }
     /// Une lecture `.manual` attend sa fin.
     public var isPlaying: Bool { state.withLock { $0.playing != nil } }
     /// Nombre d'attentes de `waitForPlays` inscrites et pas encore servies (pour les tests de ce module).
@@ -277,6 +307,15 @@ public final class ScriptedClipPlayer: ClipPlayer {
 
     public func stop() {
         stop(token: nil)
+    }
+
+    /// Arrête la lecture en cours avant de rendre la main ; compté à part de `stop()`.
+    @MainActor public func stopNow() {
+        state.withLock { s -> CheckedContinuation<Void, Never>? in
+            s.stopNows += 1
+            defer { s.playing = nil }
+            return s.playing?.continuation
+        }?.resume()
     }
 
     /// Compte un arrêt ; avec un jeton, n'arrête la lecture que si c'est celle de cet appel.

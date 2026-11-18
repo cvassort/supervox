@@ -215,23 +215,53 @@ private func playingFromACancelledTask(_ player: ScriptedClipPlayer, _ clip: Aud
         #expect(player.clips == [first, silent])
         #expect(player.stopCount == 0)
         // Dans les modes immédiat et en échec aussi : rendu tout de suite, sans lever.
-        try await ScriptedClipPlayer(completion: .immediate).play(silent)
-        try await ScriptedClipPlayer(completion: .failing).play(silent)
+        try await bounded { try await ScriptedClipPlayer(completion: .immediate).play(silent) }
+        try await bounded { try await ScriptedClipPlayer(completion: .failing).play(silent) }
     }
 
     @Test func anImmediatePlayerReturnsAtOnceAndKeepsEveryClip() async throws {
         let player = ScriptedClipPlayer(completion: .immediate)
-        try await player.play(first)
-        try await player.play(second)
+        try await bounded { try await player.play(first) }
+        try await bounded { try await player.play(second) }
         #expect(player.clips == [first, second])
         #expect(!player.isPlaying)
     }
 
     @Test func aFailingPlayerThrowsFailedAndKeepsTheClip() async {
         let player = ScriptedClipPlayer(completion: .failing)
-        await #expect(throws: ClipPlayerError.failed) { try await player.play(first) }
+        // `bounded` rend l'erreur de l'opération telle quelle ; il ne lève `DeadlineExceeded` qu'au bout de 30 s.
+        await #expect(throws: ClipPlayerError.failed) { try await bounded { try await player.play(first) } }
         #expect(player.clips == [first])
         #expect(!player.isPlaying)
+    }
+
+    /// Point 3 : `stopNow()` arrête la lecture avant de rendre la main. Le test est sur le fil principal : l'appel est synchrone, et
+    /// la ligne suivante voit déjà la lecture arrêtée, sans aucune attente entre les deux.
+    @MainActor @Test func stopNowEndsPlayBeforeReturning() async throws {
+        let player = ScriptedClipPlayer()
+        let task = playing(player, first)
+        defer { task.cancel(); player.finish() }
+        try await bounded { await player.waitForPlays(1) }
+        #expect(player.isPlaying)
+        player.stopNow()
+        #expect(!player.isPlaying, "l'arrêt doit avoir eu lieu avant le retour de stopNow()")
+        try await bounded { try await task.value }   // et `play` rend la main, sans lever
+        #expect(player.stopNowCount == 1)
+        #expect(player.stopCount == 0)
+    }
+
+    /// Sans lecture en cours, `stopNow()` ne fait rien (il est compté) et ne retient pas la lecture suivante.
+    @MainActor @Test func stopNowWithoutAPlayDoesNothing() async throws {
+        let player = ScriptedClipPlayer()
+        player.stopNow()
+        #expect(player.stopNowCount == 1)
+        let task = playing(player, first)
+        defer { task.cancel(); player.finish() }
+        try await bounded { await player.waitForPlays(1) }
+        #expect(player.isPlaying)
+        player.finish()
+        try await bounded { try await task.value }
+        #expect(player.stopCount == 0)
     }
 
     /// `waitForPlays` d'une tâche annulée avant de s'inscrire rend la main (contrôle d'annulation sous le verrou).
@@ -294,36 +324,54 @@ private func playingFromACancelledTask(_ player: ScriptedClipPlayer, _ clip: Aud
 // MARK: - Règle 5 : essais matériels de `SystemClipPlayer`, désactivés
 
 /// ESSAIS MATÉRIELS. Ce qu'ils font à la machine : ils JOUENT du son par la sortie audio par défaut (haut-parleurs ou casque
-/// branché), au volume du système, à amplitude 0,2 (valeur du brief, choix non mesuré), sans ouvrir le micro. Environ 2,6 s de son au
-/// total (0,3 s ; puis quatre lectures coupées après 0,5 s ; plus 0,3 s pour la seconde lecture du chevauchement). Désactivés par
-/// défaut : ils ne tournent que si `SUPERVOX_PLAYER=1`, variable que seul l'utilisateur positionne. En série, pour ne pas mêler les sons.
-/// Chaque lecture est attendue sous `Deadline.run` (3 s, valeur du brief, choix non mesuré) : un délégué qui ne viendrait pas fait
-/// échouer l'essai au lieu de le suspendre.
+/// branché), au volume du système, à amplitude 0,2 (valeur du brief, choix non mesuré), sans ouvrir le micro. Durée de son :
+/// nominale, environ 2,6 s (0,3 s ; puis quatre lectures longues coupées après 0,5 s ; plus 0,3 s pour la seconde lecture du
+/// chevauchement) ; au pire, si aucun arrêt ne marche, 0,3 + 4 × 6 + 0,3 = 24,6 s (chaque clip long joué jusqu'au bout).
+/// Désactivés par défaut : ils ne tournent que si `SUPERVOX_PLAYER=1`, variable que seul l'utilisateur positionne. En série, pour ne
+/// pas mêler les sons.
+///
+/// Deux bornes, de nature différente :
+/// - anti-suspension : chaque attente passe par `Deadline.run` (3 s pour le clip court, valeur du brief ; 10 s pour un clip long,
+///   au-delà de sa fin de secours à 6 + 2 = 8 s ; choix non mesurés) : un essai pendu échoue au lieu de se suspendre ;
+/// - fin ordinaire : à la fin de chaque essai, `fallbackEndCount` doit valoir 0. Sinon le système n'a pas appelé le délégué de fin,
+///   et la lecture n'a fini que par la fin de secours (`durée + 2 s`) : l'essai passerait sans cela, puisque cette fin rend la main
+///   sans lever avant la borne.
 @Suite(.serialized, .timeLimit(.minutes(1)), .enabled(if: ProcessInfo.processInfo.environment["SUPERVOX_PLAYER"] == "1"))
 struct SystemClipPlayerHardwareTests {
-    /// Un la à 440 Hz (valeur du brief, choix non mesuré) à 44,1 kHz, de `seconds` secondes.
+    /// Un la à 440 Hz (valeur du brief, choix non mesuré) à 44,1 kHz (fréquence courante des sorties audio, acceptée par
+    /// `isPlayable` ; choix non mesuré), de `seconds` secondes.
     static func tone(seconds: Double) -> AudioClip {
         let rate = 44_100.0
         return AudioClip(samples: (0..<Int(rate * seconds)).map { Float(0.2 * sin(2 * Double.pi * 440 * Double($0) / rate)) },
                          sampleRate: rate)
     }
 
-    /// Clip long des arrêts : 2 s (valeur du plan, choix non mesuré). L'arrêt est demandé après 0,5 s (choix non mesuré : la lecture
-    /// a commencé ; un `stop()` antérieur au début réel serait perdu, par contrat).
-    static let longTone = tone(seconds: 2)
+    /// Clip long des arrêts : 6 s (choix non mesuré). L'arrêt est demandé après 0,5 s (choix non mesuré : la lecture a commencé ; un
+    /// `stop()` antérieur au début réel serait perdu, par contrat).
+    static let longTone = tone(seconds: 6)
     static let stopAfter = Duration.milliseconds(500)
+    /// « `play` a rendu la main avant la fin du clip » : une borne de temps par nature (arrêté avant les 6 s du clip), placée à 5 s,
+    /// soit 4,5 s de marge après la demande d'arrêt pour l'encodage, l'attente du fil principal et l'arrêt du matériel (marge non
+    /// mesurée).
+    static let returnedBefore = Duration.seconds(5)
 
-    static func bounded<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
-        try await Deadline.run(seconds: 3, sleep: { try await Task.sleep(for: .seconds($0)) }, operation)
+    static func bounded<T: Sendable>(seconds: Double, _ operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await Deadline.run(seconds: seconds, sleep: { try await Task.sleep(for: .seconds($0)) }, operation)
+    }
+
+    static func expectOrdinaryEnds(_ player: SystemClipPlayer) {
+        #expect(player.fallbackEndCount == 0, "le système n'a pas appelé le délégué de fin : la lecture a fini par la fin de secours")
     }
 
     /// 0,3 s de son (valeur du brief) : `play` rend la main avant 3 s, et pas avant 0,25 s (une lecture qui rend plus tôt n'a pas
-    /// attendu la fin ; marge choisie, non mesurée).
+    /// attendu la fin ; marge choisie, non mesurée), par la fin ordinaire.
     @Test func aShortToneIsPlayedAndPlayReturnsWithinThreeSeconds() async throws {
+        let player = SystemClipPlayer()
         let clock = ContinuousClock()
         let start = clock.now
-        try await Self.bounded { try await SystemClipPlayer().play(Self.tone(seconds: 0.3)) }
+        try await Self.bounded(seconds: 3) { try await player.play(Self.tone(seconds: 0.3)) }
         #expect(clock.now - start >= .milliseconds(250))
+        Self.expectOrdinaryEnds(player)
     }
 
     @Test func stopEndsALongToneBeforeItsEnd() async throws {
@@ -334,8 +382,9 @@ struct SystemClipPlayerHardwareTests {
         defer { task.cancel() }
         try await Task.sleep(for: Self.stopAfter)
         player.stop()
-        try await Self.bounded { try await task.value }   // sans lever
-        #expect(clock.now - start < .seconds(2), "play doit rendre la main avant la fin du clip")
+        try await Self.bounded(seconds: 10) { try await task.value }   // sans lever
+        #expect(clock.now - start < Self.returnedBefore, "play doit rendre la main avant la fin du clip")
+        Self.expectOrdinaryEnds(player)
     }
 
     @Test func cancellingEndsALongToneBeforeItsEnd() async throws {
@@ -346,8 +395,9 @@ struct SystemClipPlayerHardwareTests {
         defer { task.cancel() }
         try await Task.sleep(for: Self.stopAfter)
         task.cancel()
-        try await Self.bounded { try await task.value }
-        #expect(clock.now - start < .seconds(2), "play doit rendre la main avant la fin du clip")
+        try await Self.bounded(seconds: 10) { try await task.value }
+        #expect(clock.now - start < Self.returnedBefore, "play doit rendre la main avant la fin du clip")
+        Self.expectOrdinaryEnds(player)
     }
 
     @Test func aSecondPlayEndsTheFirstBeforeItsEnd() async throws {
@@ -359,9 +409,10 @@ struct SystemClipPlayerHardwareTests {
         try await Task.sleep(for: Self.stopAfter)
         let second = Task { try await player.play(Self.tone(seconds: 0.3)) }
         defer { second.cancel() }
-        try await Self.bounded { try await first.value }
-        #expect(clock.now - start < .seconds(2), "la première lecture doit rendre la main avant la fin de son clip")
-        try await Self.bounded { try await second.value }
+        try await Self.bounded(seconds: 10) { try await first.value }
+        #expect(clock.now - start < Self.returnedBefore, "la première lecture doit rendre la main avant la fin de son clip")
+        try await Self.bounded(seconds: 3) { try await second.value }
+        Self.expectOrdinaryEnds(player)
     }
 
     @Test func anEmptyClipEndsTheCurrentToneBeforeItsEnd() async throws {
@@ -371,8 +422,9 @@ struct SystemClipPlayerHardwareTests {
         let task = Task { try await player.play(Self.longTone) }
         defer { task.cancel() }
         try await Task.sleep(for: Self.stopAfter)
-        try await Self.bounded { try await player.play(AudioClip(samples: [], sampleRate: 44_100)) }
-        try await Self.bounded { try await task.value }
-        #expect(clock.now - start < .seconds(2), "play doit rendre la main avant la fin du clip")
+        try await Self.bounded(seconds: 3) { try await player.play(AudioClip(samples: [], sampleRate: 44_100)) }
+        try await Self.bounded(seconds: 10) { try await task.value }
+        #expect(clock.now - start < Self.returnedBefore, "play doit rendre la main avant la fin du clip")
+        Self.expectOrdinaryEnds(player)
     }
 }
