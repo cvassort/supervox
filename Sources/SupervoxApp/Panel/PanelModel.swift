@@ -125,10 +125,19 @@ public final class PanelModel {
     @ObservationIgnored public var onConclude: (@MainActor () -> Void)?
     /// Ce que VoiceOver doit annoncer (le titre de l'entretien quand il change) ; le contrôleur du panneau y pose l'annonce du système.
     @ObservationIgnored public var onAnnounce: (@MainActor (String) -> Void)?
+    /// Ce que fait « Historique… » du menu « … » : `AppController.openSettings(tab: .history)`. `nil` sans dossier d'historique :
+    /// l'entrée n'est alors pas montrée. Posé une fois à l'assemblage, avant que le panneau s'affiche.
+    @ObservationIgnored public var onOpenHistory: (@MainActor () -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
     /// Chaque clic sur une pastille (`chipTapped`), après `onModeChanged` s'il y a eu changement.
     @ObservationIgnored public var onChipTapped: (@MainActor (String) -> Void)?
+
+    /// L'entrée « Historique… » existe : un dossier d'historique est branché.
+    public var canOpenHistory: Bool { onOpenHistory != nil }
+
+    /// Ce que fait un clic sur « Historique… ».
+    public func openHistory() { onOpenHistory?() }
 
     /// `lastModeID` vient des réglages ; un identifiant inconnu retombe sur la dictée brute. `modes` : les pastilles des
     /// réglages ; sans elles, les quatre modes de base.

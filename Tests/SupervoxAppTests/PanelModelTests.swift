@@ -738,4 +738,32 @@ import Testing
         model.concludeInterview()
         #expect(calls == 2)
     }
+
+    // MARK: - Entrée « Historique… » du menu « … » (tâche 11)
+
+    @Test func theHistoryEntryExistsOnlyWhenAHistoryIsWired() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(!model.canOpenHistory)
+        model.openHistory()  // sans branchement : rien, et pas de plantage
+
+        var opened = 0
+        model.onOpenHistory = { opened += 1 }
+        #expect(model.canOpenHistory)
+        model.openHistory()
+        #expect(opened == 1)
+    }
+
+    @Test func theMenuListsSettingsHistoryThenQuitAndHidesHistoryWithoutOne() {
+        func view(_ model: PanelModel) -> PanelView {
+            PanelView(
+                model: model, permissions: PermissionsModel(probe: FakePermissionsProbe(microphone: .granted, accessibility: .granted)),
+                openSettings: {}, quit: {})
+        }
+        let without = PanelModel(lastModeID: "dictee-brute")
+        #expect(view(without).menuEntries.map(\.title) == ["Réglages…", "Quitter Supervox"])
+
+        let with = PanelModel(lastModeID: "dictee-brute")
+        with.onOpenHistory = {}
+        #expect(view(with).menuEntries.map(\.title) == ["Réglages…", "Historique…", "Quitter Supervox"])
+    }
 }

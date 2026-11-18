@@ -37,6 +37,17 @@ public struct PanelView: View {
         .frame(width: 520)
     }
 
+    /// Les entrées du menu « … », dans l'ordre (UNE source : la vue les montre, les tests les lisent).
+    var menuEntries: [PanelMenuEntry] { PanelMenuEntry.entries(hasHistory: model.canOpenHistory) }
+
+    private func run(_ entry: PanelMenuEntry) {
+        switch entry {
+        case .settings: openSettings()
+        case .history: model.openHistory()
+        case .quit: quit()
+        }
+    }
+
     private var chips: some View {
         ModeChips(
             modes: model.modes, selectedID: model.selectedModeID, locked: model.modesLocked, select: { model.chipTapped($0) })
@@ -92,9 +103,10 @@ public struct PanelView: View {
             }
             Spacer(minLength: 0)
             Menu {
-                Button("Réglages…") { openSettings() }
-                Divider()
-                Button("Quitter Supervox") { quit() }
+                ForEach(menuEntries, id: \.self) { entry in
+                    if entry == .quit { Divider() }
+                    Button(entry.title) { run(entry) }
+                }
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -126,5 +138,23 @@ struct ModeChipButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// Une entrée du menu « … » du panneau.
+enum PanelMenuEntry: Hashable {
+    case settings, history, quit
+
+    var title: String {
+        switch self {
+        case .settings: "Réglages…"
+        case .history: "Historique…"
+        case .quit: "Quitter Supervox"
+        }
+    }
+
+    /// Réglages, puis Historique (seulement si un historique est branché), puis Quitter après un séparateur.
+    static func entries(hasHistory: Bool) -> [PanelMenuEntry] {
+        hasHistory ? [.settings, .history, .quit] : [.settings, .quit]
     }
 }
