@@ -253,6 +253,45 @@ let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple
     return model
 }
 
+/// Le silence que le détecteur de voix applique en pratique : la formule de `FluidStreamingVoiceDetector.effectiveSilence`, copiée ici
+/// pour l'image (l'outil de rendu ne dépend pas des moteurs). `1 + ⌈Int(s × 16 000) / 4 096⌉` blocs de 4 096 échantillons à 16 kHz.
+let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
+    let blocks = 1 + (Int(requested * 16_000) + 4_095) / 4_096
+    return Double(blocks * 4_096) / 16_000
+}
+
+/// Les réglages en mémoire de l'onglet Entretien : `read` les donne, `update` les modifie, ou lève si `failure` est posé. Aucun
+/// fichier : l'application réelle est remplacée par des doubles.
+@MainActor final class ExampleInterview {
+    var settings: AppSettings
+    var failure: (any Error)?
+
+    /// Par défaut : les réglages d'entretien d'origine, un fournisseur d'exemple, les modèles fort et rapide choisis.
+    init(_ settings: AppSettings? = nil) { self.settings = settings ?? ExampleModes().settings }
+
+    func makeModel() -> InterviewSettingsModel {
+        InterviewSettingsModel(
+            read: { self.settings },
+            update: { change in
+                if let failure = self.failure { throw failure }
+                change(&self.settings)
+            },
+            effectiveTurnSilence: examplePracticalSilence)
+    }
+}
+
+/// Un entretien réglé à la main : gabarit propre, silence plus long, voix d'un fournisseur, raccourci en maintien.
+@MainActor func customInterviewSettings() -> AppSettings {
+    var settings = ExampleModes().settings
+    settings.interview = InterviewSettings(
+        maxQuestions: 12,
+        template: "Rédige un prompt en trois parties : Objectif, Contraintes, Résultat attendu. Reste factuel et n'invente rien.",
+        turnSilence: 0.9, interruptMinDuration: 0.45, interruptLevel: -22)
+    settings.voice = VoiceChoice(providerID: modesProvider.id, model: "voix-modele-exemple", identifier: "voix-exemple")
+    settings.hotKeyBehavior = .hold
+    return settings
+}
+
 /// Les quatre modes de base et deux modes personnels : l'un avec son modèle, son moteur et son raccourci, l'autre dont le
 /// fournisseur a été supprimé.
 @MainActor func exampleModesSettings() -> AppSettings {
@@ -737,6 +776,36 @@ for dark in [false, true] {
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
+    // Onglet Entretien : à la taille de la vraie fenêtre (groupe replié, sous la ligne de flottaison : la fenêtre fait défiler), puis le
+    // contenu entier, groupe ouvert et replié, puis un entretien réglé à la main et un refus d'enregistrement.
+    try render(
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
+            interview: ExampleInterview().makeModel()),
+        name: "reglages-entretien", dark: dark, background: window, size: settingsSize)
+    try render(
+        InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true),
+        name: "reglages-entretien-avance", dark: dark, background: window, size: NSSize(width: 600, height: 760))
+    try render(
+        InterviewPane(model: ExampleInterview().makeModel()),
+        name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: 600, height: 760))
+    try render(
+        InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true),
+        name: "reglages-entretien-regle-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
+    let interviewRefusing = ExampleInterview()
+    let interviewRefused = interviewRefusing.makeModel()
+    interviewRefusing.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+    interviewRefused.maxQuestions = 5
+    try render(
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
+            interview: interviewRefused),
+        name: "reglages-entretien-erreur", dark: dark, background: window, size: settingsSize)
+
     // Toute la liste, avec deux modes personnels (modèle, moteur, raccourci ; fournisseur supprimé) : la vraie fenêtre la fait
     // défiler.
     try render(

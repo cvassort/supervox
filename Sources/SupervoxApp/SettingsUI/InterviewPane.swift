@@ -40,10 +40,9 @@ public struct InterviewPane: View {
                     }
                 }
                 Section {
-                    Stepper(value: $model.maxQuestions, in: model.maxQuestionsRange) {
-                        LabeledContent(InterviewSettingsModel.maxQuestionsTitle) {
-                            Text("\(model.maxQuestions)").monospacedDigit()
-                        }
+                    stepperRow(InterviewSettingsModel.maxQuestionsTitle, value: "\(model.maxQuestions)") {
+                        Stepper(
+                            InterviewSettingsModel.maxQuestionsTitle, value: $model.maxQuestions, in: model.maxQuestionsRange)
                     }
                     note(InterviewSettingsModel.maxQuestionsNote)
                 } header: {
@@ -79,29 +78,38 @@ public struct InterviewPane: View {
 
     @ViewBuilder
     private var advanced: some View {
-        Stepper(value: $model.turnSilence, in: model.turnSilenceRange, step: model.turnSilenceStep) {
-            LabeledContent(InterviewSettingsModel.turnSilenceTitle) {
-                Text(model.turnSilenceLabel).monospacedDigit()
-            }
+        stepperRow(InterviewSettingsModel.turnSilenceTitle, value: model.turnSilenceLabel) {
+            Stepper(
+                InterviewSettingsModel.turnSilenceTitle, value: $model.turnSilence, in: model.turnSilenceRange,
+                step: model.turnSilenceStep)
         }
         note(model.effectiveSilenceText)
-        Stepper(
-            value: $model.interruptMinDuration, in: model.interruptMinDurationRange, step: model.interruptMinDurationStep
-        ) {
-            LabeledContent(InterviewSettingsModel.interruptMinDurationTitle) {
-                Text(model.interruptMinDurationLabel).monospacedDigit()
-            }
+        stepperRow(InterviewSettingsModel.interruptMinDurationTitle, value: model.interruptMinDurationLabel) {
+            Stepper(
+                InterviewSettingsModel.interruptMinDurationTitle, value: $model.interruptMinDuration,
+                in: model.interruptMinDurationRange, step: model.interruptMinDurationStep)
         }
-        Stepper(value: $model.interruptLevel, in: model.interruptLevelRange, step: model.interruptLevelStep) {
-            LabeledContent(InterviewSettingsModel.interruptLevelTitle) {
-                Text(model.interruptLevelLabel).monospacedDigit()
-            }
+        stepperRow(InterviewSettingsModel.interruptLevelTitle, value: model.interruptLevelLabel) {
+            Stepper(
+                InterviewSettingsModel.interruptLevelTitle, value: $model.interruptLevel, in: model.interruptLevelRange,
+                step: model.interruptLevelStep)
         }
         note(InterviewSettingsModel.interruptNote)
         HStack {
             Spacer()
             Button(InterviewSettingsModel.restoreAdvancedTitle) { model.restoreAdvanced() }
                 .controlSize(.small)
+        }
+    }
+
+    /// Une ligne : le titre à gauche, la valeur puis les flèches à droite. Le titre reste celui que VoiceOver lit pour le contrôle,
+    /// et la valeur est son état.
+    private func stepperRow(_ title: String, value: String, @ViewBuilder stepper: () -> some View) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                Text(value).monospacedDigit().foregroundStyle(.secondary)
+                stepper().labelsHidden().accessibilityValue(value)
+            }
         }
     }
 
