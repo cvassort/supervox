@@ -917,6 +917,19 @@ import Testing
         }
     }
 
+    /// D6 : « ce fournisseur sait parler » est UNE propriété (`ProviderKind.canSpeak`), lue par la règle, le brouillon de l'onglet
+    /// et la fabrique ; aucun des trois ne teste le type du fournisseur lui-même.
+    @Test func whetherAProviderSpeaksIsReadFromTheOneProperty() throws {
+        let sources = try Self.sources(under: "Sources")
+        for place in [
+            "SupervoxApp/Settings/VoiceRoute.swift", "SupervoxApp/SettingsUI/VoicesModel.swift", "Supervox/LiveInterview.swift",
+        ] {
+            let file = try #require(sources.first { $0.place == place }, "le balayage doit voir \(place)")
+            #expect(!file.code.contains(".openAICompatible"), "\(place) teste le type du fournisseur")
+            #expect(file.code.contains("canSpeak"), "\(place) ne lit pas canSpeak")
+        }
+    }
+
     @Test(arguments: [
         "SupervoxApp/SettingsUI/VoicesModel.swift", "SupervoxApp/SettingsUI/VoicesPane.swift",
         "SupervoxApp/SettingsUI/VoicesText.swift", "SupervoxApp/Interview/VoicePreview.swift",

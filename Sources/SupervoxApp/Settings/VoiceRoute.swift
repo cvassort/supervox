@@ -38,10 +38,7 @@ extension VoiceChoice {
             .system(language: choice.language, identifier: nil, because: reason)
         }
         guard let provider = settings.providers.first(where: { $0.id == providerID }) else { return fallback(.providerRemoved) }
-        switch provider.kind {
-        case .anthropic: return fallback(.providerCannotSpeak)
-        case .openAICompatible: break
-        }
+        guard provider.kind.canSpeak else { return fallback(.providerCannotSpeak) }
         guard let voice = choice.providerVoice else { return fallback(.incomplete) }
         return .provider(provider, voice)
     }

@@ -7,6 +7,17 @@ public enum ProviderKind: String, Codable, Sendable {
     case anthropic
 }
 
+extension ProviderKind {
+    /// LA règle « ce fournisseur sait parler » (il a une route de synthèse de la voix) : lue par `VoiceChoice.route(in:)`, par
+    /// le brouillon de l'onglet Voix et par la fabrique de voix du programme. Un type nouveau forcera une décision ici.
+    public var canSpeak: Bool {
+        switch self {
+        case .openAICompatible: true
+        case .anthropic: false
+        }
+    }
+}
+
 /// Un fournisseur de modèles. Aucune clé d'API ici : elles vivent dans le trousseau. Un champ que cette version ne connaît pas
 /// est gardé et réécrit tel quel (`UnknownFields`) ; l'égalité ne compare que les champs connus.
 public struct Provider: Codable, Equatable, Identifiable, Sendable {

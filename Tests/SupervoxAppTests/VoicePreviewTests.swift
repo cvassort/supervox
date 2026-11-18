@@ -176,7 +176,7 @@ final class OtherErrorPlayer: ClipPlayer {
         id: UUID(uuidString: "00000000-0000-0000-0000-0000000000c1")!, name: "Fournisseur d'exemple",
         baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-voix-exemple"])
     static let silentProvider = Provider(
-        id: UUID(uuidString: "00000000-0000-0000-0000-0000000000c2")!, name: "Fournisseur sans voix",
+        id: UUID(uuidString: "00000000-0000-0000-0000-0000000000c2")!, name: "Fournisseur d'exemple",
         baseURL: "https://example.com/v2", kind: .anthropic, models: [])
 
     static let systemChoice = VoiceChoice(language: "fr-FR")
@@ -424,7 +424,7 @@ final class OtherErrorPlayer: ClipPlayer {
     }
 
     /// Chaque ligne de la table des pannes : l'écoute finit sur sa panne, sans second classement, et la phrase montrée est celle de
-    /// `VoicesText` (pour `.provider(f)`, `f.message`). Une voix inutilisable, ou une voix du système absente de la liste, n'est
+    /// `VoicesText` (pour `.provider(f)`, `VoicesText.providerFailure(f)`). Une voix inutilisable, ou une voix du système absente de la liste, n'est
     /// jamais fabriquée ; aucune voix du système ne parle à la place d'un fournisseur ; rien n'est joué sauf par la ligne de lecture.
     @Test(arguments: FailureCase.allCases)
     func everyPreviewFailureHasItsSentence(_ c: FailureCase) async {
@@ -440,7 +440,7 @@ final class OtherErrorPlayer: ClipPlayer {
         #expect(rig.states.states.last == .failed(s.expected), "\(rig.states.states)")
         let sentence = VoicesText.failure(s.expected)
         #expect(!sentence.isEmpty)
-        if case .provider(let failure) = s.expected { #expect(sentence == failure.message) }
+        if case .provider(let failure) = s.expected { #expect(sentence == VoicesText.providerFailure(failure)) }
         if case .unusable(let reason) = s.expected {
             #expect(sentence == VoicesText.reason(reason))
             #expect(s.factory.calls.isEmpty, "une voix inutilisable n'est jamais fabriquée")
@@ -544,7 +544,54 @@ final class OtherErrorPlayer: ClipPlayer {
         let sentences = failures.map(VoicesText.failure)
         #expect(Set(sentences).count == failures.count)
         #expect(sentences.allSatisfy { $0.hasSuffix(".") && !$0.contains("Error") })
-        #expect(VoicesText.failure(.timedOut).contains("15"), "la borne dite est celle de limitSeconds")
+        let digits = VoicesText.failure(.timedOut).filter(\.isNumber)
+        #expect(digits.isEmpty, "aucun nombre de secondes : la voix du système abandonne avant la borne de l'écoute")
+    }
+
+    /// Ce qu'une panne de fournisseur dit pour une voix : la phrase qui la classe, une ligne par cas de `RewriteFailure`.
+    enum ProviderSentence {
+        /// Une voix mal réglée : la phrase propre à la voix, qui envoie vérifier modèle, identifiant et paramètres dans l'onglet Voix.
+        case misconfigured
+        /// Un cas neutre : la phrase de `RewriteFailure` telle quelle.
+        case neutral
+        case removed, timedOut, silent
+    }
+
+    static let providerFailures: [(RewriteFailure, ProviderSentence)] = [
+        (.noModel, .misconfigured), (.providerMissing, .removed), (.noKey(provider: "Fournisseur d'exemple"), .neutral),
+        (.keychain, .neutral), (.unauthorized(401), .neutral), (.notFound, .misconfigured), (.rejected(400), .misconfigured),
+        (.rateLimited, .neutral), (.server(503), .neutral), (.unreachable, .neutral), (.redirected, .neutral),
+        (.interrupted, .neutral), (.stalled(30), .timedOut), (.providerError, .neutral), (.truncated, .neutral),
+        (.refused, .neutral), (.empty, .silent), (.timedOut(30), .timedOut), (.malformed, .misconfigured),
+    ]
+
+    /// D1 : chaque cas de `RewriteFailure` (19, une ligne chacun) a sa phrase pour une voix ; aucune ne parle de « mode » ni de
+    /// « réponse longue ». Une voix mal réglée (adresse ou modèle inconnu, requête refusée, réponse illisible, pas de modèle)
+    /// envoie à l'onglet Voix ; les cas neutres gardent la phrase de `RewriteFailure`.
+    @Test func everyProviderFailureHasAVoiceSentence() {
+        #expect(Self.providerFailures.count == 19, "une ligne par cas")
+        var misconfigured: [String] = []
+        for (failure, kind) in Self.providerFailures {
+            let sentence = VoicesText.providerFailure(failure)
+            #expect(VoicesText.failure(.provider(failure)) == sentence)
+            let lower = sentence.lowercased()
+            #expect(lower.range(of: #"\bmodes?\b"#, options: .regularExpression) == nil, "« mode » : \(sentence)")
+            #expect(!lower.contains("longue"), "« réponse longue » : \(sentence)")
+            #expect(sentence.hasSuffix("."))
+            switch kind {
+            case .misconfigured:
+                #expect(sentence != failure.message)
+                for word in ["modèle", "identifiant", "paramètres", "onglet Voix"] {
+                    #expect(sentence.contains(word), "\(failure) : \(word)")
+                }
+                misconfigured.append(sentence)
+            case .neutral: #expect(sentence == failure.message)
+            case .removed: #expect(sentence == VoicesText.reason(.providerRemoved))
+            case .timedOut: #expect(sentence == VoicesText.failure(.timedOut))
+            case .silent: #expect(sentence == VoicesText.failure(.silent))
+            }
+        }
+        #expect(Set(misconfigured).count == misconfigured.count, "une phrase par cas mal réglé")
     }
 
     // MARK: Règle 9 : arrêt
@@ -628,6 +675,9 @@ final class OtherErrorPlayer: ClipPlayer {
         #expect(Set(phrases.keys) == ["fr", "en", "es", "de", "it"])
         #expect(Set(phrases.values).count == 5)
         #expect(phrases.values.allSatisfy { !$0.isEmpty })
+        // Une voix qu'on écoute n'est pas encore choisie : « peut prendre », jamais « prendra ».
+        #expect(phrases["fr"]?.contains("peut prendre") == true)
+        #expect(phrases["fr"]?.contains("prendra") == false)
     }
 }
 

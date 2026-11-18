@@ -8,11 +8,11 @@ public enum VoicesText {
 
     /// La phrase que dit une voix qu'on écoute, par langue primaire. Une autre langue prend l'anglais.
     public static let samplePhrases: [String: String] = [
-        "fr": InterviewText.fr("Bonjour, je suis la voix que Supervox prendra pour vous parler."),
-        "en": "Hello, I am the voice Supervox will use to speak to you.",
-        "es": "Hola, soy la voz que Supervox usará para hablarte.",
-        "de": "Hallo, ich bin die Stimme, mit der Supervox zu Ihnen sprechen wird.",
-        "it": "Ciao, sono la voce che Supervox userà per parlarti.",
+        "fr": InterviewText.fr("Bonjour, je suis une voix que Supervox peut prendre pour vous parler."),
+        "en": "Hello, I am a voice Supervox can use to speak to you.",
+        "es": "Hola, soy una voz que Supervox puede usar para hablarte.",
+        "de": "Hallo, ich bin eine Stimme, mit der Supervox zu Ihnen sprechen kann.",
+        "it": "Ciao, sono una voce che Supervox può usare per parlarti.",
     ]
 
     /// La phrase d'essai de cette langue : sa langue primaire (avant `-` ou `_`, sans casse), sinon l'anglais.
@@ -32,12 +32,12 @@ public enum VoicesText {
         case .unusable(let reason):
             Self.reason(reason)
         case .provider(let failure):
-            failure.message
+            providerFailure(failure)
         case .silent:
             InterviewText.fr("La voix n'a rendu aucun son : il n'y a rien à faire entendre.")
         case .timedOut:
-            InterviewText.fr(
-                "La voix n'a pas répondu en \(Int(VoicePreview.limitSeconds)) secondes : réessayez dans un moment.")
+            // Sans nombre de secondes : la voix du système abandonne d'elle-même avant la borne de l'écoute.
+            InterviewText.fr("La voix n'a pas répondu à temps : réessayez dans un moment.")
         case .playback:
             InterviewText.fr("Le son n'a pas pu être joué : vérifiez la sortie audio, puis réessayez.")
         case .unavailable:
@@ -45,6 +45,40 @@ public enum VoicesText {
         case .microphoneBusy:
             InterviewText.fr(
                 "Une dictée ou un entretien se sert du micro : réessayez d'écouter cette voix une fois qu'il est fini.")
+        }
+    }
+
+    /// La phrase d'une panne de fournisseur pendant l'écoute d'une voix. Le classement reste unique (`RewriteFailure.from`) ; seule
+    /// la phrase change là où celle de `RewriteFailure`, écrite pour les modes, égarerait : pour une voix, une adresse ou un modèle
+    /// inconnu, une requête refusée ou une réponse illisible veulent dire « voix mal réglée ». `switch` sans `default` : un cas
+    /// nouveau forcera une décision ici.
+    public static func providerFailure(_ failure: RewriteFailure) -> String {
+        switch failure {
+        case .noModel:
+            InterviewText.fr(
+                "Aucun modèle n'est donné pour cette voix : vérifiez le modèle, l'identifiant et les paramètres de la voix dans "
+                    + "l'onglet Voix.")
+        case .providerMissing:
+            Self.reason(.providerRemoved)
+        case .notFound:
+            InterviewText.fr(
+                "Le fournisseur ne connaît pas ce modèle ou cette adresse (HTTP 404) : vérifiez le modèle, l'identifiant et les "
+                    + "paramètres de la voix dans l'onglet Voix, puis l'adresse du fournisseur.")
+        case .rejected(let status):
+            InterviewText.fr(
+                "Le fournisseur a refusé la demande de cette voix (HTTP \(status)) : vérifiez le modèle, l'identifiant et les "
+                    + "paramètres de la voix dans l'onglet Voix.")
+        case .malformed:
+            InterviewText.fr(
+                "Le fournisseur n'a pas rendu un son lisible : vérifiez le modèle, l'identifiant et les paramètres de la voix dans "
+                    + "l'onglet Voix.")
+        case .stalled, .timedOut:
+            Self.failure(.timedOut)
+        case .empty:
+            Self.failure(.silent)
+        case .noKey, .keychain, .unauthorized, .rateLimited, .server, .unreachable, .redirected, .interrupted, .providerError,
+            .truncated, .refused:
+            failure.message
         }
     }
 
@@ -129,9 +163,14 @@ public enum VoicesText {
 
     // MARK: - Vie privée (règle 10)
 
-    /// Une voix du système, ou une voix de fournisseur qui ne peut pas parler : l'écoute n'envoie rien.
+    /// Une voix du système : l'écoute n'envoie rien.
     public static let privacyNothingSent = InterviewText.fr(
         "Écouter cette voix n'envoie rien : elle est produite sur cet ordinateur.")
+
+
+    /// Une voix de fournisseur qui ne peut pas parler (fournisseur supprimé, sans synthèse, voix incomplète) : rien n'est envoyé,
+    /// et elle n'est produite nulle part.
+    public static let privacyCannotSpeak = InterviewText.fr("Cette voix ne peut pas parler : l'écouter n'envoie rien.")
 
     /// Une voix de fournisseur : la phrase d'essai part chez lui, et sa clé est lue.
     public static func privacyProvider(_ name: String) -> String {

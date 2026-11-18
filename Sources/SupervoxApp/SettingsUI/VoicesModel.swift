@@ -307,12 +307,13 @@ public final class VoicesModel {
 
     // MARK: - Vie privée (règle 10)
 
-    /// Ce que l'écoute de la voix choisie envoie, selon `route(in:)` : rien (voix du système, ou voix qui ne peut pas parler), ou
-    /// la phrase d'essai et la lecture de la clé (voix de fournisseur). `nil` sans ligne choisie.
+    /// Ce que l'écoute de la voix choisie envoie, selon `route(in:)` : rien (voix du système ; voix de fournisseur qui ne peut pas
+    /// parler, qui le dit), ou la phrase d'essai et la lecture de la clé (voix de fournisseur). `nil` sans ligne choisie.
     public var privacyText: String? {
         guard let row = selectedRow else { return nil }
         switch row.choice.route(in: settings) {
         case .provider(let provider, _): return VoicesText.privacyProvider(Provider.shortName(provider.name))
+        case .system(_, _, because: .some): return VoicesText.privacyCannotSpeak
         case .system: return VoicesText.privacyNothingSent
         }
     }
@@ -405,9 +406,9 @@ public final class VoicesModel {
 
     // MARK: - Brouillon (règle 5)
 
-    /// Les fournisseurs qui savent parler (format compatible : ils ont une route de synthèse).
+    /// Les fournisseurs qui savent parler (`ProviderKind.canSpeak`).
     public var speakingProviders: [Provider] {
-        settings.providers.filter { $0.kind == .openAICompatible }
+        settings.providers.filter { $0.kind.canSpeak }
     }
 
     /// Les modèles connus d'un fournisseur qui sait parler ; vide sinon (le modèle se saisit alors librement).

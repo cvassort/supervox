@@ -96,7 +96,7 @@ struct LiveInterview: Sendable {
         // La voix d'un fournisseur ne se construit que par `VoiceChoice.providerVoice` (forme normalisée) : rien de non normalisé ne
         // part chez lui, quel que soit l'appelant. Un fournisseur donné avec un choix qui ne fait pas une voix de fournisseur
         // (sans fournisseur, modèle ou identifiant blanc) donne la voix du système, jamais une voix au modèle vide.
-        guard let provider, provider.kind == .openAICompatible, let voice = choice.providerVoice else {
+        guard let provider, provider.kind.canSpeak, let voice = choice.providerVoice else {
             let choice = choice.normalized
             let isSystemVoice = provider == nil && choice.providerID == nil
             return makeSystemVoice(choice.language, isSystemVoice ? choice.identifier : nil)

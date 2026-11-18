@@ -21,7 +21,7 @@ import Testing
         id: UUID(uuidString: "00000000-0000-0000-0000-0000000000d1")!, name: "Fournisseur d'exemple",
         baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-voix-exemple", "modele-exemple"])
     static let silentProvider = Provider(
-        id: UUID(uuidString: "00000000-0000-0000-0000-0000000000d2")!, name: "Fournisseur sans voix",
+        id: UUID(uuidString: "00000000-0000-0000-0000-0000000000d2")!, name: "Fournisseur d'exemple",
         baseURL: "https://example.com/v2", kind: .anthropic, models: ["modele-exemple"])
 
     // Les voix installées inventées, données dans le désordre : deux langues, des genres et qualités variés.
@@ -114,9 +114,9 @@ import Testing
     /// enregistrées, par langue puis nom. Chaque ligne dit nom, langue, genre (ou « Genre non précisé ») et qualité ; une voix
     /// enregistrée dit son fournisseur et son modèle.
     @Test func rowsListSystemThenSaved() throws {
-        let z = Self.saved("Zèbre", id: 1, language: "fr-FR")
-        let a = Self.saved("Alouette", id: 2, language: "fr-FR", model: "modele-exemple")
-        let e = Self.saved("Écho", id: 3, language: "en-US")
+        let z = Self.saved("Voix d'exemple F", id: 1, language: "fr-FR")
+        let a = Self.saved("voix d'exemple É", id: 2, language: "fr-FR", model: "modele-exemple")
+        let e = Self.saved("Voix d'exemple C", id: 3, language: "en-US")
         let rig = Rig(Self.settings(voices: [z, a, e]))
         rig.model.language = nil
         let rows = rig.model.rows
@@ -142,10 +142,11 @@ import Testing
         #expect(unspecified.detail == "en-US · \(VoicesText.genderUnspecified) · \(VoicesText.quality(1))")
         #expect(rows[4].detail.contains(VoicesText.quality(3)))
 
-        let alouette = rows[6]
-        #expect(alouette.title == "Alouette")
-        #expect(alouette.detail == "Fournisseur d'exemple · modele-exemple")
-        #expect(alouette.choice == a.voice)
+        // Le nom plié (sans casse ni accents) : « voix d'exemple É » passe avant « Voix d'exemple F ».
+        let folded = rows[6]
+        #expect(folded.title == "voix d'exemple É")
+        #expect(folded.detail == "Fournisseur d'exemple · modele-exemple")
+        #expect(folded.choice == a.voice)
         #expect(Set([1, 2, 3].map(VoicesText.quality)).count == 3, "trois qualités, trois libellés")
     }
 
@@ -170,7 +171,7 @@ import Testing
         #expect(gone.model.rows.filter(\.isActive).count == 1)
 
         // Une voix de fournisseur qui n'est pas enregistrée.
-        let loose = Self.saved("Libre", id: 9).voice
+        let loose = Self.saved("Voix d'exemple D", id: 9).voice
         let unsaved = Rig(Self.settings(voice: loose))
         let unsavedRow = unsaved.model.rows.first { $0.isActive }
         #expect(unsavedRow?.id == .active)
@@ -180,8 +181,8 @@ import Testing
 
     /// Deux voix enregistrées identiques : UNE ligne cochée, la première dans l'ordre affiché.
     @Test func twoIdenticalSavedVoicesCheckOnlyTheFirst() {
-        let first = Self.saved("Alpha", id: 1)
-        let second = Self.saved("Bêta", id: 2)
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let second = Self.saved("Voix d'exemple B", id: 2)
         let rig = Rig(Self.settings(voices: [second, first], voice: first.voice))
         #expect(rig.model.rows.filter(\.isActive).map(\.id) == [.saved(first.id)])
     }
@@ -189,10 +190,10 @@ import Testing
     // MARK: - Règle 3 : voix enregistrée inutilisable
 
     @Test func anUnusableSavedVoiceIsListedAndSaysWhy() {
-        let removed = Self.saved("Sans fournisseur", id: 1, provider: UUID(uuidString: "00000000-0000-0000-0000-0000000000ff"))
-        let mute = Self.saved("Muette", id: 2, provider: Self.silentProvider.id)
-        let incomplete = Self.saved("Incomplète", id: 3, identifier: "  ")
-        let good = Self.saved("Bonne", id: 4)
+        let removed = Self.saved("Voix d'exemple D", id: 1, provider: UUID(uuidString: "00000000-0000-0000-0000-0000000000ff"))
+        let mute = Self.saved("Voix d'exemple E", id: 2, provider: Self.silentProvider.id)
+        let incomplete = Self.saved("Voix d'exemple F", id: 3, identifier: "  ")
+        let good = Self.saved("Voix d'exemple G", id: 4)
         let rig = Rig(Self.settings(voices: [removed, mute, incomplete, good]))
         let rows = Dictionary(uniqueKeysWithValues: rig.model.rows.map { ($0.id, $0) })
         #expect(rows[.saved(removed.id)]?.note == VoicesText.reason(.providerRemoved))
@@ -213,7 +214,7 @@ import Testing
     // MARK: - Règle 4 : filtres
 
     @Test func filtersNarrowButNeverHideTheActiveVoice() {
-        let english = Self.saved("Écho", id: 1, language: "en-US", gender: .neutral)
+        let english = Self.saved("Voix d'exemple C", id: 1, language: "en-US", gender: .neutral)
         let rig = Rig(Self.settings(voices: [english], voice: VoiceChoice(identifier: "voix.exemple.a", language: "fr-FR")))
         let model = rig.model
         #expect(model.language == "fr-FR", "la langue par défaut est celle de la voix en vigueur")
@@ -362,8 +363,8 @@ import Testing
     /// Modifier la voix en vigueur (la ligne cochée) met à jour la liste ET `settings.voice`, dans la même écriture. Modifier la
     /// seconde de deux voix identiques (non cochée) ne touche pas `settings.voice`.
     @Test func savingTheActiveVoiceUpdatesBoth() throws {
-        let first = Self.saved("Alpha", id: 1)
-        let second = Self.saved("Bêta", id: 2)
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let second = Self.saved("Voix d'exemple B", id: 2)
         let rig = Rig(Self.settings(voices: [first, second], voice: first.voice))
         let model = rig.model
         // La jumelle non cochée d'abord : elle EST la même voix que la voix en vigueur, mais pas la ligne cochée.
@@ -377,7 +378,7 @@ import Testing
 
         model.selection = .saved(first.id)
         model.beginEditing()
-        #expect(model.draft?.name == "Alpha")
+        #expect(model.draft?.name == "Voix d'exemple A")
         #expect(model.draft?.parameters.map(\.key) == ["cle-exemple"])
         model.draft?.identifier = "voix-exemple-neuve"
         model.save()
@@ -390,22 +391,22 @@ import Testing
     /// Modifier une voix garde ce que cette version ne connaît pas (son identité, ses champs inconnus) : la voix enregistrée est
     /// modifiée en place, pas remplacée par une neuve.
     @Test func editingKeepsTheSavedVoiceInPlace() throws {
-        let json = #"{"id":"00000000-0000-0000-0000-000000000001","name":"Alpha","avenir":1,"voice":{"providerID":"00000000-0000-0000-0000-0000000000d1","model":"modele-voix-exemple","identifier":"voix-exemple","language":"fr-FR","futur":2}}"#
+        let json = #"{"id":"00000000-0000-0000-0000-000000000001","name":"Voix d'exemple A","avenir":1,"voice":{"providerID":"00000000-0000-0000-0000-0000000000d1","model":"modele-voix-exemple","identifier":"voix-exemple","language":"fr-FR","futur":2}}"#
         let decoded = try JSONDecoder().decode(SavedVoice.self, from: Data(json.utf8))
         let rig = Rig(Self.settings(voices: [decoded]))
         rig.model.selection = .saved(decoded.id)
         rig.model.beginEditing()
-        rig.model.draft?.name = "Alpha modifiée"
+        rig.model.draft?.name = "Voix d'exemple A modifiée"
         rig.model.save()
         let written = String(decoding: try JSONEncoder().encode(rig.settings.voices[0]), as: UTF8.self)
         #expect(written.contains("\"avenir\"") && written.contains("\"futur\""))
-        #expect(rig.settings.voices[0].name == "Alpha modifiée")
+        #expect(rig.settings.voices[0].name == "Voix d'exemple A modifiée")
     }
 
     // MARK: - Règle 6 : utiliser, supprimer
 
     @Test func useWritesOnlyTheVoice() {
-        let saved = Self.saved("Alpha", id: 1, model: " modele-voix-exemple ")
+        let saved = Self.saved("Voix d'exemple A", id: 1, model: " modele-voix-exemple ")
         let rig = Rig(Self.settings(voices: [saved]))
         let model = rig.model
         model.language = nil
@@ -432,8 +433,8 @@ import Testing
     }
 
     @Test func deletingTheActiveVoiceFallsBackAndSaysSo() {
-        let first = Self.saved("Alpha", id: 1)
-        let other = Self.saved("Bêta", id: 2, model: "modele-exemple")
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let other = Self.saved("Voix d'exemple B", id: 2, model: "modele-exemple")
         let rig = Rig(Self.settings(voices: [first, other], voice: first.voice))
         let model = rig.model
 
@@ -466,8 +467,8 @@ import Testing
 
     /// Supprimer la seconde de deux voix identiques (non cochée) ne change pas la voix en vigueur.
     @Test func deletingTheUncheckedTwinKeepsTheActiveVoice() {
-        let first = Self.saved("Alpha", id: 1)
-        let second = Self.saved("Bêta", id: 2)
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let second = Self.saved("Voix d'exemple B", id: 2)
         let rig = Rig(Self.settings(voices: [first, second], voice: first.voice))
         rig.model.selection = .saved(second.id)
         rig.model.requestDeletion()
@@ -515,8 +516,8 @@ import Testing
     // MARK: - Règle 10 : vie privée
 
     @Test func thePrivacyNoteFollowsTheRoute() {
-        let good = Self.saved("Bonne", id: 1)
-        let mute = Self.saved("Muette", id: 2, provider: Self.silentProvider.id)
+        let good = Self.saved("Voix d'exemple G", id: 1)
+        let mute = Self.saved("Voix d'exemple E", id: 2, provider: Self.silentProvider.id)
         let rig = Rig(Self.settings(voices: [good, mute]))
         let model = rig.model
         #expect(model.privacyText == nil, "aucune ligne choisie")
@@ -527,7 +528,18 @@ import Testing
         #expect(model.privacyText == InterviewText.fr(
             "Écouter cette voix envoie la phrase d'essai à « Fournisseur d'exemple » et lit sa clé dans le trousseau."))
         model.selection = .saved(mute.id)
-        #expect(model.privacyText == VoicesText.privacyNothingSent, "une voix qui ne peut pas parler n'envoie rien")
+        #expect(model.privacyText == VoicesText.privacyCannotSpeak, "une voix qui ne peut pas parler n'envoie rien")
+        // Trois phrases distinctes ; celle d'une voix qui ne peut pas parler ne dit pas qu'elle est produite sur cet ordinateur.
+        let notes = [VoicesText.privacyNothingSent, VoicesText.privacyCannotSpeak, VoicesText.privacyProvider("Fournisseur d'exemple")]
+        #expect(Set(notes).count == 3)
+        #expect(!VoicesText.privacyCannotSpeak.contains("ordinateur"))
+        #expect(VoicesText.privacyCannotSpeak.contains("n'envoie rien"))
+    }
+
+    /// D6 : LA propriété « ce fournisseur sait parler », lue par la route, le brouillon et la fabrique.
+    @Test func onlyTheCompatibleKindSpeaks() {
+        #expect(ProviderKind.openAICompatible.canSpeak)
+        #expect(!ProviderKind.anthropic.canSpeak)
     }
 
     // MARK: - Règle 11 : écriture refusée
@@ -646,6 +658,12 @@ import Testing
         #expect(model.selectedRow == nil)
         #expect(model.previewState == .idle, "l'écoute est arrêtée")
         #expect(model.listeningRow == nil)
+        // L'écoute elle-même est arrêtée (pas seulement l'affichage) : la synthèse retenue a vu l'annulation et rien n'est joué.
+        gate.open()
+        #expect(await until { rig.factory.system.sawCancellation })
+        await settle()
+        #expect(rig.player.clips.isEmpty, "l'écoute arrêtée n'a rien joué")
+        #expect(model.previewState == .idle)
 
         // Une ligne choisie alors qu'elle est cachée : aucun geste ne l'atteint.
         model.gender = .all
@@ -660,7 +678,6 @@ import Testing
         #expect(model.pendingDeletion == nil)
         #expect(model.listeningRow == nil)
         #expect(rig.factory.calls.count == 1, "seule la première écoute a fabriqué une voix")
-        #expect(rig.player.clips.isEmpty, "l'écoute arrêtée n'a rien joué")
 
         // Un filtre qui garde la ligne choisie ne la lâche pas.
         model.language = nil
@@ -694,7 +711,7 @@ import Testing
         rig.settings.providers.removeAll { $0.id == Self.provider.id }
         model.listen()
         #expect(await until { model.previewState == .failed(.unusable(.providerRemoved)) })
-        #expect(model.privacyText == VoicesText.privacyNothingSent)
+        #expect(model.privacyText == VoicesText.privacyCannotSpeak)
         #expect(rig.keys.readCount == 0)
         #expect(!model.canUse)
 
