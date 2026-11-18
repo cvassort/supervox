@@ -776,8 +776,8 @@ for dark in [false, true] {
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
-    // Onglet Entretien : à la taille de la vraie fenêtre (groupe replié, sous la ligne de flottaison : la fenêtre fait défiler), puis le
-    // contenu entier, groupe ouvert et replié, puis un entretien réglé à la main et un refus d'enregistrement.
+    // Onglet Entretien : à la taille RÉELLE de la fenêtre (`SettingsView.windowSize`), groupe replié (la vraie vue) puis ouvert (le volet
+    // seul : la vue ne peut pas s'ouvrir d'elle-même), puis le contenu entier, un entretien réglé à la main et un refus d'enregistrement.
     try render(
         SettingsView(
             providers: await providersModel([]), hotKey: hotKeyModel(),
@@ -786,13 +786,15 @@ for dark in [false, true] {
             interview: ExampleInterview().makeModel()),
         name: "reglages-entretien", dark: dark, background: window, size: settingsSize)
     try render(
-        InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true),
-        name: "reglages-entretien-avance", dark: dark, background: window, size: NSSize(width: 600, height: 760))
+        InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true)
+            .frame(width: settingsSize.width, height: settingsSize.height),
+        name: "reglages-entretien-avance", dark: dark, background: window, size: settingsSize)
     try render(
-        InterviewPane(model: ExampleInterview().makeModel()),
+        InterviewPane(model: ExampleInterview().makeModel()).frame(width: 600, height: 760),
         name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: 600, height: 760))
     try render(
-        InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true),
+        InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true)
+            .frame(width: 600, height: 1_000),
         name: "reglages-entretien-regle-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
     let interviewRefusing = ExampleInterview()
     let interviewRefused = interviewRefusing.makeModel()
