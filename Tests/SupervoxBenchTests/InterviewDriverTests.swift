@@ -332,6 +332,30 @@ private func talk(_ texts: String...) -> Conversation {
         _ = try await rig.finish()
     }
 
+    /// Le texte d'un tour qui arrive après l'expiration de son délai (une transcription qui a démarré tard : le détecteur a mis plus que
+    /// la marge à fermer le passage) n'est pas celui d'un tour qu'on attend encore : le tour reste « sans réaction », la conclusion
+    /// n'est pas demandée une seconde fois, et rien ne plante. Le tour est le dernier : le délai qui expire a déjà demandé la
+    /// conclusion, et rien d'autre n'attend ce texte.
+    @Test func aTextThatArrivesAfterTheDelayOfTheLastTurnIsIgnoredForThatTurn() async throws {
+        let rig = try Rig(turns: 1)
+        try await rig.send(.state(.listening))
+        try #require(await settle { rig.board.pendingSeconds == [driverReactionTimeout] })
+        try #require(rig.board.release(seconds: driverReactionTimeout))
+        try #require(await settle { rig.engine.concludeCalls == 1 }, "le délai expiré demande la conclusion")
+
+        // Le texte tardif, puis ce que le moteur émet ensuite : rien de cela n'a de tour à qui s'attacher.
+        try await rig.send(.turnEnded("texte tardif"), .state(.thinking), .replyText("Une question ?"), .state(.speaking),
+                           .speakingStarted(question: 1), .sentencePlayed("Une question ?"), .speakingEnded(heard: "Une question ?"),
+                           .state(.listening))
+
+        #expect(rig.pushed == [0], "aucun autre tour n'est poussé")
+        #expect(rig.engine.concludeCalls == 1, "la conclusion n'est demandée qu'une fois")
+        let trace = try await rig.finish()
+        let turn = try #require(trace.turns.first)
+        #expect(trace.turns.count == 1 && turn.noReaction && !turn.heard, "le tour reste « sans réaction » : \(turn)")
+        #expect(turn.toFirstText == nil && turn.toFirstSentence == nil && turn.toPlayed == nil, "aucune durée ne lui est attachée : \(turn)")
+    }
+
     // MARK: Durées
 
     @Test func theDurationsRunFromTheEndOfTheTurnToEachMomentOfTheReply() async throws {
