@@ -357,6 +357,38 @@ import Testing
         }
     }
 
+    @Test("I4 : avec le VRAI historique, un dossier refusé (la racine est un fichier) : la relecture s'ouvre avec l'avis ET la phrase de l'historique")
+    func aRefusedRootIsSaidInTheReview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("pas un dossier".utf8).write(to: realRoot)
+        let controller = try makeController(historyRoot: realRoot)
+        hotKeys.press()
+        let driver = try await listening(controller)
+
+        driver.finish(.prompt("Le prompt d'exemple.", DictationInterviewTests.exchange))
+
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.notice == InterviewText.promptReview + " " + InterviewText.historyNotSaved)
+        #expect(try Data(contentsOf: realRoot) == Data("pas un dossier".utf8), "le fichier posé à la place du dossier est intact")
+    }
+
+    @Test("I4 : avec « Ne rien garder », rien n'est écrit et ce n'est pas un échec : la relecture n'a pas d'avertissement")
+    func keepingNothingIsNotAFailure() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = self.settings()
+        settings.history.retentionDays = 0
+        let controller = try makeController(settings: settings, historyRoot: realRoot)
+        hotKeys.press()
+        let driver = try await listening(controller)
+
+        driver.finish(.prompt("Le prompt d'exemple.", DictationInterviewTests.exchange))
+
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.notice == InterviewText.promptReview)
+        await controller.interview.waitForSaves()
+        #expect(!FileManager.default.fileExists(atPath: realRoot.path), "rien n'est écrit, pas même le dossier")
+    }
+
     @Test("règle 5 : un entretien dont la rédaction a échoué est gardé sans prompt, avec sa conversation")
     func aFailedConclusionIsKeptWithoutAPromptInTheRealHistory() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }

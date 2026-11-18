@@ -470,26 +470,97 @@ import Testing
         }
     }
 
-    @Test("règle 8 : la relecture n'attend pas l'historique, et une panne de l'historique ne l'empêche pas")
-    func theHistoryIsNotAwaitedAndItsFailureIsHarmless() async throws {
+    @Test("I4 : la relecture n'attend l'enregistrement qu'un délai borné : tenu au-delà, elle s'ouvre sans avis, et l'enregistrement finit après")
+    func theReviewWaitsForTheHistoryOnlyForABoundedTime() async throws {
         let held = InterviewRig()
         let gate = TestGate()
         defer { gate.open() }
         held.history.configure(gate: gate)
         let driver = try await held.listening()
         driver.finish(.prompt("P.", Self.exchange))
-        #expect(try await outcome(held) == .review(text: "P.", notice: InterviewText.promptReview))
         #expect(await until { held.history.attempts == 1 })
+        #expect(await until { held.timers.started == 1 }, "le délai est lancé avec l'enregistrement")
+        #expect(held.outcomes.isEmpty, "l'enregistrement tient : la relecture attend son issue, tant que le délai n'est pas écoulé")
+        #expect(held.controller.isActive)
+
+        held.timers.fire()
+
+        #expect(try await outcome(held) == .review(text: "P.", notice: InterviewText.promptReview), "délai écoulé : l'issue est inconnue, aucun avis")
         #expect(held.history.saved.isEmpty, "l'enregistrement est encore retenu")
         gate.open()
         #expect(await until { held.history.saved.count == 1 })
+    }
 
-        let failing = InterviewRig()
-        failing.history.configure(fails: true)
-        let second = try await failing.listening()
-        second.finish(.prompt("P.", Self.exchange))
-        #expect(try await outcome(failing) == .review(text: "P.", notice: InterviewText.promptReview))
-        #expect(await until { failing.history.attempts == 1 })
+    @Test("I4 : un enregistrement réussi à temps ouvre la relecture avec son avis habituel, sans avertissement")
+    func aSaveThatSucceedsInTimeAddsNoWarning() async throws {
+        let rig = InterviewRig()
+        let driver = try await rig.listening()
+        driver.finish(.prompt("P.", Self.exchange))
+        #expect(try await outcome(rig) == .review(text: "P.", notice: InterviewText.promptReview))
+        #expect(rig.history.saved.count == 1, "l'issue n'arrive qu'une fois l'enregistrement fini")
+    }
+
+    @Test("I4 : un entretien conclu qui n'a pas pu être écrit le dit en relecture : l'avis habituel, puis la phrase de l'historique")
+    func aFailedSaveIsSaidInTheReview() async throws {
+        let prompt = InterviewRig()
+        prompt.history.configure(fails: true)
+        let first = try await prompt.listening()
+        first.finish(.prompt("P.", Self.exchange))
+        #expect(
+            try await outcome(prompt)
+                == .review(text: "P.", notice: InterviewText.promptReview + " " + InterviewText.historyNotSaved))
+        #expect(prompt.history.attempts == 1)
+
+        let failedConclusion = InterviewRig()
+        failedConclusion.history.configure(fails: true)
+        let second = try await failedConclusion.listening()
+        second.finish(.conclusionFailed(.server(503), Self.exchange))
+        #expect(
+            try await outcome(failedConclusion)
+                == .review(
+                    text: Self.exchange.transcript,
+                    notice: InterviewText.conclusionFailedReview + " " + InterviewText.historyNotSaved))
+
+        let lastWords = InterviewRig()
+        lastWords.history.configure(fails: true)
+        let third = try await lastWords.listening()
+        try await emit(.notice(.lastWordsLost), third, lastWords) { $0.notice == InterviewText.notice(.lastWordsLost) }
+        third.finish(.prompt("P.", Self.exchange))
+        #expect(
+            try await outcome(lastWords)
+                == .review(
+                    text: "P.", notice: InterviewText.promptReviewWithoutLastWords + " " + InterviewText.historyNotSaved))
+    }
+
+    @Test("I4 : une panne de l'historique n'empêche jamais la relecture, et ce qui n'est pas enregistré n'a pas d'avis d'échec")
+    func aFailedSaveNeverBlocksTheReviewAndUnsavedEndsHaveNoWarning() async throws {
+        // Une panne du micro après un tour : relecture, rien n'est enregistré, donc aucun avis sur l'historique.
+        let rig = InterviewRig()
+        rig.history.configure(fails: true)
+        let driver = try await rig.listening()
+        driver.finish(.failed(.microphone("silent"), Self.exchange))
+        #expect(try await outcome(rig) == .review(text: Self.exchange.transcript, notice: InterviewText.microphoneStoppedReview))
+        #expect(rig.history.attempts == 0)
+    }
+
+    @Test("I4 : annulé pendant l'attente de l'enregistrement : issue « annulé » une seule fois, jamais de relecture après")
+    func cancellingWhileTheSaveIsHeldNeverOpensTheReview() async throws {
+        let held = InterviewRig()
+        let gate = TestGate()
+        defer { gate.open() }
+        held.history.configure(gate: gate)
+        let driver = try await held.listening()
+        driver.finish(.prompt("P.", Self.exchange))
+        #expect(await until { held.history.attempts == 1 })
+
+        held.controller.cancel()
+        #expect(held.outcomes == [.cancelled])
+        gate.open()
+        await held.controller.waitForSaves()
+
+        #expect(held.outcomes == [.cancelled], "aucune relecture ne s'ajoute")
+        #expect(held.panel.interview == nil)
+        #expect(held.history.saved.count == 1, "l'entretien déjà conclu est enregistré (comme avant)")
     }
 
     // MARK: - Règle 7 : l'annulation, à chaque étape

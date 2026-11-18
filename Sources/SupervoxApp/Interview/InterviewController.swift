@@ -50,6 +50,7 @@ public final class InterviewController: InterviewRunning {
     private let history: any InterviewHistoryStoring
     private let panel: PanelModel
     private let now: @Sendable () -> Date
+    private let saveWait: @Sendable (Double) async throws -> Void
     private let log = Logger(subsystem: "dev.supervox.app", category: "interview")
 
     /// L'entretien en cours, `nil` hors entretien.
@@ -69,7 +70,8 @@ public final class InterviewController: InterviewRunning {
         environment: InterviewEnvironment, settings: @escaping @MainActor () -> AppSettings,
         behavior: @escaping @MainActor () -> HotKeyBehavior,
         resolve: @escaping @MainActor (AppSettings, TranscriptionEngine?) async throws -> InterviewSetup,
-        history: any InterviewHistoryStoring, panel: PanelModel, now: @escaping @Sendable () -> Date = Date.init
+        history: any InterviewHistoryStoring, panel: PanelModel, now: @escaping @Sendable () -> Date = Date.init,
+        saveWait: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
     ) {
         self.environment = environment
         self.settings = settings
@@ -78,6 +80,7 @@ public final class InterviewController: InterviewRunning {
         self.history = history
         self.panel = panel
         self.now = now
+        self.saveWait = saveWait
     }
 
     public var isActive: Bool { current != nil }
@@ -176,7 +179,7 @@ public final class InterviewController: InterviewRunning {
         // La conversation reste tenue jusque-là, et ce qui attend le micro (`waitUntilStopped`) aussi.
         for await event in events {
             if case .finished(let end) = event {
-                finished(end, attempt)
+                await finished(end, attempt)
                 continue
             }
             guard isLive(attempt) else { continue }
@@ -332,19 +335,27 @@ public final class InterviewController: InterviewRunning {
         }
     }
 
-    private func finished(_ end: ConversationEnd, _ attempt: Attempt) {
+    /// La fin de la conversation. Pour un entretien conclu (`.prompt`, `.conclusionFailed`), l'écriture dans l'historique est
+    /// attendue UN DÉLAI BORNÉ (`saveWaitSeconds`) avant d'ouvrir la relecture : si elle échoue, l'avis de relecture le dit
+    /// (`InterviewText.withHistoryWarning`) ; si elle tient plus longtemps, la relecture s'ouvre sans avis et l'écriture finit après.
+    /// Annulé pendant l'attente : rien n'est ouvert.
+    private func finished(_ end: ConversationEnd, _ attempt: Attempt) async {
         guard isLive(attempt) else { return }
         log.notice("entretien fini : \(self.kind(of: end), privacy: .public)")
         switch end {
         case .prompt(let prompt, let conversation):
-            save(InterviewRecord(id: UUID(), date: now(), prompt: prompt, conversation: conversation))
-            let notice = attempt.lastWordsLost ? InterviewText.promptReviewWithoutLastWords : InterviewText.promptReview
-            self.end(attempt, .review(text: prompt, notice: notice))
+            let saved = await save(InterviewRecord(id: UUID(), date: now(), prompt: prompt, conversation: conversation))
+            guard isLive(attempt) else { return }
+            let notice =
+                attempt.lastWordsLost ? InterviewText.promptReviewWithoutLastWords : InterviewText.promptReview
+            self.end(attempt, .review(text: prompt, notice: saved ? notice : InterviewText.withHistoryWarning(notice)))
         case .conclusionFailed(_, let conversation):
-            save(InterviewRecord(id: UUID(), date: now(), prompt: nil, conversation: conversation))
+            let saved = await save(InterviewRecord(id: UUID(), date: now(), prompt: nil, conversation: conversation))
+            guard isLive(attempt) else { return }
             let notice =
                 attempt.lastWordsLost ? InterviewText.conclusionFailedReviewWithoutLastWords : InterviewText.conclusionFailedReview
-            self.end(attempt, .review(text: conversation.transcript, notice: notice))
+            self.end(
+                attempt, .review(text: conversation.transcript, notice: saved ? notice : InterviewText.withHistoryWarning(notice)))
         case .failed(let failure, let conversation):
             // Rien n'est enregistré, mais rien n'est perdu : la conversation va en relecture dès qu'elle a un tour de la personne.
             if conversation.hasUserTurn {
@@ -365,17 +376,45 @@ public final class InterviewController: InterviewRunning {
         }
     }
 
-    /// Un entretien conclu va dans l'historique, sans que la relecture l'attende. Une panne ne dit que sa nature, dans le journal.
-    private func save(_ record: InterviewRecord) {
+    /// Combien de temps la relecture attend l'écriture de l'historique, en secondes : une écriture de quelques centaines d'octets
+    /// prend des millisecondes, ce délai ne sert qu'à une écriture qui ne rend pas la main. Choix non mesuré.
+    static let saveWaitSeconds = 2.0
+
+    /// Les écritures en cours : chacune est une tâche que `waitForSaves()` attend (les tests, pour prouver qu'une fin n'écrit RIEN
+    /// sans compter sur une durée fixe).
+    private var savesInFlight: [UUID: Task<Bool, Never>] = [:]
+
+    /// Un entretien conclu va dans l'historique. Rend `false` si l'écriture a échoué (le journal ne dit que sa nature), `true` si elle
+    /// a réussi, ou si le délai est écoulé avant son issue (rien n'est alors affirmé : la relecture s'ouvre sans avis, l'écriture
+    /// continue). Une durée « Ne rien garder » n'écrit rien et ne lève pas : ce n'est pas un échec.
+    private func save(_ record: InterviewRecord) async -> Bool {
         let history = history
         let log = log
-        Task {
+        let id = UUID()
+        let task = Task { [weak self] () -> Bool in
+            defer { self?.savesInFlight[id] = nil }
             do {
                 try await history.save(record)
+                return true
             } catch {
                 log.error("entretien non enregistré dans l'historique")
+                return false
             }
         }
+        savesInFlight[id] = task
+        do {
+            return try await Deadline.run(seconds: Self.saveWaitSeconds, sleep: saveWait) { await task.value }
+        } catch is DeadlineExceeded {
+            log.notice("entretien : écriture de l'historique encore en cours")
+            return true
+        } catch {
+            return true
+        }
+    }
+
+    /// Attend la fin de toutes les écritures de l'historique en cours.
+    func waitForSaves() async {
+        for task in Array(savesInFlight.values) { _ = await task.value }
     }
 
     // MARK: - État

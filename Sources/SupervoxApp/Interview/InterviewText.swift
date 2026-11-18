@@ -234,6 +234,15 @@ public enum InterviewText {
     public static let conclusionFailedReviewWithoutLastWords = fr(
         "Le prompt n'a pas pu être rédigé, et vos derniers mots n'ont pas pu être transcrits : le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.")
 
+    /// L'entretien conclu n'a pas pu être écrit dans l'historique local. Ajoutée à l'avis de relecture (`withHistoryWarning`) : la
+    /// personne ne l'apprendrait jamais autrement, et l'onglet Historique dit « chaque entretien conclu est gardé ici ».
+    public static let historyNotSaved = fr(
+        "Cet entretien n'a pas pu être gardé dans l'historique : copiez le texte si vous voulez le conserver.")
+
+    /// L'avis de relecture, suivi de la phrase de l'historique. Chacun des quatre avis d'un entretien enregistré (`promptReview…`,
+    /// `conclusionFailedReview…`) y tient dans `DictationText.detailLimit` (`allSentences`, que `InterviewTextTests` mesure).
+    public static func withHistoryWarning(_ notice: String) -> String { notice + " " + historyNotSaved }
+
     /// Le micro s'est arrêté après au moins un tour : la relecture porte la conversation jusque-là.
     public static let microphoneStoppedReview = fr(
         "Le micro s'est arrêté pendant l'entretien : le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.")
@@ -290,8 +299,10 @@ public enum InterviewText {
         sentences += [
             couldNotStart, promptReview, promptReviewWithoutLastWords, conclusionFailedReview,
             conclusionFailedReviewWithoutLastWords, microphoneStoppedReview,
-            transcriptionStoppedReview, nothingSaid, microphoneSentNothing, transcriptionDidNotStart,
+            transcriptionStoppedReview, nothingSaid, microphoneSentNothing, transcriptionDidNotStart, historyNotSaved,
         ]
+        sentences += [promptReview, promptReviewWithoutLastWords, conclusionFailedReview, conclusionFailedReviewWithoutLastWords]
+            .map(withHistoryWarning)
         sentences += ([.noFastModel, .noStrongModel] + failures.map(InterviewSetupFailure.provider)).map(setupFailure)
         return sentences
     }

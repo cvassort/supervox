@@ -286,6 +286,30 @@ final class FakeInterviewEnvironment: Sendable {
 
 /// Le contrôleur de l'entretien et ses doubles : vrai `PanelModel`, vraie résolution (`InterviewSetup.resolve`) sur un trousseau en
 /// mémoire et des modèles doubles, environnement, conversation et historique doubles.
+/// Les minuteries de l'attente de l'enregistrement de l'historique : aucune ne rend d'elle-même, le test les déclenche (`fire`). Une
+/// minuterie que le contrôleur annule (l'enregistrement a fini à temps) rend la main par une erreur d'annulation, sans délai écoulé.
+final class SaveTimers: Sendable {
+    private let gates = Mutex<[TestGate]>([])
+    /// Combien de minuteries ont été lancées.
+    var started: Int { gates.withLock { $0.count } }
+
+    func wait() async throws {
+        let gate = TestGate()
+        gates.withLock { $0.append(gate) }
+        try await withTaskCancellationHandler {
+            await gate.wait()
+            try Task.checkCancellation()
+        } onCancel: {
+            gate.open()
+        }
+    }
+
+    /// Le délai est écoulé pour toutes les minuteries en cours.
+    func fire() {
+        for gate in gates.withLock({ $0 }) { gate.open() }
+    }
+}
+
 @MainActor final class InterviewRig {
     static let provider = Provider(
         id: UUID(), name: "Fournisseur d'exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
@@ -305,6 +329,7 @@ final class FakeInterviewEnvironment: Sendable {
     let journal = Journal()
     let environment: FakeInterviewEnvironment
     let history = FakeInterviewHistory()
+    let timers = SaveTimers()
     let secrets = InMemorySecretStore()
     var settings = InterviewRig.readySettings()
     var behavior = HotKeyBehavior.toggle
@@ -324,6 +349,7 @@ final class FakeInterviewEnvironment: Sendable {
         let fakeEnvironment = environment
         let secrets = secrets
         let date = date
+        let timers = timers
         // Construit en deux temps : la résolution relit `self` (porte, compte), qui n'existe pas encore.
         let relay = RigRelay()
         controller = InterviewController(
@@ -336,7 +362,7 @@ final class FakeInterviewEnvironment: Sendable {
                     secrets: SecretAccess(secrets, queue: DispatchQueue(label: "test.interview.\(UUID())")),
                     makeModel: { _, _ in ScriptedModel(.never) }, makeVoice: fakeEnvironment.environment.makeVoice)
             },
-            history: history, panel: panel, now: { date })
+            history: history, panel: panel, now: { date }, saveWait: { _ in try await timers.wait() })
         relay.rig = self
         panel.onConclude = { [controller] in controller.conclude() }
     }

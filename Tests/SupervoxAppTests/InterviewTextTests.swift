@@ -183,6 +183,24 @@ import Testing
         }
     }
 
+    @Test("I4 : la phrase de l'historique non écrit, en clair, et son ajout à chaque avis de relecture, dans la limite de longueur")
+    func theHistoryWarningIsFixedAndFitsEveryEnrichedNotice() {
+        #expect(
+            InterviewText.historyNotSaved
+                == "Cet entretien n'a pas pu être gardé dans l'historique\u{00A0}: copiez le texte si vous voulez le conserver.")
+        let bases = [
+            InterviewText.promptReview, InterviewText.promptReviewWithoutLastWords, InterviewText.conclusionFailedReview,
+            InterviewText.conclusionFailedReviewWithoutLastWords,
+        ]
+        for base in bases {
+            let enriched = InterviewText.withHistoryWarning(base)
+            #expect(enriched == base + " " + InterviewText.historyNotSaved)
+            #expect(enriched.count <= DictationText.detailLimit, "\(enriched.count) caractères")
+            #expect(InterviewText.allSentences.contains(enriched), "absente de allSentences\u{00A0}: \(enriched)")
+        }
+        #expect(InterviewText.allSentences.contains(InterviewText.historyNotSaved))
+    }
+
     @Test("règle 1 : allSentences contient les phrases que ces appels produisent")
     func allSentencesHoldsWhatTheseCallsProduce() {
         let sentences = Set(InterviewText.allSentences)
