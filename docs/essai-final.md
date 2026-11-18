@@ -24,7 +24,7 @@ Ce fichier est public : n'y écrivez ni texte dicté, ni clé, ni nom de personn
   vocabulaire vide). Si un essai échoue pour une raison qui ressemble à un état oublié, rétablissez-le avant de conclure.
   Une seule exception, dite en tête de l'étape 4 : les essais 32 à 45 gardent la relecture activée, et l'essai 46 la
   désactive. L'étape 5 (essais 47 à 62) a ses propres préparatifs : un fournisseur qui répond et un modèle fort choisi. L'étape 6
-  (essais 63 à 94) a les siens, et ouvre le micro : voir « Avant de commencer l'étape 6 » et « Jamais exécuté pendant la
+  (essais 63 à 95) a les siens, et ouvre le micro : voir « Avant de commencer l'étape 6 » et « Jamais exécuté pendant la
   construction ».
 
 ## Étape 2 — socle
@@ -1451,7 +1451,7 @@ code) :
   maintenant « Réécrit le texte quand vous le corrigez à la voix, rédige le prompt de l'entretien, et sert aux modes qui n'ont
   pas de modèle propre. » et « Pose les questions de l'entretien vocal : choisissez un modèle qui répond vite. ».
 - **Essai 62** : « Aucun code de l'application ne fait de lui une annonce parlée » reste vrai pour la mise en forme et la
-  correction, mais **l'entretien en poste** : une annonce à chaque changement de titre et à chaque avis (essai 89).
+  correction, mais **l'entretien en poste** : une annonce à chaque changement de titre et à chaque avis (essai 90).
 - **Essai 3 (point 5)** : le menu « … » du panneau a maintenant « Réglages… », « Historique… », un séparateur, puis
   « Quitter Supervox ». Le menu de l'icône de la barre des menus n'a pas changé.
 
@@ -1498,7 +1498,7 @@ ce qui suit n'a été vu tourner sur du matériel réel pendant la construction 
 - **Le modèle** : la qualité des questions et du prompt, le respect du marqueur de conclusion, une proposition de conclure
   faite au bon moment, jamais vus avec un vrai modèle. Les avis « derniers mots non transcrits » et ceux du vocabulaire
   (petit modèle absent, liste trop longue) n'ont jamais été vus : ils demandent une panne difficile à provoquer.
-- **Le banc `interview`** (essai 94) : jamais lancé contre un service.
+- **Le banc `interview`** (essai 95) : jamais lancé contre un service.
 
 ### 63. Réglages : sept onglets et navigation (sans micro, sans son)
 
@@ -1631,7 +1631,8 @@ deux à la fois. **Ne dictez rien et ne lancez aucun entretien dans l'ancienne a
 1. Onglet Historique.
    - Attendu : en tête, « Chaque entretien conclu est gardé ici en texte : le prompt rédigé et la conversation. Ils restent sur
      cet ordinateur, ne sont envoyés nulle part, et l'audio n'est jamais gardé. Un entretien annulé par Échap n'est pas
-     gardé. » ; au milieu, « Aucun entretien gardé pour l'instant. » ; en bas, « Garder les entretiens » sur « 30 jours » et
+     gardé. » (« nulle part » vaut pour le réseau : le dossier est sur le disque et fait partie des sauvegardes locales du
+     Mac) ; au milieu, « Aucun entretien gardé pour l'instant. » ; en bas, « Garder les entretiens » sur « 30 jours » et
      « Tout supprimer… » grisé. Entre le milieu et le pied, une bande réservée aux messages, vide (hauteur fixe de 44 points,
      choix non mesuré).
 2. Ouvrez le menu « Garder les entretiens ».
@@ -1759,10 +1760,11 @@ Chaque variante est un entretien court (une ou deux questions). Notez, à chaque
    - Si ce n'est pas le cas, noter : le numéro de la question où cela s'est arrêté, une question de trop, une question en
      moins, un compteur qui saute un numéro.
 
-### 72. Annuler à chaque état : Échap, fermeture du panneau, Réglages, Quitter (ouvre le micro)
+### 72. Annuler à chaque état : Échap, fermeture du panneau, Réglages, Quitter (ouvre le micro, joue un son)
 
 Dans chaque cas : rien n'est collé (collez ⌘V : votre ancien presse-papiers revient), aucune relecture ne s'ouvre, le voyant
-d'enregistrement s'éteint, **et rien n'est gardé dans l'Historique** (essai 87). Copiez avant un texte reconnaissable (⌘C).
+d'enregistrement s'éteint, **et rien n'est gardé dans l'Historique** (essai 87), sauf le cas du point 7. Copiez avant un texte
+reconnaissable (⌘C).
 
 1. Lancez un entretien et tapez Échap à chaque état, un entretien par état : pendant « Préparation de l'entretien… », pendant
    « À vous » (sans avoir parlé, puis en pleine phrase), pendant « Réflexion… », pendant « Supervox parle », pendant
@@ -1787,8 +1789,14 @@ d'enregistrement s'éteint, **et rien n'est gardé dans l'Historique** (essai 87
      dictée (préparation, enregistrement, mise en forme, correction, collage) et pendant une relecture, et redevient active
      quand le panneau est au repos. **Comportement à confirmer** : le dessin grisé du vrai menu (l'image est un dessin de
      l'outil, pas une capture).
+7. Concluez un entretien, puis tapez Échap tout de suite, pendant « Rédaction du prompt… » puis dans les deux secondes qui
+   suivent l'arrivée du prompt.
+   - Attendu : le panneau se ferme, aucune relecture n'arrive. **Mais l'entretien peut déjà être gardé dans
+     l'Historique** : l'écriture est lancée dès que le prompt arrive, avant l'attente de la relecture (au plus 2 s, choix non
+     mesuré), et Échap ne l'annule pas (`InterviewController.save`). Ouvrez l'Historique (essai 87) : notez si l'entretien y est.
+     Échap pendant la rédaction elle-même (avant l'arrivée du prompt) ne laisse rien.
    - Si ce n'est pas le cas, noter : un micro resté allumé, un texte arrivé après l'annulation, une relecture inattendue, une
-     entrée d'Historique, un « Historique… » actif pendant l'entretien, l'état où cela s'est produit.
+     entrée d'Historique hors du point 7, un « Historique… » actif pendant l'entretien, l'état où cela s'est produit.
 
 ### 73. Écho sur haut-parleurs : Supervox ne se coupe jamais seul (ouvre le micro, joue un son fort)
 
@@ -1898,10 +1906,11 @@ cet essai qu'après les essais 73 à 76.
 4. Rétablissez les valeurs d'origine (« Rétablir les valeurs d'origine »), à moins de vouloir garder les vôtres.
    - Si ce n'est pas le cas, noter : les trois valeurs qui marchent dans votre pièce.
 
-### 79. Refus au départ : aucun micro ouvert, aucun son
+### 79. Refus au départ (aucun micro ni son au refus ; la dictée de vérification ouvre le micro)
 
 Dans chaque cas, l'entretien est lancé (pastille « Entretien ») et le panneau montre une phrase **sans ouvrir le micro**
-(voyant éteint) ; aucune voix. Après, une dictée marche normalement. Rétablissez l'état à la fin de chaque point.
+(voyant éteint) ; aucune voix. Après chaque refus, faites une dictée courte pour vérifier qu'elle marche normalement : **elle,
+ouvre le micro** (« Dictée brute », ⌃⌥Espace). Rétablissez l'état à la fin de chaque point.
 
 1. Modèle rapide sur « Aucun » (onglet Modes).
    - Attendu : « Aucun modèle rapide n'est choisi : choisissez-en un en tête de Réglages, onglet Modes, pour mener l'entretien. »
@@ -1972,7 +1981,7 @@ le fichier). L'entrée « voice » existe déjà, avec `"language" : "fr-FR"`. C
    - Si ce n'est pas le cas, noter : l'avis vu (ou son absence), un silence long avant la première phrase, une phrase dite deux
      fois.
 
-### 83. Micro débranché pendant l'entretien (ouvre le micro)
+### 83. Micro débranché pendant l'entretien (ouvre le micro, joue un son)
 
 Un micro que vous pouvez débrancher (casque USB ou filaire). Rien n'est gardé dans l'Historique pour une panne.
 
@@ -1989,7 +1998,7 @@ Un micro que vous pouvez débrancher (casque USB ou filaire). Rien n'est gardé 
    - Attendu : ce n'est **plus** une panne : le micro est déjà fermé, le prompt est rédigé.
    - Si ce n'est pas le cas, noter : la phrase vue, un texte perdu, une panne après « Conclure ».
 
-### 84. Rien dit, rien compris (ouvre le micro)
+### 84. Rien dit, rien compris (ouvre le micro, peut jouer un son)
 
 1. Lancez un entretien, attendez « À vous », cliquez sur « Conclure » sans avoir parlé.
    - Attendu : le panneau revient au repos avec « Rien n'a été dit : il n'y a pas de prompt à rédiger. Relancez l'entretien pour
@@ -1997,6 +2006,7 @@ Un micro que vous pouvez débrancher (casque USB ou filaire). Rien n'est gardé 
 2. Lancez un entretien et faites un bruit bref (claquez des doigts), sans parole, puis attendez.
    - Attendu : si le détecteur y voit de la voix et que la transcription est vide : « Rien n'a été compris : répétez, un peu plus
      près du micro. » ; l'écoute reprend. **Comportement à confirmer** : cela dépend du détecteur ; notez si rien ne s'affiche.
+     Si la transcription n'est pas vide, Supervox répond à voix haute (c'est ce que dit le titre) : notez ce qu'il a compris.
    - Si ce n'est pas le cas, noter : la phrase vue, un entretien qui ne revient pas à « À vous ».
 
 ### 85. Corriger à la voix le prompt d'un entretien (ouvre le micro)
@@ -2031,6 +2041,8 @@ Un micro que vous pouvez débrancher (casque USB ou filaire). Rien n'est gardé 
      téléchargé, ou si la liste ne tient pas dans le moteur, le vocabulaire est retiré avec un avis dès la préparation (« Le
      vocabulaire n'a pas servi à cet entretien… »). Retirez les deux termes, remettez le moteur par défaut.
    - Si ce n'est pas le cas, noter : un terme mal écrit, un avis vu ou son absence.
+   - Notez aussi un mot juste que la transcription a **remplacé** par un mot de votre vocabulaire (par exemple « Zorbline » écrit
+     à la place d'un mot proche que vous aviez dit) : le vocabulaire peut recaler un mot ordinaire (risque connu, non mesuré).
 
 ### 87. Historique après des entretiens (sans micro, sans son)
 
@@ -2073,8 +2085,7 @@ dont le modèle fort a échoué (81).
    - Attendu : la ligne « Avec « Ne rien garder », aucun entretien n'est gardé. » apparaît sous l'en-tête. S'il y a des
      entretiens : « Les n entretiens gardés seront supprimés maintenant. » (« L'entretien gardé sera supprimé maintenant. »),
      avec leur nombre exact, **même si vous choisissez cette durée dès l'ouverture de la fenêtre**. Confirmez : la liste est
-     vide. Faites un entretien et concluez : rien n'est écrit dans le dossier, et la relecture **ne dit rien** de l'historique
-     (ce n'est pas un échec). Remettez « 30 jours ».
+     vide. L'essai 88 vérifie, avec cette durée, qu'un entretien conclu n'écrit rien. Remettez « 30 jours » après l'essai 88.
 8. Placez dans le dossier un fichier `essai.json` qui contient n'importe quel texte.
    - Attendu : il n'apparaît pas dans la liste, et une note dit « 1 fichier de l'historique n'a pas pu être lu : il
      n'apparaît pas dans la liste, et « Tout supprimer… » le supprime aussi. ».
@@ -2082,9 +2093,28 @@ dont le modèle fort a échoué (81).
    - Attendu : « Supprimer les n entretiens gardés ? C'est définitif. » (« Supprimer l'entretien gardé ? C'est définitif. »),
      « Annuler », « Tout supprimer ». « Annuler » ne supprime rien ; confirmer vide la liste et le dossier, y compris
      `essai.json`.
-10. Choisissez une durée courte (7 jours), quittez et relancez Supervox.
-    - Attendu : seuls les entretiens plus vieux que la durée ont disparu au lancement. Avec un fichier de réglages abîmé ou plus
-      récent, aucune suppression ce jour-là (code lu). Si vous n'avez rien d'assez vieux, ne testez pas. Rétablissez 30 jours.
+10. **Durée confirmée du dossier.** Le dossier de l'historique garde aussi la durée que vous avez choisie dans l'onglet : un
+    fichier `conservation` (0600 ; ce n'est pas un entretien : il n'est ni compté, ni listé comme illisible, ni supprimé par
+    « Tout supprimer… » ni par la purge). Règle de la purge du lancement : elle n'a lieu que si ce n'est pas le premier
+    lancement, si le fichier de réglages a été lu sans avis, **et** si la durée confirmée du dossier est absente (jamais choisie :
+    la durée par défaut de 30 jours s'applique) ou égale à celle des réglages. Réglages remis à zéro, mis de côté ou édités à la
+    main (une durée de la mauvaise forme est lue 30 jours) alors que le dossier a confirmé une autre durée : **aucune
+    suppression, à ce lancement ni aux suivants, tant que vous n'avez pas choisi la durée de nouveau dans l'onglet.**
+    En fonctionnement normal, la purge du lancement supprime ce qui dépasse la durée choisie, sans confirmation.
+    Essai sûr, sans risque pour des entretiens à garder :
+    - Copiez le dossier `Historique` et `settings.json` ailleurs (c'est la sauvegarde : si la règle était cassée, la purge du
+      lancement pourrait supprimer des entretiens de plus de 30 jours).
+    - Choisissez « 1 an » dans « Garder les entretiens », puis quittez Supervox.
+    - Dans `settings.json`, entrée « history », remplacez `"retentionDays" : 365` par `"retentionDays" : 30`. Relancez deux fois.
+    - Attendu : aucun entretien n'est supprimé, même plus vieux que 30 jours. Sous l'en-tête de l'onglet, la ligne « La durée de
+      conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas choisie de
+      nouveau ci-dessous. » apparaît.
+    - Choisissez « 1 an » de nouveau : la ligne disparaît, et la purge du lancement suivant reprend avec 1 an. Rétablissez la
+      durée de votre choix (30 jours par défaut).
+    - Sans entretien de plus de 30 jours, seule la ligne est observable. **Le cas du fichier abîmé ou plus récent, le cas
+      « durée jamais choisie » et le cas d'un fichier `conservation` illisible ne se provoquent pas sûrement à la main : couverts
+      par les tests** (`AppControllerHistoryTests`). Ne reculez pas l'horloge du Mac pour « vieillir » des entretiens : une
+      horloge avancée fait purger selon la durée choisie, sans confirmation.
 11. **Entretien conclu que l'historique n'a pas pu garder** (disque plein, dossier refusé, droits impossibles).
     - Attendu : la relecture porte, après son avis habituel, « Cet entretien n'a pas pu être gardé dans l'historique : copiez le
       texte si vous voulez le conserver. ». La relecture attend l'écriture au plus 2 s avant de s'ouvrir (choix non mesuré :
@@ -2097,7 +2127,21 @@ dont le modèle fort a échoué (81).
       différent de ce que vous avez vu, des droits de fichier plus larges, une purge inattendue, un bouton qui bouge quand
       « Copié. » ou un message apparaît, une suppression sans feuille, un entretien choisi d'office après une suppression.
 
-### 88. Vie privée : ce qui part, et vers où, pendant un entretien (ouvre le micro, joue un son)
+### 88. Entretien conclu avec « Ne rien garder » (ouvre le micro, joue un son)
+
+Après l'essai 87 (historique vidé ou non : peu importe).
+
+1. Onglet Historique, « Garder les entretiens » sur « Ne rien garder » (confirmez s'il reste des entretiens).
+   - Attendu : la ligne « Avec « Ne rien garder », aucun entretien n'est gardé. » sous l'en-tête.
+2. Faites un entretien court (une question, comme à l'essai 70) et concluez.
+   - Attendu : la relecture s'ouvre avec « Prompt rédigé à partir de l'entretien : relisez-le, puis collez-le ou copiez-le. »,
+     **sans** phrase sur l'historique (ne rien garder n'est pas un échec). Dans le Terminal :
+     `ls -l ~/Library/Application\ Support/Supervox/Historique` : aucun nouveau fichier `.json` (le fichier `conservation`, qui
+     garde la durée choisie, est là : ce n'est pas un entretien). Dans l'onglet Historique, la liste n'a pas changé.
+3. Remettez « 30 jours ».
+   - Si ce n'est pas le cas, noter : une phrase sur l'historique dans la relecture, un fichier d'entretien écrit malgré la durée.
+
+### 89. Vie privée : ce qui part, et vers où, pendant un entretien (ouvre le micro, joue un son)
 
 Avec un outil de journal réseau de votre choix (essai 60), voix du système.
 
@@ -2118,7 +2162,7 @@ Avec un outil de journal réseau de votre choix (essai 60), voix du système.
    - Si ce n'est pas le cas, noter : un hôte inattendu, une requête de plus, du son qui part, ce que le panneau dit à propos
      de l'hôte.
 
-### 89. VoiceOver et « Réduire les animations » pendant l'entretien (ouvre le micro, joue un son)
+### 90. VoiceOver et « Réduire les animations » pendant l'entretien (ouvre le micro, joue un son)
 
 Activez VoiceOver (⌘F5). **Rien n'a été écouté** : cet essai dit ce que VoiceOver lit et annonce vraiment.
 
@@ -2142,7 +2186,7 @@ Activez VoiceOver (⌘F5). **Rien n'a été écouté** : cet essai dit ce que Vo
      niveau. Désactivez VoiceOver (⌘F5) et rétablissez le réglage.
    - Si ce n'est pas le cas, noter : ce que VoiceOver a dit ou tu, à quel titre ; une animation qui continue.
 
-### 90. Tests du son : `SUPERVOX_SPEAKER=1` (ouvre le micro, joue des tons)
+### 91. Tests du son : `SUPERVOX_SPEAKER=1` (ouvre le micro, joue des tons)
 
 Quatre tests écrits pour cette étape, **désactivés par défaut** (suite « Son réel », `RealAudioIOTests`).
 
@@ -2161,7 +2205,7 @@ disque.
    cet hôte de test (aucune invite n'est déclenchée) » et **paraît vert**. Lisez les lignes d'avertissement : elles portent
    aussi les mesures.
 2. Lancez la commande.
-   - Attendu : quatre tests verts, et des lignes d'avertissement avec des mesures (par exemple « fin .played à … s de play() pour
+   - Attendu : quatre tests verts, et des lignes d'avertissement avec des mesures (par exemple « fin played à … s de play() pour
      0.5 s de son ; position à 0,2 s : … ; tranches du micro pendant la lecture : … »). Aucune ligne « non établi ». La fin
      naturelle arrive après la durée du son ; les deux clips coupés reçoivent une fin « coupée » ; aucune tranche après l'arrêt.
      Le quatrième test (`aRestartAfterANaturalEndPlaysAgain`) **n'a jamais été exécuté**.
@@ -2169,7 +2213,7 @@ disque.
      (`_auv3 != nil` à l'activation du traitement de la voix, vue une fois à la tâche 2, non reproduite) ; le casque ou les
      haut-parleurs en entrée et en sortie.
 
-### 91. Tests du micro : `SUPERVOX_MIC=1` (ouvre le micro, ne joue rien)
+### 92. Tests du micro : `SUPERVOX_MIC=1` (ouvre le micro, ne joue rien)
 
 Trois tests (suite « Micro réel », `RealMicrophoneTests`), écrits aux étapes précédentes, **désactivés par défaut**.
 
@@ -2187,7 +2231,7 @@ n'est joué. L'autorisation du micro doit déjà être accordée à l'applicatio
      Une prise « silence parfait » (casque non porté, ou accès refusé) est signalée sans afficher le contenu.
    - Si ce n'est pas le cas, noter : le nom du test et la sortie.
 
-### 92. Test de la voix du système : `SUPERVOX_SPEECH=1` (fait travailler la voix du système)
+### 93. Test de la voix du système : `SUPERVOX_SPEECH=1` (fait travailler la voix du système)
 
 Un test (`SystemSpeechIntegrationTests`), **désactivé par défaut**.
 
@@ -2205,7 +2249,7 @@ dites si vous entendez quelque chose**. Il faut une voix française du système 
    - Si ce n'est pas le cas, noter : la sortie, la voix installée, et un délai inhabituel (le garde-fou est de 8 s par phrase,
      choix non mesuré).
 
-### 93. Tests de fenêtre : `SUPERVOX_WINDOWS=1` (affiche brièvement un panneau)
+### 94. Tests de fenêtre : `SUPERVOX_WINDOWS=1` (affiche brièvement un panneau)
 
 Les tests de vraies fenêtres d'AppKit, **désactivés par défaut**. Ils ne tournent pas écran verrouillé ou en veille : ils
 échouent tous sur `isKeyWindow`.
@@ -2225,7 +2269,7 @@ directement à leurs fenêtres (`performKeyEquivalent`) : aucune frappe n'est en
      connu (tâche 8, `8dcf25c`, mesuré). Les tests n'ont pas été relancés depuis, l'écran étant verrouillé.
    - Si ce n'est pas le cas, noter : le nom du test, la sortie, l'état du verrou (`ioreg`).
 
-### 94. Banc `supervox-bench interview` (appelle un service, n'ouvre ni micro ni haut-parleur)
+### 95. Banc `supervox-bench interview` (appelle un service, n'ouvre ni micro ni haut-parleur)
 
 Le banc mène un entretien entier à partir de fichiers WAV (un par tour de la personne), avec la vraie conversation, sans micro
 ni haut-parleur : la lecture est simulée par une attente. Il appelle **votre service** (le texte part chez lui), charge le
@@ -2233,7 +2277,7 @@ détecteur de voix et Parakeet (téléchargés au premier lancement), et, sans `
 (synthèse en mémoire, rien n'est joué).
 
 Préparatifs : un WAV mono de 16 bits par tour (par exemple avec `supervox-bench record`, qui, lui, ouvre le micro), **hors du
-dépôt** ; un dossier de sortie **ignoré par git** (`bench-data/` l'est : sinon la commande refuse). Les noms de modèles et
+dépôt** ; un dossier de sortie **ignoré par git** (`bench-data/` l'est : sinon, dans un dépôt git, la commande refuse ; hors de tout dépôt, elle écrit). Les noms de modèles et
 l'adresse viennent de vous.
 
 ```sh
@@ -2261,15 +2305,20 @@ rapport. La durée est à peu près celle de l'audio des répliques.
    - Attendu : l'aide en français ; un rapport Markdown (durées par tour, questions, interruptions, avis, fin) et, sur la sortie,
      le prompt rédigé. Ni la clé, ni l'adresse, ni les noms de modèle et de voix ne sont écrits dans le rapport ni sur la sortie.
      Code de sortie non nul si l'entretien ne rend pas de prompt (le rapport est écrit avant). La commande refuse un dossier de
-     sortie suivi par git, un rapport qui existe sans `--overwrite`, et un `--output` qui est l'un des WAV d'entrée.
+     sortie situé dans un dépôt git qui ne l'ignore pas, un rapport qui existe sans `--overwrite`, et un `--output` qui est
+     l'un des WAV d'entrée (comparé par l'identité du fichier : un lien physique vers une entrée, ou une autre graphie de la casse
+     sur un volume qui l'ignore, est refusé aussi).
      `--turn-silence` va de 0,3 à 2,0 s (comme l'onglet Entretien).
    - Les durées du rapport ne sont **pas comparables** à celles de `latency` (la forme des requêtes diffère) ; elles ne
-     contiennent pas le silence de fin de tour.
+     contiennent pas le silence de fin de tour. Le rapport dit lui-même, sous « Lecture des durées », les secondes de silence
+     réellement poussées après chaque tour (au moins 2 s ; davantage quand `--turn-silence` dépasse environ 0,5 s : 3,304 s à
+     2,0 s avec le vrai détecteur, formule lue, non confirmée) et, dans son résumé, le délai d'un tour « aucune réaction » : 150 s,
+     soit la limite de transcription du moteur (120 s) plus 30 s de marge.
    - Si ce n'est pas le cas, noter : le message d'erreur, le tour où l'entretien s'est arrêté, un tour sans réaction (le banc le
      note après 150 s : 120 s de délai de transcription plus 30 s de marge, choix non mesuré), un nom ou une adresse visible
      dans le rapport. **Jamais lancé contre un service.**
 
-### 95. Retour à faire
+### 96. Retour à faire
 
 À la fin, notez : les essais pas OK ; ce qui était lent (préparation, transcription, téléchargement, et le temps entre
 « Coller » et l'arrivée du texte) ; ce qui était déroutant dans le panneau ou les réglages (la relecture, l'aide sous le
@@ -2285,5 +2334,5 @@ haut-parleurs, le casque filaire et le casque Bluetooth (le modèle du casque da
 ce dépôt) ; si les questions et le prompt étaient utiles, et si le modèle a respecté la conclusion à la voix ; si les phrases
 des pannes disent bien quoi faire ; si l'Historique contient exactement ce qu'il devait contenir ; si la confirmation de
 suppression d'un entretien et l'absence de sélection ensuite vous conviennent ; si l'onglet Entretien tient dans la fenêtre ; ce que les tests matériels
-(essais 90 à 93) et le banc (essai 94) ont montré ; et, pour chaque ligne de « Jamais exécuté pendant la construction », ce
+(essais 91 à 94) et le banc (essai 95) ont montré ; et, pour chaque ligne de « Jamais exécuté pendant la construction », ce
 que vous avez fini par voir.
