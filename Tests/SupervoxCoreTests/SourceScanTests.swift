@@ -663,4 +663,109 @@ import Testing
             #expect(!code.contains(rootDefault), "\(code)")
         }
     }
+
+    // MARK: - Voix du système et lecteur de sortie seule (réglage des voix, tâche 1)
+
+    /// Devant un nom : début de ligne ou un caractère qui n'est pas d'identifiant. Pas de `\b` : la limite de mot Unicode ne coupe pas
+    /// entre `.` et une lettre, et `SupervoxCore.SystemClipPlayer()` passerait.
+    static let nameStart = #"(?:^|[^A-Za-z0-9_])"#
+    /// Demander au système la liste des voix installées.
+    static let systemVoiceListing = nameStart + #"speechVoices(?![A-Za-z0-9_])"#
+    /// Le lecteur de fichiers audio du système et son délégué ; pas le nœud de lecture du moteur (`…PlayerNode`), que la capture utilise.
+    static let systemFilePlayer = nameStart + #"AVAudioPlayer(?!Node)"#
+    /// Construire le vrai lecteur de sortie seule.
+    static let realClipPlayer = nameStart + #"SystemClipPlayer"# + construction
+    /// Lire la vraie liste des voix installées.
+    static let installedVoices = nameStart + #"SystemVoices\s*\.\s*installed(?![A-Za-z0-9_])"#
+
+    /// Règle 6 : la liste des voix n'est demandée au système que par `SystemVoices.installed` ; le lecteur du système n'est nommé que
+    /// par `Audio/ClipPlayer.swift` ; le vrai lecteur et la vraie liste ne sont pris que par le programme (`main.swift`) et leur fichier
+    /// de définition. Le programme ne les prend pas encore : la preuve que le balayage voit quelque chose vient des fichiers de
+    /// définition, qui doivent porter ce qu'ils définissent.
+    @Test func theSystemVoiceListAndTheSystemPlayerStayInTheirFiles() throws {
+        let speech = "SupervoxCore/Speech/SystemSpeechSynthesizer.swift"
+        let player = "SupervoxCore/Audio/ClipPlayer.swift"
+        let sources = try Self.sources(under: "Sources")
+        let speechFile = try #require(sources.first { $0.place == speech }, "le balayage doit voir la voix du système")
+        let playerFile = try #require(sources.first { $0.place == player }, "le balayage doit voir le lecteur")
+        #expect(speechFile.code.contains(try Regex(Self.systemVoiceListing)), "la liste des voix doit être demandée dans \(speech)")
+        #expect(speechFile.code.contains("enum SystemVoices"), "SystemVoices doit être défini dans \(speech)")
+        #expect(playerFile.code.contains(try Regex(Self.systemFilePlayer)), "le lecteur du système doit être pris dans \(player)")
+        #expect(playerFile.code.contains("final class SystemClipPlayer"), "SystemClipPlayer doit être défini dans \(player)")
+
+        let rules: [(name: String, pattern: String, allowed: Set<String>)] = [
+            ("speechVoices", Self.systemVoiceListing, [speech]),
+            ("AVAudioPlayer", Self.systemFilePlayer, [player]),
+            ("SystemClipPlayer(", Self.realClipPlayer, ["Supervox/main.swift", player]),
+            ("SystemVoices.installed", Self.installedVoices, ["Supervox/main.swift", speech]),
+        ]
+        for rule in rules {
+            let pattern = try Regex(rule.pattern)
+            let offending = sources.filter { !rule.allowed.contains($0.place) && $0.code.contains(pattern) }.map(\.place)
+            #expect(offending.isEmpty, "\(rule.name) : \(offending)")
+        }
+    }
+
+    /// Aucun test hors de `SupervoxCoreTests` ne nomme la liste des voix, le lecteur du système, le vrai lecteur ni la vraie liste.
+    @Test func noTestOutsideTheCoreNamesTheSystemVoiceListNorTheSystemPlayer() throws {
+        let patterns = try [Self.systemVoiceListing, Self.systemFilePlayer, Self.realClipPlayer, Self.installedVoices].map { try Regex($0) }
+        let tests = try Self.sources(under: "Tests")
+        #expect(tests.contains { $0.place.hasPrefix("SupervoxAppTests/") }, "le balayage doit voir les tests de l'application")
+        let offending = tests
+            .filter { file in !file.place.hasPrefix("SupervoxCoreTests/") && patterns.contains { file.code.contains($0) } }
+            .map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "AVSpeechSynthesisVoice.speechVoices()", "AVSpeechSynthesisVoice\n    .speechVoices ( )", "let all = AVSpeechSynthesisVoice.speechVoices",
+        "speechVoices()",
+    ])
+    func theVoiceListingPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.systemVoiceListing)))
+    }
+
+    @Test(arguments: [
+        "AVAudioPlayer(data: data)", "try AVAudioPlayer.init(data: data)", "AVFAudio.AVAudioPlayer(data: data)", "let p: AVAudioPlayer",
+        "final class P: NSObject, AVAudioPlayerDelegate {", "AVAudioPlayer",
+    ])
+    func theSystemFilePlayerPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.systemFilePlayer)))
+    }
+
+    @Test(arguments: [
+        "SystemClipPlayer()", "SystemClipPlayer ( )", "SystemClipPlayer.init()", "let p: SystemClipPlayer = .init()",
+        "SupervoxCore.SystemClipPlayer()", "{ SystemClipPlayer() }", "SystemClipPlayer.self.init()", "player: SystemClipPlayer()",
+    ])
+    func theRealClipPlayerPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realClipPlayer)))
+    }
+
+    @Test(arguments: [
+        "SystemVoices.installed()", "voices: SystemVoices.installed,", "SystemVoices . installed", "SupervoxCore.SystemVoices.installed",
+        "SystemVoices\n    .installed",
+    ])
+    func theInstalledVoicesPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.installedVoices)))
+    }
+
+    @Test func theVoiceAndPlayerPatternsLeaveOrdinaryUsesAlone() throws {
+        let listing = try Regex(Self.systemVoiceListing)
+        let filePlayer = try Regex(Self.systemFilePlayer)
+        let clipPlayer = try Regex(Self.realClipPlayer)
+        let installed = try Regex(Self.installedVoices)
+        for code in ["mySpeechVoices()", "speechVoicesCount", "let voices = SystemVoices.installed"] {
+            #expect(!code.contains(listing), "\(code)")
+        }
+        for code in ["private let player = AVAudioPlayerNode()", "AVAudioPlayerNode.h", "MyAVAudioPlayer()", "ClipPlayer"] {
+            #expect(!code.contains(filePlayer), "\(code)")
+        }
+        for code in ["ScriptedClipPlayer()", "MySystemClipPlayer()", "let p: SystemClipPlayer", "x is SystemClipPlayer",
+                     "public final class SystemClipPlayer: ClipPlayer {", "let p: SystemClipPlayer = player"] {
+            #expect(!code.contains(clipPlayer), "\(code)")
+        }
+        for code in ["SystemVoices.gender(.male)", "SystemVoices.installedCount", "MySystemVoices.installed", "enum SystemVoices {"] {
+            #expect(!code.contains(installed), "\(code)")
+        }
+    }
 }
