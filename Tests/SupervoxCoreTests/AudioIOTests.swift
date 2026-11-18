@@ -227,7 +227,9 @@ private let someClip = AudioClip(samples: [0.1, 0.2, 0.3], sampleRate: 22_050)
         received.onEnd(end)
     }
     let finished = DispatchSemaphore(value: 0)
-    DispatchQueue.global().async {
+    // Un fil dédié, pas la file globale de GCD : ce test attend par sémaphore, donc en occupant un fil du groupe coopératif ; quand
+    // tous ces fils attendent (lanceur à peu de cœurs, tests en parallèle), la file globale n'est plus servie et l'attente expire.
+    Thread.detachNewThread {
         io.stopPlayback()
         finished.signal()
     }
@@ -390,10 +392,10 @@ func afterDurationModeCallsTheWaitWithTheClipDurationThenRendersPlayed() async t
         entered.signal()
         release.wait()
     }
-    DispatchQueue.global().async { io.push(AudioChunk(samples: [1], sampleRate: 1)) }
+    Thread.detachNewThread { io.push(AudioChunk(samples: [1], sampleRate: 1)) }
     #expect(entered.wait(timeout: .now() + 10) == .success)
     let stopReturned = DispatchSemaphore(value: 0)
-    DispatchQueue.global().async {
+    Thread.detachNewThread {
         io.stop()
         stopReturned.signal()
     }
@@ -468,7 +470,9 @@ private func syntheticTapWindow() -> AVAudioPCMBuffer {
 /// sûreté, choix non mesuré, très au-delà d'une livraison (une file de répartition, sans attente) ; elle ne joue que sur un fils
 /// suspendu, jamais sur la durée d'un test qui passe.
 func armChildProcessGuard(exitCode: Int32, after seconds: Double = 30) {
-    DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+    // Sur un fil dédié : une minuterie de la file globale ne part pas si tous les fils du processus attendent.
+    Thread.detachNewThread {
+        Thread.sleep(forTimeInterval: seconds)
         FileHandle.standardError.write(Data("garde de durée du processus fils : l'attente n'a pas été reprise\n".utf8))
         exit(exitCode)
     }

@@ -47,7 +47,9 @@ private final class Received: @unchecked Sendable {
     let stopReturned = DispatchSemaphore(value: 0)
     let countWhenStopReturned = OSAllocatedUnfairLock(initialState: -1)
 
-    DispatchQueue.global().async {
+    // Un fil dédié, pas la file globale de GCD : ce test attend par sémaphore, donc en occupant un fil du groupe coopératif ; quand
+    // tous ces fils attendent (lanceur à peu de cœurs, tests en parallèle), la file globale n'est plus servie et l'attente expire.
+    Thread.detachNewThread {
         entered.wait()
         feed.stop()
         countWhenStopReturned.withLock { $0 = received.chunks.count }

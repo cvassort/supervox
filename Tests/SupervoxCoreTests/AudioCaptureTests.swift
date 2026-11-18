@@ -128,12 +128,14 @@ private let anyTime = AVAudioTime(hostTime: 0)
     }
     nonisolated(unsafe) let window = syntheticWindow(first: 0)
 
-    DispatchQueue.global().async {   // fil A : le tap, bloqué dans `onChunk`
+    // Un fil dédié, pas la file globale de GCD : ce test attend par sémaphore, donc en occupant un fil du groupe coopératif ; quand
+    // tous ces fils attendent (lanceur à peu de cœurs, tests en parallèle), la file globale n'est plus servie et l'attente expire.
+    Thread.detachNewThread {   // fil A : le tap, bloqué dans `onChunk`
         tap(window, anyTime)
         tapDone.signal()
     }
     #expect(entered.wait(timeout: .now() + 10) == .success)
-    DispatchQueue.global().async {   // fil B
+    Thread.detachNewThread {   // fil B
         _ = capture.stop()
         stopReturned.signal()
     }
