@@ -62,8 +62,18 @@ import Testing
         let sources = try Self.sources(under: "Sources")
         let main = try #require(sources.first { $0.place == "Supervox/main.swift" })
         #expect(main.code.contains(pattern), "le balayage doit voir le programme les construire")
-        let offending = sources.filter { !allowed.contains($0.place) && $0.code.contains(pattern) }.map(\.place)
+        // Le banc est un programme lui aussi : sa commande `interview` construit la voix du système dans sa fabrique de vrais moteurs
+        // (`InterviewEngines.real`), jamais le son réel : son seul `AudioIO` est `WavTurnFeed`, qui simule la lecture. Les tests du banc
+        // ne font que construire cette fabrique (le constructeur de la voix range deux fermetures, code lu) ; ils ne la font pas parler.
+        let benchVoice = "SupervoxBench/InterviewCommand.swift"
+        let realAudio = try Regex(#"\bLiveAudioIO\s*(?:\(|\.\s*init\b)"#)
+        let offending = sources
+            .filter { !allowed.contains($0.place) && $0.code.contains(pattern) }
+            .filter { $0.place != benchVoice || $0.code.contains(realAudio) }
+            .map(\.place)
         #expect(offending.isEmpty, "\(offending)")
+        let bench = try #require(sources.first { $0.place == benchVoice })
+        #expect(bench.code.contains(pattern), "le balayage doit voir le banc construire la voix du système")
         let tests = try Self.sources(under: "Tests")
             .filter { !$0.place.hasPrefix("SupervoxCoreTests/") && $0.code.contains(pattern) }
             .map(\.place)
