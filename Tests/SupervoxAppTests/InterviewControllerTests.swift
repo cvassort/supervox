@@ -565,6 +565,24 @@ import Testing
         #expect(held.history.saved.count == 1, "l'entretien déjà conclu est enregistré (comme avant)")
     }
 
+    @Test("m-3 : une fin « prompt » livrée après l'annulation, la conversation encore lue : ni relecture ni écriture")
+    func aPromptDeliveredAfterTheCancellationIsIgnored() async throws {
+        let rig = InterviewRig()
+        let driver = try await rig.listening()
+        // Le moteur prend l'annulation sans finir tout de suite : le flux reste lu, la fin peut encore arriver.
+        driver.configure(finishOnCancel: false)
+        rig.controller.cancel()
+        #expect(rig.outcomes == [.cancelled])
+        #expect(await until { driver.cancels == 1 }, "le moteur a reçu l'annulation")
+        #expect(!driver.isFinished, "son flux est encore ouvert")
+
+        driver.finish(.prompt("Tardif.", Self.exchange))
+        #expect(await rig.controller.drained(), "la lecture et les écritures finissent")
+        #expect(rig.outcomes == [.cancelled], "aucune relecture ne s'ajoute")
+        #expect(rig.history.attempts == 0, "rien n'est écrit dans l'historique")
+        #expect(rig.panel.interview == nil)
+    }
+
     // MARK: - Règle 7 : l'annulation, à chaque étape
 
     enum Stage: String, CaseIterable { case resolving, preparing, making, starting, listening, concluding }
