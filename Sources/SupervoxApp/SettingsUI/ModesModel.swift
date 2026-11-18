@@ -123,12 +123,13 @@ public final class ModesModel {
         "Un mode dit ce que devient le texte dicté. Sans consigne, il est collé tel quel. Avec une consigne, le texte (jamais l'audio) est envoyé au fournisseur choisi pour être mis en forme ; l'audio ne quitte jamais cet ordinateur."
     public static let strongTitle = "Modèle fort"
     public static let strongNote =
-        "Réécrit le texte quand vous le corrigez à la voix, et sert aux modes qui n'ont pas de modèle propre."
+        "Réécrit le texte quand vous le corrigez à la voix, rédige le prompt de l'entretien, et sert aux modes qui n'ont pas de modèle propre."
     public static let fastTitle = "Modèle rapide"
-    public static let fastNote = "Servira à l'entretien vocal, à une étape suivante."
+    public static let fastNote = InterviewText.fr("Pose les questions de l'entretien vocal : choisissez un modèle qui répond vite.")
     public static let toggleTitle = "Relire avant de coller"
     public static let alwaysReviewedNote = "Toujours relu : l'entretien passe toujours par la relecture."
-    public static let laterModeNote = "Ce mode arrive à une étape suivante."
+    /// Ce que la ligne d'Entretien dit en plus : où se règlent ses questions et son gabarit.
+    public static let interviewTabNote = "Ses questions et son gabarit se règlent dans l'onglet Entretien."
     /// Le choix « pas de modèle propre » d'un mode.
     public static let defaultModelTitle = "Modèle fort (par défaut)"
     /// Le choix « aucun » des modèles fort et rapide.
@@ -141,14 +142,22 @@ public final class ModesModel {
     /// Sur la ligne d'un mode qui dépend du modèle fort, tant qu'aucun n'est choisi. La section « Modèles » est en tête de l'onglet.
     public static let noStrongModelRowNote = "Aucun modèle fort n'est choisi : choisissez-en un ci-dessus, dans « Modèles »."
     /// Ce que la feuille dit à la place du champ de consigne d'un mode qui n'en a pas : Dictée brute colle le texte tel quel, Entretien
-    /// n'est pas encore là.
+    /// renvoie à son onglet.
     public static func lockedInstructionNote(for id: String) -> String {
         id == ModeChip.interviewID
-            ? "Ce mode n'a pas de consigne à modifier. \(laterModeNote)"
+            ? InterviewText.fr("Ce mode n'a pas de consigne à modifier : ses questions et son gabarit se règlent dans l'onglet Entretien.")
             : "Ce mode n'a pas de consigne : le texte y est collé tel quel."
     }
     public static let noProviderNote = "Aucun fournisseur n'est enregistré : ajoutez-en un dans l'onglet Fournisseurs."
     public static let noTranscriptionEngineTitle = "Moteur de l'onglet Transcription"
+    /// Le moteur que prend Entretien quand aucun n'est choisi : celui de l'entretien (`TranscriptionEngine.interviewDefault`), et non
+    /// celui de l'onglet Transcription. Le titre est lu du type.
+    public static let interviewEngineTitle = "\(TranscriptionEngine.interviewDefault.title) (moteur de l'entretien)"
+
+    /// Le choix « par défaut » du moteur d'un mode : celui de l'onglet Transcription, sauf pour Entretien.
+    public static func defaultEngineTitle(for id: String) -> String {
+        id == ModeChip.interviewID ? interviewEngineTitle : noTranscriptionEngineTitle
+    }
     public static let pastedAsIsSummary = "Texte collé tel quel"
     /// Ce que l'onglet dit quand l'enregistrement échoue pour une autre raison qu'une `SettingsError`. Le texte de l'erreur n'y
     /// est jamais repris : une erreur d'ailleurs peut porter une adresse.
@@ -256,7 +265,7 @@ public final class ModesModel {
 
     private func row(_ mode: Mode) -> Row {
         var notes: [String] = []
-        if mode.id == ModeChip.interviewID { notes += [Self.alwaysReviewedNote, Self.laterModeNote] }
+        if mode.id == ModeChip.interviewID { notes += [Self.alwaysReviewedNote, Self.interviewTabNote] }
         if mode.usesModel {
             // Le modèle qui recevra le texte : le sien, sinon le modèle fort. Sans lui, la ligne ne doit pas laisser croire que
             // le mode marche.
@@ -274,7 +283,7 @@ public final class ModesModel {
 
     /// Modèle (ou « Modèle fort »), moteur (ou « Moteur de l'onglet Transcription »), raccourci s'il y en a. Un mode qui ne
     /// passe pas par le modèle de langage (sans consigne) n'en nomme pas : Dictée brute dit que son texte est collé tel quel ;
-    /// Entretien, qui n'est pas encore là, n'en dit rien.
+    /// Entretien n'en nomme pas non plus, et dit son propre moteur par défaut (`interviewEngineTitle`).
     private func summary(_ mode: Mode) -> String {
         var parts: [String] = []
         if mode.usesModel {
@@ -282,7 +291,7 @@ public final class ModesModel {
         } else if mode.id != ModeChip.interviewID {
             parts.append(Self.pastedAsIsSummary)
         }
-        parts.append(mode.engine?.title ?? Self.noTranscriptionEngineTitle)
+        parts.append(mode.engine?.title ?? Self.defaultEngineTitle(for: mode.id))
         if let hotKey = mode.hotKey { parts.append(hotKey.label(layout: layout)) }
         return parts.joined(separator: " · ")
     }

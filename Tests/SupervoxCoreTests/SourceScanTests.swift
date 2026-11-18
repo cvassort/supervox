@@ -499,4 +499,16 @@ import Testing
             #expect(!code.contains(pattern), "\(code)")
         }
     }
+    /// Tâche 10 : plus aucune note ne renvoie à « une étape suivante » (l'entretien est là). Commentaires compris, comme le `grep`
+    /// de la tâche.
+    @Test func noSourceSpeaksOfANextStep() throws {
+        let base = Self.root.appendingPathComponent("Sources", isDirectory: true)
+        let files = try #require(FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" }
+        try #require(files.count > 50, "le balayage doit voir les sources")
+        let offending = try files.filter { try String(contentsOf: $0, encoding: .utf8).contains("étape suivante") }
+            .map { String($0.path.dropFirst(base.path.count + 1)) }
+        #expect(offending.isEmpty, "\(offending)")
+    }
 }
