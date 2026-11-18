@@ -44,8 +44,25 @@ import Testing
         /// prouve l'ORDRE « durée confirmée écrite, puis purge ».
         var retentionReads: [InterviewHistory.ConfirmedRetention] = []
 
+        /// Le modèle que le banc a construit en dernier, pour observer l'ÉCRAN au milieu d'une écriture ou d'une purge.
+        weak var model: HistoryModel?
+        /// Ce que l'onglet montrait chaque fois que le magasin a lu la durée (donc AU MILIEU de la purge) : la ligne de durée, le
+        /// bouton, la réponse « garde-t-on quelque chose ? » et la durée du sélecteur.
+        var notesDuringPurge: [String?] = []
+        var buttonsDuringPurge: [String?] = []
+        var keepsNothingDuringPurge: [Bool] = []
+        var shownDuringPurge: [Int] = []
+        /// La durée que le sélecteur montrait quand les réglages se sont écrits (reprise de la tâche après la durée confirmée).
+        var shownDuringUpdate: [Int] = []
+
         func retentionRead() async -> Int {
             retentionReads.append(await history.confirmedRetention())
+            if let model {
+                notesDuringPurge.append(model.retentionNote)
+                buttonsDuringPurge.append(model.confirmRetentionButtonTitle)
+                keepsNothingDuringPurge.append(model.keepsNothing)
+                shownDuringPurge.append(model.shownRetention)
+            }
             return retention()
         }
 
@@ -53,10 +70,17 @@ import Testing
             root: root, retentionDays: { await self.retentionRead() }, now: { HistoryModelTests.now })
 
         func makeModel(locale: Locale = Locale(identifier: "fr_FR"), timeZone: TimeZone = .gmt) -> HistoryModel {
+            let built = makeModelUntracked(locale: locale, timeZone: timeZone)
+            model = built
+            return built
+        }
+
+        private func makeModelUntracked(locale: Locale, timeZone: TimeZone) -> HistoryModel {
             HistoryModel(
                 history: history, read: { self.settings },
                 update: { change in
                     self.updates += 1
+                    if let model = self.model { self.shownDuringUpdate.append(model.shownRetention) }
                     // Ce que le dossier savait QUAND les réglages se sont écrits : la durée confirmée vient AVANT.
                     self.confirmedFileSeenByUpdate = FileManager.default.fileExists(
                         atPath: self.root.appendingPathComponent("conservation").path)
@@ -632,7 +656,7 @@ import Testing
         try await finish(model.confirmRetention())
 
         #expect(rig.updates == 1)
-        #expect(model.message == HistoryModel.retentionSaveFailure)
+        #expect(model.message == HistoryModel.retentionNotedButNotSavedFailure)
         #expect(model.messageIsFailure)
         #expect(model.retentionDays == 365)
         #expect(model.pendingRetention == nil)
@@ -1196,6 +1220,170 @@ import Testing
         #expect(model.retentionNote == nil)
     }
 
+    // MARK: - I-1 (tour 2) : aucun état faux pendant un changement ordinaire de durée
+
+    @Test("I-1 : un changement ordinaire (30 → 365) ne montre ni ligne « a changé hors de cet onglet » ni bouton, AU MILIEU de la purge")
+    func anOrdinaryChangeShowsNoRetentionNoteWhileItIsApplied() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(30)
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.retentionNote == nil)
+        rig.notesDuringPurge = []
+        rig.buttonsDuringPurge = []
+
+        try await finish(await model.requestRetention(365))
+
+        #expect(rig.notesDuringPurge == [nil], "pendant la purge : aucune ligne \(rig.notesDuringPurge)")
+        #expect(rig.buttonsDuringPurge == [nil], "et aucun bouton « Confirmer » \(rig.buttonsDuringPurge)")
+        #expect(model.retentionNote == nil)
+    }
+
+    @Test("I-1 : « Ne rien garder » → 30 jours : jamais « Vous aviez choisi « Ne rien garder » » pendant la purge, et le modèle dit déjà que le dossier garde")
+    func leavingKeepNothingNeverSaysItIsStillKeptNothing() async throws {
+        let rig = try Rig(retention: 0)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(0)
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.keepsNothing)
+        rig.notesDuringPurge = []
+        rig.keepsNothingDuringPurge = []
+        rig.buttonsDuringPurge = []
+
+        try await finish(await model.requestRetention(30))
+
+        #expect(rig.notesDuringPurge == [nil], "\(rig.notesDuringPurge)")
+        #expect(rig.buttonsDuringPurge == [nil])
+        #expect(rig.keepsNothingDuringPurge == [false], "le modèle ne contredit pas `save` pendant la purge")
+        #expect(!model.keepsNothing)
+        // `save` écrit bien à cet instant : le disque dit 30.
+        try await rig.history.save(Self.record(1))
+        #expect(try rig.names().count == 1)
+    }
+
+    @Test("I-1 : le sélecteur montre la durée demandée dès la demande (avant la relecture), pendant l'écriture des réglages et pendant la purge")
+    func theSelectorShowsTheRequestedDurationThroughoutTheWrite() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        let model = rig.makeModel()
+        await model.reload()
+        rig.shownDuringUpdate = []
+        rig.shownDuringPurge = []
+
+        // Pendant la relecture de la demande : la tâche a démarré et attend l'instantané.
+        let request = Task { await model.requestRetention(90) }
+        await Task.yield()
+        #expect(model.shownRetention == 90, "avant même la fin de la relecture de la demande")
+        let applying = await request.value
+        try await finish(applying)
+
+        #expect(rig.shownDuringUpdate == [90], "quand les réglages se sont écrits : \(rig.shownDuringUpdate)")
+        #expect(rig.shownDuringPurge == [90], "pendant la purge : \(rig.shownDuringPurge)")
+        #expect(model.shownRetention == 90)
+        #expect(model.retentionDays == 90)
+    }
+
+    @Test("I-1 : la durée montrée redevient celle des réglages quand la demande finit sans écriture : même durée, feuille annulée, autre confirmation en cours")
+    func theShownDurationReturnsToTheSettingsWhenNothingIsWritten() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 100)])
+        try await rig.history.confirmRetention(365)
+        let model = rig.makeModel()
+        await model.reload()
+
+        // Même durée que les réglages ET déjà confirmée : rien n'est écrit.
+        let same = await model.requestRetention(365)
+        #expect(same == nil)
+        #expect(model.shownRetention == 365)
+
+        // Feuille de confirmation : la durée demandée reste montrée tant que la feuille est ouverte, puis revient si elle est annulée.
+        let asking = await model.requestRetention(30)
+        #expect(asking == nil)
+        #expect(model.pendingRetention == 30)
+        #expect(model.shownRetention == 30, "la feuille est ouverte : le sélecteur montre ce que la personne a choisi")
+        model.cancelRetention()
+        #expect(model.shownRetention == 365, "feuille annulée : la durée des réglages")
+        await model.requestRetention(30)
+        model.cancelConfirmation()
+        #expect(model.shownRetention == 365)
+
+        // Une autre confirmation (un entretien) arrivée avant la fin de la relecture garde la main : la durée demandée n'est pas gardée.
+        let retention = Task { await model.requestRetention(7) }
+        model.requestDeleteSelected()
+        _ = await retention.value
+        #expect(model.confirmation == .deleteSelected)
+        #expect(model.shownRetention == 365, "la demande a fini sans écriture : la durée des réglages")
+    }
+
+    // MARK: - m-1 (tour 2) : le retour à l'ancienne durée pendant l'application n'est pas abandonné
+
+    @Test("m-1 : 7 puis 30 à la suite : état final fichier 30, réglages 30, sélecteur 30 (le retour n'est pas abandonné)")
+    func goingBackWhileTheFirstChangeIsBeingAppliedIsNotDropped() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(30)
+        let model = rig.makeModel()
+        await model.reload()
+
+        let first = await model.requestRetention(7)
+        let second = await model.requestRetention(30)
+        try await finish(first)
+        try await finish(second)
+
+        #expect(await rig.history.confirmedRetention() == .days(30))
+        #expect(rig.settings.history.retentionDays == 30)
+        #expect(model.shownRetention == 30)
+        #expect(model.retentionNote == nil)
+    }
+
+    // MARK: - m-2 (tour 2) : une phrase vraie quand le dossier est écrit et les réglages refusés
+
+    static let notedButNotSaved =
+        "La durée a été notée dans l'historique, les réglages n'ont pas pu être enregistrés\u{00A0}: rien ne sera supprimé automatiquement tant que vous ne l'aurez pas confirmée de nouveau."
+
+    @Test("m-2 : « Ne rien garder » noté dans le dossier et réglages refusés : la phrase ne dit PAS que la durée reste celle d'avant")
+    func aSettingsRefusalAfterKeepNothingIsNotCalledUnchanged() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(30)
+        let model = rig.makeModel()
+        await model.reload()
+        rig.failure = ForeignError()
+
+        try await finish(await model.requestRetention(0))
+
+        #expect(model.message == Self.notedButNotSaved)
+        #expect(HistoryModel.retentionNotedButNotSavedFailure == Self.notedButNotSaved)
+        #expect(!(model.message ?? "").contains("reste celle d'avant"), "« reste celle d'avant » serait faux : le dossier a noté 0")
+        #expect(model.keepsNothing, "`save` n'écrit plus rien : la phrase ne peut pas dire le contraire")
+        #expect(model.messageIsFailure)
+        #expect(!(model.message ?? "").contains("example.com"))
+    }
+
+    @Test("m-2 : 365 → 30 confirmé par la feuille, réglages refusés : la même phrase vraie, jamais « reste celle d'avant »")
+    func aSettingsRefusalAfterAShorterDurationIsNotCalledUnchanged() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 100)])
+        try await rig.history.confirmRetention(365)
+        let model = rig.makeModel()
+        await model.reload()
+        await model.requestRetention(30)
+        #expect(model.pendingRetention == 30)
+        rig.failure = ForeignError()
+
+        try await finish(model.confirmRetention())
+
+        #expect(model.message == Self.notedButNotSaved)
+        #expect(await rig.history.confirmedRetention() == .days(30), "le dossier a noté la nouvelle durée")
+        #expect(model.retentionDays == 365)
+        #expect(model.retentionNote == Self.changedNote, "la ligne dit que la durée a changé hors de l'onglet")
+        #expect(try rig.names().count == 1, "aucune purge")
+    }
+
     // MARK: - Relecture
 
     @Test("reload relit les réglages et le disque : une durée changée ailleurs et un entretien ajouté ailleurs s'y voient")
@@ -1242,7 +1430,7 @@ import Testing
         // Contrôle générique : aucune ponctuation double précédée d'une espace ordinaire.
         let sentences = [
             HistoryModel.header, HistoryModel.empty, HistoryModel.copyFailure, HistoryModel.writeFailure,
-            HistoryModel.retentionSaveFailure, HistoryModel.keepsNothingNote, HistoryModel.retentionChangedNote, HistoryModel.keptNothingAfterResetNote,
+            HistoryModel.retentionNotedButNotSavedFailure, HistoryModel.keepsNothingNote, HistoryModel.retentionChangedNote, HistoryModel.keptNothingAfterResetNote,
         ]
         for sentence in sentences {
             for mark in [" :", " ;", " ?", " !", "« ", " »"] { #expect(!sentence.contains(mark), "« \(mark) » ordinaire dans : \(sentence)") }

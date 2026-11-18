@@ -42,9 +42,12 @@ public final class HistoryModel {
     /// Écriture ou suppression refusée par le disque.
     public static let writeFailure = InterviewText.fr(
         "L'historique n'a pas pu être modifié : vérifiez l'espace libre sur le disque, puis réessayez.")
-    /// La durée n'a pas pu être enregistrée pour une autre raison qu'une `SettingsError` (dont la phrase est reprise telle quelle).
-    public static let retentionSaveFailure = InterviewText.fr(
-        "Ce changement n'a pas pu être enregistré : la durée de conservation reste celle d'avant.")
+    /// Les réglages n'ont pas pu être écrits APRÈS que la durée a été notée dans le dossier (autre cause qu'une `SettingsError`, dont la
+    /// phrase est reprise telle quelle). « La durée reste celle d'avant » serait faux : le dossier a noté la nouvelle (avec « Ne rien
+    /// garder », plus rien n'est écrit) ; la purge au lancement, elle, ne partira pas tant que la durée n'est pas confirmée de nouveau.
+    public static let retentionNotedButNotSavedFailure = InterviewText.fr(
+        "La durée a été notée dans l'historique, les réglages n'ont pas pu être enregistrés : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas confirmée de nouveau."
+    )
 
     /// Une ligne sous l'en-tête quand la durée est « Ne rien garder » : l'en-tête, lui, dit « chaque entretien conclu est gardé ici ».
     public static let keepsNothingNote = InterviewText.fr("Avec « Ne rien garder », aucun entretien n'est gardé.")
@@ -389,7 +392,7 @@ public final class HistoryModel {
     }
 
     public func cancelConfirmation() {
-        pendingRetention = nil
+        clearPendingRetention()
         pendingDelete = nil
         pendingDeleteAll = false
     }
@@ -409,12 +412,23 @@ public final class HistoryModel {
     /// La durée en vigueur, en jours, telle que les réglages la bornent.
     public var retentionDays: Int { settings.history.normalized.retentionDays }
 
-    /// La durée que le sélecteur montre : celle qu'on est en train d'appliquer (elle ne revient pas à l'ancienne le temps de l'écriture :
-    /// le sélecteur ne clignote pas), sinon celle des réglages. Si l'écriture échoue, elle redevient celle des réglages.
+    /// La durée que le sélecteur montre : celle que la personne vient de demander, DÈS la demande (avant la relecture du disque), puis
+    /// pendant la feuille de confirmation, l'écriture de la durée confirmée, celle des réglages et la purge : le sélecteur ne clignote
+    /// pas. Sinon, celle des réglages. Elle y revient quand la demande finit sans écriture (même durée, feuille annulée, autre
+    /// confirmation en cours, échec).
     public var shownRetention: Int { inFlightRetention ?? retentionDays }
 
-    /// La durée en cours d'application (`applyRetention` jusqu'à sa fin), `nil` sinon.
+    /// La durée demandée, montrée par le sélecteur (`nil` : celle des réglages). Un seul champ pour la demande en cours de relecture,
+    /// la feuille ouverte et l'application.
     private var inFlightRetention: Int?
+    /// Combien d'applications (`applyRetention`) sont en cours : un retour à l'ancienne durée demandé pendant l'une d'elles n'est pas
+    /// abandonné parce que le disque dit encore l'ancienne.
+    private var applyingCount = 0
+
+    /// La demande de `days` finit sans écriture : le sélecteur ne la montre plus (sauf si une autre demande l'a remplacée).
+    private func dropShown(_ days: Int) {
+        if inFlightRetention == days { inFlightRetention = nil }
+    }
 
     /// Les durées proposées, dans l'ordre : celles du brief, plus la durée en vigueur si elle n'en fait pas partie (un réglage écrit à
     /// la main), pour que la sélection s'affiche.
@@ -457,22 +471,38 @@ public final class HistoryModel {
     @discardableResult
     public func requestRetention(_ days: Int) async -> Task<Void, Never>? {
         let wanted = HistorySettings(retentionDays: days).normalized.retentionDays
-        pendingRetention = nil
+        clearPendingRetention()
+        // Le sélecteur montre la durée demandée tout de suite, pas après la relecture.
+        inFlightRetention = wanted
         await reload()
         // Une autre confirmation (un entretien, tout) arrivée pendant la relecture garde la main : une seule feuille à la fois.
-        guard confirmation == nil else { return nil }
+        guard confirmation == nil else {
+            dropShown(wanted)
+            return nil
+        }
         // La même durée que celle des réglages ET déjà confirmée : rien à faire. Confirmée autrement (ou jamais) : le choix passe par
-        // le chemin habituel, qui écrit la durée confirmée.
-        guard wanted != retentionDays || confirmedRetention != .days(wanted) else { return nil }
+        // le chemin habituel, qui écrit la durée confirmée. Pendant qu'une application est en cours, le disque peut encore dire
+        // l'ancienne durée : un retour à elle (7 puis 30) n'est pas abandonné pour autant.
+        guard applyingCount > 0 || wanted != retentionDays || confirmedRetention != .days(wanted) else {
+            dropShown(wanted)
+            return nil
+        }
         if expiredCount(under: wanted) > 0 {
-            pendingRetention = wanted
+            pendingRetention = wanted  // la durée demandée reste montrée tant que la feuille est ouverte
             return nil
         }
         return applyRetention(wanted)
     }
 
     public func cancelRetention() {
+        clearPendingRetention()
+    }
+
+    /// Abandonne la demande de durée qui attend sa feuille : le sélecteur revient à la durée des réglages.
+    private func clearPendingRetention() {
+        guard let pending = pendingRetention else { return }
         pendingRetention = nil
+        dropShown(pending)
     }
 
     /// Confirme la durée en attente : la durée confirmée du dossier d'abord, puis les réglages, puis la purge (voir `applyRetention`).
@@ -503,6 +533,7 @@ public final class HistoryModel {
     @discardableResult
     private func applyRetention(_ days: Int) -> Task<Void, Never> {
         inFlightRetention = days
+        applyingCount += 1
         let history = history
         // La tâche tient le modèle (fini : elle ne dure que le temps des écritures) : fermer la fenêtre en pleine écriture n'abandonne pas
         // les trois étapes à mi-chemin.
@@ -511,7 +542,7 @@ public final class HistoryModel {
             do {
                 try await history.confirmRetention(days)
             } catch {
-                await abandonRetention(saying: Self.writeFailure)
+                await abandonRetention(days, saying: Self.writeFailure)
                 return
             }
             // (2) Les réglages, sauf s'ils disent déjà cette durée.
@@ -519,24 +550,35 @@ public final class HistoryModel {
                 do {
                     try update { $0.history.retentionDays = days }
                 } catch {
+                    // Le dossier a déjà noté `days` : la phrase ne dit pas que la durée reste celle d'avant.
                     await abandonRetention(
-                        saying: (error as? SettingsError)?.errorDescription ?? Self.retentionSaveFailure)
+                        days, saying: (error as? SettingsError)?.errorDescription ?? Self.retentionNotedButNotSavedFailure)
                     return
                 }
             }
             clearMessage()
             settings = read()
-            inFlightRetention = nil
+            // Le modèle vient d'écrire la durée confirmée ET les réglages : il sait ce que le dossier dit, sans attendre la relecture.
+            // Pendant la purge et l'instantané, la ligne « a changé hors de cet onglet » et son bouton seraient faux (le changement vient
+            // de l'onglet), et « Ne rien garder » (0 → 30) contredirait `save`.
+            confirmedRetention = .days(days)
+            endApplying(days)
             // (3) La purge lit la durée des réglages à l'instant où elle s'exécute.
             _ = await history.purge()
             await reload()
         }
     }
 
+    /// Fin de l'application de `days` : le sélecteur ne la montre plus, sauf si une autre demande l'a remplacée entre-temps.
+    private func endApplying(_ days: Int) {
+        applyingCount -= 1
+        dropShown(days)
+    }
+
     /// Une écriture de la durée a échoué : la durée affichée redevient celle des réglages, le disque est relu, PUIS la phrase est posée
     /// (la relecture peut changer la sélection, ce qui efface un message posé avant).
-    private func abandonRetention(saying sentence: String) async {
-        inFlightRetention = nil
+    private func abandonRetention(_ days: Int, saying sentence: String) async {
+        endApplying(days)
         settings = read()
         await reload()
         say(sentence, failure: true)
