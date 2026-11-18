@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SupervoxCore
 import SwiftUI
 import Testing
 
@@ -56,6 +57,7 @@ import Testing
         var hotKey: HotKeySettingsModel?
         var modes: ModesModel?
         var interview: InterviewSettingsModel?
+        var voices: VoicesModel?
         var history: HistoryModel?
         var content: SettingsContent?
     }
@@ -71,13 +73,15 @@ import Testing
             built.modes = modes
             let interview = SettingsView.makeInterviewModel(controller)
             built.interview = interview
+            let voices = SettingsView.makeVoicesModel(controller)
+            built.voices = voices
             let content = SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
                 modes: modes,
-                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview, history: history,
-                navigation: controller.settingsNavigation)
+                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview, voices: voices,
+                history: history, navigation: controller.settingsNavigation)
             built.content = content
             return content
         }
@@ -697,13 +701,14 @@ import Testing
         #expect(history.pendingRetention == 30, "onLeave n'annule PAS la confirmation en attente")
     }
 
-    /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien.
+    /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien, et l'onglet Voix juste après.
     @Test func theProductionWindowHasTheInterviewTab() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
         let content = SettingsView.provider(catalog: catalog, promptTokenLimit: Self.promptTokenLimit)(controller)
-        #expect(content.tabs == SettingsTab.visible(hasInterview: true))
+        #expect(content.tabs == SettingsTab.visible(hasInterview: true, hasVoices: true))
         #expect(content.tabs.contains(.interview))
+        #expect(content.tabs.last == .voices, "sans dossier d'historique, Voix ferme la barre")
         #expect(content.navigation === controller.settingsNavigation, "la vraie fenêtre suit la navigation du contrôleur")
     }
 
@@ -1042,5 +1047,213 @@ import Testing
         #expect(SystemSettingsPane.microphone.url.absoluteString.hasSuffix("?Privacy_Microphone"))
         #expect(SystemSettingsPane.accessibility.url.absoluteString.hasSuffix("?Privacy_Accessibility"))
         #expect(SystemSettingsPane.microphone.url.scheme == "x-apple.systempreferences")
+    }
+
+    // MARK: - Onglet Voix (tâche 4)
+
+    /// Règle 3 : Voix vient entre Entretien et Historique, Historique reste dernier ; sans entretien, pas d'onglet Voix ; l'onglet
+    /// n'existe que si son modèle est donné. Titre « Voix », image `speaker.wave.2`.
+    @Test func theVoicesTabSitsBetweenInterviewAndHistory() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(
+            SettingsTab.visible(hasInterview: true, hasVoices: true, hasHistory: true).map(\.title)
+                == ["Fournisseurs", "Raccourci", "Permissions", "Transcription", "Modes", "Entretien", "Voix", "Historique"])
+        #expect(SettingsTab.visible(hasInterview: true, hasVoices: true, hasHistory: true).last == .history)
+        #expect(SettingsTab.visible(hasInterview: true, hasVoices: true).last == .voices)
+        #expect(!SettingsTab.visible(hasInterview: false, hasVoices: true, hasHistory: true).contains(.voices), "sans entretien")
+        #expect(!SettingsTab.visible(hasInterview: true, hasVoices: false, hasHistory: true).contains(.voices), "sans modèle")
+        #expect(SettingsTab.voices.title == "Voix")
+        #expect(SettingsTab.voices.systemImage == "speaker.wave.2")
+
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let controller = makeController()
+        func content(interview: Bool, voices: Bool, history: Bool) -> SettingsContent {
+            SettingsView.content(
+                providers: SettingsView.makeProvidersModel(controller),
+                hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+                openSystemSettings: { _ in }, interview: interview ? SettingsView.makeInterviewModel(controller) : nil,
+                voices: voices ? SettingsView.makeVoicesModel(controller) : nil, history: history ? rig.makeModel() : nil,
+                navigation: controller.settingsNavigation)
+        }
+        #expect(
+            content(interview: true, voices: true, history: true).tabs
+                == [.providers, .hotKey, .permissions, .transcription, .modes, .interview, .voices, .history])
+        #expect(!content(interview: false, voices: true, history: true).tabs.contains(.voices))
+        #expect(!content(interview: true, voices: false, history: true).tabs.contains(.voices))
+    }
+
+    /// Règle 4 : « Choisir la voix… » de l'onglet Entretien mène à l'onglet Voix ; sans onglet Voix, pas de bouton.
+    @Test func chooseTheVoiceLeadsToTheVoicesTab() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        func view(voices: Bool) -> SettingsView {
+            SettingsView(
+                providers: SettingsView.makeProvidersModel(controller),
+                hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+                openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller),
+                voices: voices ? SettingsView.makeVoicesModel(controller) : nil, navigation: controller.settingsNavigation)
+        }
+        controller.settingsNavigation.tab = .interview
+        let choose = try #require(view(voices: true).chooseVoice)
+        choose()
+        #expect(controller.settingsNavigation.tab == .voices)
+        #expect(view(voices: false).chooseVoice == nil, "sans onglet Voix, pas de bouton")
+    }
+
+    /// La fabrique de l'onglet Voix : les écritures passent par le contrôleur (réglages en mémoire et fichier), sans écraser ce
+    /// qui s'écrit ailleurs ; la liste des voix vient de l'environnement de l'entretien (inventée ici) ; « Écouter » se grise quand
+    /// le PANNEAU montre un micro tenu (reflet d'affichage).
+    @Test func theVoicesModelWritesThroughTheControllerAndReadsThePanel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var environment = InterviewEnvironment.unavailable
+        let installed = VoicesModelTests.installed
+        environment.systemVoices = { installed }
+        let controller = makeController(interview: environment)
+        let voices = SettingsView.makeVoicesModel(controller)
+
+        try controller.updateSettings { $0.hotKeyBehavior = .hold }  // écrit ailleurs après la fabrique
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        voices.use()
+
+        let chosen = VoiceChoice(identifier: "voix.exemple.a", language: "fr-FR", gender: .female)
+        #expect(controller.settings.voice == chosen)
+        #expect(store.load().settings.voice == chosen)
+        #expect(controller.settings.hotKeyBehavior == .hold, "ce qui s'est écrit ailleurs reste")
+        #expect(voices.rows.first { $0.isActive }?.id == VoicesModel.Row.ID.system(identifier: "voix.exemple.a"))
+
+        #expect(voices.canListen)
+        controller.panelModel.dictation.stage = .recording
+        #expect(!voices.canListen, "une dictée écoute : « Écouter » est grisé")
+        controller.panelModel.dictation.stage = .review
+        #expect(voices.canListen, "en relecture, le micro est libre")
+    }
+
+    /// Le reflet du micro tenu, étape par étape : dictée en cours, correction qui écoute ou transcrit, entretien affiché ; pas la
+    /// relecture ni la correction qui réécrit (le micro y est libre).
+    @Test func theMicrophoneLooksBusyOnlyWhileTheMicrophoneIsHeld() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let panel = PanelModel(lastModeID: ModeChip.rawID)
+        let cases: [(DictationStage, Bool)] = [
+            (.idle, false), (.preparing, true), (.recording, true), (.finalizing, true), (.formatting, true), (.review, false),
+            (.pasting, false), (.correcting(.preparing), true), (.correcting(.recording), true), (.correcting(.transcribing), true),
+            (.correcting(.rewriting), false), (.copied, false), (.cancelled, false),
+        ]
+        for (stage, busy) in cases {
+            panel.dictation.stage = stage
+            #expect(SettingsView.microphoneLooksBusy(panel) == busy, "\(stage)")
+        }
+        panel.dictation.stage = .idle
+        panel.setInterview(InterviewViewState(maxQuestions: 3, privacy: "La vie privée."))
+        #expect(SettingsView.microphoneLooksBusy(panel), "un entretien affiché")
+        panel.setInterview(nil)
+        #expect(!SettingsView.microphoneLooksBusy(panel))
+    }
+
+    /// Décision 1 : la présentation de la fenêtre relit l'onglet Voix (un fournisseur retiré ailleurs se voit dans la ligne de vie
+    /// privée) et efface son message d'avant.
+    @Test func presentingTheWindowRereadsTheVoicesTabAndClearsItsMessage() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
+        let rig = VoicesModelTests.Rig(VoicesModelTests.settings(voices: [saved]))
+        let voices = rig.model
+        let controller = makeController()
+        let content = voicesContent(controller, voices: voices)
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.beginAdding()
+        voices.save()  // refusé : un message
+        voices.draft = nil
+        #expect(voices.message != nil)
+        rig.settings.providers.removeAll { $0.id == VoicesModelTests.provider.id }
+        #expect(voices.privacyText == VoicesText.privacyProvider("Fournisseur d'exemple"), "pas encore relu")
+
+        await content.onPresent()
+
+        #expect(voices.privacyText == VoicesText.privacyCannotSpeak)
+        #expect(voices.message == nil)
+    }
+
+    /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
+    func voicesContent(
+        _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()
+    ) -> SettingsContent {
+        SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), voices: voices,
+            navigation: navigation)
+    }
+
+    /// Règle 5 et décision 2 : quitter la fenêtre (`onLeave`) arrête l'écoute (la lecture elle-même) mais GARDE une confirmation en
+    /// attente et un brouillon ouvert (une feuille fait perdre la clé à la fenêtre : `onLeave` s'appelle alors) ; changer d'onglet
+    /// arrête l'écoute et annule la confirmation. Le changement d'onglet est vu dans la VRAIE vue, posée dans une fenêtre jamais
+    /// affichée.
+    @Test func leavingStopsThePreview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
+        let rig = VoicesModelTests.Rig(
+            VoicesModelTests.settings(voices: [saved]), player: ScriptedClipPlayer(completion: .manual))
+        let voices = rig.model
+        let controller = makeController()
+        let navigation = SettingsNavigation(tab: .voices)
+        let content = voicesContent(controller, voices: voices, navigation: navigation)
+
+        // La fenêtre quittée : l'écoute s'arrête ; la confirmation en attente reste.
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        voices.listen()
+        #expect(await until { rig.player.isPlaying })
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.requestDeletion()
+        content.onLeave()
+        #expect(!rig.player.isPlaying, "la lecture est arrêtée")
+        #expect(voices.listeningRow == nil && voices.previewState == .idle)
+        #expect(voices.pendingDeletion == saved.id, "onLeave n'annule PAS la confirmation en attente")
+        voices.cancelConfirmation()
+        voices.beginEditing()
+        content.onLeave()
+        #expect(voices.draft != nil, "onLeave garde le brouillon ouvert")
+        voices.cancel()
+
+        // Le changement d'onglet, dans la vraie vue.
+        let host = NSHostingView(rootView: content.view)
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 460)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        // Un passage de la boucle d'exécution est synchrone (`RunLoop.run` n'existe pas en contexte asynchrone).
+        func pumpOnce() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        func pump(until condition: () -> Bool) async {
+            for _ in 0..<400 where !condition() {
+                pumpOnce()
+                await Task.yield()
+            }
+        }
+        await pump { false }
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.b")
+        voices.listen()
+        #expect(await until { rig.player.isPlaying })
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.requestDeletion()
+        #expect(voices.pendingDeletion == saved.id)
+
+        navigation.tab = .providers
+        await pump { !rig.player.isPlaying && voices.pendingDeletion == nil }
+
+        #expect(!rig.player.isPlaying, "un autre onglet : la lecture est arrêtée")
+        #expect(voices.listeningRow == nil)
+        #expect(voices.pendingDeletion == nil, "un autre onglet : la confirmation est annulée")
+        #expect(rig.updates == 0, "rien n'a été supprimé")
+        withExtendedLifetime(window) {}
     }
 }

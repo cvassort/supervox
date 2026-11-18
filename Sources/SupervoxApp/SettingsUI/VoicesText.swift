@@ -140,6 +140,57 @@ public enum VoicesText {
         }
     }
 
+    // MARK: - Libellés de la vue (tâche 4)
+
+    public static let languageFilterLabel = "Langue"
+    public static let genderFilterLabel = "Genre"
+    public static let useTitle = "Utiliser cette voix"
+    public static let listenTitle = "Écouter"
+    public static let stopTitle = "Arrêter"
+    public static let addTitle = "Ajouter une voix…"
+    public static let editTitle = "Modifier…"
+    public static let deleteTitle = "Supprimer…"
+    /// Le bouton de la confirmation de suppression.
+    public static let confirmDeleteTitle = "Supprimer"
+    /// Le bouton de l'onglet Entretien qui mène à l'onglet Voix.
+    public static let chooseVoiceTitle = "Choisir la voix…"
+    /// Ce que VoiceOver dit de la marque de la ligne en cours d'écoute.
+    public static let listeningMark = "En écoute"
+
+    // MARK: - L'éditeur d'une voix de fournisseur (tâche 4)
+
+    public static let editorAddTitle = "Ajouter une voix"
+    public static let editorEditTitle = "Modifier la voix"
+    public static let nameField = "Nom"
+    public static let providerField = "Fournisseur"
+    public static let noSpeakingProvider = "Aucun fournisseur qui sait parler"
+    /// Le fournisseur d'une voix modifiée qui ne peut plus servir (supprimé, ou sans synthèse de la voix).
+    public static let unusableProvider = "Fournisseur qui ne peut pas parler"
+    public static let modelField = "Modèle"
+    /// Le menu des modèles connus du fournisseur, à côté du champ du modèle.
+    public static let modelMenu = "Modèles du fournisseur"
+    public static let identifierField = "Identifiant"
+    public static let languageField = "Langue"
+    public static let genderField = "Genre"
+    public static let parametersTitle = "Paramètres"
+    public static let keyField = "Clé"
+    public static let valueField = "Valeur"
+    public static let addParameterTitle = "Ajouter un paramètre"
+    public static let removeParameterTitle = "Retirer ce paramètre"
+    public static let cancelTitle = "Annuler"
+    public static let saveTitle = "Enregistrer"
+
+    /// Le genre d'une voix dans l'éditeur : contrairement au détail d'une ligne, « Autre » s'y distingue de « Non précisé ».
+    public static func editorGenderTitle(_ gender: VoiceGender?) -> String {
+        switch gender {
+        case nil: genderFilterTitle(.unspecified)
+        case .female?: genderFilterTitle(.female)
+        case .male?: genderFilterTitle(.male)
+        case .neutral?: genderFilterTitle(.neutral)
+        case .other(let name)?: "Autre (\(name))"
+        }
+    }
+
     // MARK: - Écritures
 
     public static let deleteConfirmation = InterviewText.fr("Supprimer cette voix ?")

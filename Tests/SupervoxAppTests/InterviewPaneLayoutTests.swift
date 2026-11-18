@@ -17,13 +17,15 @@ import Testing
     /// Marge pour la barre d'onglets, en points : choix non mesuré (la barre ne se mesure pas hors fenêtre affichée).
     static let tabStripAllowance: CGFloat = 60
 
-    /// Le bas de l'intitulé « Réglages avancés », en points depuis le haut du volet, pour un volet de cette largeur.
+    /// Le bas de l'intitulé « Réglages avancés », en points depuis le haut du volet, pour un volet de cette largeur. Le volet a le
+    /// bouton « Choisir la voix… » (règle 4 de la tâche 4 : la vraie fenêtre le montre dès que l'onglet Voix existe).
     private func headingBottom(
         model: InterviewSettingsModel, width: CGFloat = SettingsView.windowSize.width, expanded: Bool = false
     ) throws -> CGFloat {
         var measured: CGFloat?
         let height = SettingsView.windowSize.height
-        let pane = InterviewPane(model: model, advancedExpanded: expanded, onAdvancedHeadingBottom: { measured = $0 })
+        let pane = InterviewPane(
+            model: model, advancedExpanded: expanded, chooseVoice: {}, onAdvancedHeadingBottom: { measured = $0 })
         let host = NSHostingView(rootView: pane.frame(width: width, height: height))
         host.frame = NSRect(x: 0, y: 0, width: width, height: height)
         // Bornée : la mise en page se fait au passage de la boucle, jamais d'attente sans fin.
@@ -72,6 +74,31 @@ import Testing
         let opened = try headingBottom(model: model(), expanded: true)
         let closed = try headingBottom(model: model(), expanded: false)
         #expect(abs(opened - closed) < 1, "ouvert : \(opened), fermé : \(closed)")
+    }
+
+    /// Règle 4 (tâche 4) : le bouton « Choisir la voix… » est dans le volet (sous la ligne de vie privée, dans le bloc de notes du
+    /// bas) ; sans onglet Voix, il n'y est pas. Son bas est mesuré et donné tel quel : le bloc de notes est sous le pli de la
+    /// fenêtre fixe, le formulaire défile pour l'atteindre.
+    @Test func theChooseVoiceButtonIsInThePaneOnlyWithTheVoicesTab() throws {
+        func buttonBottom(_ chooseVoice: (@MainActor () -> Void)?) -> CGFloat? {
+            var measured: CGFloat?
+            let height = SettingsView.windowSize.height
+            let pane = InterviewPane(model: model(), chooseVoice: chooseVoice, onChooseVoiceBottom: { measured = $0 })
+            let host = NSHostingView(rootView: pane.frame(width: SettingsView.windowSize.width, height: height))
+            host.frame = NSRect(x: 0, y: 0, width: SettingsView.windowSize.width, height: height)
+            for _ in 0..<300 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(mode: .default, before: Date())
+            }
+            return measured
+        }
+        let measuredBottom = buttonBottom({})
+        let bottom = try #require(measuredBottom, "le bouton n'est pas dans le volet")
+        let heading = try headingBottom(model: model())
+        print("Entretien : bas du bouton « Choisir la voix… » à \(bottom) points du haut du volet ; intitulé avancé à \(heading) ; hauteur utile \(SettingsView.windowSize.height - Self.tabStripAllowance)")
+        #expect(bottom > heading, "le bouton est sous l'intitulé « Réglages avancés » (dans le bloc de notes du bas)")
+        let withoutVoices = buttonBottom(nil)
+        #expect(withoutVoices == nil, "sans onglet Voix, pas de bouton")
     }
 
     /// La mesure est vivante : un volet plus étroit passe les phrases à la ligne, et l'intitulé descend. Sans cela, un chiffre

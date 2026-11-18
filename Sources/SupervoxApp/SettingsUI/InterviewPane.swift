@@ -14,14 +14,22 @@ public struct InterviewPane: View {
     /// Mesure : reçoit le bas de l'intitulé « Réglages avancés », en points depuis le haut du volet (défilement à zéro). Sert au test
     /// qui exige que l'intitulé tienne dans la hauteur de la fenêtre ; `nil` en production.
     private let onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)?
+    /// « Choisir la voix… » : mène à l'onglet Voix ; `nil` : pas de bouton (pas d'onglet Voix).
+    private let chooseVoice: (@MainActor () -> Void)?
+    /// Mesure : reçoit le bas du bouton « Choisir la voix… », en points depuis le haut du volet (défilement à zéro) ; `nil` en
+    /// production.
+    private let onChooseVoiceBottom: (@MainActor (CGFloat) -> Void)?
 
     public init(
-        model: InterviewSettingsModel, advancedExpanded: Bool = false,
-        onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)? = nil
+        model: InterviewSettingsModel, advancedExpanded: Bool = false, chooseVoice: (@MainActor () -> Void)? = nil,
+        onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)? = nil,
+        onChooseVoiceBottom: (@MainActor (CGFloat) -> Void)? = nil
     ) {
         self.model = model
         _advancedExpanded = State(initialValue: advancedExpanded)
+        self.chooseVoice = chooseVoice
         self.onAdvancedHeadingBottom = onAdvancedHeadingBottom
+        self.onChooseVoiceBottom = onChooseVoiceBottom
     }
 
     /// Hauteur du champ du gabarit, en points : environ cinq lignes du texte courant. Choix non mesuré, vu en image. Un gabarit plus
@@ -86,6 +94,15 @@ public struct InterviewPane: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    // Sous la ligne de vie privée (qui nomme la voix) : la voix se choisit dans l'onglet Voix.
+                    if let chooseVoice {
+                        HStack {
+                            Spacer()
+                            Button(VoicesText.chooseVoiceTitle, action: chooseVoice)
+                                .controlSize(.small)
+                                .background(chooseVoiceProbe)
+                        }
+                    }
                     if let holdNote = model.holdNote {
                         note(holdNote)
                     }
@@ -96,6 +113,9 @@ public struct InterviewPane: View {
         .coordinateSpace(name: Self.coordinateSpaceName)
         .onPreferenceChange(AdvancedHeadingBottomKey.self) { bottom in
             if let bottom { onAdvancedHeadingBottom?(bottom) }
+        }
+        .onPreferenceChange(ChooseVoiceBottomKey.self) { bottom in
+            if let bottom { onChooseVoiceBottom?(bottom) }
         }
         // Un réglage ajouté ailleurs pendant que la fenêtre était gardée s'y voit à chaque affichage de l'onglet.
         .onAppear { model.reload() }
@@ -110,6 +130,16 @@ public struct InterviewPane: View {
             Color.clear.preference(
                 key: AdvancedHeadingBottomKey.self,
                 value: onAdvancedHeadingBottom == nil
+                    ? nil : geometry.frame(in: .named(Self.coordinateSpaceName)).maxY)
+        }
+    }
+
+    /// Rapporte le bas du bouton « Choisir la voix… » (seulement quand quelqu'un mesure).
+    private var chooseVoiceProbe: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: ChooseVoiceBottomKey.self,
+                value: onChooseVoiceBottom == nil
                     ? nil : geometry.frame(in: .named(Self.coordinateSpaceName)).maxY)
         }
     }
@@ -165,6 +195,12 @@ public struct InterviewPane: View {
 
 /// Le bas de l'intitulé « Réglages avancés » dans le repère du volet ; `nil` quand personne ne mesure.
 private struct AdvancedHeadingBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat? = nil
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+}
+
+/// Le bas du bouton « Choisir la voix… » dans le repère du volet ; `nil` quand personne ne mesure.
+private struct ChooseVoiceBottomKey: PreferenceKey {
     static let defaultValue: CGFloat? = nil
     static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
 }
