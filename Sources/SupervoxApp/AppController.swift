@@ -152,6 +152,8 @@ public final class AppController {
             resolve: { [secretAccess = SecretAccess(secrets)] choice, settings in
                 try await choice.resolve(in: settings, secrets: secretAccess)
             },
+            systemVoices: interviewEnvironment.systemVoices,
+            microphoneHeld: { false },
             sleep: { try await Task.sleep(for: .seconds($0)) })
         voicePreview = preview
         // LA fermeture d'avant micro : la même pour la dictée, la correction et l'entretien.

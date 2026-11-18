@@ -14,8 +14,10 @@ import SupervoxCore
 ///   `ClipPlayer`), puis appelle `stopNow()` (l'arrêt est fait avant le retour : pour qui ouvre le micro juste après). Chaque écoute
 ///   a son jeton : un état tardif d'une écoute arrêtée ou remplacée est jeté, et rien n'est joué après `stop()`.
 ///
-/// Le choix de la voix du système installée (identifiant absent de la liste → `.notInstalled` sans fabriquer de voix) se fait
-/// avant l'appel, dans `VoicesModel.listen()`, qui tient la liste des voix : la signature de `init` ne la reçoit pas.
+/// - Une voix du système désignée absente de la liste des voix installées (`systemVoices`, relue à l'écoute) : `.notInstalled`,
+///   sans fabriquer de voix. Ce contrôle vit ici, et seulement ici : tout appelant y passe.
+/// - Tant qu'un micro est tenu (`microphoneHeld`), l'écoute est refusée avant toute résolution (aucune lecture du trousseau) :
+///   `.failed(.microphoneBusy)`. C'est la garantie ; l'onglet ne fait que la refléter.
 @MainActor
 public final class VoicePreview {
     public enum State: Equatable, Sendable {
@@ -31,8 +33,10 @@ public final class VoicePreview {
     /// - `timedOut` : `SpeechError.timedOut`, ou la borne `limitSeconds` ;
     /// - `playback` : `ClipPlayerError` ;
     /// - `unavailable` : `InterviewEnvironment.Unavailable` (fabrique ou lecteur absent), et toute autre erreur de la voix du système.
+    /// - `microphoneBusy` : un micro est tenu (dictée, correction, entretien) ; rien n'a été résolu ni fabriqué.
     public enum Failure: Equatable, Sendable {
         case notInstalled, unusable(SystemReason), provider(RewriteFailure), silent, timedOut, playback, unavailable
+        case microphoneBusy
     }
 
     /// La résolution d'une voix : en production, `VoiceChoice.resolve(in:secrets:)`.
@@ -45,6 +49,8 @@ public final class VoicePreview {
     private let makeVoice: @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
     private let makePlayer: @Sendable () -> any ClipPlayer
     private let resolve: Resolve
+    private let systemVoices: @Sendable () -> [SystemVoiceInfo]
+    private let microphoneHeld: @MainActor () -> Bool
     private let sleep: @Sendable (Double) async throws -> Void
 
     /// Le lecteur, fabriqué à la première lecture et gardé : un `play` suivant sur le même lecteur arrête le précédent, et
@@ -58,19 +64,31 @@ public final class VoicePreview {
 
     public init(
         makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer,
-        makePlayer: @escaping @Sendable () -> any ClipPlayer, resolve: @escaping Resolve,
+        makePlayer: @escaping @Sendable () -> any ClipPlayer,
+        resolve: @escaping Resolve,
+        systemVoices: @escaping @Sendable () -> [SystemVoiceInfo],
+        microphoneHeld: @escaping @MainActor () -> Bool,
         sleep: @escaping @Sendable (Double) async throws -> Void
     ) {
         self.makeVoice = makeVoice
         self.makePlayer = makePlayer
         self.resolve = resolve
+        self.systemVoices = systemVoices
+        self.microphoneHeld = microphoneHeld
         self.sleep = sleep
     }
 
     /// Arrête l'écoute en cours (elle publie `.idle`), puis lance celle-ci : `.preparing` tout de suite, `.playing` pendant la
     /// lecture, puis `.idle` à la fin, ou `.failed`.
+    ///
+    /// Un micro tenu : `.failed(.microphoneBusy)` est publié une fois, ici, et rien d'autre (ni jeton, ni tâche, ni résolution).
+    /// Le rappel n'est pas retenu : le `stop()` d'avant micro suivant ne publierait sinon `.idle` par-dessus la phrase.
     public func start(_ choice: VoiceChoice, settings: AppSettings, onState: @escaping @MainActor (State) -> Void) {
         stop()
+        if microphoneHeld() {
+            onState(.failed(.microphoneBusy))
+            return
+        }
         generation += 1
         let token = generation
         self.onState = onState
@@ -128,6 +146,7 @@ public final class VoicePreview {
         } catch {
             throw Stop(failure: .unavailable)
         }
+        // Arrêtée pendant la résolution (même par une résolution sourde à l'annulation) : rien n'est fabriqué.
         try checkLive(token)
 
         let voice: any SpeechSynthesizer
@@ -135,7 +154,14 @@ public final class VoicePreview {
         switch resolved {
         case .system(_, _, because: let reason?):
             throw Stop(failure: .unusable(reason))
-        case .system:
+        case .system(_, let identifier, because: nil):
+            // Une voix désignée absente de la liste : le synthétiseur du système prendrait la meilleure voix de la langue sans
+            // rien lever, et l'on entendrait une autre voix que celle qu'on écoute.
+            // Laissé : entre cette relecture et la synthèse, la voix peut disparaître ; le synthétiseur prend alors la meilleure
+            // voix de la langue sans rien lever (il n'a pas de mode strict).
+            if let identifier, !systemVoices().contains(where: { $0.identifier == identifier }) {
+                throw Stop(failure: .notInstalled)
+            }
             voice = makeVoice(choice, nil)
             fromProvider = false
         case .provider(let provider, _):
@@ -150,7 +176,8 @@ public final class VoicePreview {
         } catch {
             throw try Self.synthesisFailure(error, fromProvider: fromProvider)
         }
-        // Une réponse arrivée après l'arrêt n'est jamais jouée.
+        // Une réponse arrivée après l'arrêt n'est jamais jouée. Défense en profondeur, sans test propre : l'annulation la masque
+        // (`Deadline.run` rend `CancellationError` dès l'annulation).
         try checkLive(token)
         guard !speech.clip.samples.isEmpty else { throw Stop(failure: .silent) }
 

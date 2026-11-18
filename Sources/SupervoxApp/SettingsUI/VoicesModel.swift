@@ -321,19 +321,10 @@ public final class VoicesModel {
         return nil
     }
 
-    /// Écoute la voix choisie. Une voix du système désignée absente de la liste des voix installées (relue à l'instant) :
-    /// `.failed(.notInstalled)`, sans fabriquer de voix.
+    /// Écoute la voix choisie. Une voix du système désignée absente de la liste des voix installées : `.failed(.notInstalled)`,
+    /// sans fabriquer de voix (contrôlé par l'écoute, `VoicePreview`, seul endroit).
     public func listen() {
         guard let row = selectedRow else { return }
-        let choice = row.choice.normalized
-        if choice.providerID == nil, let identifier = choice.identifier {
-            installed = systemVoices()
-            guard installed.contains(where: { $0.identifier == identifier }) else {
-                preview.stop()
-                previewState = .failed(.notInstalled)
-                return
-            }
-        }
         preview.start(row.choice, settings: read()) { [weak self] state in self?.previewState = state }
     }
 

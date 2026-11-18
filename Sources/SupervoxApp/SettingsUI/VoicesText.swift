@@ -42,6 +42,9 @@ public enum VoicesText {
             InterviewText.fr("Le son n'a pas pu être joué : vérifiez la sortie audio, puis réessayez.")
         case .unavailable:
             InterviewText.fr("L'écoute n'est pas disponible : relancez Supervox.")
+        case .microphoneBusy:
+            InterviewText.fr(
+                "Une dictée ou un entretien se sert du micro : réessayez d'écouter cette voix une fois qu'il est fini.")
         }
     }
 

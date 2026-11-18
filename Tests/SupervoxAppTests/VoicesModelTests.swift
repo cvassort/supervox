@@ -70,17 +70,21 @@ import Testing
             voices = VoiceList(installed)
         }
 
-        func setInstalled(_ list: [SystemVoiceInfo]) { voices.value.withLock { $0 = list } }
+        let microphone = MicrophoneFlag()
+
+        func setInstalled(_ list: [SystemVoiceInfo]) { voices.set(list) }
 
         private func makeModel() -> VoicesModel {
             let access = SecretAccess(keys, queue: DispatchQueue(label: "test.voices.model.\(UUID())"))
             let factory = factory
             let clock = clock
+            let voices = voices
+            let microphone = microphone
             let preview = VoicePreview(
                 makeVoice: { factory.make($0, $1) }, makePlayer: { [player] in player },
                 resolve: { choice, settings in try await choice.resolve(in: settings, secrets: access) },
+                systemVoices: { voices.read() }, microphoneHeld: { microphone.held },
                 sleep: { try await clock.sleep($0) })
-            let voices = voices
             return VoicesModel(
                 read: { self.settings },
                 update: { change in
@@ -88,15 +92,9 @@ import Testing
                     if let failure = self.failure { throw failure }
                     change(&self.settings)
                 },
-                systemVoices: { voices.value.withLock { $0 } },
+                systemVoices: { voices.read() },
                 preview: preview)
         }
-    }
-
-    /// La liste des voix « installées », changeable par le test, lue sous verrou.
-    final class VoiceList: Sendable {
-        let value: Mutex<[SystemVoiceInfo]>
-        init(_ list: [SystemVoiceInfo]) { value = Mutex(list) }
     }
 
     // MARK: - Règle 1 : lignes
@@ -476,14 +474,14 @@ import Testing
         let model = rig.model
         model.selection = .active
         model.listen()
-        #expect(model.previewState == .failed(.notInstalled))
+        #expect(await until { model.previewState == .failed(.notInstalled) })
         #expect(model.previewMessage == VoicesText.failure(.notInstalled))
 
-        // Listée à l'ouverture, désinstallée avant l'écoute : la liste est relue.
+        // Listée à l'ouverture, désinstallée avant l'écoute : la liste est relue (par l'écoute).
         model.selection = RowID.system(identifier: "voix.exemple.a")
         rig.setInstalled([Self.voiceB, Self.voiceC])
         model.listen()
-        #expect(model.previewState == .failed(.notInstalled))
+        #expect(await until { model.previewState == .failed(.notInstalled) })
         await settle()
         #expect(rig.factory.calls.isEmpty, "aucune voix fabriquée")
         #expect(rig.player.clips.isEmpty)

@@ -137,6 +137,31 @@ final class PlayerCount: Sendable {
     let value = Mutex(0)
 }
 
+/// La liste des voix « installées » (inventée), changeable par le test, lue sous verrou à chaque appel.
+final class VoiceList: Sendable {
+    let value: Mutex<[SystemVoiceInfo]>
+    init(_ list: [SystemVoiceInfo]) { value = Mutex(list) }
+    func set(_ list: [SystemVoiceInfo]) { value.withLock { $0 = list } }
+    func read() -> [SystemVoiceInfo] { value.withLock { $0 } }
+}
+
+/// Le micro tenu ou non, tel que l'écoute le lit (`microphoneHeld`), changeable par le test.
+@MainActor final class MicrophoneFlag {
+    var held = false
+}
+
+/// Un compte sur le fil principal (appels de la résolution, entrées dans une attente).
+@MainActor final class MainCounter {
+    var value = 0
+}
+
+/// Un lecteur qui lève une erreur qui n'est pas une `ClipPlayerError`.
+final class OtherErrorPlayer: ClipPlayer {
+    func play(_ clip: AudioClip) async throws { throw VoicePreviewTests.Other() }
+    func stop() {}
+    @MainActor func stopNow() {}
+}
+
 /// Les états publiés par une écoute, dans l'ordre.
 @MainActor final class PreviewStates {
     var states: [VoicePreview.State] = []
@@ -165,14 +190,21 @@ final class PlayerCount: Sendable {
         return settings
     }
 
+    /// La voix installée de la liste inventée du banc.
+    static let listed = SystemVoiceInfo(identifier: "voix.exemple.a", language: "en-US", quality: 2, name: "Voix d'exemple A")
+
     /// L'écoute et ses doubles. `resolve` : la VRAIE résolution (`VoiceChoice.resolve(in:secrets:)`) sur un trousseau en mémoire,
-    /// sauf quand un test la remplace.
+    /// sauf quand un test la remplace ; chaque appel est compté (`resolves`). `voices` : la liste des voix installées, relue par
+    /// l'écoute à chaque appel. `microphone` : le micro tenu ou non.
     @MainActor final class Rig {
         let factory: PreviewVoiceFactory
         let player: ScriptedClipPlayer
         let clock = PreviewClock()
         let keys: InMemorySecretStore
         let states = PreviewStates()
+        let voices: VoiceList
+        let microphone = MicrophoneFlag()
+        let resolves = MainCounter()
         private let madePlayers = PlayerCount()
         let preview: VoicePreview
 
@@ -181,22 +213,33 @@ final class PlayerCount: Sendable {
         init(
             factory: PreviewVoiceFactory, player: ScriptedClipPlayer = ScriptedClipPlayer(completion: .immediate),
             makePlayer: (@Sendable () -> any ClipPlayer)? = nil, withKey: Bool = true,
-            resolve: VoicePreview.Resolve? = nil
+            resolve: VoicePreview.Resolve? = nil, installed: [SystemVoiceInfo] = [VoicePreviewTests.listed]
         ) {
             self.factory = factory
             self.player = player
             keys = withKey
                 ? InMemorySecretStore(secrets: [VoicePreviewTests.provider.id.uuidString: "cle-exemple"]) : InMemorySecretStore()
+            voices = VoiceList(installed)
             let access = SecretAccess(keys, queue: DispatchQueue(label: "test.voice.preview.\(UUID())"))
             let counter = madePlayers
             let clock = clock
+            let voices = voices
+            let microphone = microphone
+            let resolves = resolves
+            let resolveVoice: VoicePreview.Resolve =
+                resolve ?? { choice, settings in try await choice.resolve(in: settings, secrets: access) }
             preview = VoicePreview(
                 makeVoice: { factory.make($0, $1) },
                 makePlayer: makePlayer ?? { [player] in
                     counter.value.withLock { $0 += 1 }
                     return player
                 },
-                resolve: resolve ?? { choice, settings in try await choice.resolve(in: settings, secrets: access) },
+                resolve: { choice, settings in
+                    resolves.value += 1
+                    return try await resolveVoice(choice, settings)
+                },
+                systemVoices: { voices.read() },
+                microphoneHeld: { microphone.held },
                 sleep: { try await clock.sleep($0) })
         }
 
@@ -287,20 +330,30 @@ final class PlayerCount: Sendable {
     // MARK: Table des pannes (amendement 1)
 
     enum FailureCase: String, CaseIterable, CustomTestStringConvertible {
-        case systemNoVoice, systemEmptyError, systemZeroSamples, systemTimedOutError, systemDeadline, systemOtherError
+        case systemMissing, systemNoVoice, systemEmptyError, systemZeroSamples, systemTimedOutError, systemDeadline
+        case systemOtherError
         case providerRemoved, providerCannotSpeak, providerIncomplete
-        case resolveNoKey, providerHTTP, providerUnreadableBytes, providerEmptyError, providerZeroSamples, providerDeadline
-        case playbackFailed, voiceUnavailable, playerUnavailable
+        case resolveNoKey, resolveOther, providerHTTP, providerUnreadableBytes, providerEmptyError, providerZeroSamples
+        case providerDeadline
+        case playbackFailed, playbackOther, voiceUnavailable, playerUnavailable
         var testDescription: String { rawValue }
     }
 
     struct Other: Error {}
 
     /// Une ligne de la table : la voix choisie, les doubles, et la panne attendue.
-    static func scenario(_ c: FailureCase) -> (
-        choice: VoiceChoice, factory: PreviewVoiceFactory, player: ScriptedClipPlayer?, withKey: Bool,
-        fireDeadline: Bool, expected: VoicePreview.Failure
-    ) {
+    struct Scenario {
+        let choice: VoiceChoice
+        let factory: PreviewVoiceFactory
+        var player: ScriptedClipPlayer? = nil
+        var makePlayer: (@Sendable () -> any ClipPlayer)? = nil
+        var withKey = true
+        var fireDeadline = false
+        var resolve: VoicePreview.Resolve? = nil
+        let expected: VoicePreview.Failure
+    }
+
+    static func scenario(_ c: FailureCase) -> Scenario {
         let silent = AudioClip(samples: [], sampleRate: 24_000)
         func system(_ b: PreviewVoice.Behavior) -> PreviewVoiceFactory { PreviewVoiceFactory(system: PreviewVoice(b)) }
         func provider(_ b: PreviewVoice.Behavior) -> PreviewVoiceFactory {
@@ -313,47 +366,71 @@ final class PlayerCount: Sendable {
         var incomplete = providerChoice
         incomplete.identifier = "  "
         switch c {
+        case .systemMissing:
+            // Une voix du système désignée, absente de la liste installée : rien n'est fabriqué.
+            return Scenario(
+                choice: VoiceChoice(identifier: "voix.exemple.absente", language: "fr-FR"), factory: system(.forbidden),
+                expected: .notInstalled)
         case .systemNoVoice:
-            return (systemChoice, system(.error(SpeechError.noVoice(language: "fr-FR"))), nil, true, false, .notInstalled)
-        case .systemEmptyError: return (systemChoice, system(.error(SpeechError.empty)), nil, true, false, .silent)
-        case .systemZeroSamples: return (systemChoice, system(.clip(silent)), nil, true, false, .silent)
-        case .systemTimedOutError: return (systemChoice, system(.error(SpeechError.timedOut)), nil, true, false, .timedOut)
-        case .systemDeadline: return (systemChoice, system(.hang), nil, true, true, .timedOut)
-        case .systemOtherError: return (systemChoice, system(.error(Other())), nil, true, false, .unavailable)
-        case .providerRemoved: return (removed, provider(.forbidden), nil, true, false, .unusable(.providerRemoved))
+            return Scenario(
+                choice: systemChoice, factory: system(.error(SpeechError.noVoice(language: "fr-FR"))), expected: .notInstalled)
+        case .systemEmptyError: return Scenario(choice: systemChoice, factory: system(.error(SpeechError.empty)), expected: .silent)
+        case .systemZeroSamples: return Scenario(choice: systemChoice, factory: system(.clip(silent)), expected: .silent)
+        case .systemTimedOutError:
+            return Scenario(choice: systemChoice, factory: system(.error(SpeechError.timedOut)), expected: .timedOut)
+        case .systemDeadline:
+            return Scenario(choice: systemChoice, factory: system(.hang), fireDeadline: true, expected: .timedOut)
+        case .systemOtherError: return Scenario(choice: systemChoice, factory: system(.error(Other())), expected: .unavailable)
+        case .providerRemoved: return Scenario(choice: removed, factory: provider(.forbidden), expected: .unusable(.providerRemoved))
         case .providerCannotSpeak:
-            return (cannotSpeak, provider(.forbidden), nil, true, false, .unusable(.providerCannotSpeak))
-        case .providerIncomplete: return (incomplete, provider(.forbidden), nil, true, false, .unusable(.incomplete))
+            return Scenario(choice: cannotSpeak, factory: provider(.forbidden), expected: .unusable(.providerCannotSpeak))
+        case .providerIncomplete:
+            return Scenario(choice: incomplete, factory: provider(.forbidden), expected: .unusable(.incomplete))
         case .resolveNoKey:
-            return (providerChoice, provider(.forbidden), nil, false, false, .provider(.noKey(provider: Self.provider.name)))
+            return Scenario(
+                choice: providerChoice, factory: provider(.forbidden), withKey: false,
+                expected: .provider(.noKey(provider: Self.provider.name)))
+        case .resolveOther:
+            // Une erreur de la résolution que le contrat ne prévoit pas.
+            return Scenario(
+                choice: providerChoice, factory: provider(.forbidden), resolve: { _, _ in throw Other() }, expected: .unavailable)
         case .providerHTTP:
-            return (
-                providerChoice, provider(.error(EndpointError.http(status: 401, body: "corps"))), nil, true, false,
-                .provider(.unauthorized(401))
-            )
+            return Scenario(
+                choice: providerChoice, factory: provider(.error(EndpointError.http(status: 401, body: "corps"))),
+                expected: .provider(.unauthorized(401)))
         case .providerUnreadableBytes:
-            return (providerChoice, provider(.error(WavFileError.notAWavFile)), nil, true, false, .provider(.malformed))
-        case .providerEmptyError: return (providerChoice, provider(.error(SpeechError.empty)), nil, true, false, .silent)
-        case .providerZeroSamples: return (providerChoice, provider(.clip(silent)), nil, true, false, .silent)
-        case .providerDeadline: return (providerChoice, provider(.hang), nil, true, true, .timedOut)
+            return Scenario(choice: providerChoice, factory: provider(.error(WavFileError.notAWavFile)), expected: .provider(.malformed))
+        case .providerEmptyError:
+            return Scenario(choice: providerChoice, factory: provider(.error(SpeechError.empty)), expected: .silent)
+        case .providerZeroSamples: return Scenario(choice: providerChoice, factory: provider(.clip(silent)), expected: .silent)
+        case .providerDeadline:
+            return Scenario(choice: providerChoice, factory: provider(.hang), fireDeadline: true, expected: .timedOut)
         case .playbackFailed:
-            return (systemChoice, system(.clip(clip)), ScriptedClipPlayer(completion: .failing), true, false, .playback)
+            return Scenario(
+                choice: systemChoice, factory: system(.clip(clip)), player: ScriptedClipPlayer(completion: .failing),
+                expected: .playback)
+        case .playbackOther:
+            // Le lecteur lève une erreur qui n'est pas une `ClipPlayerError`.
+            return Scenario(
+                choice: systemChoice, factory: system(.clip(clip)), makePlayer: { OtherErrorPlayer() }, expected: .playback)
         case .voiceUnavailable:
-            return (systemChoice, system(.error(InterviewEnvironment.Unavailable())), nil, true, false, .unavailable)
-        case .playerUnavailable: return (systemChoice, system(.clip(clip)), nil, true, false, .unavailable)
+            return Scenario(
+                choice: systemChoice, factory: system(.error(InterviewEnvironment.Unavailable())), expected: .unavailable)
+        case .playerUnavailable:
+            return Scenario(
+                choice: systemChoice, factory: system(.clip(clip)), makePlayer: InterviewEnvironment.noPlayer,
+                expected: .unavailable)
         }
     }
 
     /// Chaque ligne de la table des pannes : l'écoute finit sur sa panne, sans second classement, et la phrase montrée est celle de
-    /// `VoicesText` (pour `.provider(f)`, `f.message`). Une voix inutilisable n'est jamais fabriquée ; aucune voix du système ne parle
-    /// à la place d'un fournisseur ; rien n'est joué sauf par la ligne de lecture.
+    /// `VoicesText` (pour `.provider(f)`, `f.message`). Une voix inutilisable, ou une voix du système absente de la liste, n'est
+    /// jamais fabriquée ; aucune voix du système ne parle à la place d'un fournisseur ; rien n'est joué sauf par la ligne de lecture.
     @Test(arguments: FailureCase.allCases)
     func everyPreviewFailureHasItsSentence(_ c: FailureCase) async {
         let s = Self.scenario(c)
         let player = s.player ?? ScriptedClipPlayer(completion: .immediate)
-        let rig = Rig(
-            factory: s.factory, player: player,
-            makePlayer: c == .playerUnavailable ? InterviewEnvironment.noPlayer : nil, withKey: s.withKey)
+        let rig = Rig(factory: s.factory, player: player, makePlayer: s.makePlayer, withKey: s.withKey, resolve: s.resolve)
         rig.start(s.choice)
         if s.fireDeadline {
             #expect(await until { rig.clock.asked.count == 1 })
@@ -368,8 +445,93 @@ final class PlayerCount: Sendable {
             #expect(sentence == VoicesText.reason(reason))
             #expect(s.factory.calls.isEmpty, "une voix inutilisable n'est jamais fabriquée")
         }
+        if c == .systemMissing { #expect(s.factory.calls.isEmpty, "une voix absente de la liste n'est jamais fabriquée") }
         if s.choice.providerID != nil { #expect(s.factory.systemCalls == 0, "jamais la voix du système à la place") }
         if c != .playbackFailed { #expect(player.clips.isEmpty, "rien n'est joué") }
+    }
+
+    /// La liste des voix est relue au moment de l'écoute : une voix listée à la construction, désinstallée depuis, n'est pas
+    /// fabriquée.
+    @Test func aDesignatedVoiceUninstalledSinceIsSaidWithoutSynthesis() async {
+        let rig = Rig(factory: PreviewVoiceFactory(system: PreviewVoice(.forbidden)))
+        rig.voices.set([])
+        rig.start(VoiceChoice(identifier: "voix.exemple.a", language: "en-US"))
+        #expect(await rig.ended())
+        #expect(rig.states.states == [.preparing, .failed(.notInstalled)])
+        #expect(rig.factory.calls.isEmpty)
+    }
+
+    enum CancellationSource: String, CaseIterable, CustomTestStringConvertible {
+        case voice, resolution
+        var testDescription: String { rawValue }
+    }
+
+    /// Une `CancellationError` levée d'elle-même (par la voix, ou par la résolution) n'est jamais une panne : l'écoute revient à
+    /// `.idle`, sans phrase, et rien n'est joué.
+    @Test(arguments: CancellationSource.allCases)
+    func aCancellationIsNeverAFailure(_ source: CancellationSource) async {
+        let rig: Rig = switch source {
+        case .voice: Rig(factory: PreviewVoiceFactory(system: PreviewVoice(.error(CancellationError()))))
+        case .resolution:
+            Rig(factory: PreviewVoiceFactory(system: PreviewVoice(.forbidden)), resolve: { _, _ in throw CancellationError() })
+        }
+        rig.start(Self.systemChoice)
+        #expect(await rig.ended())
+        #expect(rig.states.states == [.preparing, .idle])
+        #expect(rig.player.clips.isEmpty)
+    }
+
+    /// `stop()` pendant la résolution (une résolution sourde à l'annulation, retenue par une porte) : quand elle rend sa réponse,
+    /// aucune voix n'est fabriquée et rien n'est publié après le `.idle` de `stop()`. C'est le contrôle du jeton d'après la
+    /// résolution qui le tient.
+    @Test func stopDuringTheResolutionMakesNoVoice() async {
+        let gate = TestGate()
+        defer { gate.open() }
+        let entered = MainCounter()
+        let rig = Rig(
+            factory: PreviewVoiceFactory(system: PreviewVoice(.clip(Self.clip))),
+            resolve: { choice, _ in
+                entered.value += 1
+                await gate.wait()
+                return ResolvedVoice.system(language: choice.language, identifier: choice.identifier, because: nil)
+            })
+        rig.start(Self.systemChoice)
+        #expect(await until { entered.value == 1 })
+        rig.preview.stop()
+        #expect(rig.states.states == [.preparing, .idle])
+        gate.open()
+        await settle()
+        #expect(rig.factory.calls.isEmpty, "aucune voix fabriquée après stop()")
+        #expect(rig.states.states == [.preparing, .idle], "aucun état après stop()")
+        #expect(rig.player.clips.isEmpty)
+    }
+
+    // MARK: Le micro tenu
+
+    /// Tant qu'un micro est tenu, l'écoute est refusée avant tout : un seul état, `.failed(.microphoneBusy)` ; rien n'est résolu
+    /// (aucune lecture du trousseau), rien n'est fabriqué ni joué. Le refus ne retient pas le rappel : un `stop()` qui suit ne publie
+    /// rien. Le micro rendu, l'écoute repart et joue.
+    @Test func aHeldMicrophoneRefusesTheListeningBeforeAnything() async {
+        let factory = PreviewVoiceFactory(system: PreviewVoice(.forbidden), provider: PreviewVoice(.clip(Self.clip)))
+        let rig = Rig(factory: factory)
+        rig.microphone.held = true
+        rig.start(Self.providerChoice)
+        #expect(rig.states.states == [.failed(.microphoneBusy)])
+        await settle()
+        #expect(rig.states.states == [.failed(.microphoneBusy)], "un seul état")
+        #expect(rig.resolves.value == 0, "rien n'est résolu")
+        #expect(rig.keys.readCount == 0, "le trousseau n'est pas lu")
+        #expect(factory.calls.isEmpty)
+        #expect(rig.player.clips.isEmpty)
+        rig.preview.stop()
+        #expect(rig.states.states == [.failed(.microphoneBusy)], "le refus ne retient pas le rappel")
+
+        rig.microphone.held = false
+        rig.start(Self.providerChoice)
+        #expect(await until { rig.states.states.last == .idle })
+        #expect(rig.states.states == [.failed(.microphoneBusy), .preparing, .playing, .idle])
+        #expect(rig.player.clips == [Self.clip])
+        #expect(rig.resolves.value == 1)
     }
 
     /// Les phrases des pannes : fixes, en français, distinctes d'un cas à l'autre.
@@ -377,6 +539,7 @@ final class PlayerCount: Sendable {
         let failures: [VoicePreview.Failure] = [
             .notInstalled, .unusable(.providerRemoved), .unusable(.providerCannotSpeak), .unusable(.incomplete),
             .provider(.noKey(provider: "Fournisseur d'exemple")), .silent, .timedOut, .playback, .unavailable,
+            .microphoneBusy,
         ]
         let sentences = failures.map(VoicesText.failure)
         #expect(Set(sentences).count == failures.count)
