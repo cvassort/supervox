@@ -83,15 +83,19 @@ struct LiveInterview: Sendable {
     /// Contrat de `InterviewEnvironment.makeVoice` : sans fournisseur, la voix **du système** dans la langue du choix, désignée par
     /// son identifiant quand le choix est une voix du système ; avec un fournisseur résolu, la voix **de ce fournisseur** (modèle,
     /// identifiant et paramètres du choix). Un fournisseur au format Anthropic n'a pas de synthèse (`InterviewSetup.resolve` ne le
-    /// donne jamais) : la voix du système, plutôt qu'une voix muette. Tout repli d'une voix de fournisseur prend la meilleure voix de
-    /// la langue : l'identifiant d'un fournisseur ne désigne pas une voix du système.
+    /// donne jamais) : la voix du système, plutôt qu'une voix muette. Tout repli d'une voix de fournisseur, et tout choix donné avec
+    /// un fournisseur sans faire une voix de fournisseur, prend la meilleure voix de la langue : l'identifiant d'un fournisseur ne
+    /// désigne pas une voix du système.
     func makeVoice(_ choice: VoiceChoice, _ provider: ResolvedProvider?) -> any SpeechSynthesizer {
-        guard let provider, provider.kind == .openAICompatible else {
+        // La voix d'un fournisseur ne se construit que par `VoiceChoice.providerVoice` (forme normalisée) : rien de non normalisé ne
+        // part chez lui, quel que soit l'appelant. Un fournisseur donné avec un choix qui ne fait pas une voix de fournisseur
+        // (sans fournisseur, modèle ou identifiant blanc) donne la voix du système, jamais une voix au modèle vide.
+        guard let provider, provider.kind == .openAICompatible, let voice = choice.providerVoice else {
+            let choice = choice.normalized
             let isSystemVoice = provider == nil && choice.providerID == nil
             return makeSystemVoice(choice.language, isSystemVoice ? choice.identifier : nil)
         }
-        return makeProviderVoice(
-            provider, ProviderVoice(model: choice.model ?? "", identifier: choice.identifier ?? "", extra: choice.extra))
+        return makeProviderVoice(provider, voice)
     }
 
     /// La voix d'un fournisseur au format OpenAI : sa route `audio/speech`.

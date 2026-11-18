@@ -110,10 +110,10 @@ public struct InterviewSetup: Sendable {
         }
     }
 
-    /// La voix et le nom de son fournisseur. Qui parle se décide par `VoiceChoice.route(in:)`, sur la forme normalisée (seule forme
-    /// donnée à la fabrique : aucune clé réservée ne part chez un fournisseur). Un repli (fournisseur supprimé, sans synthèse, voix
-    /// incomplète) est décidé avant toute lecture de clé : aucune invite du trousseau pour rien. Seule une `RewriteFailure` de la
-    /// résolution retombe sur le système ; l'annulation remonte. Le repli garde langue et genre, sans identifiant.
+    /// La voix et le nom de son fournisseur, par la résolution unique (`VoiceChoice.resolve(in:secrets:)` : la route, puis la clé
+    /// pour une voix de fournisseur seulement ; aucune invite du trousseau pour un repli). La fabrique reçoit la forme normalisée.
+    /// Une `RewriteFailure` de la résolution retombe sur le système ; l'annulation remonte. Le repli garde langue et genre, sans
+    /// identifiant ; une voix de fournisseur a la voix du système en secours (`FallbackSpeechSynthesizer`).
     @MainActor
     private static func resolveVoice(
         _ choice: VoiceChoice, settings: AppSettings, secrets: SecretAccess,
@@ -122,31 +122,21 @@ public struct InterviewSetup: Sendable {
         let choice = choice.normalized
         let systemChoice = VoiceChoice(
             providerID: nil, model: nil, identifier: nil, language: choice.language, gender: choice.gender, extra: [:])
-        switch choice.route(in: settings) {
+        let resolved: ResolvedVoice
+        do {
+            resolved = try await choice.resolve(in: settings, secrets: secrets)
+        } catch is RewriteFailure {
+            return (makeVoice(systemChoice, nil), nil)
+        }
+        switch resolved {
         case .system(_, _, because: nil):
             return (makeVoice(choice, nil), nil)
         case .system:
             return (makeVoice(systemChoice, nil), nil)
         case .provider(let provider, _):
-            guard let resolved = try await resolveVoiceProvider(provider, settings: settings, secrets: secrets) else {
-                return (makeVoice(systemChoice, nil), nil)
-            }
             let voice = FallbackSpeechSynthesizer(
-                primary: makeVoice(choice, resolved), fallback: makeVoice(systemChoice, nil))
-            return (voice, resolved.name)
-        }
-    }
-
-    /// La clé du fournisseur que `route(in:)` a désigné : `nil` si la résolution échoue (`RewriteFailure` : clé absente, trousseau,
-    /// adresse), l'annulation remonte.
-    @MainActor
-    private static func resolveVoiceProvider(
-        _ provider: Provider, settings: AppSettings, secrets: SecretAccess
-    ) async throws -> ResolvedProvider? {
-        do {
-            return try await ProviderResolver.resolve(provider.id, settings: settings, secrets: secrets)
-        } catch is RewriteFailure {
-            return nil
+                primary: makeVoice(choice, provider), fallback: makeVoice(systemChoice, nil))
+            return (voice, provider.name)
         }
     }
 }

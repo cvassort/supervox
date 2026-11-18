@@ -42,8 +42,8 @@ extension VoiceChoice {
         case .anthropic: return fallback(.providerCannotSpeak)
         case .openAICompatible: break
         }
-        guard let model = choice.model, let identifier = choice.identifier else { return fallback(.incomplete) }
-        return .provider(provider, ProviderVoice(model: model, identifier: identifier, extra: choice.extra))
+        guard let voice = choice.providerVoice else { return fallback(.incomplete) }
+        return .provider(provider, voice)
     }
 
     /// LA règle « cette ligne est la voix en vigueur ». Deux voix de fournisseur sont la même si leurs formes normalisées sont égales
@@ -72,6 +72,42 @@ extension VoiceChoice {
             return lhs == rhs
         default:
             return false
+        }
+    }
+}
+
+/// Une voix résolue : la route, et pour une voix de fournisseur, son fournisseur prêt à servir (adresse et clé lues).
+public enum ResolvedVoice: Sendable {
+    /// Comme `VoiceRoute.system` : aucune clé n'a été lue.
+    case system(language: String, identifier: String?, because: SystemReason?)
+    /// Le fournisseur résolu par `ProviderResolver`, et la voix à lui demander.
+    case provider(ResolvedProvider, ProviderVoice)
+}
+
+extension VoiceChoice {
+    /// LE seul constructeur de `ProviderVoice` à partir des réglages : depuis la forme normalisée (modèle et identifiant rognés,
+    /// paramètres sans clé réservée ni vide, au plus 16). `nil` sans fournisseur, ou si le modèle ou l'identifiant est absent ou
+    /// blanc. Ne lit pas les réglages : que le fournisseur existe et sache parler, c'est `route(in:)`.
+    public var providerVoice: ProviderVoice? {
+        let choice = normalized
+        guard choice.providerID != nil, let model = choice.model, let identifier = choice.identifier else { return nil }
+        return ProviderVoice(model: model, identifier: identifier, extra: choice.extra)
+    }
+
+    /// LA résolution d'une voix : `route(in:)`, puis, pour `.provider` seulement, `ProviderResolver.resolve` (adresse, puis clé lue
+    /// hors du fil principal). Une voix du système ou une voix inutilisable ne lit JAMAIS le trousseau. L'entretien
+    /// (`InterviewSetup.resolve`) et l'écoute d'une voix passent par elle : aucun appelant ne redécide « qui parle ».
+    ///
+    /// - Throws: la `RewriteFailure` de la résolution telle quelle (fournisseur introuvable, adresse refusée, clé absente,
+    ///   trousseau) ; `CancellationError` si la tâche est annulée pendant la résolution.
+    @MainActor
+    public func resolve(in settings: AppSettings, secrets: SecretAccess) async throws -> ResolvedVoice {
+        switch route(in: settings) {
+        case .system(let language, let identifier, let because):
+            return .system(language: language, identifier: identifier, because: because)
+        case .provider(let provider, let voice):
+            let resolved = try await ProviderResolver.resolve(provider.id, settings: settings, secrets: secrets)
+            return .provider(resolved, voice)
         }
     }
 }

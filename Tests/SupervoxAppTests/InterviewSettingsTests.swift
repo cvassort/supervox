@@ -326,7 +326,7 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
         #expect(system.language == "fr-FR")
         #expect(system.gender == nil)
         #expect(system.extra == [:])
-        #expect(system.route(in: .defaults) == .system(language: "fr-FR", identifier: nil, because: nil))
+        #expect(system.route(in: .defaults) == VoiceRoute.system(language: "fr-FR", identifier: nil, because: nil))
     }
 
     @Test func aVoiceSpeaksThroughAProviderOnlyWhenItNamesOne() {
@@ -342,7 +342,7 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
         // Un modèle ou un identifiant sans fournisseur : c'est toujours une voix du système.
         #expect(
             VoiceChoice(model: "modele-exemple-voix", identifier: "voix-exemple").route(in: settings)
-                == .system(language: "fr-FR", identifier: "voix-exemple", because: nil))
+                == VoiceRoute.system(language: "fr-FR", identifier: "voix-exemple", because: nil))
     }
 
     @Test func aVoiceChoiceIsWrittenAndReadBackWithEveryField() throws {
@@ -389,7 +389,7 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
              "extra": {"garde": "oui", "refuse": 1}}
             """#)
         #expect(read.providerID == nil)
-        #expect(read.route(in: .defaults) == .system(language: "fr-FR", identifier: "voix-exemple", because: nil))
+        #expect(read.route(in: .defaults) == VoiceRoute.system(language: "fr-FR", identifier: "voix-exemple", because: nil))
         #expect(read.model == nil)
         #expect(read.identifier == "voix-exemple")
         #expect(read.language == "fr-FR")

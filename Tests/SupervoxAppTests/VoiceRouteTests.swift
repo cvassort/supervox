@@ -294,6 +294,126 @@ import Testing
         #expect(privacy == (speaks ? named : InterviewSettingsModelTests.systemPrivacy), "onglet : \(privacy)")
     }
 
+    // MARK: - Point 1 du tour de correction : une seule construction de `ProviderVoice`, une seule résolution
+
+    struct ProviderVoiceCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let choice: VoiceChoice
+        let expected: ProviderVoice?
+        var testDescription: String { name }
+    }
+
+    static let providerVoiceCases: [ProviderVoiceCase] = [
+        ProviderVoiceCase(name: "voix du système", choice: VoiceChoice(identifier: "voix.exemple.a"), expected: nil),
+        ProviderVoiceCase(
+            name: "sans fournisseur, même avec modèle et identifiant",
+            choice: VoiceChoice(model: "modele-voix-exemple", identifier: "voix-exemple"), expected: nil),
+        ProviderVoiceCase(name: "modèle blanc", choice: with { $0.model = " " }, expected: nil),
+        ProviderVoiceCase(name: "identifiant absent", choice: with { $0.identifier = nil }, expected: nil),
+        ProviderVoiceCase(
+            name: "voix complète",
+            choice: providerVoice,
+            expected: ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"])),
+        ProviderVoiceCase(
+            name: "écrite à la main : rognée, sans clé réservée ni clé vide",
+            choice: with {
+                $0.model = "\tmodele-voix-exemple "
+                $0.identifier = " voix-exemple"
+                $0.extra = ["model": "x", "Voice": "x", "": "x", " cle-exemple ": "valeur-exemple"]
+            },
+            expected: ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"])),
+        ProviderVoiceCase(
+            name: "fournisseur supprimé : la voix se construit (les réglages ne sont pas lus ici)",
+            choice: with { $0.providerID = goneID },
+            expected: ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"])),
+    ]
+
+    @Test(arguments: providerVoiceCases)
+    func theProviderVoiceHasItsTable(_ example: ProviderVoiceCase) {
+        #expect(example.choice.providerVoice == example.expected)
+    }
+
+    /// Ce qu'une résolution rend, sous une forme comparable (`ResolvedProvider` ne se compare pas : il porte la clé).
+    enum Resolved: Equatable {
+        case system(language: String, identifier: String?, because: SystemReason?)
+        case provider(name: String, baseURL: URL, apiKey: String, voice: ProviderVoice)
+
+        init(_ resolved: ResolvedVoice) {
+            switch resolved {
+            case .system(let language, let identifier, let because):
+                self = Resolved.system(language: language, identifier: identifier, because: because)
+            case .provider(let provider, let voice):
+                self = .provider(
+                    name: provider.name, baseURL: provider.config.baseURL, apiKey: provider.config.apiKey, voice: voice)
+            }
+        }
+    }
+
+    /// `resolve(in:secrets:)` : la route, puis la clé pour `.provider` seulement. Aucune clé n'est lue pour une voix du système ou
+    /// une voix inutilisable (le trousseau double note chaque compte lu).
+    @MainActor
+    @Test(arguments: Who.allCases)
+    func theResolutionReadsTheKeyOnlyForAProviderVoice(_ who: Who) async throws {
+        let settings = Self.settings
+        let store = SetupAccountStore(keys: [
+            Self.speakingID: "cle-exemple", Self.silentID: "cle-exemple", Self.modelsID: "cle-exemple",
+        ])
+        let resolved = try await who.choice.resolve(
+            in: settings, secrets: SecretAccess(store, queue: DispatchQueue(label: "test.resolve.\(UUID())")))
+        let expected: Resolved =
+            switch who {
+            case .system: .system(language: "fr-CA", identifier: "voix.exemple.a", because: nil)
+            case .providerRemoved: .system(language: "fr-CA", identifier: nil, because: .providerRemoved)
+            case .providerCannotSpeak: .system(language: "fr-CA", identifier: nil, because: .providerCannotSpeak)
+            case .incompleteModel, .incompleteIdentifier: .system(language: "fr-CA", identifier: nil, because: .incomplete)
+            case .provider:
+                .provider(
+                    name: "Fournisseur d'exemple", baseURL: URL(string: "https://example.com/v1")!, apiKey: "cle-exemple",
+                    voice: ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"]))
+            }
+        #expect(Resolved(resolved) == expected)
+        #expect(store.readAccounts == (who == .provider ? [Self.speakingID.uuidString] : []), "comptes lus")
+    }
+
+    /// Une résolution qui échoue lève la `RewriteFailure` telle quelle (l'entretien, lui, retombe sur le système).
+    @MainActor
+    @Test func aFailedResolutionThrowsItsRewriteFailure() async throws {
+        let missing = SetupAccountStore(keys: [Self.modelsID: "cle-exemple"])
+        await #expect(throws: RewriteFailure.noKey(provider: "Fournisseur d'exemple")) {
+            _ = try await Self.providerVoice.resolve(
+                in: Self.settings, secrets: SecretAccess(missing, queue: DispatchQueue(label: "test.resolve.\(UUID())")))
+        }
+        let denied = SetupAccountStore(keys: [Self.speakingID: "cle-exemple"], denied: [Self.speakingID])
+        await #expect(throws: RewriteFailure.keychain) {
+            _ = try await Self.providerVoice.resolve(
+                in: Self.settings, secrets: SecretAccess(denied, queue: DispatchQueue(label: "test.resolve.\(UUID())")))
+        }
+        var badAddress = Self.settings
+        badAddress.providers[0].baseURL = "pas une adresse"
+        let store = SetupAccountStore(keys: [Self.speakingID: "cle-exemple"])
+        await #expect(throws: RewriteFailure.unreachable) {
+            _ = try await Self.providerVoice.resolve(
+                in: badAddress, secrets: SecretAccess(store, queue: DispatchQueue(label: "test.resolve.\(UUID())")))
+        }
+        #expect(store.readAccounts.isEmpty, "une adresse refusée ne coûte pas une lecture du trousseau")
+    }
+
+    /// Une tâche déjà annulée : la résolution d'une voix de fournisseur lève l'annulation sans lire le trousseau.
+    @MainActor
+    @Test func aCancelledResolutionThrowsCancellation() async throws {
+        let store = SetupAccountStore(keys: [Self.speakingID: "cle-exemple"])
+        let access = SecretAccess(store, queue: DispatchQueue(label: "test.resolve.\(UUID())"))
+        let settings = Self.settings
+        let task = Task { @MainActor in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await Self.providerVoice.resolve(in: settings, secrets: access)
+        }
+        // L'attente rend la main à l'annulation du test : elle annule la tâche attendue.
+        let result = await withTaskCancellationHandler { await task.result } onCancel: { task.cancel() }
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(store.readAccounts.isEmpty)
+    }
+
     // MARK: - Règle 6 : la même voix
 
     struct SameCase: Sendable, CustomTestStringConvertible {

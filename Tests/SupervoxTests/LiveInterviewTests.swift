@@ -427,6 +427,29 @@ import Testing
         #expect(rig.made.providerVoices.count == 1)
         #expect(made.voice == ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"]))
         #expect(VoiceChoice.reservedExtraKeys.isDisjoint(with: made.voice.extra.keys))
+
+        // Appelée directement, sans la résolution, la fabrique ne laisse rien passer de non normalisé non plus.
+        let direct = Self.rig()
+        _ = direct.live.environment.makeVoice(settings.voice, Self.resolvedVoiceProvider)
+        let directVoice = try #require(direct.made.providerVoices.first)
+        #expect(
+            directVoice.voice
+                == ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"]))
+    }
+
+    /// Un fournisseur donné avec un choix qui ne fait pas une voix de fournisseur (sans fournisseur, modèle ou identifiant blanc) :
+    /// la voix du système, sans identifiant, jamais une voix de fournisseur au modèle vide.
+    @Test(arguments: [
+        VoiceChoice(identifier: "voix.exemple.a", language: "fr-CA"),
+        VoiceChoice(providerID: voiceProviderID, model: "  ", identifier: "voix-exemple", language: "fr-CA"),
+        VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: nil, language: "fr-CA"),
+    ])
+    func aProviderWithAnUnusableChoiceGivesTheSystemVoice(_ choice: VoiceChoice) {
+        let rig = Self.rig()
+        _ = rig.live.environment.makeVoice(choice, Self.resolvedVoiceProvider)
+        #expect(rig.made.providerVoices.isEmpty, "aucune voix de fournisseur")
+        #expect(rig.made.systemVoices == ["fr-CA"])
+        #expect(rig.made.systemIdentifiers == [nil])
     }
 
     struct SystemFactoryCase: Sendable, CustomTestStringConvertible {

@@ -185,10 +185,12 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
 
     /// La forme sous laquelle la voix sert : modèle et identifiant rognés (vides : `nil`) ; langue rognée (vide ou blanche :
     /// `fr-FR`) ; clés d'`extra` rognées, les clés vides et les clés réservées (`reservedExtraKeys`, comparées après rognage et sans
-    /// casse : un serveur peut apparier les clés JSON sans casse) retirées, puis au plus `maxExtraEntries` entrées, les premières dans l'ordre des clés. Deux clés qui se rejoignent une fois
-    /// rognées : celle qui l'était déjà l'emporte, sinon la première dans l'ordre des clés d'origine. Les valeurs ne sont pas
-    /// touchées ; le fournisseur, le genre et les champs inconnus restent. Idempotente. C'est la seule forme qui part chez un
-    /// fournisseur (`InterviewSetup.resolve`, `route(in:)`).
+    /// casse : un serveur peut apparier les clés JSON sans casse) retirées, puis au plus `maxExtraEntries` entrées, les premières
+    /// dans l'ordre des clés. Deux clés qui se rejoignent une fois rognées : celle qui l'était déjà l'emporte, sinon la première
+    /// dans l'ordre des clés d'origine. Les valeurs ne sont pas touchées ; le fournisseur, le genre et les champs inconnus restent.
+    /// Idempotente. C'est la seule forme qui part chez un fournisseur : tenu par `providerVoice`, seul constructeur de
+    /// `ProviderVoice` à partir des réglages, qui part d'elle (et dont `route(in:)`, `resolve(in:secrets:)` et la fabrique de
+    /// l'entretien se servent).
     public var normalized: VoiceChoice {
         func trimmed(_ text: String?) -> String? {
             guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
