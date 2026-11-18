@@ -556,7 +556,9 @@ import Testing
         held.controller.cancel()
         #expect(held.outcomes == [.cancelled])
         gate.open()
-        await held.controller.waitForSaves()
+        // La fin OBSERVÉE : la lecture est revenue de `finished()` (son micro rendu) et l'écriture est finie. Attendre l'écriture
+        // seule ne suffit pas : la lecture reprend après, sur le fil principal, et passerait le chemin gardé après les vérifications.
+        #expect(await held.controller.drained(), "la lecture et l'écriture finissent")
 
         #expect(held.outcomes == [.cancelled], "aucune relecture ne s'ajoute")
         #expect(held.panel.interview == nil)
