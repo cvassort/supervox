@@ -279,6 +279,91 @@ let examplePracticalSilence: @Sendable (Double) -> Double = { FluidStreamingVoic
     }
 }
 
+/// Une voix double : rend aussitôt un clip de trois échantillons, sans rien produire ni jouer.
+struct ExampleSpeech: SpeechSynthesizer {
+    func synthesize(_ text: String) async throws -> Speech {
+        Speech(clip: AudioClip(samples: [0, 0.1, 0], sampleRate: 24_000))
+    }
+}
+
+/// L'onglet Voix : réglages en mémoire, liste des voix du système INVENTÉE, la vraie écoute (`VoicePreview`) et la vraie résolution
+/// (`VoiceChoice.resolve`) sur une voix double (`ExampleSpeech`), un lecteur double (`ScriptedClipPlayer`, qui ne joue rien) et un
+/// trousseau en mémoire, vide. Aucun son, aucune vraie voix, aucune vraie liste des voix, aucun trousseau réel.
+@MainActor final class ExampleVoices {
+    static let installed = [
+        SystemVoiceInfo(identifier: "voix.exemple.a", language: "fr-FR", quality: 2, name: "Voix d'exemple A", gender: .female),
+        SystemVoiceInfo(identifier: "voix.exemple.b", language: "fr-FR", quality: 3, name: "Voix d'exemple B", gender: .male),
+        SystemVoiceInfo(identifier: "voix.exemple.c", language: "fr-FR", quality: 1, name: "Voix d'exemple C"),
+        SystemVoiceInfo(identifier: "voix.exemple.d", language: "en-US", quality: 2, name: "Voix d'exemple D", gender: .female),
+    ]
+    /// Un fournisseur qui sait parler.
+    static let provider = Provider(
+        id: UUID(uuidString: "00000000-0000-0000-0000-0000000000e1")!, name: "Fournisseur d'exemple",
+        baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-voix-exemple", "modele-exemple"])
+    /// Un fournisseur au nom long (`Provider.shortName` le ramène à 40 caractères dans les phrases), sans clé dans le trousseau.
+    static let longProvider = Provider(
+        id: UUID(uuidString: "00000000-0000-0000-0000-0000000000e2")!,
+        name: "Fournisseur d'exemple, Fournisseur d'exemple, Fournisseur d'exemple",
+        baseURL: "https://example.com/v2", kind: .openAICompatible, models: ["modele-voix-exemple"])
+
+    static func saved(
+        _ name: String, id: Int, provider: UUID, gender: VoiceGender? = nil,
+        extra: [String: String] = ["cle-exemple": "valeur-exemple"]
+    ) -> SavedVoice {
+        SavedVoice(
+            id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", id))!, name: name,
+            voice: VoiceChoice(
+                providerID: provider, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-FR",
+                gender: gender, extra: extra))
+    }
+
+    /// Deux paramètres.
+    static let voiceE = saved(
+        "Voix d'exemple E", id: 1, provider: provider.id, gender: .female,
+        extra: ["cle-exemple": "valeur-exemple", "cle-exemple-b": "valeur-exemple-b"])
+    /// Du fournisseur au nom long, sans clé : l'écoute tombe sur la panne de la clé absente.
+    static let voiceF = saved("Voix d'exemple F", id: 2, provider: longProvider.id, gender: .male)
+    /// D'un fournisseur supprimé des réglages.
+    static let voiceG = saved("Voix d'exemple G", id: 3, provider: UUID(uuidString: "00000000-0000-0000-0000-0000000000e9")!)
+
+    var settings: AppSettings
+
+    init(voice: VoiceChoice = .system) {
+        var settings = AppSettings.defaults
+        settings.providers = [Self.provider, Self.longProvider]
+        settings.voices = [Self.voiceE, Self.voiceF, Self.voiceG]
+        settings.voice = voice
+        self.settings = settings
+    }
+
+    /// `player` : le lecteur double ; `.manual` garde l'écoute en lecture jusqu'à son arrêt.
+    func makeModel(player: ScriptedClipPlayer = ScriptedClipPlayer(completion: .immediate)) -> VoicesModel {
+        let installed = Self.installed
+        let secrets = SecretAccess(InMemorySecretStore())
+        let preview = VoicePreview(
+            makeVoice: { _, _ in ExampleSpeech() }, makePlayer: { player },
+            resolve: { choice, settings in try await choice.resolve(in: settings, secrets: secrets) },
+            systemVoices: { installed }, microphoneHeld: { false },
+            sleep: { try await Task.sleep(for: .seconds($0)) })
+        return VoicesModel(
+            read: { self.settings }, update: { change in change(&self.settings) }, systemVoices: { installed },
+            preview: preview, microphoneBusy: { false })
+    }
+
+    /// Attend que l'écoute atteigne l'état voulu (au plus 3 s), sinon lève : une image d'un autre état serait fausse.
+    static func waitFor(_ what: String, _ reached: @MainActor () -> Bool) async throws {
+        for _ in 0..<300 {
+            if reached() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw SnapshotFailure(description: "l'écoute n'a pas atteint l'état « \(what) »")
+    }
+}
+
+struct SnapshotFailure: Error, CustomStringConvertible {
+    let description: String
+}
+
 /// Un entretien réglé à la main : gabarit propre, silence plus long, voix d'un fournisseur, raccourci en maintien.
 @MainActor func customInterviewSettings() -> AppSettings {
     var settings = ExampleModes().settings
@@ -890,14 +975,14 @@ for dark in [false, true] {
             providers: await providersModel([]), hotKey: hotKeyModel(),
             transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
             permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
-            interview: ExampleInterview().makeModel()),
+            interview: ExampleInterview().makeModel(), voices: ExampleVoices().makeModel()),
         name: "reglages-entretien", dark: dark, background: window, size: settingsSize)
     try render(
         InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true)
             .frame(width: settingsSize.width, height: settingsSize.height),
         name: "reglages-entretien-avance", dark: dark, background: window, size: settingsSize)
     try render(
-        InterviewPane(model: ExampleInterview().makeModel()).frame(width: 600, height: 760),
+        InterviewPane(model: ExampleInterview().makeModel(), chooseVoice: {}).frame(width: 600, height: 760),
         name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: 600, height: 760))
     try render(
         InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true)
@@ -914,6 +999,83 @@ for dark in [false, true] {
             permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
             interview: interviewRefused),
         name: "reglages-entretien-erreur", dark: dark, background: window, size: settingsSize)
+
+    // Onglet Voix : à la taille RÉELLE de la fenêtre, la ligne choisie à chaque fois (la bande dit ce que l'écoute envoie).
+    func voicesTab(_ model: VoicesModel) async -> SettingsView {
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .voices,
+            interview: ExampleInterview().makeModel(), voices: model)
+    }
+    // La voix d'origine : « Automatique » en français, cochée et choisie.
+    let voicesSystem = ExampleVoices().makeModel()
+    voicesSystem.selection = voicesSystem.rows.first { $0.isActive }?.id
+    try await render(voicesTab(voicesSystem), name: "reglages-voix", dark: dark, background: window, size: settingsSize)
+    // Une voix de fournisseur en vigueur, choisie.
+    let voicesProvider = ExampleVoices(voice: ExampleVoices.voiceE.voice).makeModel()
+    voicesProvider.selection = .saved(ExampleVoices.voiceE.id)
+    try await render(
+        voicesTab(voicesProvider), name: "reglages-voix-fournisseur", dark: dark, background: window, size: settingsSize)
+    // Une voix dont le fournisseur a été supprimé, choisie : sa note, « Utiliser » grisé ; « Écouter » reste actif (l'écoute dit
+    // pourquoi elle ne parle pas). Filtre « Non précisé » : la liste ne fait pas défiler jusqu'à la ligne choisie.
+    let voicesUnusable = ExampleVoices().makeModel()
+    voicesUnusable.gender = .unspecified
+    voicesUnusable.selection = .saved(ExampleVoices.voiceG.id)
+    try await render(
+        voicesTab(voicesUnusable), name: "reglages-voix-inutilisable", dark: dark, background: window, size: settingsSize)
+    // Une voix du système en écoute : le lecteur double garde la lecture jusqu'à l'arrêt ; rien n'est joué.
+    let voicesListening = ExampleVoices().makeModel(player: ScriptedClipPlayer(completion: .manual))
+    // Écrit en toutes lettres : `= .system(` se lirait comme la construction de l'insertion du système (`SourceScanTests`).
+    voicesListening.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+    voicesListening.listen()
+    try await ExampleVoices.waitFor("en lecture") { voicesListening.previewState == .playing }
+    try await render(
+        voicesTab(voicesListening), name: "reglages-voix-ecoute", dark: dark, background: window, size: settingsSize)
+    voicesListening.stopListening()
+    // La phrase la plus haute de la bande : la clé absente d'un fournisseur au nom long, par la vraie résolution sur un trousseau
+    // en mémoire vide. Filtre « Masculin » : la ligne écoutée reste en vue.
+    let voicesFailing = ExampleVoices().makeModel()
+    voicesFailing.gender = .male
+    voicesFailing.selection = .saved(ExampleVoices.voiceF.id)
+    voicesFailing.listen()
+    try await ExampleVoices.waitFor("panne de la clé absente") {
+        if case .failed(.provider(.noKey)) = voicesFailing.previewState { true } else { false }
+    }
+    try await render(
+        voicesTab(voicesFailing), name: "reglages-voix-erreur", dark: dark, background: window, size: settingsSize)
+    // L'éditeur d'une voix à deux paramètres, à la taille de la feuille.
+    let voicesEditing = ExampleVoices().makeModel()
+    voicesEditing.selection = .saved(ExampleVoices.voiceE.id)
+    voicesEditing.beginEditing()
+    let editorSize = NSSize(width: VoiceEditor.size.width, height: VoiceEditor.size.height)
+    try render(
+        VoiceEditor(model: voicesEditing), name: "reglages-voix-editeur", dark: dark, background: window, size: editorSize,
+        keyWindow: true)
+    // Un ajout refusé : nommé, alors qu'aucun fournisseur des réglages ne sait parler (le seul chemin réel vers un brouillon sans
+    // fournisseur : `beginAdding` prend sinon le premier qui parle, et le menu n'offre pas « aucun »).
+    let noSpeakerExample = ExampleVoices()
+    noSpeakerExample.settings.providers = []
+    let voicesRefused = noSpeakerExample.makeModel()
+    voicesRefused.beginAdding()
+    voicesRefused.draft?.name = "Voix d'exemple H"
+    voicesRefused.save()
+    guard voicesRefused.message == VoicesText.refusalNoProvider, voicesRefused.draft != nil else {
+        throw SnapshotFailure(description: "le refus attendu n'est pas arrivé : \(voicesRefused.message ?? "aucun message")")
+    }
+    try render(
+        VoiceEditor(model: voicesRefused), name: "reglages-voix-editeur-refus", dark: dark, background: window,
+        size: editorSize, keyWindow: true)
+    // La confirmation de suppression, telle que la feuille de l'onglet la montre.
+    let voicesDeleting = ExampleVoices().makeModel()
+    voicesDeleting.selection = .saved(ExampleVoices.voiceE.id)
+    voicesDeleting.requestDeletion()
+    guard let deletionText = voicesDeleting.confirmationText else {
+        throw SnapshotFailure(description: "la demande de suppression n'a pas été prise")
+    }
+    try render(
+        HistoryConfirmationSheet(text: deletionText, confirmTitle: VoicesText.confirmDeleteTitle, cancel: {}, confirm: {}),
+        name: "reglages-voix-confirmation", dark: dark, background: window)
 
     // Onglet Historique : à la taille RÉELLE de la fenêtre. Un VRAI historique dans un dossier temporaire, deux entretiens d'exemple
     // (l'un sans prompt), puis vide, puis un illisible et une copie refusée, puis « Copié. », puis les deux confirmations.
@@ -1256,4 +1418,98 @@ for dark in [false, true] {
             model: await providersModel([firstProvider]), existing: firstProvider,
             initialFailure: ProvidersModel.message(for: ProvidersError.keyNotSaved("le trousseau a refusé l'accès."))),
         name: "fournisseur-erreur", dark: dark, background: window)
+}
+
+// MARK: - Logo (règle 6 bis)
+
+/// Une image vide de `pixels` de côté, `points` de côté : `pixels / points` est l'échelle (1x, 2x).
+@MainActor func blankBitmap(width: Int, height: Int, scale: Int = 1) -> NSBitmapImageRep {
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+        isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    rep.size = NSSize(width: width / scale, height: height / scale)
+    return rep
+}
+
+/// Dessine dans `rep`, en points.
+@MainActor func drawing(into rep: NSBitmapImageRep, _ body: () -> Void) {
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    NSGraphicsContext.current?.imageInterpolation = .none
+    body()
+    NSGraphicsContext.restoreGraphicsState()
+}
+
+@MainActor func writeLogo(_ rep: NSBitmapImageRep, name: String, dark: Bool) throws {
+    let file = output.appendingPathComponent("\(name)-\(dark ? "sombre" : "clair").png")
+    guard let png = rep.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+    try png.write(to: file)
+    print("\(file.lastPathComponent) \(rep.pixelsWide)×\(rep.pixelsHigh) pixels")
+}
+
+/// L'icône de la barre de menus telle que la barre la montre : le gabarit de 18 points (`BrandMark.menuBarImage`), teint en noir
+/// sur une barre claire ou en blanc sur une barre sombre, rastérisé à 1x (18 pixels) et à 2x (36 pixels), puis chaque pixel agrandi
+/// quatre fois, au plus proche voisin, pour qu'on les voie. 1x à gauche, 2x à droite. Les teintes de barre sont des gris choisis
+/// ici, pas ceux du système (la vraie barre est translucide).
+@MainActor func writeMenuBarLogo(dark: Bool) throws {
+    let bar = dark ? NSColor(white: 0.17, alpha: 1) : NSColor(white: 0.93, alpha: 1)
+    let ink = dark ? NSColor.white : NSColor.black
+    let zoom = 4
+    let rect = NSRect(x: 0, y: 0, width: 18, height: 18)
+    func raster(scale: Int) -> NSBitmapImageRep {
+        let glyph = blankBitmap(width: 18 * scale, height: 18 * scale, scale: scale)
+        drawing(into: glyph) {
+            BrandMark.menuBarImage().draw(in: rect)
+            ink.setFill()
+            rect.fill(using: .sourceIn)
+        }
+        let tile = blankBitmap(width: 18 * scale, height: 18 * scale, scale: scale)
+        drawing(into: tile) {
+            bar.setFill()
+            rect.fill()
+            // `draw(in:)` d'une image bitmap copie aussi sa transparence : on compose par-dessus.
+            glyph.draw(
+                in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: false, hints: nil)
+        }
+        return tile
+    }
+    let one = raster(scale: 1)
+    let two = raster(scale: 2)
+    let margin = 16
+    let oneSide = 18 * zoom
+    let twoSide = 36 * zoom
+    let canvas = blankBitmap(width: margin * 3 + oneSide + twoSide, height: margin * 2 + twoSide)
+    drawing(into: canvas) {
+        bar.setFill()
+        NSRect(x: 0, y: 0, width: canvas.pixelsWide, height: canvas.pixelsHigh).fill()
+        let hints: [NSImageRep.HintKey: Any] = [.interpolation: NSImageInterpolation.none.rawValue]
+        one.draw(
+            in: NSRect(x: margin, y: margin + (twoSide - oneSide) / 2, width: oneSide, height: oneSide), from: .zero,
+            operation: .sourceOver, fraction: 1, respectFlipped: false, hints: hints)
+        two.draw(
+            in: NSRect(x: margin * 2 + oneSide, y: margin, width: twoSide, height: twoSide), from: .zero,
+            operation: .sourceOver, fraction: 1, respectFlipped: false, hints: hints)
+    }
+    try writeLogo(canvas, name: "logo-barre-de-menus", dark: dark)
+}
+
+/// L'icône de l'application à 256 points (256 pixels, 1x), sur un fond clair ou sombre, telle que `BrandMark.appIconBitmap` la
+/// dessine.
+@MainActor func writeAppLogo(dark: Bool) throws {
+    let icon = BrandMark.appIconBitmap(pixels: 256)
+    let margin = 24
+    let canvas = blankBitmap(width: 256 + margin * 2, height: 256 + margin * 2)
+    drawing(into: canvas) {
+        (dark ? NSColor(white: 0.17, alpha: 1) : NSColor(white: 0.93, alpha: 1)).setFill()
+        NSRect(x: 0, y: 0, width: canvas.pixelsWide, height: canvas.pixelsHigh).fill()
+        icon.draw(
+            in: NSRect(x: margin, y: margin, width: 256, height: 256), from: .zero, operation: .sourceOver, fraction: 1,
+            respectFlipped: false, hints: nil)
+    }
+    try writeLogo(canvas, name: "logo-application", dark: dark)
+}
+
+for dark in [false, true] {
+    try writeMenuBarLogo(dark: dark)
+    try writeAppLogo(dark: dark)
 }
