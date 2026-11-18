@@ -754,7 +754,7 @@ import Testing
         let filePlayer = try Regex(Self.systemFilePlayer)
         let clipPlayer = try Regex(Self.realClipPlayer)
         let installed = try Regex(Self.installedVoices)
-        for code in ["mySpeechVoices()", "speechVoicesCount", "let voices = SystemVoices.installed"] {
+        for code in ["myspeechVoices()", "_speechVoices()", "speechVoicesCount"] {
             #expect(!code.contains(listing), "\(code)")
         }
         for code in ["private let player = AVAudioPlayerNode()", "AVAudioPlayerNode.h", "MyAVAudioPlayer()", "ClipPlayer"] {
