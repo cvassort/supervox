@@ -9,7 +9,7 @@ public enum InterviewText {
 
     /// Les espaces insécables du français, comme `DictationText` : avant « : ; ? ! », après « « » et avant « » ». Une ligne ne finit
     /// donc pas sur un « « » ni ne commence par un « : ». Chaque phrase de ce fichier passe par là.
-    private static func fr(_ text: String) -> String {
+    static func fr(_ text: String) -> String {
         var typeset = text
         for mark in [":", ";", "?", "!"] { typeset = typeset.replacingOccurrences(of: " " + mark, with: "\u{00A0}" + mark) }
         return typeset.replacingOccurrences(of: "« ", with: "«\u{00A0}").replacingOccurrences(of: " »", with: "\u{00A0}»")
