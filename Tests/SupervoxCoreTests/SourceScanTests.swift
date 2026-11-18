@@ -57,8 +57,9 @@ import Testing
     /// Les tests du cœur (`Tests/SupervoxCoreTests`) en ont le droit : leurs essais sur le matériel sont gardés par une variable
     /// d'environnement (`SUPERVOX_MIC`, `SUPERVOX_SPEAKER`, `SUPERVOX_SPEECH`), et `LiveAudioIO(device:)` y reçoit un double.
     static let realAudioOrSystemVoice = #"\b(?:LiveAudioIO|SystemSpeechSynthesizer)"# + construction
-    /// Ce qui suit le nom du type quand on le construit : `(`, `.init`, `.self.init`, ou `= .init` (`let io: LiveAudioIO = .init()`).
-    static let construction = #"\s*(?:\(|\.\s*init\b|\.\s*self\s*\.\s*init\b|=\s*\.\s*init\b)"#
+    /// Ce qui suit le nom du type quand on le construit : `(`, `.init`, `.self.init`, ou `= .init` (`let io: LiveAudioIO = .init()`),
+    /// y compris par un type déclaré optionnel ou implicitement déballé (`LiveAudioIO? = .init()`, `! = .init()`).
+    static let construction = #"\s*(?:\(|\.\s*init\b|\.\s*self\s*\.\s*init\b|[?!]?\s*=\s*\.\s*init\b)"#
 
     @Test func theRealSoundAndTheSystemVoiceAreBuiltOnlyByTheProgram() throws {
         let pattern = try Regex(Self.realAudioOrSystemVoice)
@@ -91,6 +92,7 @@ import Testing
         "SystemSpeechSynthesizer . init(language: x)", "{ LiveAudioIO() }",
         // m-F : les formes par le type déclaré et par `.self`.
         "let io: LiveAudioIO = .init()", "let v: SystemSpeechSynthesizer = .init(language: l)", "LiveAudioIO.self.init()",
+        "let io: LiveAudioIO? = .init()",
         "SystemSpeechSynthesizer.self.init(language: l)",
     ])
     func theRealSoundPatternSeesNeighbouringSpellings(code: String) throws {
@@ -674,6 +676,11 @@ import Testing
     /// Le lecteur de fichiers audio du système et son délégué ; pas le nœud de lecture du moteur (`…PlayerNode`), que la capture utilise.
     static let systemFilePlayer = nameStart + #"AVAudioPlayer(?!Node)"#
     /// Construire le vrai lecteur de sortie seule.
+    ///
+    /// Formes qui échappent à ces quatre gardes (filets contre la maladresse, pas contre une écriture délibérée) : une ligne entière de
+    /// commentaire ; un alias (`typealias R = SystemClipPlayer` puis `R()`) ; un type gardé dans une valeur
+    /// (`let t = SystemClipPlayer.self` puis `t.init()`) ; `SystemVoices.self.installed` ; les autres API du système qui listent des
+    /// voix ou jouent un son, hors du brief.
     static let realClipPlayer = nameStart + #"SystemClipPlayer"# + construction
     /// Lire la vraie liste des voix installées.
     static let installedVoices = nameStart + #"SystemVoices\s*\.\s*installed(?![A-Za-z0-9_])"#
@@ -692,6 +699,8 @@ import Testing
         #expect(speechFile.code.contains("enum SystemVoices"), "SystemVoices doit être défini dans \(speech)")
         #expect(playerFile.code.contains(try Regex(Self.systemFilePlayer)), "le lecteur du système doit être pris dans \(player)")
         #expect(playerFile.code.contains("final class SystemClipPlayer"), "SystemClipPlayer doit être défini dans \(player)")
+        // m5 : la vraie liste est bien vue là où elle est prise aujourd'hui (le constructeur public de la voix du système).
+        #expect(speechFile.code.contains(try Regex(Self.installedVoices)), "SystemVoices.installed doit être vu dans \(speech)")
 
         let rules: [(name: String, pattern: String, allowed: Set<String>)] = [
             ("speechVoices", Self.systemVoiceListing, [speech]),
@@ -736,6 +745,8 @@ import Testing
     @Test(arguments: [
         "SystemClipPlayer()", "SystemClipPlayer ( )", "SystemClipPlayer.init()", "let p: SystemClipPlayer = .init()",
         "SupervoxCore.SystemClipPlayer()", "{ SystemClipPlayer() }", "SystemClipPlayer.self.init()", "player: SystemClipPlayer()",
+        // m5 : par le type déclaré optionnel ou implicitement déballé.
+        "let p: SystemClipPlayer? = .init()", "var p: SystemClipPlayer! = .init()", "let p: SystemClipPlayer ? = . init()",
     ])
     func theRealClipPlayerPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.realClipPlayer)))
@@ -761,7 +772,8 @@ import Testing
             #expect(!code.contains(filePlayer), "\(code)")
         }
         for code in ["ScriptedClipPlayer()", "MySystemClipPlayer()", "let p: SystemClipPlayer", "x is SystemClipPlayer",
-                     "public final class SystemClipPlayer: ClipPlayer {", "let p: SystemClipPlayer = player"] {
+                     "public final class SystemClipPlayer: ClipPlayer {", "let p: SystemClipPlayer = player",
+                     "let p: SystemClipPlayer? = nil", "var p: SystemClipPlayer! = player"] {
             #expect(!code.contains(clipPlayer), "\(code)")
         }
         for code in ["SystemVoices.gender(.male)", "SystemVoices.installedCount", "MySystemVoices.installed", "enum SystemVoices {"] {
