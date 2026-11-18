@@ -29,8 +29,6 @@ public final class InterviewSettingsModel {
         "Il passe toujours par la relecture. Les changements s'appliquent au prochain entretien.")
     /// L'en-tête entier, mot pour mot celui du brief.
     public static let header = introduction + " " + introductionRest
-    /// Le titre de la section du nombre de questions.
-    public static let questionsTitle = "Questions"
     public static let modelsNote = InterviewText.fr(
         "Le modèle rapide pose les questions, le modèle fort rédige le prompt : ils se choisissent en tête de l'onglet Modes.")
     public static let maxQuestionsTitle = "Nombre maximal de questions"

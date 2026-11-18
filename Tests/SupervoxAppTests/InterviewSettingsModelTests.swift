@@ -554,7 +554,6 @@ import Testing
         #expect(
             InterviewSettingsModel.introductionRest
                 == "Il passe toujours par la relecture. Les changements s'appliquent au prochain entretien.")
-        #expect(InterviewSettingsModel.questionsTitle == "Questions")
         #expect(
             InterviewSettingsModel.modelsNote
                 == "Le modèle rapide pose les questions, le modèle fort rédige le prompt\u{00A0}: ils se choisissent en tête de l'onglet Modes."
