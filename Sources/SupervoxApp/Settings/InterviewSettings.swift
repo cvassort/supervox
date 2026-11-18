@@ -177,7 +177,8 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
     /// La voix du système, meilleure voix pour le français.
     public static let system = VoiceChoice()
 
-    /// La voix vient d'un fournisseur (sinon, du système).
+    /// Le choix désigne un fournisseur. Ne dit PAS qui parle (un fournisseur supprimé, sans synthèse ou une voix incomplète donnent
+    /// le système) : tout lecteur qui doit le savoir passe par `route(in:)`.
     public var usesProvider: Bool { providerID != nil }
 
     /// Les clés que la requête de synthèse pose elle-même (`OpenAICompatibleClient.speech`, code lu) : un paramètre libre ne les
