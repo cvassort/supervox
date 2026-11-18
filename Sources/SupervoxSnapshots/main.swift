@@ -981,6 +981,18 @@ for dark in [false, true] {
     try await render(
         historyTab(historyRefusing), name: "reglages-historique-refus-reglages", dark: dark, background: window,
         size: settingsSize)
+    // m-2 : la durée est notée dans le dossier, les réglages refusés (erreur qui n'est pas une `SettingsError`) : la phrase la plus longue
+    // de la bande du message, sur deux lignes.
+    struct ExampleSettingsWriteFailure: Error {}
+    let historyNotedExample = ExampleHistory()
+    defer { historyNotedExample.remove() }  // retiré même si un rendu lève
+    try await historyNotedExample.seed()
+    historyNotedExample.settingsFailure = ExampleSettingsWriteFailure()
+    let historyNoted = await historyNotedExample.makeModel()
+    if let applying = await historyNoted.requestRetention(90) { await applying.value }
+    try await render(
+        historyTab(historyNoted), name: "reglages-historique-duree-notee-reglages-refuses", dark: dark, background: window,
+        size: settingsSize)
     // La phrase la plus longue de l'onglet (échec d'écriture), pour voir qu'elle tient dans l'emplacement du message : « Tout
     // supprimer » sur un dossier sans droit d'écriture (dossier temporaire de l'outil, droits rendus ensuite).
     let historyFailingExample = ExampleHistory()
