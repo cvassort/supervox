@@ -351,6 +351,31 @@ struct ConversationInterruptionTests {
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.")))
     }
 
+    /// Revue finale, m-F : le cas positif à la fin de l'entretien. Le passage, encore ouvert à la fin de la parole (échantillon
+    /// 2 000), continue au niveau sur 7 000 échantillons sans se fermer : la porte passe sur ce qui suit la fin de la parole.
+    /// « Conclure » le transcrit depuis la fin de la parole jusqu'au dernier échantillon reçu, et la conclusion le contient.
+    @Test func aPassageStillOpenAtTheEndOfTheSpeechThatPassesTheGateIsTranscribedWhenConcluding() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un.")], completion: .manual,
+            events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        pushQuiet(h, from: 0, count: 2)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.wait(.speakingEnded(heard: "Un."))
+        pushLoud(h, from: 2000, count: 7)
+        await log.wait(6 + 9, where: isLevel)
+        await h.chain.conclude()
+        await log.waitForEnd()
+
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: loudSamples(2000..<9000), sampleRate: 16000))
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2")))
+    }
+
     /// L'aperçu ne montre pas non plus un passage rebasé tant que la porte n'a pas passé : l'écho qui traîne après la parole n'est
     /// jamais envoyé au moteur de transcription.
     @Test func anEchoPassageStillOpenAtTheEndOfTheSpeechIsNeverPreviewed() async {
@@ -480,6 +505,31 @@ struct ConversationInterruptionTests {
         await log.waitForEnd()
 
         #expect(h.fast.requests.map(\.input) == ["t1", "t2"])
+        #expect(h.fast.requests.map(\.instruction) == [InterviewPrompt.instruction(remainingQuestions: 8),
+                                                       InterviewPrompt.instruction(remainingQuestions: 7)])
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
+    }
+
+    /// Revue finale, m-F : la borne. Coupée à 50 % exactement de sa durée (0,005 s d'un clip de 0,01 s, égalité exacte en virgule
+    /// flottante : la moitié d'un double est exacte), la phrase est entendue : la règle dit « la moitié au moins ».
+    @Test func anInterruptionAtExactlyHalfOfTheFirstSentenceHearsIt() async {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un. Deux."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, events: [6: .speechStart(sample: 0), 12: .speechEnd(sample: 7000)])
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.speakingStarted(question: 1))
+
+        h.audio.inner.scriptedPosition = 0.005   // 50 %
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "Un.")])
+        pushLoud(h, from: 5000, count: 2)
+        await h.audio.plays.wait(atLeast: 3)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
         #expect(h.fast.requests.map(\.instruction) == [InterviewPrompt.instruction(remainingQuestions: 8),
                                                        InterviewPrompt.instruction(remainingQuestions: 7)])
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))

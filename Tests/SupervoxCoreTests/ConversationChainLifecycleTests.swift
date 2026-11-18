@@ -240,6 +240,27 @@ struct ConversationConcludeTests {
         expectCleanEnd(h)
     }
 
+    /// Revue finale, m-F : la règle de la moitié vaut aussi quand la réplique est coupée par la fin de l'entretien. « Conclure » à
+    /// 60 % de « Un. » (clip de 0,01 s) : elle est entendue, la réplique finit sur elle, et la conclusion la contient ; « Deux. »,
+    /// en file derrière, ne l'est pas.
+    @Test func concludeAfterHalfOfASentenceKeepsItAsHeard() async throws {
+        let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: texts("t1"), fast: [question("Un. Deux.")],
+                                    completion: .manual)
+        let log = await h.start()
+        await h.say(0)
+        await log.wait(.speakingStarted(question: 1))
+
+        h.audio.inner.scriptedPosition = 0.006   // 60 %
+        await h.chain.conclude()
+        await log.waitForEnd()
+
+        #expect(h.audio.inner.stopPlaybackCount == 1)
+        #expect(!log.items.contains { if case .sentencePlayed = $0 { true } else { false } })
+        #expect(log.trace.contains(.speakingEnded(heard: "Un.")))
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.")))
+        expectCleanEnd(h)
+    }
+
     @Test func concludeWhileTheTurnIsBeingTranscribedKeepsTheTurnAndAsksNoFastModel() async {
         let h = ConversationHarness(turns: [TurnScript(base: 0)], transcripts: { _ in .hold })
         let log = await h.start()
