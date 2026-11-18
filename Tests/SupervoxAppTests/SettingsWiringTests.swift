@@ -1225,7 +1225,7 @@ import Testing
 
         // Le changement d'onglet, dans la vraie vue.
         let host = NSHostingView(rootView: content.view)
-        host.frame = NSRect(x: 0, y: 0, width: 600, height: 460)
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
         window.contentView = host
         // Un passage de la boucle d'exécution est synchrone (`RunLoop.run` n'existe pas en contexte asynchrone).

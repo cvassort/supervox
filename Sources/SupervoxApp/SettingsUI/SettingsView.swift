@@ -163,7 +163,8 @@ public struct SettingsView: View {
                 // L'écoute d'une voix ne survit pas à la fenêtre quittée. Une confirmation en attente et un brouillon d'éditeur, eux,
                 // sont GARDÉS : une feuille fait perdre la clé à la fenêtre, `onLeave` s'appelle alors, et les annuler fermerait la
                 // feuille à peine ouverte (même constat que l'onglet Historique). Ils tombent au changement d'onglet et à la
-                // disparition du volet.
+                // disparition du volet. Une fenêtre qui porte une feuille ne se ferme pas : fermer la fenêtre n'oublie donc aucune
+                // confirmation ouverte.
                 voices?.stopListening()
                 // Fenêtre fermée ou quittée, ou fin de l'application : le gabarit tapé est enregistré.
                 interview?.commitTemplate()
@@ -290,8 +291,10 @@ public struct SettingsView: View {
     }
 
     /// La taille de la fenêtre de réglages, en points : fixe. Les onglets s'y règlent sans que la fenêtre grandisse ; les images de
-    /// l'outil de rendu et les mesures de hauteur la lisent ici.
-    public static let windowSize = CGSize(width: 600, height: 460)
+    /// l'outil de rendu et les mesures de hauteur la lisent ici. Largeur : la barre de huit onglets demande 804 points (taille propre
+    /// de son contrôle segmenté, mesurée hors écran dans une fenêtre jamais affichée par `SettingsTabBarTests`), plus 20 points de
+    /// marge de chaque côté, arrondi au multiple de 20 au-dessus : 860. Hauteur : 460, choix non mesuré.
+    public static let windowSize = CGSize(width: 860, height: 460)
 
     @ViewBuilder
     private func pane(for tab: SettingsTab) -> some View {

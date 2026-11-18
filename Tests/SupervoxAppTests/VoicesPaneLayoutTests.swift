@@ -391,8 +391,8 @@ import Testing
 
     /// Pose le volet dans une fenêtre jamais affichée.
     private func show(_ model: VoicesModel) -> (window: NSWindow, host: NSHostingView<AnyView>) {
-        let host = NSHostingView(rootView: AnyView(VoicesPane(model: model).frame(width: 600, height: 460)))
-        host.frame = NSRect(x: 0, y: 0, width: 600, height: 460)
+        let host = NSHostingView(rootView: AnyView(VoicesPane(model: model).frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)))
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
         window.contentView = host
         return (window, host)

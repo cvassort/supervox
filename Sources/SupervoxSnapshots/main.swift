@@ -982,12 +982,12 @@ for dark in [false, true] {
             .frame(width: settingsSize.width, height: settingsSize.height),
         name: "reglages-entretien-avance", dark: dark, background: window, size: settingsSize)
     try render(
-        InterviewPane(model: ExampleInterview().makeModel(), chooseVoice: {}).frame(width: 600, height: 760),
-        name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: 600, height: 760))
+        InterviewPane(model: ExampleInterview().makeModel(), chooseVoice: {}).frame(width: settingsSize.width, height: 760),
+        name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 760))
     try render(
         InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true)
-            .frame(width: 600, height: 1_000),
-        name: "reglages-entretien-regle-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
+            .frame(width: settingsSize.width, height: 1_000),
+        name: "reglages-entretien-regle-complet", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 1_000))
     let interviewRefusing = ExampleInterview()
     let interviewRefused = interviewRefusing.makeModel()
     interviewRefusing.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
@@ -1220,12 +1220,12 @@ for dark in [false, true] {
     // défiler.
     try render(
         ModesPane(model: ExampleModes(exampleModesSettings()).makeModel()),
-        name: "modes-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
+        name: "modes-complet", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 1_000))
 
     // Premier lancement : aucun fournisseur, aucun modèle fort ni rapide. Toute la liste, avec la section Modèles.
     try render(
         ModesPane(model: ExampleModes(AppSettings.defaults).makeModel()),
-        name: "modes-premier-lancement", dark: dark, background: window, size: NSSize(width: 600, height: 900))
+        name: "modes-premier-lancement", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 900))
 
     // Confirmations de suppression : un mode de base (Prompt), puis un mode personnel.
     let deletion = ExampleModes(exampleModesSettings()).makeModel()
@@ -1330,7 +1330,7 @@ for dark in [false, true] {
     }
     let allAbsentModels = exampleModels(parakeet: .absent, turbo: .absent, small: .absent, base: .absent, voice: .absent)
     let allReadyModels = exampleModels(parakeet: .ready, turbo: .ready, small: .absent, base: .absent, voice: .ready)
-    let tallSize = NSSize(width: 600, height: 1_260)
+    let tallSize = NSSize(width: settingsSize.width, height: 1_260)
     let whisperChosen = TranscriptionSettings(
         engine: .whisperKit, whisperModel: "large-v3-v20240930_turbo", language: "fr",
         vocabulary: ["Kubernetes", "PostgreSQL", "Keycloak"])
@@ -1407,7 +1407,7 @@ for dark in [false, true] {
     // Version sans catalogue de modèles.
     try render(
         TranscriptionPane(model: await transcriptionModel(UnavailableModelCatalog())),
-        name: "transcription-indisponible", dark: dark, background: window, size: NSSize(width: 600, height: 760))
+        name: "transcription-indisponible", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 760))
 
     // Feuille d'édition : ajout vide, puis fournisseur existant avec une erreur.
     try render(

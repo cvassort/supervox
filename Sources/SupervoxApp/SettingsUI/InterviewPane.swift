@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Onglet Entretien. La fenêtre de réglages a une hauteur fixe (600×460 avec sa barre d'onglets) : ce qui se règle passe avant ce qui
+/// Onglet Entretien. La fenêtre de réglages a une hauteur fixe (`SettingsView.windowSize`, avec sa barre d'onglets) : ce qui se règle passe avant ce qui
 /// se lit une fois. De haut en bas : une phrase d'introduction, le nombre de questions, le gabarit du prompt final (champ de hauteur
 /// bornée), les réglages avancés de l'interruption (groupe repliable, replié), puis, en bas, un bloc de notes (le reste de l'en-tête,
 /// les modèles, la vie privée, la note de maintien). Toute la logique est dans `InterviewSettingsModel`, dont viennent aussi les

@@ -225,7 +225,7 @@ public struct VoicesPane: View {
     }
 
     /// Hauteur de la bande, en points : `messageLineLimit` lignes de texte `callout` et leurs marges. La phrase la plus longue qui
-    /// peut y arriver tient sur ces lignes à 600 points de large : mesuré par `VoicesPaneLayoutTests`. Choix de la marge non mesuré.
+    /// peut y arriver tient sur ces lignes à la largeur de la fenêtre (`SettingsView.windowSize`) : mesuré par `VoicesPaneLayoutTests`. Choix de la marge non mesuré.
     static let messageSlotHeight: CGFloat = 62
     static let messageLineLimit = 3
     /// Largeur du texte de la bande : la fenêtre moins les marges (20 points de chaque côté) et l'icône (16 points et 8 d'écart).
