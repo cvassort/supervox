@@ -20,11 +20,18 @@ import Testing
         id: silentID, name: "Fournisseur d'exemple sans voix", baseURL: "https://example.com/autre", kind: .anthropic,
         models: ["modele-exemple"])
 
+    static let modelsID = UUID(uuidString: "00000000-0000-0000-0000-00000000D0B4")!
+    /// Le fournisseur des deux modèles, distinct de ceux de la voix : sa clé est lue pour les modèles, jamais celles des autres
+    /// pour rien, et un lecteur qui nommerait le fournisseur des modèles à la place de celui de la voix se verrait.
+    static let models = Provider(
+        id: modelsID, name: "Second d'exemple", baseURL: "https://example.com/modeles", kind: .openAICompatible,
+        models: ["modele-exemple"])
+
     static var settings: AppSettings {
         var settings = AppSettings.defaults
-        settings.providers = [speaking, silent]
-        settings.fastModel = ModelChoice(providerID: speakingID, model: "modele-exemple")
-        settings.strongModel = ModelChoice(providerID: speakingID, model: "modele-exemple")
+        settings.providers = [speaking, silent, models]
+        settings.fastModel = ModelChoice(providerID: modelsID, model: "modele-exemple")
+        settings.strongModel = ModelChoice(providerID: modelsID, model: "modele-exemple")
         return settings
     }
 
@@ -60,9 +67,11 @@ import Testing
             input: VoiceChoice(extra: [" model ": "x", "voice\n": "x", "cle-exemple": "valeur-exemple"]),
             expected: VoiceChoice(extra: ["cle-exemple": "valeur-exemple"])),
         NormalizedCase(
-            name: "une clé réservée se compare telle quelle (casse comprise)",
-            input: VoiceChoice(extra: ["Model": "x"]),
-            expected: VoiceChoice(extra: ["Model": "x"])),
+            name: "clés réservées comparées sans casse",
+            input: VoiceChoice(extra: [
+                "Model": "x", "VOICE": "x", " Input ": "x", "Response_Format": "x", "cle-exemple": "valeur-exemple",
+            ]),
+            expected: VoiceChoice(extra: ["cle-exemple": "valeur-exemple"])),
         NormalizedCase(
             name: "clés vides ou blanches retirées",
             input: VoiceChoice(extra: ["": "x", "   ": "y", "cle-exemple": "valeur-exemple"]),
@@ -108,6 +117,10 @@ import Testing
             name: "langue vide : fr-FR",
             input: VoiceChoice(language: ""),
             expected: VoiceChoice(language: "fr-FR")),
+        NormalizedCase(
+            name: "langue rognée (espaces et retours)",
+            input: VoiceChoice(language: " fr-CA\n"),
+            expected: VoiceChoice(language: "fr-CA")),
         NormalizedCase(
             name: "une langue qui dit quelque chose ne change pas",
             input: VoiceChoice(language: "fr-CA"),
@@ -258,21 +271,27 @@ import Testing
         if case .provider = route { speaks = true } else { speaks = false }
         #expect(speaks == (who == .provider), "route(in:) : \(route)")
 
-        let store = SetupAccountStore(keys: [Self.speakingID: "cle-exemple", Self.silentID: "cle-exemple"])
+        let store = SetupAccountStore(keys: [
+            Self.speakingID: "cle-exemple", Self.silentID: "cle-exemple", Self.modelsID: "cle-exemple",
+        ])
         let voices = SetupVoiceFactory()
         let setup = try await InterviewSetup.resolve(
             settings: settings, engine: nil, secrets: SecretAccess(store, queue: DispatchQueue(label: "test.route.\(UUID())")),
             makeModel: { _, _ in ScriptedModel(.never) }, makeVoice: voices.make)
-        #expect((setup.voiceProviderName != nil) == speaks, "résolution : \(String(describing: setup.voiceProviderName))")
-        #expect(voices.calls.contains { $0.providerName != nil } == speaks, "voix de fournisseur fabriquée")
-        #expect(setup.privacy.contains("Le texte que dit Supervox part chez") == speaks)
-        if !speaks {
-            #expect(!store.readAccounts.contains(Self.silentID.uuidString), "aucune clé lue pour une voix qui ne parlera pas")
-        }
+        // Le fournisseur NOMMÉ est celui de la voix, jamais celui des modèles ni celui qui n'a pas de synthèse.
+        let voiceName: String? = speaks ? "Fournisseur d'exemple" : nil
+        #expect(setup.voiceProviderName == voiceName, "résolution")
+        #expect(voices.calls.compactMap(\.providerName) == (speaks ? ["Fournisseur d'exemple"] : []), "voix de fournisseur fabriquée")
+        let sentFromVoice = "Le texte que dit Supervox part chez «\u{00A0}Fournisseur d'exemple\u{00A0}»."
+        #expect(speaks ? setup.privacy.hasSuffix(sentFromVoice) : !setup.privacy.contains("Le texte que dit Supervox"), "\(setup.privacy)")
+        // La clé de la voix n'est lue que pour une voix qui parle ; jamais celle du fournisseur sans synthèse.
+        let voiceKeysRead = Set(store.readAccounts).intersection([Self.speakingID.uuidString, Self.silentID.uuidString])
+        #expect(voiceKeysRead == (speaks ? [Self.speakingID.uuidString] : []), "clés lues : \(store.readAccounts)")
 
         let privacy = InterviewSettingsModelTests.Rig(settings).makeModel().privacyText
-        #expect((privacy != InterviewSettingsModelTests.systemPrivacy) == speaks, "onglet : \(privacy)")
-        #expect(privacy.contains("Fournisseur d'exemple") == speaks)
+        let named =
+            "Le texte de vos réponses est envoyé au fournisseur du modèle rapide et du modèle fort\u{00A0}; l'audio du micro ne quitte jamais cet ordinateur. La voix de Supervox vient de «\u{00A0}Fournisseur d'exemple\u{00A0}»\u{00A0}: le texte qu'elle dit lui est envoyé."
+        #expect(privacy == (speaks ? named : InterviewSettingsModelTests.systemPrivacy), "onglet : \(privacy)")
     }
 
     // MARK: - Règle 6 : la même voix
@@ -311,28 +330,65 @@ import Testing
         SameCase(
             name: "fournisseur : clé réservée en plus (normalisation)", lhs: providerVoice,
             rhs: with { $0.extra["voice"] = "voix.exemple.a" }, same: true),
+        // Deux voix du système qui ont un identifiant : l'identifiant seul décide.
         SameCase(
             name: "système : même identifiant, fr-FR contre fr_fr", lhs: systemVoice, rhs: system { $0.language = "fr_fr" },
             same: true),
         SameCase(
-            name: "système : même identifiant, FR-fr", lhs: systemVoice, rhs: system { $0.language = "FR-fr" }, same: true),
-        SameCase(name: "système : genre différent", lhs: systemVoice, rhs: system { $0.gender = .male }, same: true),
+            name: "système : même identifiant, fr-FR contre fr-CA (l'identifiant décide)", lhs: systemVoice,
+            rhs: system { $0.language = "fr-CA" }, same: true),
+        SameCase(name: "système : même identifiant, genre différent", lhs: systemVoice, rhs: system { $0.gender = .male }, same: true),
         SameCase(
-            name: "système : paramètres différents", lhs: systemVoice, rhs: system { $0.extra = ["cle-exemple": "valeur-exemple"] },
-            same: true),
+            name: "système : même identifiant, paramètres différents", lhs: systemVoice,
+            rhs: system { $0.extra = ["cle-exemple": "valeur-exemple"] }, same: true),
+        SameCase(
+            name: "système : même identifiant aux espaces près (normalisation)", lhs: systemVoice,
+            rhs: system { $0.identifier = " voix.exemple.a " }, same: true),
+        SameCase(
+            name: "système : autre identifiant, même langue", lhs: systemVoice, rhs: system { $0.identifier = "voix-exemple" },
+            same: false),
+        // L'une avec un identifiant, l'autre sans : jamais la même.
         SameCase(name: "système : identifiant nil contre un identifiant", lhs: systemVoice, rhs: system { $0.identifier = nil }, same: false),
         SameCase(
-            name: "système : deux identifiants nil, même langue", lhs: system { $0.identifier = nil },
+            name: "système : identifiant blanc contre un identifiant", lhs: system { $0.identifier = " " }, rhs: systemVoice,
+            same: false),
+        // Aucune n'a d'identifiant : la langue décide, sans casse, `_` et `-` confondus, rognée.
+        SameCase(
+            name: "système sans identifiant : même langue", lhs: system { $0.identifier = nil },
             rhs: system { $0.identifier = nil }, same: true),
         SameCase(
-            name: "système : identifiant blanc et nil (normalisation)", lhs: system { $0.identifier = " " },
+            name: "système sans identifiant : identifiant blanc et nil (normalisation)", lhs: system { $0.identifier = " " },
             rhs: system { $0.identifier = nil }, same: true),
-        SameCase(name: "système : autre identifiant", lhs: systemVoice, rhs: system { $0.identifier = "voix-exemple" }, same: false),
-        SameCase(name: "système : fr-FR contre fr-CA", lhs: systemVoice, rhs: system { $0.language = "fr-CA" }, same: false),
-        SameCase(name: "système : fr-FR contre fr", lhs: systemVoice, rhs: system { $0.language = "fr" }, same: false),
         SameCase(
-            name: "système : fr-FR contre une langue entourée d'espaces (rien d'autre n'est confondu)", lhs: systemVoice,
-            rhs: system { $0.language = " fr-FR" }, same: false),
+            name: "système sans identifiant : fr-FR contre FR_fr", lhs: system { $0.identifier = nil },
+            rhs: system {
+                $0.identifier = nil
+                $0.language = "FR_fr"
+            }, same: true),
+        SameCase(
+            name: "système sans identifiant : fr-FR contre une langue entourée d'espaces (rognée)", lhs: system { $0.identifier = nil },
+            rhs: system {
+                $0.identifier = nil
+                $0.language = " fr-FR\n"
+            }, same: true),
+        SameCase(
+            name: "système sans identifiant : fr-FR contre fr-CA", lhs: system { $0.identifier = nil },
+            rhs: system {
+                $0.identifier = nil
+                $0.language = "fr-CA"
+            }, same: false),
+        SameCase(
+            name: "système sans identifiant : fr-FR contre fr", lhs: system { $0.identifier = nil },
+            rhs: system {
+                $0.identifier = nil
+                $0.language = "fr"
+            }, same: false),
+        SameCase(
+            name: "système sans identifiant : genre différent", lhs: system { $0.identifier = nil },
+            rhs: system {
+                $0.identifier = nil
+                $0.gender = .female
+            }, same: true),
         SameCase(
             name: "système contre fournisseur, mêmes identifiant et langue", lhs: system { $0.identifier = "voix-exemple" },
             rhs: with {
@@ -345,6 +401,22 @@ import Testing
     func theSameVoiceRuleHasItsTable(_ example: SameCase) {
         #expect(example.lhs.isSameVoice(as: example.rhs) == example.same)
         #expect(example.rhs.isSameVoice(as: example.lhs) == example.same, "symétrique")
+    }
+
+    /// `isSameVoice` est une relation d'équivalence sur toutes les voix de la table : réflexive, symétrique et transitive (chaque
+    /// triplet est essayé).
+    @Test func theSameVoiceRuleIsAnEquivalenceOnTheTable() {
+        let voices = Self.sameCases.flatMap { [$0.lhs, $0.rhs] }
+        for a in voices {
+            #expect(a.isSameVoice(as: a), "réflexive : \(a)")
+            for b in voices {
+                #expect(a.isSameVoice(as: b) == b.isSameVoice(as: a), "symétrique : \(a) / \(b)")
+                guard a.isSameVoice(as: b) else { continue }
+                for c in voices where b.isSameVoice(as: c) {
+                    #expect(a.isSameVoice(as: c), "transitive : \(a) / \(b) / \(c)")
+                }
+            }
+        }
     }
 
     /// Un champ inconnu ne compte pas (fournisseur comme système).

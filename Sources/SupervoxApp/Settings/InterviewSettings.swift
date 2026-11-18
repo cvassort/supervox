@@ -177,19 +177,15 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
     /// La voix du système, meilleure voix pour le français.
     public static let system = VoiceChoice()
 
-    /// Le choix désigne un fournisseur. Ne dit PAS qui parle (un fournisseur supprimé, sans synthèse ou une voix incomplète donnent
-    /// le système) : tout lecteur qui doit le savoir passe par `route(in:)`.
-    public var usesProvider: Bool { providerID != nil }
-
     /// Les clés que la requête de synthèse pose elle-même (`OpenAICompatibleClient.speech`, code lu) : un paramètre libre ne les
     /// porte jamais.
     public static let reservedExtraKeys: Set<String> = ["model", "input", "voice", "response_format"]
     /// Nombre maximal de paramètres libres envoyés au fournisseur : 16, choix non mesuré.
     public static let maxExtraEntries = 16
 
-    /// La forme sous laquelle la voix sert : modèle et identifiant rognés (vides : `nil`) ; langue vide ou blanche : `fr-FR` ; clés
-    /// d'`extra` rognées, les clés vides et les clés réservées (`reservedExtraKeys`, comparées après rognage, casse comprise)
-    /// retirées, puis au plus `maxExtraEntries` entrées, les premières dans l'ordre des clés. Deux clés qui se rejoignent une fois
+    /// La forme sous laquelle la voix sert : modèle et identifiant rognés (vides : `nil`) ; langue rognée (vide ou blanche :
+    /// `fr-FR`) ; clés d'`extra` rognées, les clés vides et les clés réservées (`reservedExtraKeys`, comparées après rognage et sans
+    /// casse : un serveur peut apparier les clés JSON sans casse) retirées, puis au plus `maxExtraEntries` entrées, les premières dans l'ordre des clés. Deux clés qui se rejoignent une fois
     /// rognées : celle qui l'était déjà l'emporte, sinon la première dans l'ordre des clés d'origine. Les valeurs ne sont pas
     /// touchées ; le fournisseur, le genre et les champs inconnus restent. Idempotente. C'est la seule forme qui part chez un
     /// fournisseur (`InterviewSetup.resolve`, `route(in:)`).
@@ -201,11 +197,11 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
         var result = self
         result.model = trimmed(model)
         result.identifier = trimmed(identifier)
-        if trimmed(language) == nil { result.language = Self.system.language }
+        result.language = trimmed(language) ?? Self.system.language
         // Tri par (clé rognée, clé déjà propre d'abord, clé d'origine) : l'ordre ne dépend pas du parcours du dictionnaire.
         let entries = extra
             .map { (key: $0.key.trimmingCharacters(in: .whitespacesAndNewlines), original: $0.key, value: $0.value) }
-            .filter { !$0.key.isEmpty && !Self.reservedExtraKeys.contains($0.key) }
+            .filter { !$0.key.isEmpty && !Self.reservedExtraKeys.contains($0.key.lowercased()) }
             .sorted { lhs, rhs in
                 if lhs.key != rhs.key { return lhs.key < rhs.key }
                 let lhsClean = lhs.key == lhs.original

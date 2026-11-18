@@ -47,7 +47,8 @@ import Testing
     }
 
     /// Un fichier tel que l'étape 6 l'écrivait : tout ce que l'encodeur d'aujourd'hui écrit, SANS `voices` (la clé est retirée de
-    /// la valeur, quel que soit ce que l'encodeur testé en fait). Chaque champ à une valeur qui n'est pas son défaut.
+    /// la valeur, quel que soit ce que l'encodeur testé en fait). Fournisseur, comportement du raccourci, modèle rapide, voix et
+    /// historique sont hors de leur défaut ; modes, raccourci et transcription gardent les leurs (le test compare le fichier entier).
     static func stepSixFile() throws -> [String: JSONValue] {
         var settings = AppSettings.defaults
         settings.providers = [

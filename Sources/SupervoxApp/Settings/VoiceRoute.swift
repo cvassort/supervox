@@ -47,9 +47,11 @@ extension VoiceChoice {
     }
 
     /// LA règle « cette ligne est la voix en vigueur ». Deux voix de fournisseur sont la même si leurs formes normalisées sont égales
-    /// (`==` : fournisseur, modèle, identifiant, langue, genre, paramètres ; les champs inconnus ne comptent pas). Deux voix du système
-    /// sont la même si l'identifiant (normalisé) et la langue sont égaux, la langue comparée sans casse, `_` et `-` confondus, rien
-    /// d'autre (`fr-FR` et `fr-CA` sont deux voix) ; genre et paramètres ne comptent pas. Une voix du système et une voix de
+    /// (`==` : fournisseur, modèle, identifiant, langue, genre, paramètres ; les champs inconnus ne comptent pas). Deux voix du système :
+    /// si les deux ont un identifiant (normalisé), l'identifiant seul décide (une voix installée désignée parle pareil quelle que soit
+    /// la langue notée, `SystemSpeechSynthesizer` la cherche avant la langue) ; si aucune n'en a, la langue (normalisée) décide, sans
+    /// casse, `_` et `-` confondus, rien d'autre (`fr-FR` et `fr-CA` sont deux voix) ; l'une avec et l'autre sans : jamais la même.
+    /// Genre et paramètres ne comptent pas. C'est une relation d'équivalence. Une voix du système et une voix de
     /// fournisseur ne sont jamais la même. `settings.voice` ne porte pas d'identité de ligne : si plusieurs voix enregistrées sont la
     /// même voix, la première de la liste est la voix en vigueur.
     public func isSameVoice(as other: VoiceChoice) -> Bool {
@@ -57,8 +59,15 @@ extension VoiceChoice {
         let rhs = other.normalized
         switch (lhs.providerID, rhs.providerID) {
         case (nil, nil):
-            func languageKey(_ language: String) -> String { language.lowercased().replacingOccurrences(of: "_", with: "-") }
-            return lhs.identifier == rhs.identifier && languageKey(lhs.language) == languageKey(rhs.language)
+            switch (lhs.identifier, rhs.identifier) {
+            case (let left?, let right?):
+                return left == right
+            case (nil, nil):
+                func languageKey(_ language: String) -> String { language.lowercased().replacingOccurrences(of: "_", with: "-") }
+                return languageKey(lhs.language) == languageKey(rhs.language)
+            default:
+                return false
+            }
         case (.some, .some):
             return lhs == rhs
         default:
