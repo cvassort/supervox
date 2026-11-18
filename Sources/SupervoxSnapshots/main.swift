@@ -371,6 +371,8 @@ let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
 /// se rend pas par cet outil (il s'ouvre dans sa propre fenêtre) : ceci en est un dessin, pas une capture.
 struct PanelMenuPreview: View {
     let entries: [PanelMenuEntry]
+    /// `PanelModel.isHistoryEntryEnabled` : « Historique… » est grisée quand un entretien ou une dictée tient le panneau.
+    let historyEnabled: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -378,7 +380,9 @@ struct PanelMenuPreview: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(entries, id: \.self) { entry in
                     if entry == .quit { Divider().padding(.vertical, 2) }
-                    Text(entry.title).padding(.horizontal, 12).padding(.vertical, 3)
+                    Text(entry.title)
+                        .foregroundStyle(entry == .history && !historyEnabled ? Color.secondary.opacity(0.5) : Color.primary)
+                        .padding(.horizontal, 12).padding(.vertical, 3)
                 }
             }
             .padding(6)
@@ -931,6 +935,13 @@ for dark in [false, true] {
         historyTab(await historyEmptyExample.makeModel()), name: "reglages-historique-vide", dark: dark, background: window,
         size: settingsSize)
     historyEmptyExample.remove()
+    let historyNoneExample = ExampleHistory()
+    historyNoneExample.settings.history.retentionDays = 0
+    try await historyNoneExample.seed(withExamples: false)
+    try await render(
+        historyTab(await historyNoneExample.makeModel()), name: "reglages-historique-rien-garder", dark: dark,
+        background: window, size: settingsSize)
+    historyNoneExample.remove()
     let historyWorstExample = ExampleHistory()
     try await historyWorstExample.seed(unreadable: true)
     historyWorstExample.copyAccepts = false
@@ -939,6 +950,19 @@ for dark in [false, true] {
     try await render(
         historyTab(historyWorst), name: "reglages-historique-erreur", dark: dark, background: window, size: settingsSize)
     historyWorstExample.remove()
+    // La phrase la plus longue de l'onglet (échec d'écriture), pour voir qu'elle tient dans l'emplacement du message : « Tout
+    // supprimer » sur un dossier sans droit d'écriture (dossier temporaire de l'outil, droits rendus ensuite).
+    let historyFailingExample = ExampleHistory()
+    try await historyFailingExample.seed()
+    let historyFailing = await historyFailingExample.makeModel()
+    await historyFailing.requestDeleteAll()
+    chmod(historyFailingExample.root.path, 0o500)
+    await historyFailing.deleteAll()
+    chmod(historyFailingExample.root.path, 0o700)
+    try await render(
+        historyTab(historyFailing), name: "reglages-historique-echec-ecriture", dark: dark, background: window,
+        size: settingsSize)
+    historyFailingExample.remove()
     // Les deux confirmations : la durée la plus courte qui supprime (le compte annoncé vient de la règle d'âge de `purge`), puis « Tout
     // supprimer ».
     let historyOldExample = ExampleHistory()
@@ -950,6 +974,13 @@ for dark in [false, true] {
         HistoryConfirmationSheet(
             text: historyAsking.retentionConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle, cancel: {}, confirm: {}),
         name: "historique-confirmation-duree", dark: dark, background: window)
+    historyAsking.cancelConfirmation()
+    historyAsking.requestDeleteSelected()
+    try render(
+        HistoryConfirmationSheet(
+            text: historyAsking.deleteSelectedConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle, cancel: {}, confirm: {}),
+        name: "historique-confirmation-entretien", dark: dark, background: window)
+    historyAsking.cancelConfirmation()
     await historyAsking.requestDeleteAll()
     try render(
         HistoryConfirmationSheet(
@@ -962,9 +993,23 @@ for dark in [false, true] {
     try render(
         HStack(alignment: .bottom, spacing: 0) {
             PanelView(model: withHistory, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {})
-            PanelMenuPreview(entries: PanelMenuEntry.entries(hasHistory: withHistory.canOpenHistory))
+            PanelMenuPreview(
+                entries: PanelMenuEntry.entries(hasHistory: withHistory.canOpenHistory),
+                historyEnabled: withHistory.isHistoryEntryEnabled)
         },
         name: "panneau-menu", dark: dark, background: panelBackground)
+    // Pendant un entretien, le panneau est tenu : « Historique… » est grisée (l'ouvrir annulerait l'entretien sans rien demander).
+    let heldPanel = interviewPanelModel(
+        phase: .listening, question: 2, level: 0.5, questionText: exampleInterviewQuestion, lastReply: exampleInterviewReply)
+    heldPanel.onOpenHistory = {}
+    try render(
+        HStack(alignment: .bottom, spacing: 0) {
+            PanelView(model: heldPanel, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {})
+            PanelMenuPreview(
+                entries: PanelMenuEntry.entries(hasHistory: heldPanel.canOpenHistory),
+                historyEnabled: heldPanel.isHistoryEntryEnabled)
+        },
+        name: "panneau-menu-grise", dark: dark, background: panelBackground, keyWindow: true)
 
     // Toute la liste, avec deux modes personnels (modèle, moteur, raccourci ; fournisseur supprimé) : la vraie fenêtre la fait
     // défiler.
