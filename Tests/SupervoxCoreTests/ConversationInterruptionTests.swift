@@ -702,6 +702,47 @@ struct ConversationInterruptionTests {
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
     }
 
+    /// Revue finale, m-3 : le site de la fin de `hear` pendant une réplique. Pendant la parole, 4 500 échantillons forts (trois
+    /// tranches de 1 500) : un passage `.busy` s'ouvre au bloc 6 et se ferme au bloc 9, trop court pour la porte (14 trames sur 15) ;
+    /// il reste 500 échantillons (4 000..<4 500) qui ne remplissent pas un bloc. La fin de `hear` remet la ligne à neuf en les
+    /// reportant, la réplique durant encore. La personne se tait, la réplique finit : aucune interruption, `finishReply` jette ce
+    /// reste, et le tour suivant ne contient rien de l'audio capté pendant la réplique.
+    @Test func aPassageClosedDuringTheReplyCarriesItsTailUnderTheGate() async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, config: makeConversationConfig(padding: 0.0625),
+            events: [6: .speechStart(sample: 0), 9: .speechEnd(sample: 3000), 10: .speechStart(sample: 0), 14: .speechEnd(sample: 4000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        for k in 0..<3 { h.audio.inner.push(loudChunk((k * 1500)..<((k + 1) * 1500))) }
+        await log.wait(6 + 3, where: isLevel)
+        #expect(h.detector.resetMarks == [0, 6, 6, 10])   // talk, fin de `hear`, `proceed`, fin de `hear` pendant la réplique
+        let carried = await h.chain.listeningLineState()
+        #expect(carried.samples == 500 && !carried.gatePassesFromZero)   // le reste est reporté, sous la porte
+        #expect(!log.items.contains(where: isInterrupted))
+
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.wait(.state(.listening), count: 2)
+        #expect(h.detector.resetMarks == [0, 6, 6, 10, 10])   // `finishReply`
+        let renewed = await h.chain.listeningLineState()
+        #expect(renewed.samples == 0 && renewed.duration == 0 && !renewed.gatePassesFromZero)
+
+        for k in 0..<5 { h.audio.inner.push(rampChunk((1_000_000 + k * 1000)..<(1_000_000 + (k + 1) * 1000))) }
+        await h.audio.plays.wait(atLeast: 2)   // « Merci. »
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        #expect(h.audio.inner.stopPlaybackCount == 0)
+        #expect(!log.items.contains(where: isInterrupted))
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: rampSamples(1_000_000..<1_005_000), sampleRate: 16000))
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
+    }
+
     /// La porte et la ligne de temps restent alignées après une remise à neuf qui reporte un reste de 500 échantillons : le passage
     /// s'ouvre à l'échantillon 500 de la ligne neuve pendant la parole, la porte compte les trames qui commencent à 500 ou après
     /// (trames 2 et suivantes) et coupe au 5e bloc fort (17 trames reçues, 15 au niveau), pas avant. Une porte sans le reste aurait
