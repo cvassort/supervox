@@ -18,11 +18,13 @@ import Testing
         return (window, host)
     }
 
-    /// Laisse SwiftUI faire sa mise en page et les tâches se poser, jusqu'à ce que la condition soit vraie (passages bornés).
+    /// Laisse SwiftUI faire sa mise en page et les tâches se poser, jusqu'à ce que la condition soit vraie (passages bornés). Un
+    /// sommeil de 5 ms par passage (2 s au plus, consommées seulement tant que la condition est fausse) : la lecture du disque se
+    /// fait hors du fil principal, et des passages sans délai pouvaient finir avant elle en série (tâche 4, F1).
     private func settle(_ host: NSView, until condition: () -> Bool) async {
         for _ in 0..<400 where !condition() {
             pump(host)
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
     }
 
