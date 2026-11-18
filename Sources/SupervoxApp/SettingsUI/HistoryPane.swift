@@ -248,6 +248,7 @@ struct HistoryMessageLine: View {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             }
             Text(text)
+                .font(.callout)
                 .lineLimit(2)
                 .help(text)
             Spacer(minLength: 0)

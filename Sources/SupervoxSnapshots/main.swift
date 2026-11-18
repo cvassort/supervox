@@ -302,6 +302,8 @@ let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
         .appendingPathComponent("supervox-snapshots-history-\(UUID().uuidString)", isDirectory: true)
     var settings = AppSettings.defaults
     var copyAccepts = true
+    /// Pose : l'enregistrement des réglages refuse (la phrase du réglage arrive à l'écran).
+    var settingsFailure: (any Error)?
     var root: URL { directory.appendingPathComponent("entretiens-exemple", isDirectory: true) }
     lazy var history = InterviewHistory(root: root, retentionDays: { 365 }, now: { ExampleHistory.now })
 
@@ -357,7 +359,11 @@ let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
 
     func makeModel() async -> HistoryModel {
         let model = HistoryModel(
-            history: history, read: { self.settings }, update: { change in change(&self.settings) },
+            history: history, read: { self.settings },
+            update: { change in
+                if let failure = self.settingsFailure { throw failure }
+                change(&self.settings)
+            },
             copy: { _ in self.copyAccepts }, now: { ExampleHistory.now }, locale: Locale(identifier: "fr_FR"),
             timeZone: TimeZone(identifier: "Europe/Paris")!)
         await model.reload()
@@ -950,6 +956,16 @@ for dark in [false, true] {
     try await render(
         historyTab(historyWorst), name: "reglages-historique-erreur", dark: dark, background: window, size: settingsSize)
     historyWorstExample.remove()
+    // Le refus de réglages le plus long (version plus récente) : deux lignes dans l'emplacement du message, sans coupure.
+    let historyRefusingExample = ExampleHistory()
+    try await historyRefusingExample.seed()
+    historyRefusingExample.settingsFailure = SettingsError.newerVersionKept(fileName: "settings.json", version: 9)
+    let historyRefusing = await historyRefusingExample.makeModel()
+    await historyRefusing.requestRetention(90)
+    try await render(
+        historyTab(historyRefusing), name: "reglages-historique-refus-reglages", dark: dark, background: window,
+        size: settingsSize)
+    historyRefusingExample.remove()
     // La phrase la plus longue de l'onglet (échec d'écriture), pour voir qu'elle tient dans l'emplacement du message : « Tout
     // supprimer » sur un dossier sans droit d'écriture (dossier temporaire de l'outil, droits rendus ensuite).
     let historyFailingExample = ExampleHistory()
