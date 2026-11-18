@@ -44,7 +44,8 @@ public enum VoicesText {
             InterviewText.fr("L'écoute n'est pas disponible : relancez Supervox.")
         case .microphoneBusy:
             InterviewText.fr(
-                "Une dictée ou un entretien se sert du micro : réessayez d'écouter cette voix une fois qu'il est fini.")
+                "Une dictée ou un entretien se sert du micro : réessayez d'écouter cette voix quand la dictée ou l'entretien "
+                    + "sera terminé.")
         }
     }
 
@@ -166,7 +167,6 @@ public enum VoicesText {
     /// Une voix du système : l'écoute n'envoie rien.
     public static let privacyNothingSent = InterviewText.fr(
         "Écouter cette voix n'envoie rien : elle est produite sur cet ordinateur.")
-
 
     /// Une voix de fournisseur qui ne peut pas parler (fournisseur supprimé, sans synthèse, voix incomplète) : rien n'est envoyé,
     /// et elle n'est produite nulle part.

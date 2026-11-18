@@ -511,6 +511,46 @@ import Testing
         #expect(model.message == nil, "une voix qui n'était pas en vigueur : rien à dire")
     }
 
+    /// Décision 13a (tâche 4) : une demande de suppression ne survit pas à la disparition de sa ligne. Un filtre qui cache la ligne
+    /// demandée lâche la demande ; la confirmation n'écrit rien et la voix reste.
+    @Test func aPendingDeletionDoesNotSurviveItsRowBeingHidden() {
+        let saved = Self.saved("Voix d'exemple A", id: 1, gender: .female)
+        let rig = Rig(Self.settings(voices: [saved]))
+        let model = rig.model
+        model.selection = .saved(saved.id)
+        model.requestDeletion()
+        #expect(model.pendingDeletion == saved.id)
+        model.gender = .male  // la ligne demandée est cachée
+        #expect(model.selection == nil)
+        #expect(model.pendingDeletion == nil, "la demande est lâchée avec sa ligne")
+        #expect(model.confirmationText == nil)
+        model.confirmDeletion()
+        #expect(rig.updates == 0, "rien n'est écrit")
+        #expect(rig.settings.voices == [saved], "la voix est toujours dans les réglages")
+    }
+
+    /// Décision 13a : la confirmation ne supprime que la voix en attente si elle est encore la ligne choisie et montrée ; la
+    /// sélection passée à une autre ligne entre-temps, rien n'est écrit.
+    @Test func confirmingDeletesOnlyThePendingVoiceStillChosenAndShown() {
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let other = Self.saved("Voix d'exemple B", id: 2)
+        let rig = Rig(Self.settings(voices: [first, other]))
+        let model = rig.model
+        model.selection = .saved(first.id)
+        model.requestDeletion()
+        model.selection = .saved(other.id)
+        model.confirmDeletion()
+        #expect(rig.updates == 0, "la ligne choisie n'est plus la voix en attente")
+        #expect(rig.settings.voices == [first, other])
+        #expect(model.pendingDeletion == nil, "la demande est consommée")
+
+        model.selection = .saved(first.id)
+        model.requestDeletion()
+        model.confirmDeletion()
+        #expect(rig.updates == 1)
+        #expect(rig.settings.voices == [other])
+    }
+
     /// Supprimer la seconde de deux voix identiques (non cochée) ne change pas la voix en vigueur.
     @Test func deletingTheUncheckedTwinKeepsTheActiveVoice() {
         let first = Self.saved("Voix d'exemple A", id: 1)

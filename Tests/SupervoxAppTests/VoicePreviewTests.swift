@@ -546,6 +546,10 @@ final class OtherErrorPlayer: ClipPlayer {
         #expect(sentences.allSatisfy { $0.hasSuffix(".") && !$0.contains("Error") })
         let digits = VoicesText.failure(.timedOut).filter(\.isNumber)
         #expect(digits.isEmpty, "aucun nombre de secondes : la voix du système abandonne avant la borne de l'écoute")
+        // Décision 13b (tâche 4) : la phrase du micro tenu nomme ce qui doit être fini, sans référent ambigu.
+        let busy = VoicesText.failure(.microphoneBusy)
+        #expect(busy.contains("la dictée ou l'entretien"), "\(busy)")
+        #expect(!busy.contains("qu'il est fini"), "\(busy)")
     }
 
     /// Ce qu'une panne de fournisseur dit pour une voix : la phrase qui la classe, une ligne par cas de `RewriteFailure`.

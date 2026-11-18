@@ -366,10 +366,12 @@ public final class VoicesModel {
         listeningRow = nil
     }
 
-    /// Un filtre a caché la ligne choisie : elle n'est plus choisie, et l'écoute en cours s'arrête.
+    /// Un filtre a caché la ligne choisie : elle n'est plus choisie, l'écoute en cours s'arrête, et une demande de suppression
+    /// en attente est lâchée avec elle.
     private func dropHiddenSelection() {
         guard let selection, !rows.contains(where: { $0.id == selection }) else { return }
         self.selection = nil
+        pendingDeletion = nil
         stopListening()
     }
 
@@ -387,11 +389,13 @@ public final class VoicesModel {
         pendingDeletion = nil
     }
 
-    /// Supprime la voix visée par la demande, en une écriture. Si c'était la voix en vigueur (la ligne cochée, sur les réglages
-    /// relus), la voix automatique du système en français la remplace dans la même écriture, et le message le dit.
+    /// Supprime la voix visée par la demande, en une écriture, si elle est encore la ligne choisie et montrée (sinon la demande est
+    /// consommée sans rien écrire). Si c'était la voix en vigueur (la ligne cochée, sur les réglages relus), la voix automatique du
+    /// système en français la remplace dans la même écriture, et le message le dit.
     public func confirmDeletion() {
         guard let id = pendingDeletion else { return }
         pendingDeletion = nil
+        guard selectedRow?.savedID == id else { return }
         let installed = installed
         var wasActive = false
         let written = commit { settings in
@@ -438,7 +442,8 @@ public final class VoicesModel {
         message = nil
     }
 
-    /// Laissé : pas de refus « voix supprimée ailleurs » ici (`git grep` : seul ce modèle écrit `voices`).
+    // Laissé : pas de refus « voix supprimée ailleurs » ici (`git grep` : seul ce modèle écrit `voices`).
+
     /// Enregistre le brouillon, ou dit pourquoi il ne s'enregistre pas (une phrase par cas, rien d'écrit, le brouillon reste).
     /// Accepté : `voices` est écrit en une fois sur les réglages relus (une voix modifiée l'est en place) ; modifier la voix en
     /// vigueur (la ligne cochée) écrit aussi `settings.voice`, dans la même écriture. Ce qui est écrit est la forme normalisée.
