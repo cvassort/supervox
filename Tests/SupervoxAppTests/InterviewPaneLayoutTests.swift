@@ -64,8 +64,14 @@ import Testing
     }
 
     /// Ouvrir le groupe ne déplace pas son intitulé : le contenu s'ouvre dessous.
+    ///
+    /// À un point près, pas à l'égalité exacte : selon la machine, la mise en page rend l'intitulé un quart de point plus haut
+    /// quand le groupe est ouvert (mesuré : 394,5 contre 394,75, session ouverte, deux écrans ; égaux session verrouillée ; cause
+    /// non établie). Un intitulé poussé par le contenu descendrait d'au moins une ligne de texte, bien au-delà d'un point.
     @Test func openingTheGroupDoesNotMoveItsHeading() throws {
-        #expect(try headingBottom(model: model(), expanded: true) == (try headingBottom(model: model(), expanded: false)))
+        let opened = try headingBottom(model: model(), expanded: true)
+        let closed = try headingBottom(model: model(), expanded: false)
+        #expect(abs(opened - closed) < 1, "ouvert : \(opened), fermé : \(closed)")
     }
 
     /// La mesure est vivante : un volet plus étroit passe les phrases à la ligne, et l'intitulé descend. Sans cela, un chiffre
