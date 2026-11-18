@@ -57,19 +57,29 @@ import Testing
         var settings: AppSettings
         var updates = 0
         var failure: (any Error)?
+        /// Ce que le modèle lit pour griser « Écouter » (reflet d'affichage seulement).
+        var busy = false
         let voices: VoiceList
         let clock = PreviewClock()
-        let factory = PreviewVoiceFactory(
-            system: PreviewVoice(.clip(VoicePreviewTests.clip)), provider: PreviewVoice(.clip(VoicePreviewTests.clip)))
-        let player = ScriptedClipPlayer(completion: .immediate)
+        let factory: PreviewVoiceFactory
+        let player: ScriptedClipPlayer
         let keys = InMemorySecretStore(secrets: [VoicesModelTests.provider.id.uuidString: "cle-exemple"])
         lazy var model: VoicesModel = makeModel()
 
-        init(_ settings: AppSettings, installed: [SystemVoiceInfo] = VoicesModelTests.installed) {
+        /// `systemVoice` : la voix du système double (par défaut, elle rend un clip) ; `player` : le lecteur (par défaut, la
+        /// lecture finit aussitôt).
+        init(
+            _ settings: AppSettings, installed: [SystemVoiceInfo] = VoicesModelTests.installed,
+            systemVoice: PreviewVoice = PreviewVoice(.clip(VoicePreviewTests.clip)),
+            player: ScriptedClipPlayer = ScriptedClipPlayer(completion: .immediate)
+        ) {
             self.settings = settings
             voices = VoiceList(installed)
+            factory = PreviewVoiceFactory(system: systemVoice, provider: PreviewVoice(.clip(VoicePreviewTests.clip)))
+            self.player = player
         }
 
+        /// Le micro tel que l'écoute le lit (la garantie).
         let microphone = MicrophoneFlag()
 
         func setInstalled(_ list: [SystemVoiceInfo]) { voices.set(list) }
@@ -93,7 +103,8 @@ import Testing
                     change(&self.settings)
                 },
                 systemVoices: { voices.read() },
-                preview: preview)
+                preview: preview,
+                microphoneBusy: { self.busy })
         }
     }
 
@@ -521,22 +532,180 @@ import Testing
 
     // MARK: - Règle 11 : écriture refusée
 
+    /// Une écriture refusée : la phrase de `SettingsError.sentence(forSaveError:)` (celle de la `SettingsError`, sinon la phrase
+    /// fixe commune), jamais le texte de l'erreur ; puis l'affichage est relu (un changement fait ailleurs juste avant se voit).
     @Test func aRefusedWriteSaysTheSettingsSentenceOrTheFixedOneAndRereads() {
-        let rig = Rig(Self.settings())
+        let saved = Self.saved("Voix d'exemple A", id: 1)
+        let rig = Rig(Self.settings(voices: [saved]))
         let model = rig.model
+        model.language = nil
         model.selection = RowID.system(identifier: "voix.exemple.a")
         let refusal = SettingsError.unreadableFileKept(fileName: "settings.json")
         rig.failure = refusal
         model.use()
+        #expect(model.message == SettingsError.sentence(forSaveError: refusal))
         #expect(model.message == refusal.errorDescription)
         #expect(rig.settings.voice == .system)
+
+        // Écrit ailleurs juste avant l'écriture refusée : la voix enregistrée devient la voix en vigueur. L'écriture refusée est
+        // une suppression (`confirmDeletion` ne relit pas avant d'écrire : seule la relecture d'après le refus peut le montrer).
+        model.selection = .saved(saved.id)
+        model.requestDeletion()
+        rig.settings.voice = saved.voice
+        #expect(model.rows.first { $0.isActive }?.id == .automatic(language: "fr-FR"), "pas encore relu")
         rig.failure = ForeignError()
-        model.use()
-        #expect(model.message == VoicesText.saveFailure)
+        model.confirmDeletion()
+        #expect(model.message == SettingsError.otherSaveFailure)
         #expect(model.message?.contains("https") == false)
-        #expect(model.rows.first { $0.isActive }?.id == .automatic(language: "fr-FR"), "l'affichage est relu")
+        #expect(model.rows.first { $0.isActive }?.id == .saved(saved.id), "l'affichage est relu après le refus")
         rig.failure = nil
         model.use()
         #expect(model.message == nil)
+    }
+
+    // MARK: - Tour de correction 1
+
+    /// C1 : « Écouter » est grisé tant que le micro est tenu (reflet d'affichage). Le cas qui diverge : le modèle croit le micro
+    /// libre, l'écoute le sait tenu et refuse ; l'état et la phrase le disent.
+    @Test func listeningIsGreyedWhileTheMicrophoneIsBusyAndTheRefusalIsSaid() async {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        #expect(model.canListen)
+        rig.busy = true
+        #expect(!model.canListen)
+        rig.busy = false
+
+        rig.microphone.held = true
+        model.listen()
+        #expect(model.previewState == .failed(.microphoneBusy))
+        #expect(model.previewMessage == VoicesText.failure(.microphoneBusy))
+        #expect(model.listeningRow == nil)
+        await settle()
+        #expect(rig.factory.calls.isEmpty)
+    }
+
+    /// C2 : la ligne écoutée, pendant la préparation et la lecture ; `nil` après la fin, après une panne, après un arrêt ; une
+    /// seconde écoute sur une autre ligne la remplace.
+    @Test func theListeningRowFollowsTheListening() async {
+        let gate = TestGate()
+        defer { gate.open() }
+        let player = ScriptedClipPlayer(completion: .manual)
+        let unusable = Self.saved(
+            "Voix d'exemple C", id: 3, provider: UUID(uuidString: "00000000-0000-0000-0000-0000000000ff"))
+        let rig = Rig(
+            Self.settings(voices: [unusable]), systemVoice: PreviewVoice(.held(gate, VoicePreviewTests.clip)), player: player)
+        let model = rig.model
+        let rowA = RowID.system(identifier: "voix.exemple.a")
+        let rowB = RowID.system(identifier: "voix.exemple.b")
+        #expect(model.listeningRow == nil)
+        model.selection = rowA
+        model.listen()
+        #expect(model.previewState == .preparing)
+        #expect(model.listeningRow == rowA, "pendant la préparation")
+        gate.open()
+        #expect(await until { player.isPlaying })
+        #expect(model.previewState == .playing)
+        #expect(model.listeningRow == rowA, "pendant la lecture")
+
+        model.selection = rowB
+        model.listen()
+        #expect(model.listeningRow == rowB, "une seconde écoute remplace la première")
+        #expect(await until { player.clips.count == 2 && player.isPlaying })
+        player.finish()
+        #expect(await until { model.previewState == .idle })
+        #expect(model.listeningRow == nil, "après la fin")
+
+        model.listen()
+        #expect(model.listeningRow == rowB)
+        model.stopListening()
+        #expect(model.listeningRow == nil, "après un arrêt")
+
+        model.selection = .saved(unusable.id)
+        model.listen()
+        #expect(model.listeningRow == .saved(unusable.id))
+        #expect(await until { model.previewState == .failed(.unusable(.providerRemoved)) })
+        #expect(model.listeningRow == nil, "après une panne")
+    }
+
+    /// C3 : un filtre qui cache la ligne choisie la désélectionne et arrête l'écoute ; un geste ne vise jamais une ligne
+    /// invisible.
+    @Test func aSelectionHiddenByTheFiltersIsDroppedAndNoGestureReachesIt() async {
+        let gate = TestGate()
+        defer { gate.open() }
+        let saved = Self.saved("Voix d'exemple A", id: 1, language: "en-US")
+        let rig = Rig(Self.settings(voices: [saved]), systemVoice: PreviewVoice(.held(gate, VoicePreviewTests.clip)))
+        let model = rig.model
+        model.language = nil
+        model.selection = RowID.system(identifier: "voix.exemple.b")
+        model.listen()
+        #expect(model.listeningRow == RowID.system(identifier: "voix.exemple.b"))
+        #expect(await until { rig.factory.system.texts.count == 1 }, "la synthèse est en cours (retenue par la porte)")
+        model.gender = .female
+        #expect(model.selection == nil, "la ligne cachée n'est plus choisie")
+        #expect(model.selectedRow == nil)
+        #expect(model.previewState == .idle, "l'écoute est arrêtée")
+        #expect(model.listeningRow == nil)
+
+        // Une ligne choisie alors qu'elle est cachée : aucun geste ne l'atteint.
+        model.gender = .all
+        model.language = "fr-FR"
+        model.selection = .saved(saved.id)
+        #expect(model.selectedRow == nil)
+        #expect(!model.canUse && !model.canListen && !model.canDelete && !model.canEdit)
+        model.use()
+        model.listen()
+        model.requestDeletion()
+        #expect(rig.updates == 0)
+        #expect(model.pendingDeletion == nil)
+        #expect(model.listeningRow == nil)
+        #expect(rig.factory.calls.count == 1, "seule la première écoute a fabriqué une voix")
+        #expect(rig.player.clips.isEmpty, "l'écoute arrêtée n'a rien joué")
+
+        // Un filtre qui garde la ligne choisie ne la lâche pas.
+        model.language = nil
+        model.selection = .saved(saved.id)
+        model.gender = .unspecified
+        #expect(model.selection == .saved(saved.id))
+    }
+
+    /// C4 : la langue en cours du filtre est toujours proposée, même si aucune voix ne la porte plus.
+    @Test func theCurrentLanguageIsAlwaysOffered() {
+        let rig = Rig(Self.settings(voice: VoiceChoice(language: "de-DE")))
+        let model = rig.model
+        #expect(model.language == "de-DE")
+        #expect(model.languages.contains("de-DE"))
+        #expect(model.languages == ["de-DE", "en-US", "fr-FR"])
+        model.language = "it-IT"
+        #expect(model.languages == ["en-US", "fr-FR", "it-IT"])
+        model.language = nil
+        #expect(model.languages == ["en-US", "fr-FR"])
+    }
+
+    /// C5 : la note de vie privée et l'écoute décident sur le même instantané. Le fournisseur de la voix choisie est retiré des
+    /// réglages sans `reload()` : après `listen()`, la note et l'état disent tous deux que la voix ne peut pas parler, et rien n'est
+    /// envoyé ni lu. `use()` relit de même avant d'écrire.
+    @Test func thePrivacyNoteAndTheListeningShareOneSnapshot() async {
+        let saved = Self.saved("Voix d'exemple A", id: 1)
+        let rig = Rig(Self.settings(voices: [saved]))
+        let model = rig.model
+        model.selection = .saved(saved.id)
+        #expect(model.privacyText == VoicesText.privacyProvider("Fournisseur d'exemple"))
+        rig.settings.providers.removeAll { $0.id == Self.provider.id }
+        model.listen()
+        #expect(await until { model.previewState == .failed(.unusable(.providerRemoved)) })
+        #expect(model.privacyText == VoicesText.privacyNothingSent)
+        #expect(rig.keys.readCount == 0)
+        #expect(!model.canUse)
+
+        // `use()` relit : une voix enregistrée supprimée ailleurs (encore dans l'affichage) n'est pas réécrite en voix en vigueur.
+        let other = Self.saved("Voix d'exemple B", id: 2)
+        rig.settings = Self.settings(voices: [other])
+        model.reload()
+        model.selection = .saved(other.id)
+        #expect(model.canUse)
+        rig.settings.voices = []
+        model.use()
+        #expect(rig.updates == 0, "relu avant d'écrire : la ligne n'existe plus")
     }
 }

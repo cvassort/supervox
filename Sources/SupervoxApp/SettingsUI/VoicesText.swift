@@ -110,9 +110,6 @@ public enum VoicesText {
     public static let deleteConfirmation = InterviewText.fr("Supprimer cette voix ?")
     public static let deletedActive = InterviewText.fr(
         "La voix supprimée était la voix en vigueur : Supervox reprend la voix automatique du système, en français.")
-    /// Ce que l'onglet dit quand l'enregistrement échoue pour une autre raison qu'une `SettingsError` (jamais le texte de l'erreur).
-    public static let saveFailure = InterviewText.fr(
-        "Ce changement n'a pas pu être enregistré : les voix gardent leurs réglages précédents.")
 
     // MARK: - Refus du brouillon (règle 5)
 

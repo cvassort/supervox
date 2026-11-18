@@ -108,13 +108,22 @@ public final class VoicesModel {
     private var settings: AppSettings
     /// Les voix installées à la dernière lecture.
     private var installed: [SystemVoiceInfo]
-    /// Le filtre de langue ; `nil` : toutes les langues. Au départ, la langue de la voix en vigueur.
-    public var language: String?
-    public var gender: GenderFilter = .all
+    /// Le filtre de langue ; `nil` : toutes les langues. Au départ, la langue de la voix en vigueur. Un changement qui cache la
+    /// ligne choisie la désélectionne et arrête l'écoute.
+    public var language: String? {
+        didSet { dropHiddenSelection() }
+    }
+    /// Le filtre de genre ; même règle que la langue.
+    public var gender: GenderFilter = .all {
+        didSet { dropHiddenSelection() }
+    }
+    /// La ligne choisie. Une ligne que les filtres cachent n'est jamais visée par un geste (`selectedRow` ne la rend pas).
     public var selection: Row.ID?
     public var draft: VoiceDraft?
     public private(set) var message: String?
     public private(set) var previewState: VoicePreview.State = .idle
+    /// La ligne dont l'écoute est en préparation ou en lecture ; `nil` sinon (fin, arrêt, panne, remplacement).
+    public private(set) var listeningRow: Row.ID?
     /// La voix enregistrée dont la suppression attend la confirmation (visée au moment de la demande), `nil` sinon.
     public private(set) var pendingDeletion: UUID?
 
@@ -122,15 +131,20 @@ public final class VoicesModel {
     @ObservationIgnored private let update: Update
     @ObservationIgnored private let systemVoices: @Sendable () -> [SystemVoiceInfo]
     @ObservationIgnored private let preview: VoicePreview
+    @ObservationIgnored private let microphoneBusy: @MainActor () -> Bool
 
+    /// - Parameter microphoneBusy: un reflet d'AFFICHAGE (l'appelant y lit l'état observable du panneau) : il grise « Écouter »
+    ///   et ne décide de rien ; la garantie est dans `VoicePreview.start`, qui refuse l'écoute tant qu'un micro est tenu.
     public init(
         read: @escaping @MainActor () -> AppSettings, update: @escaping Update,
-        systemVoices: @escaping @Sendable () -> [SystemVoiceInfo], preview: VoicePreview
+        systemVoices: @escaping @Sendable () -> [SystemVoiceInfo], preview: VoicePreview,
+        microphoneBusy: @escaping @MainActor () -> Bool
     ) {
         self.read = read
         self.update = update
         self.systemVoices = systemVoices
         self.preview = preview
+        self.microphoneBusy = microphoneBusy
         let settings = read()
         self.settings = settings
         installed = systemVoices()
@@ -158,23 +172,27 @@ public final class VoicesModel {
         }
     }
 
-    /// Les langues proposées par le filtre (voix installées et enregistrées), triées, sans doublon.
+    /// Les langues proposées par le filtre (voix installées et enregistrées, et toujours la langue en cours du filtre, même si
+    /// plus aucune voix ne la porte), triées, sans doublon.
     public var languages: [String] {
         var seen = Set<String>()
-        return Self.allRows(settings: settings, installed: installed)
+        let listed = Self.allRows(settings: settings, installed: installed)
             .filter { $0.id != .active }
             .map(\.language)
+        return (listed + (language.map { [$0] } ?? []))
             .sorted()
             .filter { seen.insert(Self.languageKey($0)).inserted }
     }
 
+    /// La ligne choisie, si elle est montrée (`rows`) ; `nil` sinon.
     public var selectedRow: Row? {
         guard let selection else { return nil }
-        return Self.allRows(settings: settings, installed: installed).first { $0.id == selection }
+        return rows.first { $0.id == selection }
     }
 
     public var canUse: Bool { selectedRow?.canUse ?? false }
-    public var canListen: Bool { selectedRow != nil }
+    /// Faux tant que le micro est tenu (reflet d'affichage : l'écoute refuse d'elle-même).
+    public var canListen: Bool { selectedRow != nil && !microphoneBusy() }
     public var canEdit: Bool { selectedRow?.savedID != nil }
     public var canDelete: Bool { selectedRow?.savedID != nil }
 
@@ -302,8 +320,10 @@ public final class VoicesModel {
     // MARK: - Utiliser (règle 6)
 
     /// Écrit la voix de la ligne choisie dans `settings.voice`, et rien d'autre : une voix du système sans fournisseur, une voix
-    /// enregistrée sous sa forme normalisée. Sans effet pour une ligne qui ne peut pas servir.
+    /// enregistrée sous sa forme normalisée. Relit d'abord les réglages : sans effet pour une ligne qui ne peut pas servir ou qui
+    /// n'existe plus.
     public func use() {
+        reload()
         guard let row = selectedRow, row.canUse else { return }
         let voice: VoiceChoice = switch row.id {
         case .saved: row.choice.normalized
@@ -321,16 +341,35 @@ public final class VoicesModel {
         return nil
     }
 
-    /// Écoute la voix choisie. Une voix du système désignée absente de la liste des voix installées : `.failed(.notInstalled)`,
-    /// sans fabriquer de voix (contrôlé par l'écoute, `VoicePreview`, seul endroit).
+    /// Écoute la voix choisie. Relit d'abord les réglages et la liste des voix, puis décide et lance sur ce même instantané : la
+    /// note de vie privée et l'écoute ne peuvent pas diverger. Une voix du système désignée absente de la liste :
+    /// `.failed(.notInstalled)`, sans fabriquer de voix (contrôlé par l'écoute, `VoicePreview`, seul endroit) ; un micro tenu :
+    /// `.failed(.microphoneBusy)` (refusé par l'écoute).
     public func listen() {
+        reload()
         guard let row = selectedRow else { return }
-        preview.start(row.choice, settings: read()) { [weak self] state in self?.previewState = state }
+        let id = row.id
+        preview.start(row.choice, settings: settings) { [weak self] state in
+            guard let self else { return }
+            previewState = state
+            switch state {
+            case .preparing, .playing: listeningRow = id
+            case .idle, .failed: listeningRow = nil
+            }
+        }
     }
 
     public func stopListening() {
         preview.stop()
         previewState = .idle
+        listeningRow = nil
+    }
+
+    /// Un filtre a caché la ligne choisie : elle n'est plus choisie, et l'écoute en cours s'arrête.
+    private func dropHiddenSelection() {
+        guard let selection, !rows.contains(where: { $0.id == selection }) else { return }
+        self.selection = nil
+        stopListening()
     }
 
     // MARK: - Supprimer (règle 6)
@@ -398,6 +437,7 @@ public final class VoicesModel {
         message = nil
     }
 
+    /// Laissé : pas de refus « voix supprimée ailleurs » ici (`git grep` : seul ce modèle écrit `voices`).
     /// Enregistre le brouillon, ou dit pourquoi il ne s'enregistre pas (une phrase par cas, rien d'écrit, le brouillon reste).
     /// Accepté : `voices` est écrit en une fois sur les réglages relus (une voix modifiée l'est en place) ; modifier la voix en
     /// vigueur (la ligne cochée) écrit aussi `settings.voice`, dans la même écriture. Ce qui est écrit est la forme normalisée.
@@ -458,8 +498,8 @@ public final class VoicesModel {
 
     // MARK: - Écriture
 
-    /// Appelle `update` une fois. Réussi : le message s'efface. Refusé : la phrase de la `SettingsError` ou la phrase fixe. Dans les
-    /// deux cas, l'affichage est relu.
+    /// Appelle `update` une fois. Réussi : le message s'efface. Refusé : `SettingsError.sentence(forSaveError:)` (la phrase de la
+    /// `SettingsError`, sinon la phrase fixe commune ; jamais le texte de l'erreur). Dans les deux cas, l'affichage est relu.
     @discardableResult
     private func commit(_ change: (inout AppSettings) -> Void) -> Bool {
         do {
@@ -468,7 +508,7 @@ public final class VoicesModel {
             settings = read()
             return true
         } catch {
-            message = (error as? SettingsError)?.errorDescription ?? VoicesText.saveFailure
+            message = SettingsError.sentence(forSaveError: error)
             settings = read()
             return false
         }
