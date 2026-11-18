@@ -300,17 +300,18 @@ private func clip(seconds: Double, rate: Double = 10) -> AudioClip {
 }
 
 /// L'attente reçoit la durée du clip ; `.played` n'arrive qu'à son retour, et chaque clip attend la fin du précédent.
-@Test func afterDurationModeCallsTheWaitWithTheClipDurationThenRendersPlayed() async throws {
+@Test(.timeLimit(.minutes(1)))
+func afterDurationModeCallsTheWaitWithTheClipDurationThenRendersPlayed() async throws {
     let waited = OSAllocatedUnfairLock(initialState: [Double]())
     let io = ScriptedAudioIO(completion: .afterDuration { seconds in waited.withLock { $0.append(seconds) } })
     let sink = Sink()
     try io.start { _ in }
-    await withCheckedContinuation { (all: CheckedContinuation<Void, Never>) in
-        do {
-            try io.play(clip(seconds: 1.5)) { end in sink.onEnd("a")(end) }
-            try io.play(clip(seconds: 0.5)) { end in sink.onEnd("b")(end); all.resume() }
-        } catch { all.resume() }
-    }
+    let bothEnded = Gate()
+    try io.play(clip(seconds: 1.5)) { end in sink.onEnd("a")(end) }
+    try io.play(clip(seconds: 0.5)) { end in sink.onEnd("b")(end); bothEnded.open() }
+    // Rend la main à l'annulation : si la fin du second clip ne venait jamais, le test échoue à sa limite de temps au lieu de pendre
+    // (revue finale, m-H).
+    await bothEnded.wait()
     #expect(waited.withLock { $0 } == [1.5, 0.5])
     #expect(sink.all == ["a:played", "b:played"])
 }
@@ -461,6 +462,18 @@ private func syntheticTapWindow() -> AVAudioPCMBuffer {
     return window
 }
 
+/// Garde de durée d'un processus fils (revue finale, m-H). Le fils attend une continuation reprise par un `onEnd` : si la livraison
+/// cessait, il resterait suspendu, et le test avec lui (la limite de temps du test ne l'atteint pas). Au bout de `seconds`, le fils
+/// sort avec `exitCode`, choisi **contraire** à l'issue attendue : la garde fait échouer le test, jamais passer. 30 s : borne de
+/// sûreté, choix non mesuré, très au-delà d'une livraison (une file de répartition, sans attente) ; elle ne joue que sur un fils
+/// suspendu, jamais sur la durée d'un test qui passe.
+func armChildProcessGuard(exitCode: Int32, after seconds: Double = 30) {
+    DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+        FileHandle.standardError.write(Data("garde de durée du processus fils : l'attente n'a pas été reprise\n".utf8))
+        exit(exitCode)
+    }
+}
+
 private func expectProgrammingError(_ stderr: [UInt8], mentioning call: String) {
     let text = String(decoding: stderr, as: UTF8.self)
     #expect(text.contains("erreur de programmation"), "\(text)")
@@ -585,6 +598,7 @@ private func suspendedDouble(completion: ScriptedAudioIO.Completion = .manual) -
 /// Comme le vrai : jamais `stopPlayback()` depuis `onEnd`.
 @Test func scriptedStopPlaybackFromOnEndIsAProgrammingError() async throws {
     let result = try await #require(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+        armChildProcessGuard(exitCode: 0)   // attendu : un échec ; une sortie réussie fait tomber le test
         let io = ScriptedAudioIO(completion: .immediate)
         try io.start { _ in }
         await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
