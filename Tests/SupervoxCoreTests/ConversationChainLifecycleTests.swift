@@ -591,6 +591,9 @@ struct ConversationTranscriptionTests {
 
         await h.cancel()
 
+        // Le lecteur du flux est une tâche à part : on attend qu'il ait vu la fin avant de la lire (sinon le test dépend de
+        // l'ordonnancement). Le moteur, lui, est toujours retenu : la fin est arrivée sans l'attendre.
+        await log.waitForEnd()
         #expect(log.end == .cancelled)   // la fin est arrivée : `cancel()` n'a pas attendu le moteur
         #expect(!h.audio.inner.isRunning)
         h.transcriber.release(call: 0, text: "arrivé trop tard")   // le moteur répond enfin : rien n'en sort
@@ -609,6 +612,7 @@ struct ConversationTranscriptionTests {
 
         await h.cancel()
 
+        await log.waitForEnd()   // le lecteur du flux est une tâche à part : il a vu la fin avant qu'on la lise
         #expect(h.transcriber.calls.isEmpty)
         #expect(!log.items.contains { if case .turnEnded = $0 { true } else { false } })
         #expect(log.end == .cancelled)
