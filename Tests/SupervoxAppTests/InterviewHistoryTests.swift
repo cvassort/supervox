@@ -588,4 +588,154 @@ import Testing
         #expect(await history.list().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: root.path))
     }
+
+    // MARK: - C-1 : la durée confirmée du dossier
+
+    var confirmationFile: URL { root.appendingPathComponent("conservation") }
+
+    @Test("C-1 : sans fichier, la durée confirmée est absente ; confirmée, elle est écrite en 0600 sous le nom « conservation », JSON documenté")
+    func theConfirmedRetentionIsWrittenPrivately() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        #expect(await history.confirmedRetention() == .absent)
+        #expect(await history.snapshot().confirmedRetention == .absent)
+
+        try await history.confirmRetention(90)
+
+        #expect(await history.confirmedRetention() == .days(90))
+        #expect(await history.snapshot().confirmedRetention == .days(90))
+        #expect(try permissions(confirmationFile) == 0o600)
+        #expect(try permissions(root) == 0o700)
+        let written = try object(Data(contentsOf: confirmationFile))
+        #expect(written == (try object(Data(#"{"version": 1, "retentionDays": 90}"#.utf8))), "\(written)")
+        #expect(InterviewHistory.retentionFileName == "conservation")
+        #expect(!InterviewHistory.retentionFileName.hasSuffix(".json"), "jamais l'extension d'un entretien")
+        #expect(try names() == ["conservation"], "aucun reste d'écriture")
+    }
+
+    @Test("C-1 : 0 (« Ne rien garder ») se confirme comme les autres ; une nouvelle valeur remplace l'ancienne ; bornée comme les réglages")
+    func theConfirmedRetentionCanBeZeroReplacedAndIsBounded() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        try await history.confirmRetention(0)
+        #expect(await history.confirmedRetention() == .days(0))
+        try await history.confirmRetention(365)
+        #expect(await history.confirmedRetention() == .days(365))
+        try await history.confirmRetention(Int.max)
+        #expect(await history.confirmedRetention() == .days(HistorySettings.maxRetentionDays))
+        try await history.confirmRetention(-5)
+        #expect(await history.confirmedRetention() == .days(HistorySettings.defaults.retentionDays), "négatif : le défaut, jamais 0")
+    }
+
+    @Test("C-1 : un fichier de durée illisible (abîmé, mauvais type, négatif, sans version, dossier, lien) se lit « illisible », sans rien suivre")
+    func anUnreadableConfirmationIsReportedAsSuch() async throws {
+        defer { cleanUp() }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let history = makeHistory()
+        for content in [
+            "pas du json", #"{"version": 1, "retentionDays": "365"}"#, #"{"version": 1, "retentionDays": -3}"#,
+            #"{"retentionDays": 90}"#, #"{"version": 0, "retentionDays": 90}"#, #"{"version": 1}"#,
+        ] {
+            try Data(content.utf8).write(to: confirmationFile)
+            #expect(await history.confirmedRetention() == .unreadable, "\(content)")
+        }
+        // Une version plus récente de forme connue est lue.
+        try Data(#"{"version": 2, "retentionDays": 90}"#.utf8).write(to: confirmationFile)
+        #expect(await history.confirmedRetention() == .days(90))
+
+        try FileManager.default.removeItem(at: confirmationFile)
+        try FileManager.default.createDirectory(at: confirmationFile, withIntermediateDirectories: false)
+        #expect(await history.confirmedRetention() == .unreadable, "un dossier n'est pas un fichier de durée")
+        try FileManager.default.removeItem(at: confirmationFile)
+
+        let outside = directory.appendingPathComponent("ailleurs")
+        try Data(#"{"version": 1, "retentionDays": 90}"#.utf8).write(to: outside)
+        try FileManager.default.createSymbolicLink(at: confirmationFile, withDestinationURL: outside)
+        #expect(await history.confirmedRetention() == .unreadable, "un lien symbolique n'est pas suivi")
+    }
+
+    @Test("C-1 : sur une racine refusée (fichier, lien), la durée confirmée est absente et l'écrire lève sans rien toucher")
+    func theConfirmationFollowsTheRootRules() async throws {
+        defer { cleanUp() }
+        try Data("pas un dossier".utf8).write(to: root)
+        let history = makeHistory()
+        #expect(await history.confirmedRetention() == .absent)
+        await #expect(throws: InterviewHistory.Failure.rootRefused) { try await history.confirmRetention(90) }
+        #expect(try Data(contentsOf: root) == Data("pas un dossier".utf8))
+    }
+
+    @Test("C-1 : un dossier qui refuse l'écriture (immuable) : écrire la durée lève writeFailed, rien ne reste")
+    func aRefusedConfirmationWriteThrows() async throws {
+        defer { cleanUp() }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        #expect(chmod(root.path, 0o700) == 0)
+        #expect(chflags(root.path, UInt32(UF_IMMUTABLE)) == 0)
+
+        await #expect(throws: InterviewHistory.Failure.writeFailed) { try await makeHistory().confirmRetention(90) }
+
+        #expect(chflags(root.path, 0) == 0)
+        #expect(try names().isEmpty)
+    }
+
+    // Les parcours du dossier : le fichier de durée n'est JAMAIS compté ni supprimé comme un entretien.
+
+    @Test("C-1 : le fichier de durée n'est compté nulle part : ni `fileCount`, ni `snapshot`, ni les « illisibles », ni `list`")
+    func theConfirmationFileIsNeverCounted() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        try await history.save(Self.record(1))
+        try await history.confirmRetention(90)
+
+        let snapshot = await history.snapshot()
+        #expect(snapshot.fileCount == 1, "un entretien, pas deux fichiers")
+        #expect(snapshot.records.count == 1)
+        #expect(await history.fileCount() == 1)
+        #expect(await history.list().count == 1)
+    }
+
+    @Test("C-1 : « Tout supprimer » (deleteAll) laisse la durée confirmée, octet pour octet")
+    func deleteAllKeepsTheConfirmation() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        try await history.save(Self.record(1))
+        try await history.confirmRetention(90)
+        let before = try Data(contentsOf: confirmationFile)
+
+        try await history.deleteAll()
+
+        #expect(try Data(contentsOf: confirmationFile) == before)
+        #expect(await history.confirmedRetention() == .days(90))
+        #expect(try names() == ["conservation"])
+    }
+
+    @Test("C-1 : la purge laisse la durée confirmée, même avec « Ne rien garder » et des entretiens échus, et ne la compte pas")
+    func purgeKeepsTheConfirmation() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        try await history.save(Self.record(1, daysAgo: 40))
+        try await history.confirmRetention(0)
+        retention.days = 0
+        let before = try Data(contentsOf: confirmationFile)
+
+        #expect(await history.purge() == 1, "l'entretien seul est compté")
+
+        #expect(try Data(contentsOf: confirmationFile) == before)
+        #expect(try names() == ["conservation"])
+    }
+
+    @Test("C-1 : `delete` d'un entretien et le retrait des restes d'écriture ne touchent pas la durée confirmée")
+    func deleteAndLeftoverRemovalKeepTheConfirmation() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        let record = Self.record(1)
+        try await history.save(record)
+        try await history.confirmRetention(90)
+        try Data("reste".utf8).write(to: root.appendingPathComponent(".ecriture-\(UUID().uuidString).tmp"))
+
+        try await history.delete(record.id)
+        _ = await history.purge()
+        try await history.deleteAll()
+
+        #expect(try names() == ["conservation"], "les restes sont retirés, la durée reste")
+    }
 }

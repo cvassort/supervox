@@ -941,6 +941,14 @@ for dark in [false, true] {
         historyTab(await historyEmptyExample.makeModel()), name: "reglages-historique-vide", dark: dark, background: window,
         size: settingsSize)
     historyEmptyExample.remove()
+    // C-1 : le dossier a confirmé 365 jours, les réglages disent 30 (remis à zéro hors de l'onglet) : une ligne le dit.
+    let historyChangedExample = ExampleHistory()
+    try await historyChangedExample.seed()
+    try await historyChangedExample.history.confirmRetention(365)
+    try await render(
+        historyTab(await historyChangedExample.makeModel()), name: "reglages-historique-duree-changee", dark: dark,
+        background: window, size: settingsSize)
+    historyChangedExample.remove()
     let historyNoneExample = ExampleHistory()
     historyNoneExample.settings.history.retentionDays = 0
     try await historyNoneExample.seed(withExamples: false)

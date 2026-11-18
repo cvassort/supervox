@@ -138,6 +138,7 @@ public final class HistoryModel {
         settings = read()
         records = snapshot.records
         fileCount = snapshot.fileCount
+        confirmedRetention = snapshot.confirmedRetention
         isLoaded = true
         if let selection, snapshot.records.contains(where: { $0.id == selection }) { return }
         // Le plus récent n'est choisi d'office qu'à la première lecture. Après, une sélection disparue (supprimée, purgée) ne devient
@@ -195,6 +196,26 @@ public final class HistoryModel {
     public var canCopyPrompt: Bool { promptText != nil }
 
     public var canCopyConversation: Bool { Self.nonBlank(conversationText) != nil }
+
+    /// La ligne sous l'en-tête quand la durée confirmée du dossier n'est plus celle des réglages : les réglages ont changé hors de
+    /// l'onglet (remis à zéro, fichier mis de côté, édité à la main), et la purge au lancement ne supprime rien tant que la personne
+    /// n'a pas choisi la durée de nouveau.
+    public static let retentionChangedNote = InterviewText.fr(
+        "La durée de conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas choisie de nouveau ci-dessous."
+    )
+
+    /// La durée confirmée du dossier à la dernière lecture.
+    public private(set) var confirmedRetention: InterviewHistory.ConfirmedRetention = .absent
+
+    /// `retentionChangedNote` quand la durée confirmée existe et diffère de celle des réglages, ou ne se lit pas ; `nil` sinon
+    /// (aucune durée confirmée : la durée des réglages est celle par défaut annoncée ; ou accord).
+    public var retentionNote: String? {
+        switch confirmedRetention {
+        case .absent: nil
+        case .unreadable: Self.retentionChangedNote
+        case .days(let days): days == retentionDays ? nil : Self.retentionChangedNote
+        }
+    }
 
     /// La ligne qui corrige l'en-tête quand la durée est « Ne rien garder » ; `nil` sinon.
     public var headerNote: String? { retentionDays == 0 ? Self.keepsNothingNote : nil }
@@ -397,7 +418,9 @@ public final class HistoryModel {
         let wanted = HistorySettings(retentionDays: days).normalized.retentionDays
         pendingRetention = nil
         await reload()
-        guard wanted != retentionDays else { return nil }
+        // La même durée que celle des réglages ET déjà confirmée : rien à faire. Confirmée autrement (ou jamais) : le choix passe par
+        // le chemin habituel, qui écrit la durée confirmée.
+        guard wanted != retentionDays || confirmedRetention != .days(wanted) else { return nil }
         if expiredCount(under: wanted) > 0 {
             pendingRetention = wanted
             return nil
@@ -418,9 +441,12 @@ public final class HistoryModel {
         return applyRetention(days)
     }
 
+    /// Écrit les réglages (sauf s'ils disent déjà cette durée), puis, dans la tâche rendue, la durée CONFIRMÉE du dossier, puis purge.
+    /// Si la durée confirmée ne peut pas être écrite : la phrase d'échec d'écriture, et pas de purge (la durée des réglages n'est
+    /// alors pas celle du dossier : la purge au lancement ne partira pas non plus).
     private func applyRetention(_ days: Int) -> Task<Void, Never>? {
         do {
-            try update { $0.history.retentionDays = days }
+            if days != retentionDays { try update { $0.history.retentionDays = days } }
             clearMessage()
             settings = read()
         } catch {
@@ -431,6 +457,13 @@ public final class HistoryModel {
         // La purge lit la durée en vigueur à l'instant où elle s'exécute : celle qui vient d'être écrite.
         let history = history
         return Task { [weak self] in
+            do {
+                try await history.confirmRetention(days)
+            } catch {
+                await self?.reload()
+                self?.say(Self.writeFailure, failure: true)
+                return
+            }
             _ = await history.purge()
             await self?.reload()
         }

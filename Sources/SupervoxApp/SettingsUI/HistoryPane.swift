@@ -39,6 +39,7 @@ public struct HistoryPane: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(HistoryModel.header)
                 if let note = model.headerNote { Text(note) }
+                if let note = model.retentionNote { Text(note) }
             }
             .font(.callout)
             .foregroundStyle(.secondary)

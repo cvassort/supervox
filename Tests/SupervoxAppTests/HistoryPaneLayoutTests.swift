@@ -172,4 +172,22 @@ import Testing
             }
         }
     }
+
+    /// C-1 : la ligne « la durée a changé hors de cet onglet » s'ajoute à celle de « Ne rien garder » sous l'en-tête : la zone du milieu
+    /// garde de la place, le pied reste au bas, le message reste dans sa bande.
+    @Test("C-1 : avec les deux lignes de l'en-tête (« Ne rien garder » et « durée changée hors de l'onglet »), le pied reste en bas et la zone du milieu garde 150 points")
+    func bothHeaderNotesStillFit() async throws {
+        let rig = try HistoryModelTests.Rig(retention: 30)
+        defer { rig.cleanUp() }
+        let model = try await loadedModel(rig, count: 3, longTexts: true, withExtras: true)  // écrit avec 30 jours
+        rig.settings.history.retentionDays = 0  // réglé ensuite sur « Ne rien garder »
+        try await rig.history.confirmRetention(365)
+        await model.reload()
+        #expect(model.headerNote != nil && model.retentionNote != nil)
+
+        let metrics = try measure(model)
+
+        #expect(abs(try #require(metrics[.footer]).maxY - Self.paneHeight) < 0.5)
+        #expect(try #require(metrics[.mainArea]).height >= 150, "zone du milieu de \(metrics[.mainArea]?.height ?? -1) points")
+    }
 }

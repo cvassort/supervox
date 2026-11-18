@@ -108,11 +108,70 @@ public actor InterviewHistory: InterviewHistoryStoring {
     public struct Snapshot: Sendable {
         public var records: [InterviewRecord]
         public var fileCount: Int
+        /// La durée confirmée du dossier, lue avec les entretiens.
+        public var confirmedRetention: ConfirmedRetention
+    }
+
+    // MARK: - La durée confirmée
+
+    /// La durée de conservation que la personne a CONFIRMÉE depuis l'onglet Historique, gardée dans le dossier lui-même
+    /// (`conservation`, `{"version": 1, "retentionDays": N}`, 0600, écriture atomique). Les réglages peuvent être remis à zéro, mis de
+    /// côté ou édités à la main (le défaut de 30 jours revient alors, sans que personne l'ait choisi) : ce que le dossier sait, lui,
+    /// reste. La purge du lancement ne part que si la durée des réglages est celle-ci (ou si aucune durée n'a jamais été confirmée).
+    ///
+    /// Le nom n'a PAS l'extension `.json` : ce n'est jamais un entretien, ni un fichier « illisible » ; `snapshot`, `fileCount`,
+    /// `deleteAll` et `purge` ne le voient pas, et « Tout supprimer… » le laisse.
+    public enum ConfirmedRetention: Equatable, Sendable {
+        /// Aucune durée n'a jamais été confirmée (personne n'a réglé la durée) : la durée des réglages est celle par défaut annoncée.
+        case absent
+        /// Le fichier existe mais ne se lit pas (abîmé, mauvais type, négatif, sans version, dossier, lien) : on ne sait pas.
+        case unreadable
+        case days(Int)
+    }
+
+    public static let retentionFileName = "conservation"
+
+    private struct RetentionFile: Codable {
+        var version: Int
+        var retentionDays: Int
+    }
+
+    /// La durée confirmée du dossier. Un lien symbolique, un dossier ou un contenu qui ne se lit pas : `unreadable`. Une racine
+    /// absente ou refusée, ou pas de fichier : `absent`.
+    public func confirmedRetention() async -> ConfirmedRetention { readConfirmedRetention() }
+
+    private func readConfirmedRetention() -> ConfirmedRetention {
+        guard rootState() == .directory else { return .absent }
+        let file = path(Self.retentionFileName)
+        var info = stat()
+        if lstat(file, &info) != 0 { return errno == ENOENT ? .absent : .unreadable }
+        guard let data = Self.regularFileData(atPath: file),
+            let decoded = try? JSONDecoder().decode(RetentionFile.self, from: data), decoded.version >= Self.formatVersion,
+            decoded.retentionDays >= 0
+        else { return .unreadable }
+        return .days(decoded.retentionDays)
+    }
+
+    /// Écrit la durée que la personne vient de choisir (bornée comme les réglages), en 0600 et de façon atomique, comme un entretien.
+    /// Lève si la racine est refusée ou si le disque refuse.
+    public func confirmRetention(_ days: Int) async throws {
+        try prepareRoot()
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(RetentionFile(version: Self.formatVersion, retentionDays: Self.normalized(days)))
+        } catch { throw Failure.writeFailed }
+        let temporary = root.appendingPathComponent(Self.temporaryPrefix + UUID().uuidString + Self.temporarySuffix)
+        try Self.writeNewFile(data, atPath: temporary.path)
+        if rename(temporary.path, path(Self.retentionFileName)) != 0 {
+            unlink(temporary.path)
+            throw Failure.writeFailed
+        }
     }
 
     public func snapshot() async -> Snapshot {
-        guard rootState() == .directory else { return Snapshot(records: [], fileCount: 0) }
-        return Snapshot(records: readAll().map(\.record), fileCount: historyFileNames().count)
+        guard rootState() == .directory else { return Snapshot(records: [], fileCount: 0, confirmedRetention: .absent) }
+        return Snapshot(
+            records: readAll().map(\.record), fileCount: historyFileNames().count, confirmedRetention: readConfirmedRetention())
     }
 
     /// Le nombre de fichiers `.json` du dossier, illisibles compris : exactement ce que `deleteAll` supprimera.

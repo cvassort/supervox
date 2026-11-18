@@ -353,13 +353,30 @@ public final class AppController {
     /// Seulement quand la durée est CELLE DE LA PERSONNE : au premier lancement (aucun réglage encore choisi) ou quand le fichier de
     /// réglages n'a pas été lu (illisible, mis de côté, d'une version plus récente), la durée en vigueur est le défaut de 30 jours,
     /// pas un choix : purger avec elle supprimerait des entretiens qu'elle voulait garder plus longtemps.
+    ///
+    /// Ces gardes ne regardent que CE lancement : un incident de réglages laisse, au lancement suivant, un fichier lisible qui dit 30
+    /// jours sans que personne l'ait choisi. Le dossier de l'historique garde donc la durée que la personne a CONFIRMÉE dans
+    /// l'onglet (`InterviewHistory.confirmedRetention`) : la purge ne part que si elle est absente (jamais réglée : la durée des
+    /// réglages est le défaut annoncé) ou égale à celle des réglages. Différente ou illisible : aucune purge.
     private func purgeHistory() {
         guard let history else { return }
         guard !isFirstLaunch, !hasLoadNotice, saveRefusal == nil else {
             log.notice("historique : purge au lancement ignorée, durée de conservation non lue")
             return
         }
-        historyPurgeTask = Task { _ = await history.purge() }
+        let settingsDays = Self.retentionDays(of: self)
+        historyPurgeTask = Task {
+            // La durée des réglages n'est celle de la personne que si le dossier la reconnaît : remise à zéro, fichier mis de côté,
+            // édité à la main ou illisible (lu 30 jours), elle diffère de la durée confirmée dans l'onglet, et RIEN n'est supprimé.
+            switch await history.confirmedRetention() {
+            case .absent: break
+            case .days(let confirmed) where confirmed == settingsDays: break
+            case .days, .unreadable:
+                self.log.notice("historique : purge au lancement ignorée, durée de conservation différente de celle confirmée")
+                return
+            }
+            _ = await history.purge()
+        }
     }
 
     /// La durée de conservation en jours : celle des réglages en vigueur, bornée ; sans contrôleur (il a disparu), le défaut de 30

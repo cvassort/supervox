@@ -185,6 +185,121 @@ import Testing
         #expect(names().count == 1, "l'entretien de 400 jours reste")
     }
 
+    // MARK: - C-1 : la durée confirmée du dossier garde le lancement d'une durée non choisie
+
+    /// Écrit la durée confirmée du dossier sans passer par le contrôleur (ce que l'onglet a fait lors d'un choix passé).
+    func confirm(_ days: Int) async throws {
+        try await InterviewHistory(root: root, retentionDays: { 3650 }).confirmRetention(days)
+    }
+
+    func launched(_ controller: AppController) async {
+        controller.launch()
+        if let task = controller.historyPurgeTask { #expect(await bounded(task) != nil) }
+    }
+
+    func entretiens() -> [String] { names().filter { $0.hasSuffix(".json") } }
+
+    @Test("C-1 : après un incident de réglages (fichier mis de côté), le lancement SUIVANT ne purge pas avec le défaut quand le dossier a confirmé 365 jours")
+    func aLaunchAfterTheSettingsWereSetAsideDoesNotPurgeWithTheDefault() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("pas du json".utf8).write(to: store.file)
+        try await seed([Self.record(1, daysAgo: 400)])
+        try await confirm(365)
+        await launched(makeController(historyRoot: root))  // lancement N : mis de côté, pas de purge
+
+        let next = makeController(historyRoot: root)  // lancement N+1 : fichier absent, copie mise de côté, aucun avis
+        await launched(next)
+
+        #expect(entretiens().count == 1, "l'entretien de 400 jours reste : 30 jours n'est pas ce que la personne a choisi")
+    }
+
+    @Test("C-1 : après un premier lancement qui a écrit le défaut de 30 jours, le lancement suivant ne purge pas quand le dossier a confirmé 365 jours")
+    func theLaunchAfterAFirstLaunchDoesNotPurgeWithAnUnchosenDefault() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await seed([Self.record(1, daysAgo: 400)])
+        try await confirm(365)
+        await launched(makeController(historyRoot: root))  // premier lancement : pas de purge, écrit 30 jours
+        #expect(store.load().settings.history.retentionDays == 30)
+
+        await launched(makeController(historyRoot: root))
+
+        #expect(entretiens().count == 1)
+    }
+
+    @Test("C-1 (décision 4) : sans durée confirmée, la purge à la durée des réglages A lieu au lancement suivant (le défaut annoncé)")
+    func withoutAConfirmedRetentionTheDefaultStillPurges() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await seed([Self.record(1, daysAgo: 400), Self.record(2, daysAgo: 5)])
+        await launched(makeController(historyRoot: root))  // premier lancement
+        #expect(entretiens().count == 2)
+
+        await launched(makeController(historyRoot: root))
+
+        #expect(entretiens().count == 1, "400 jours > 30 jours : supprimé ; 5 jours : gardé")
+    }
+
+    @Test("C-1 : un fichier de réglages édité à la main (\"retentionDays\": \"365\", lu 30) avec 365 confirmés : pas de purge")
+    func aHandEditedRetentionReadAsTheDefaultDoesNotPurge() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try saveSettings(retention: 30)
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+        object["history"] = ["retentionDays": "365"]
+        try JSONSerialization.data(withJSONObject: object).write(to: store.file)
+        #expect(store.load().settings.history.retentionDays == 30, "la valeur de la mauvaise forme se lit 30 sans avis")
+        #expect(store.load().notice == nil)
+        try await seed([Self.record(1, daysAgo: 400)])
+        try await confirm(365)
+
+        await launched(makeController(historyRoot: root))
+
+        #expect(entretiens().count == 1)
+    }
+
+    @Test("C-1 : une durée confirmée illisible : pas de purge")
+    func anUnreadableConfirmedRetentionDoesNotPurge() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try saveSettings(retention: 30)
+        try await seed([Self.record(1, daysAgo: 400)])
+        try Data("pas du json".utf8).write(to: root.appendingPathComponent("conservation"))
+
+        await launched(makeController(historyRoot: root))
+
+        #expect(entretiens().count == 1)
+    }
+
+    @Test("C-1 : la durée confirmée d'accord avec les réglages : la purge a lieu")
+    func anAgreeingConfirmedRetentionPurges() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try saveSettings(retention: 90)
+        try await seed([Self.record(1, daysAgo: 400), Self.record(2, daysAgo: 60)])
+        try await confirm(90)
+
+        await launched(makeController(historyRoot: root))
+
+        #expect(entretiens().count == 1, "400 jours supprimé, 60 jours gardé")
+        #expect(names().contains("conservation"), "la durée confirmée reste")
+    }
+
+    @Test("C-1 : choisir la durée dans l'onglet réécrit la durée confirmée et la ligne de l'onglet disparaît")
+    func choosingTheDurationAgainRestoresThePurge() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try saveSettings(retention: 30)
+        try await seed([Self.record(1, daysAgo: 100)])
+        try await confirm(365)
+        let controller = makeController(historyRoot: root)
+        let model = try #require(SettingsView.makeHistoryModel(controller))
+        await model.reload()
+        #expect(model.retentionNote != nil, "la ligne dit que la durée a changé hors de l'onglet")
+
+        let task = await model.requestRetention(365)  // la personne choisit 1 an : plus long, rien à supprimer
+        #expect(await bounded(try #require(task)) != nil)
+        await model.reload()
+
+        #expect(controller.settings.history.retentionDays == 365)
+        #expect(model.retentionNote == nil)
+        #expect(await controller.history?.confirmedRetention() == .days(365))
+    }
+
     // MARK: - Durée relue
 
     @Test("règle 3 : la durée est relue dans les réglages en vigueur à chaque purge : la changer s'applique sans relancer")
