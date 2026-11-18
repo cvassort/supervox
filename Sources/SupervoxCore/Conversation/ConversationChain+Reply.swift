@@ -135,7 +135,8 @@ extension ConversationChain {
     }
 
     /// Range la réplique : ce qui produit est arrêté et attendu avant ce qui consomme, la lecture est coupée si des clips sont en
-    /// file, et seules les phrases jouées jusqu'au bout (ou montrées) entrent dans la conversation. Le numéro de génération change
+    /// file, et seules les phrases entendues entrent dans la conversation : jouées jusqu'au bout, coupées après la moitié au moins de
+    /// leur durée (`.mostlyPlayed`), ou montrées. Le numéro de génération change
     /// **avant** la première attente : ce qui reste de cette réplique dans le flux (texte, synthèse, fin de clip) est jeté à la lecture,
     /// et ne lance plus aucune synthèse ni lecture.
     func closeReply(_ closing: ReplyClosing) async -> (heard: String, signal: ReplySignal, failure: RewriteFailure?) {

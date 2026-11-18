@@ -176,7 +176,7 @@ struct ConversationCancelTests {
 @Suite(.timeLimit(.minutes(1)))
 struct ConversationConcludeTests {
     /// `conclude()` a fini la conversation ; pendant que `run` arrête le chien de garde (une attente sourde à l'annulation), `cancel()`
-    /// arrive : la fin est `.cancelled`, et l'entretien n'a jamais annoncé qu'il concluait.
+    /// arrive : la fin est `.cancelled`.
     /// Depuis le tour de correction 1 de la tâche 6 (I-1), la conclusion est annoncée dès que la fin la prend en charge : un
     /// `cancel()` arrivé ensuite, pendant l'arrêt du chien de garde, l'emporte encore. Fin annulée, modèle fort jamais sollicité, et
     /// `.concluding` dit une seule fois, avant la fin.

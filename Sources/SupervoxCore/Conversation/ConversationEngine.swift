@@ -92,8 +92,9 @@ public enum ConversationEvent: Equatable, Sendable {
     /// La réplique est finie ; `heard` : les phrases entendues, jointes par une espace (ce que la conversation retient).
     case speakingEnded(heard: String)
     /// La personne a coupé la parole (assez fort et assez longtemps pour la porte d'interruption), pendant la réflexion ou la parole :
-    /// la réplique est abandonnée, `heard` est ce qu'elle en avait entendu (vide si elle a coupé avant la fin de la première phrase),
-    /// et c'est ce que la conversation retient. Remplace `speakingEnded` pour cette réplique ; l'écoute reprend ensuite.
+    /// la réplique est abandonnée, `heard` est ce qu'elle en avait entendu (les phrases jouées jusqu'au bout, plus la phrase coupée
+    /// si la moitié au moins de sa durée a été jouée ; vide si elle a coupé avant la moitié de la première phrase), et c'est ce que
+    /// la conversation retient. Remplace `speakingEnded` pour cette réplique ; l'écoute reprend ensuite.
     case interrupted(heard: String)
     case notice(ConversationNotice)
     /// Le dernier événement : émis une seule fois, après le retour de `AudioIO.stop()`, puis le flux se termine.
@@ -120,8 +121,8 @@ public struct ConversationConfig: Sendable {
     public var template: String
     public var language: String
     public var vocabulary: [String]
-    /// Secondes de voix au niveau `interruptLevel` au moins, depuis le début d'un passage, qui coupent la parole de l'outil (lues par
-    /// `InterruptionGate`). Un réglage (0,30 s par défaut, non confirmé sur le matériel).
+    /// Secondes de voix au niveau `interruptLevel` au moins, depuis le début d'un passage et à l'intérieur d'une fenêtre glissante
+    /// de deux fois cette durée (`InterruptionGate.windowFactor`), qui coupent la parole de l'outil (lues par `InterruptionGate`). Un réglage (0,30 s par défaut, non confirmé sur le matériel).
     public var interruptMinDuration: Double
     /// Le niveau, en dB pleine échelle, à partir duquel une trame de voix compte pour couper la parole (lu par `InterruptionGate`).
     /// Un réglage (−30 dB par défaut, non confirmé sur le matériel : un bruit ambiant a été mesuré une fois jusqu'à −20,5 dB).

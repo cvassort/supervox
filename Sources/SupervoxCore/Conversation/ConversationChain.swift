@@ -389,7 +389,9 @@ public actor ConversationChain: ConversationEngine {
     /// Le passage encore ouvert est pris **avant** l'arrêt du micro, puis le micro est arrêté et, sur une conclusion, celle-ci est
     /// annoncée : les transcriptions finales tournent micro fermé (témoin éteint, plus aucune tranche accumulée, chien de garde arrêté
     /// avec lui ; revue de la tâche 6, I-1). La réplique est rangée avant : `stopPlayback()` n'est jamais appelé après `stop()`.
-    /// Reste avant l'arrêt du micro une attente sans limite : la synthèse en cours, si la voix n'écoute pas l'annulation.
+    /// Reste avant l'arrêt du micro une attente sans limite : la synthèse en cours, si la voix n'écoute pas l'annulation. Aucune des
+    /// trois voix réelles n'en est là (code lu, revue finale) : la voix du système rend l'annulation tout de suite, celle d'un
+    /// fournisseur passe par la requête réseau et, sous `FallbackSpeechSynthesizer`, par `Deadline`.
     func windDown(_ outcome: TalkOutcome) async -> TalkOutcome {
         if replyActive { await abortReply(interrupted: false) }
         await stopPreview()
