@@ -106,6 +106,36 @@ import Testing
         toggle.controller.cancel()
     }
 
+    @Test("I-3 : la ligne de vie privée est reprise de la résolution : avant, les deux fournisseurs des réglages ; après, la voix aussi")
+    func thePrivacyLineIsTakenFromTheResolution() async throws {
+        let rig = InterviewRig()
+        let other = Provider(
+            id: UUID(), name: "Autre fournisseur d'exemple", baseURL: "https://example.org/v1", kind: .openAICompatible,
+            models: ["modele-exemple-fort"])
+        try rig.secrets.write("autre-cle-exemple", account: other.id.uuidString)
+        rig.settings.providers.append(other)
+        rig.settings.strongModel = ModelChoice(providerID: other.id, model: "modele-exemple-fort")
+        rig.settings.voice = VoiceChoice(
+            providerID: other.id, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-FR")
+        let gate = TestGate()
+        defer { gate.open() }
+        rig.resolveGate = gate
+        rig.start()
+        let before = InterviewText.privacy(
+            provider: "Fournisseur d'exemple", strongProvider: "Autre fournisseur d'exemple", voiceProvider: nil)
+        let after = InterviewText.privacy(
+            provider: "Fournisseur d'exemple", strongProvider: "Autre fournisseur d'exemple",
+            voiceProvider: "Autre fournisseur d'exemple")
+        #expect(before != after, "le banc distingue les deux lignes")
+        #expect(await until { rig.resolveCount == 1 })
+        #expect(rig.panel.interview?.privacy == before, "avant la résolution : aucune voix de fournisseur n'est nommée")
+
+        gate.open()
+        #expect(await until { rig.environment.prepareCount == 1 })
+        #expect(rig.panel.interview?.privacy == after, "après : la voix du fournisseur est nommée")
+        rig.controller.cancel()
+    }
+
     // MARK: - Règle 2 : refus
 
     static let refusals: [(String, @Sendable (inout AppSettings) -> Void, InterviewSetupFailure)] = [
