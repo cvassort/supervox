@@ -990,8 +990,13 @@ import Testing
 
     // MARK: - m2 : une seule confirmation en attente à la fois
 
-    @Test("m2 : une suppression demandée pendant la relecture d'une durée : une seule confirmation, celle qui est arrivée la première")
-    func aDeletionRequestedDuringARetentionReloadWins() async throws {
+    /// Nom corrigé (m-4 de la re-revue) : la suppression est posée AVANT que la tâche de la durée ne démarre, donc avant sa relecture, pas
+    /// pendant. Poser la suppression PENDANT la relecture exigerait de retenir `reload()`, qui lit le magasin concret `InterviewHistory`
+    /// (un acteur) : aucun double ne peut le retenir sans modifier le code de production (par exemple une fermeture de lecture injectée
+    /// dans `HistoryModel.init`). Non fait, sur consigne ; la garde « une autre confirmation est arrivée pendant la relecture » du
+    /// modèle (`guard confirmation == nil`, après `await reload()`) n'a donc pas de test qui tombe si on la déplace avant la relecture.
+    @Test("m2 : une suppression demandée AVANT la relecture d'une durée : une seule confirmation, celle qui est arrivée la première")
+    func aDeletionRequestedBeforeARetentionReloadWins() async throws {
         let rig = try Rig(retention: 365)
         defer { rig.cleanUp() }
         try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 100)])
