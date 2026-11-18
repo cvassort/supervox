@@ -37,7 +37,7 @@ public struct SpeechTimeline: Sendable {
     }
 
     /// L'audio reçu qui ne remplit pas encore un bloc (moins de `blockSize` échantillons), en lecture seule : le détecteur ne l'a
-    /// pas encore vu. Une ligne de temps qui en remplace une autre le reprend à son début (l'entretien, à chaque remise à neuf).
+    /// pas encore vu. Une ligne de temps qui en remplace une autre le reprend à son début (l'entretien, quand l'appelant le reporte).
     public var unblockedTail: [Float] { Array(audio[nextBlockStart...]) }
 
     /// Fin de prise : le reste de l'audio qui ne remplit pas un bloc (moins de `blockSize` échantillons), complété par

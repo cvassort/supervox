@@ -444,7 +444,9 @@ public actor ConversationChain: ConversationEngine {
     /// la revue finale des commentaires et de l'arithmétique de `effectiveSilence`, non lue dans la bibliothèque) n'a jamais été vu du
     /// détecteur : c'est peut-être le début d'une reprise de parole. Reporté, il l'est au début de la ligne neuve **et** de la porte,
     /// pour que leurs indices désignent toujours le même échantillon (revue finale, I-A). Chaque appelant dit en clair s'il le
-    /// reporte : oui pour de l'audio d'écoute, non pour de l'audio capté pendant la parole de l'outil (décision du contrôleur).
+    /// reporte (décision du contrôleur) : `talk` et `finishReply` non, `proceed` et la fin de `hear` oui. Au site `hear`, ce reste peut
+    /// avoir été capté pendant la parole de l'outil (un passage ouvert pendant la réplique s'est fermé avant elle) : il reste alors
+    /// sous la porte tant que la réplique dure, et `finishReply` le jette (revue finale, m-2).
     ///
     /// Non fait, et son coût : le remplissage d'avant le reste n'est pas reporté. Un passage qui commence dans les `padding`
     /// premières secondes de la ligne neuve perd la part de son remplissage qui tombait avant elle (jusqu'à `padding`, 0,3 s par

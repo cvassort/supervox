@@ -77,8 +77,11 @@ extension ConversationChain {
         // Une ligne de temps par passage : le passage fermé est traité, aucun n'est ouvert, l'écoute repart d'une ligne neuve (la
         // mémoire reste bornée à ce qui a été reçu depuis le dernier passage ou la dernière réplique).
         if timeline.openSegmentStart == nil, handledSegments > 0, handledSegments == timeline.closedSegments.count {
-            // Le reste est reporté : il suit la fin du passage, capté pendant l'écoute ; ce peut être le début d'une reprise
-            // (revue finale, I-A).
+            // Le reste est reporté : il suit la fin du passage. Capté pendant l'écoute, ce peut être le début d'une reprise (revue
+            // finale, I-A). Mais il peut aussi avoir été capté pendant la parole de l'outil : un passage ouvert pendant la réplique
+            // peut se fermer avant elle. Ce reste-là ne devient pas un tour sans la porte : tant que la réplique dure, un passage qui
+            // s'ouvre est `.busy` et jugé par la porte ; à la fin de la réplique, `finishReply` le jette, et un passage encore ouvert
+            // n'y compte qu'à partir de la fin de la parole (`becomeIdle`) (revue finale, m-2).
             await renew(carryingTail: true)
         }
     }
