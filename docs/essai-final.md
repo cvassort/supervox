@@ -23,7 +23,9 @@ Ce fichier est public : n'y écrivez ni texte dicté, ni clé, ni nom de personn
   d'origine), aucun raccourci de mode, micro et Accessibilité accordés, réseau actif, WhisperKit large-v3 turbo, français,
   vocabulaire vide). Si un essai échoue pour une raison qui ressemble à un état oublié, rétablissez-le avant de conclure.
   Une seule exception, dite en tête de l'étape 4 : les essais 32 à 45 gardent la relecture activée, et l'essai 46 la
-  désactive. L'étape 5 (essais 47 à 62) a ses propres préparatifs : un fournisseur qui répond et un modèle fort choisi.
+  désactive. L'étape 5 (essais 47 à 62) a ses propres préparatifs : un fournisseur qui répond et un modèle fort choisi. L'étape 6
+  (essais 63 à 94) a les siens, et ouvre le micro : voir « Avant de commencer l'étape 6 » et « Jamais exécuté pendant la
+  construction ».
 
 ## Étape 2 — socle
 
@@ -1388,7 +1390,845 @@ VoiceOver lit sur chaque élément, et si l'application s'annonce d'elle-même.
    interrupteurs « Relire avant de coller : <nom du mode> », le champ de la feuille « Consigne ».
    - Attendu : ces noms. Désactivez VoiceOver (⌘F5).
 
-### 63. Retour à faire
+## Étape 6 — entretien vocal
+
+À cette étape, le mode Entretien existe : Supervox vous pose des questions à voix haute, une à la fois, vous répondez à voix
+haute, puis il rédige un prompt que vous relisez. **Ces essais ouvrent le micro, font parler Supervox et envoient du texte à
+un serveur** : le texte de vos réponses part chez le fournisseur du modèle rapide (à chaque tour), et la conversation entière
+chez celui du modèle fort (à la conclusion). **N'y dites rien de confidentiel.** L'audio du micro, lui, reste sur ce Mac : la
+transcription est locale. Le micro ouvert allume le voyant d'enregistrement du système : prévenez votre entourage, et gardez
+la main sur le volume.
+
+Pendant la construction de cette étape, **tout ce qui touche au micro, au son, à l'écho, à l'interruption, à la voix, à la
+vraie fenêtre et à VoiceOver n'a pas été essayé** (consigne de l'utilisateur : aucun essai sur le matériel). Cette liste est
+le seul endroit où c'est consigné : la sous-section « Jamais exécuté pendant la construction » dit, sans détour, ce que
+personne n'a encore vu tourner.
+
+Un essai dont le titre dit « sans micro, sans son » ne les ouvre pas. Un titre qui dit « ouvre le micro » ou « joue un son »
+le fait : chaque essai y revient sur le matériel utilisé.
+
+### Avant de commencer l'étape 6
+
+- Il faut un fournisseur qui répond (essai 5), un **modèle fort** et un **modèle rapide** choisis : Réglages, onglet Modes,
+  section « Modèles ». Le modèle rapide pose les questions à chaque tour : prenez-en un qui répond vite. Sans l'un des deux,
+  l'entretien refuse de démarrer (essai 79).
+- Le micro doit être accordé à Supervox (essai 2). Sans accès, l'entretien ne démarre pas : le panneau montre la ligne des
+  permissions, comme pour la dictée.
+- **Le premier entretien charge, et télécharge si besoin, le moteur de transcription du mode Entretien** (Parakeet, tant
+  que vous n'en avez pas choisi un autre dans la feuille du mode : `TranscriptionEngine.interviewDefault`) **et le détecteur
+  de voix de l'entretien** : « Préparation de l'entretien… » peut durer. Leur taille et la durée n'ont pas été mesurées.
+- **Chaque lancement peut lire le trousseau jusqu'à trois fois** (modèle rapide, modèle fort, voix de fournisseur), donc
+  faire apparaître jusqu'à trois invites du système. Comptez-les au premier entretien (essai 68).
+- Une voix française du système doit être installée, sinon l'entretien continue en texte seul (essai 82).
+- Pour l'écho et l'interruption : des haut-parleurs, un casque filaire, et, si vous en avez un, un casque Bluetooth (essais
+  73 à 77). **Notez le modèle d'un casque seulement dans vos notes personnelles, jamais dans ce dépôt.**
+- Les valeurs d'origine de l'entretien sont des **choix non mesurés** : 8 questions au plus, silence de fin de tour 0,50 s,
+  voix de 0,30 s au moins pour couper la parole, niveau de −30 dB, historique gardé 30 jours (`InterviewSettings`,
+  `HistorySettings`, commentaires du code).
+- L'état de départ de l'étape 6 ajoute à celui de l'étape 5 : pastille « Dictée brute » choisie, raccourci ⌃⌥Espace en
+  bascule, modèles rapide et fort choisis, réglages de l'entretien d'origine, voix du système, historique de 30 jours.
+  **Chaque essai qui change un état le rétablit à sa fin.**
+
+### Ce que l'étape 6 change aux attendus des essais précédents
+
+Ces essais ont été écrits quand le mode Entretien ne faisait rien. Leurs attendus ne sont plus tous vrais (vérifié dans le
+code) :
+
+- **Essais 16 (points 3 à 6) et 45 (point 2)** : cliquer sur la pastille « Entretien » au repos (même déjà choisie), ou taper
+  ⌃⌥Espace quand « Entretien » est le mode choisi, **lance un entretien et ouvre le micro**. La phrase « Ce mode arrive à
+  une étape suivante. » n'existe plus nulle part dans le code. Pendant un entretien, le raccourci **conclut** : il ne ferme
+  plus le panneau. Sautez ces points, ou faites-les en annulant par Échap (essai 72) ; remettez « Dictée brute ».
+  L'essai 45 (point 1) reste vrai : pendant une relecture, le clic sur « Entretien » ne lance rien.
+- **Essai 32 (points 1 et 2) et essai 48 (point 6)** : la barre des réglages compte **sept onglets** (essai 63), pas cinq.
+  La ligne d'Entretien, dans l'onglet Modes, dit « Toujours relu : l'entretien passe toujours par la relecture. Ses questions
+  et son gabarit se règlent dans l'onglet Entretien. » et sa feuille dit « Ce mode n'a pas de consigne à modifier : ses
+  questions et son gabarit se règlent dans l'onglet Entretien. » (essai 64). Entretien reste sans interrupteur, et ne se
+  supprime pas.
+- **Essai 47** : le fichier que l'application actuelle écrit est en **version 3**, pas 2 (points 5 et 6 ; l'avis de
+  l'application de l'étape 4 dirait « version 3 »). Il reçoit en plus les entrées « interview », « voice » et « history ».
+  L'essai 66 refait le même chemin depuis l'étape 5.
+- **Essai 59 (point 1)** : le modèle rapide **est** utilisé, il pose les questions de l'entretien. Les deux notes sont
+  maintenant « Réécrit le texte quand vous le corrigez à la voix, rédige le prompt de l'entretien, et sert aux modes qui n'ont
+  pas de modèle propre. » et « Pose les questions de l'entretien vocal : choisissez un modèle qui répond vite. ».
+- **Essai 62** : « Aucun code de l'application ne fait de lui une annonce parlée » reste vrai pour la mise en forme et la
+  correction, mais **l'entretien en poste** : une annonce à chaque changement de titre et à chaque avis (essai 89).
+- **Essai 3 (point 5)** : le menu « … » du panneau a maintenant « Réglages… », « Historique… », un séparateur, puis
+  « Quitter Supervox ». Le menu de l'icône de la barre des menus n'a pas changé.
+
+### Jamais exécuté pendant la construction
+
+Dit sans détour. À l'exception des mesures isolées citées dans le deuxième point (« Ce qui a été mesuré, isolément »), rien de
+ce qui suit n'a été vu tourner sur du matériel réel pendant la construction de l'étape 6.
+
+- **Aucun entretien complet.** Ni la chaîne assemblée (micro, détecteur de voix, transcription, modèle rapide, voix, lecture,
+  conclusion, relecture), ni aucun vrai fournisseur. Les tests tournent sur des doubles et un serveur local de test.
+- **Ce qui a été mesuré, isolément, avant la consigne d'arrêt des essais matériels** (tâches 1 et 2 de l'étape, sur un Mac dont l'entrée et la sortie
+  par défaut étaient un casque Bluetooth ; mesures, non généralisables ; la tâche 1 a une note publique,
+  `docs/bench/2026-11-16-essai-voix-et-lecture.md`, la tâche 2 n'a que des notes de construction non suivies par git) : la voix
+  française du système rend des tampons ; la fin d'une lecture arrive après la durée du son (de 47 à 88 ms de plus) ; deux
+  clips en file reçoivent chacun une fin « coupée » après un arrêt ; le micro continue de livrer pendant la lecture ;
+  l'enchaînement arrêt, démarrage, lecture marche sur la même instance. Trois des quatre tests de `SUPERVOX_SPEAKER=1` ont passé. **Au premier passage, le processus de test
+  s'est arrêté** sur une exception du système (`_auv3 != nil`, à l'activation du traitement de la voix) ; elle n'a pas été
+  reproduite en quatre exécutions et sa cause n'est pas établie.
+- **Les haut-parleurs intégrés : jamais essayés.** L'écho, la latence, et la question « l'annulation d'écho du système
+  laisse-t-elle un écho que le détecteur de voix annonce comme de la voix ? » ne sont pas établis (volume du Mac à zéro
+  pendant l'essai de la tâche 1). Le seul chiffre de bruit ambiant est une mesure unique à −20,5 dB (commentaire de
+  `ConversationEngine.swift`).
+- **L'interruption réelle** : la porte (voix de 0,30 s au moins, au-dessus de −30 dB) n'a jamais rencontré une vraie voix,
+  un vrai clavier ni le bruit d'une vraie pièce. Le délai entre le début de votre voix et l'arrêt de Supervox n'est ni calculé
+  ni mesuré.
+- **`aRestartAfterANaturalEndPlaysAgain`** (le quatrième test de `SUPERVOX_SPEAKER=1`) : écrit, jamais exécuté.
+- **La couche système de la voix** (`SystemSpeechSynthesizer`, test `SUPERVOX_SPEECH=1`) : jamais exécutée telle qu'elle est
+  livrée. **La voix d'un fournisseur** (requête `audio/speech`) : jamais contre un service. Un WAV dont l'en-tête porte une
+  taille provisoire : jamais vu.
+- **Le détecteur de voix en flux sur une voix réelle** : la valeur « en pratique » du silence de fin de tour vient d'un calcul
+  sur le code de la bibliothèque (refait à la main ici : 0,3 à 0,5 s donnent 0,768 s, 0,6 s donne 1,024 s), jamais d'une
+  mesure. Le gain du défaut de 0,5 s sur 0,6 s (environ 0,26 s) n'a pas été remesuré, et le risque de couper quelqu'un qui
+  marque une pause n'a pas été évalué.
+- **La vraie fenêtre** : sept onglets dans 600 points, la hauteur de l'onglet Entretien, les feuilles de confirmation de
+  l'Historique, un panneau d'entretien qui n'a pas la frappe, le défilement d'une longue réplique et son fondu : jamais vus
+  (les images sont rendues hors écran, sans barre d'onglets). Les tests de fenêtre n'ont pas été relancés depuis la tâche 8
+  (écran verrouillé).
+- **VoiceOver** : jamais écouté. **Casque Bluetooth en mode appel** avec un entretien : jamais essayé. **macOS 26** : le
+  montage n'a été vérifié que sous macOS 27.
+- **Le modèle** : la qualité des questions et du prompt, le respect du marqueur de conclusion, une proposition de conclure
+  faite au bon moment, jamais vus avec un vrai modèle. Les avis « derniers mots non transcrits » et ceux du vocabulaire
+  (petit modèle absent, liste trop longue) n'ont jamais été vus : ils demandent une panne difficile à provoquer.
+- **Le banc `interview`** (essai 94) : jamais lancé contre un service.
+
+### 63. Réglages : sept onglets et navigation (sans micro, sans son)
+
+1. Menu de l'icône, « Réglages… ». Regardez la barre d'onglets.
+   - Attendu : sept onglets, dans l'ordre : Fournisseurs, Raccourci, Permissions, Transcription, Modes, Entretien,
+     Historique. Tous lisibles, aucun coupé ni caché. **Comportement à confirmer** : la fenêtre a une taille fixe (600 sur 460
+     points) et ne s'est jamais vue avec sa barre d'onglets.
+2. Ouvrez l'onglet Historique, fermez la fenêtre par la croix, puis menu de l'icône, « Réglages… ».
+   - Attendu : la fenêtre revient sur l'onglet où vous l'avez laissée (Historique).
+3. Réduisez la fenêtre dans le Dock (⌘M), puis menu de l'icône, « Réglages… ».
+   - Attendu : la fenêtre revient. **Comportement à confirmer** : le code la fait passer devant (`makeKeyAndOrderFront`) sans
+     la sortir explicitement du Dock ; on ne sait pas si cela suffit.
+4. Ouvrez le panneau, puis le menu « … » en bas à droite.
+   - Attendu : « Réglages… », « Historique… », un séparateur, « Quitter Supervox ». « Historique… » ferme le panneau et ouvre
+     la fenêtre sur l'onglet Historique, même si elle était ouverte sur un autre onglet.
+   - Si ce n'est pas le cas, noter : l'onglet absent ou coupé, ce qu'affiche la barre, l'entrée de menu qui manque.
+
+### 64. Onglet Modes : modèles fort et rapide, ligne Entretien (sans micro, sans son)
+
+1. Onglet Modes, section « Modèles ».
+   - Attendu : « Modèle fort » avec la note « Réécrit le texte quand vous le corrigez à la voix, rédige le prompt de
+     l'entretien, et sert aux modes qui n'ont pas de modèle propre. » ; « Modèle rapide » avec la note « Pose les questions de
+     l'entretien vocal : choisissez un modèle qui répond vite. ». Choisissez un modèle pour chacun (deux modèles différents
+     si votre fournisseur en liste au moins deux).
+2. Regardez la ligne « Entretien » de la section « Modes ».
+   - Attendu : le moteur « Parakeet (moteur de l'entretien) », la phrase « Toujours relu : l'entretien passe toujours par la
+     relecture. Ses questions et son gabarit se règlent dans l'onglet Entretien. », aucun interrupteur, et « Supprimer… »
+     grisé dans son menu « … ».
+3. Ouvrez « Modifier… » sur Entretien.
+   - Attendu : à la place de la consigne, « Ce mode n'a pas de consigne à modifier : ses questions et son gabarit se règlent
+     dans l'onglet Entretien. » ; « Moteur de dictée » sur « Parakeet (moteur de l'entretien) » ; « Raccourci du mode » sur
+     « Aucun ». Fermez sans rien changer.
+   - Si ce n'est pas le cas, noter : la phrase vue. Dites aussi si le choix « par défaut » et le choix « Parakeet » du moteur
+     (deux entrées voisines) se comprennent.
+
+### 65. Onglet Entretien : questions, gabarit, réglages avancés (sans micro, sans son)
+
+1. Ouvrez l'onglet Entretien.
+   - Attendu : en tête, « L'entretien vous pose des questions à voix haute, une à la fois, puis rédige un prompt à partir de
+     vos réponses. » ; « Nombre maximal de questions » à 8, avec « Après la réponse à la dernière question, Supervox rédige le
+     prompt. » ; le champ « Gabarit du prompt final » avec le gabarit d'origine (il commence par « Rédige, à partir de
+     l'entretien, un prompt destiné à un agent de programmation. ») et « Revenir au gabarit d'origine » grisé ; « Réglages
+     avancés » replié ; plus bas, des notes : « Il passe toujours par la relecture. Les changements s'appliquent au prochain
+     entretien. », « Le modèle rapide pose les questions, le modèle fort rédige le prompt : ils se choisissent en tête de
+     l'onglet Modes. », et, avec un cadenas, « Le texte de vos réponses est envoyé au fournisseur du modèle rapide et du modèle
+     fort ; l'audio du micro ne quitte jamais cet ordinateur. La voix de Supervox est celle du système : rien n'est envoyé
+     pour la produire. ». **Comportement à confirmer** : la hauteur fixe de 460 points ne coupe pas ce qu'il faut voir, et le
+     bas de l'onglet s'atteint en faisant défiler (les images ne montrent pas la barre d'onglets).
+2. Avec les flèches, réglez le nombre de questions : 1 au plus bas, 20 au plus haut, de 1 en 1. Remettez 8.
+3. Dans le gabarit, ajoutez une phrase à la fin, puis cliquez dans un autre champ ou changez d'onglet, puis revenez.
+   - Attendu : le texte tapé est enregistré quand le champ perd la main (pas à chaque frappe) ; il est là au retour ;
+     « Revenir au gabarit d'origine » est actif. Cliquez dessus : le gabarit d'origine revient et le bouton se grise.
+4. Tapez une lettre dans le gabarit puis fermez la fenêtre par la croix, rouvrez-la.
+   - Attendu : la lettre est là (enregistrée à la fermeture). Effacez-la. Effacez ensuite tout le gabarit : le champ reste vide
+     tant que vous tapez, puis, quand vous cliquez ailleurs, le gabarit d'origine y revient et « Revenir au gabarit d'origine »
+     est grisé (code lu : un texte vide s'enregistre comme « pas de gabarit », donc le gabarit d'origine). **Comportement à
+     confirmer** : le champ qui se remplit à la perte du focus, jamais vu.
+5. Ouvrez « Réglages avancés ». Regardez « Silence de fin de tour », puis poussez les flèches de 0,30 à 2,00 s.
+   - Attendu : la valeur va de 0,30 à 2,00 par 0,10 sans dérive (jamais « 0,30000000000000004 »), et la note dessous dit, à
+     0,50 : « 0,50 s demandées, 0,77 s en pratique : le détecteur de voix compte par tranches de 0,256 s. ». Calcul refait à la
+     main (formule de `FluidStreamingVoiceDetector.effectiveSilence`) : de 0,30 à 0,51 s, 0,77 s en pratique ; à 0,60, 1,02 s ;
+     à 2,00, 2,30 s. C'est un plancher : le délai réel après la dernière syllabe peut être d'un bloc de plus (lu, non mesuré).
+6. « Durée de voix pour couper la parole » : de 0,10 à 1,00 s par 0,05. « Niveau de voix pour couper la parole » : de −50 à
+   −10 dB par 1 dB. Lisez la note : « Si Supervox se coupe en entendant sa propre voix, montez le niveau (vers −20 dB). S'il
+   ne s'arrête pas quand vous parlez, baissez-le. ». Cliquez sur « Rétablir les valeurs d'origine ».
+   - Attendu : 0,50 s, 0,30 s et −30 dB reviennent ; le nombre de questions et le gabarit ne bougent pas.
+7. Réglages, onglet Raccourci : « Maintenir pour dicter ». Revenez à l'onglet Entretien sans fermer la fenêtre.
+   - Attendu : une note apparaît : « En entretien, le raccourci fonctionne toujours en bascule : un appui conclut. ».
+     **Comportement à confirmer** : qu'elle apparaisse sans rouvrir la fenêtre (l'onglet relit les réglages à son affichage :
+     déduit, non vu). Rétablissez la bascule.
+8. **Enregistrement refusé** (même méthode que l'essai 33.5). Copiez `settings.json` ailleurs, fenêtre ouverte sur l'onglet
+   Entretien, remplacez le contenu du fichier par n'importe quel texte, puis poussez une flèche du nombre de questions.
+   - Attendu : une bande rouge au-dessus du formulaire (« Le fichier « settings.json » est illisible ou d'une version
+     inconnue ; il est conservé tel quel et les réglages n'ont pas été enregistrés. »), et la valeur affichée reste l'ancienne.
+     Remettez la sauvegarde par-dessus, fermez la fenêtre, rouvrez-la : la bande a disparu. **Ne quittez pas Supervox avant
+     d'avoir remis le fichier** (essai 33.6).
+   - Si ce n'est pas le cas, noter : ce qui est coupé, saute ou se répète ; un retard à la frappe dans le gabarit.
+
+### 66. Fichier de réglages de l'étape 5 conservé (sans micro, sans son)
+
+Cet essai passe par l'application de l'étape 5, la seule qui sache écrire un fichier en version 2 : l'application actuelle
+écrit en version 3. Il remplace donc votre fichier le temps de l'essai, comme l'essai 47. Le dossier est
+`~/Library/Application Support/Supervox/`. Les deux applications partagent ce dossier et le trousseau : n'en lancez jamais
+deux à la fois. **Ne dictez rien et ne lancez aucun entretien dans l'ancienne application.**
+
+1. Quittez Supervox. Copiez `settings.json` dans un dossier à vous : **c'est votre sauvegarde (S)**. Déplacez ensuite le
+   fichier hors du dossier de l'application.
+2. Construisez l'application de l'étape 5 (la fusion de l'étape 5 est le commit `b85fb87`) et lancez-la :
+
+   ```sh
+   git worktree add ../supervox-etape5 b85fb87
+   (cd ../supervox-etape5 && Scripts/make-app.sh)
+   open ../supervox-etape5/build/Supervox.app
+   ```
+
+   Dans cette ancienne application : ajoutez un fournisseur (essai 5.1, clé d'essai), choisissez un modèle fort (onglet
+   Modes), puis « Quitter Supervox ». Copiez le `settings.json` qu'elle vient d'écrire dans un autre dossier à vous : **c'est
+   le fichier de l'étape 5 (V2)**. Dans un éditeur, vérifiez que « version » vaut 2 et qu'il n'y a ni entrée « interview »
+   ni entrée « history ».
+3. Lancez l'application actuelle (`open build/Supervox.app`, depuis le dossier de cette étape).
+   - Attendu : aucun fichier `settings.json.illisible-<date>` n'apparaît ; le panneau ne parle ni de fichier illisible ni de
+     fichier mis de côté ; l'accueil du premier lancement ne revient pas. Dans Réglages : le même fournisseur avec sa clé
+     « Enregistrée », le même raccourci, le même modèle fort, les mêmes quatre modes. Onglet Entretien : 8 questions, gabarit
+     d'origine, 0,50 s, 0,30 s, −30 dB. Onglet Historique : « Aucun entretien gardé pour l'instant. », « Garder les entretiens »
+     sur « 30 jours ». D'après le code (`AppController.launch` n'écrit qu'au premier lancement ; seule la mémorisation d'un conflit entre votre
+     raccourci et un raccourci de macOS écrit aussi, `recordShownSystemConflict`), le fichier n'est normalement pas réécrit au
+     lancement et porte encore `"version" : 2` (non vu).
+4. Cliquez sur une autre pastille du panneau (jamais « Entretien » : elle lancerait un entretien), puis revenez à « Dictée
+   brute ». Rouvrez `settings.json`.
+   - Attendu : « version » vaut 3 ; trois entrées sont apparues, « interview », « voice » et « history », avec leurs valeurs
+     d'origine ; les fournisseurs, le raccourci, les modes et les modèles sont ceux de V2 (comparez avec `diff`).
+5. Quittez cette version, copiez le fichier (version 3) dans un dossier à vous (V3), puis relancez l'application de l'étape 5
+   (`open ../supervox-etape5/build/Supervox.app`). Cliquez sur une pastille, puis une autre.
+   - Attendu : le panneau s'ouvre avec un avis qui dit que le fichier de réglages vient d'une version plus récente de
+     Supervox (version 3), qu'il est gardé tel quel et que rien n'y sera écrit. Après vos clics, comparez avec V3 : le fichier
+     n'a pas changé. **Comportement à confirmer** : jamais essayé avec l'ancienne application construite. C'est la limite à
+     connaître : **après la première écriture du fichier en version 3, une version plus ancienne de Supervox ne peut plus y
+     enregistrer ses réglages** (le README le dit aussi).
+6. **Rétablissez.** Quittez l'ancienne application. Remettez V2 à la place du fichier, relancez l'ancienne application,
+   **supprimez-y le fournisseur ajouté** (« Supprimer… » : cela retire aussi sa clé du trousseau), puis quittez-la. Remettez
+   votre sauvegarde S dans le dossier, supprimez le second dossier (`git worktree remove --force ../supervox-etape5`), relancez
+   cette version : vos réglages sont revenus.
+   - Si ce n'est pas le cas, noter : ce qui a été perdu ou mis de côté, et à quelle étape.
+
+### 67. Onglet Historique vide (sans micro, sans son)
+
+À faire avant tout entretien, ou avec un historique vidé (essai 87), dossier `Historique` absent ou vide.
+
+1. Onglet Historique.
+   - Attendu : en tête, « Chaque entretien conclu est gardé ici en texte : le prompt rédigé et la conversation. Ils restent sur
+     cet ordinateur, ne sont envoyés nulle part, et l'audio n'est jamais gardé. Un entretien annulé par Échap n'est pas
+     gardé. » ; au milieu, « Aucun entretien gardé pour l'instant. » ; en bas, « Garder les entretiens » sur « 30 jours » et
+     « Tout supprimer… » grisé.
+2. Ouvrez le menu « Garder les entretiens ».
+   - Attendu : « Ne rien garder », « 7 jours », « 30 jours », « 90 jours », « 1 an ». Un changement sans entretien à supprimer
+     s'enregistre tout de suite, sans confirmation. Remettez « 30 jours ».
+   - Si ce n'est pas le cas, noter : le choix manquant ou la confirmation inattendue.
+
+### 68. Premier entretien : voix du système, trois questions, conclusion à la voix (ouvre le micro, joue un son)
+
+Préparatifs : essais 64 et 65 faits, curseur dans l'application de notes, volume raisonnable, **haut-parleurs ou casque filaire
+(pas Bluetooth : essai 77)**. Gardez sous la main de quoi dire : par exemple « Je voudrais un script qui range
+automatiquement les fichiers d'un dossier par date. »
+
+1. Ouvrez le panneau (menu de l'icône) et cliquez sur la pastille « Entretien ». Comptez les invites du trousseau.
+   - Attendu : le titre « Préparation de l'entretien… » (avec, la première fois, le téléchargement éventuel des modèles ;
+     notez sa durée) ; les pastilles se grisent ; en bas, « Échap annule l'entretien sans rien garder. » et, sur une ligne
+     de vie privée, le nom de votre fournisseur : « Le texte de vos réponses part chez « <nom> » ; l'audio du micro reste sur
+     cet ordinateur. » (deux noms, « <nom> » et « <nom> », si vos modèles rapide et fort viennent de deux fournisseurs).
+     « Conclure » est grisé. **Comportement à confirmer** : le nombre d'invites du trousseau (jusqu'à trois par lancement).
+2. Quand le titre devient « À vous » : le voyant d'enregistrement du système est allumé, l'aide dit « Parlez : Supervox attend
+   la fin de votre phrase. Appuyez sur Conclure quand vous avez tout dit. », « Conclure » est actif. Dites votre demande
+   (deux phrases), puis taisez-vous.
+   - Attendu : pendant que vous parlez, un aperçu provisoire s'écrit dans la carte « Vous » (l'aperçu est recalculé toutes les
+     secondes, choix non mesuré) ; après un silence d'environ 0,77 s (valeur « en pratique » de l'essai 65, un
+     plancher), le titre passe à « Réflexion… » (aide : « Parlez pour ajouter quelque chose : Supervox reprendra avec. »), puis à « Supervox parle » avec
+     « Question 1 sur 8 ». Vous entendez la question. Avec une voix, le bloc « Supervox » est **vide au début de la parole** (la question
+     précédente disparaît), puis chaque phrase s'y ajoute **une fois dite jusqu'au bout** (une question d'une seule phrase
+     n'apparaît donc qu'à la fin de sa lecture : code lu, `InterviewController.handle`, non vu). L'aide dit « Parlez pour couper la parole à Supervox. ». Notez le délai entre la fin de votre
+     phrase et le premier son (une mesure du banc, 1,87 s de médiane sur 40 tours le 13 novembre 2026 et citée dans
+     `ConversationEngine.swift`, sert d'ordre de grandeur : ce n'est pas un critère, la chaîne n'est pas la même).
+3. Répondez, à voix haute, à trois questions.
+   - Attendu : à chaque fois, « À vous », votre réponse dans la carte « Vous », puis « Réflexion… », la question suivante et
+     son compteur (« Question 2 sur 8 », « Question 3 sur 8 »). Supervox pose une seule question à la fois, par phrases
+     courtes (consigne de l'intervieweur).
+4. Si Supervox dit qu'il peut conclure, un avis apparaît : « Supervox propose de conclure : dites-le s'il vous convient, ou
+   continuez à préciser. ». Répondez à voix haute : « Oui, concluons. ». S'il ne le propose pas, continuez jusqu'à ce qu'il le
+   fasse (le plafond est de 8 questions : essai 71).
+   - Attendu : Supervox dit une courte phrase de fin (sans question), puis le titre passe à « Rédaction du prompt… » ; **le
+     voyant d'enregistrement s'éteint à ce moment** (le micro est fermé dès que la conclusion commence) ; « Conclure » grisé.
+     **Comportement du modèle à confirmer** : qu'il propose de conclure au bon moment, qu'il écrive le marqueur de conclusion
+     quand vous acceptez ; notez vos mots exacts s'il continue de poser des questions.
+5. Attendez la relecture.
+   - Attendu : le titre « À relire », un prompt en français en cinq parties (Objectif, Contexte, Contraintes, Résultat attendu,
+     Critères de réussite ; « Non précisé. » pour ce que vous n'avez pas dit) et la phrase « Prompt rédigé à partir de
+     l'entretien : relisez-le, puis collez-le ou copiez-le. ». Rien n'est collé. Pas de « Version précédente » (il n'y a pas de
+     version antérieure). Le panneau a la frappe, comme pour toute relecture.
+6. Curseur dans l'application de notes, cliquez sur « Coller ».
+   - Attendu : le prompt est collé, une fois ; il reste dans le presse-papiers (comme à l'essai 35).
+   - Si ce n'est pas le cas, noter : à quelle étape l'entretien s'est arrêté, la phrase affichée, le délai de préparation, le
+     délai entre la fin de votre phrase et la voix, une voix coupée ou hachée, un texte affiché qui n'est pas celui entendu.
+
+### 69. Lancer l'entretien de trois façons, et en maintien (ouvre le micro)
+
+Les points 1 à 4 lancent chacun un entretien, annulé par Échap (essai 72) dès que « À vous » apparaît. Départ : panneau fermé,
+pastille « Dictée brute » choisie.
+
+1. Ouvrez le panneau par le menu de l'icône, cliquez sur « Entretien ».
+   - Attendu : l'entretien démarre (« Préparation de l'entretien… »). Échap.
+2. Entretien est maintenant le mode choisi. Depuis une autre application, tapez ⌃⌥Espace.
+   - Attendu : le panneau s'ouvre et l'entretien démarre, sans passer par un clic. Échap.
+3. Panneau ouvert, Entretien déjà choisi, au repos : cliquez de nouveau sur la pastille « Entretien ».
+   - Attendu : l'entretien démarre (une pastille de dictée déjà choisie, elle, ne ferait rien). Échap.
+4. Réglages, onglet Modes, « Modifier… » sur Entretien : donnez-lui le raccourci ⌃⌥E. Choisissez la pastille « Dictée brute »,
+   fermez le panneau, tapez ⌃⌥E depuis une autre application.
+   - Attendu : le panneau s'ouvre sur la pastille « Entretien » (choisie et enregistrée) et l'entretien démarre. Échap, puis
+     retirez le raccourci du mode (« Retirer ») et remettez « Dictée brute ».
+5. Pendant « Préparation de l'entretien… » ou « À vous » (lancez-en un), cliquez sur une autre pastille.
+   - Attendu : rien ne change ; les pastilles sont grisées et le mode reste Entretien. Échap.
+6. Réglages, onglet Raccourci : « Maintenir pour dicter ». Lancez l'entretien en **maintenant** ⌃⌥Espace, puis relâchez.
+   - Attendu : l'entretien démarre ; la note « En entretien, le raccourci fonctionne toujours en bascule : un appui conclut. »
+     est affichée ; **relâcher ne fait rien** (l'entretien continue). Échap. Rétablissez la bascule.
+7. Retirez l'accès au micro (Réglages Système, Confidentialité et sécurité, Micro), puis lancez l'entretien.
+   - Attendu : aucun entretien ne démarre, le panneau s'ouvre avec la ligne des permissions. Rétablissez l'accès.
+   - Si ce n'est pas le cas, noter : le lancement qui ne démarre pas, ou celui qui laisse le micro allumé (voyant) après Échap.
+
+### 70. Conclure par le bouton, par la touche, par la voix (ouvre le micro, joue un son)
+
+Chaque variante est un entretien court (une ou deux questions). Notez, à chaque fois, le délai entre la demande et
+« Rédaction du prompt… ».
+
+1. **Le bouton.** Après une de vos réponses, au titre « À vous », cliquez sur « Conclure ».
+   - Attendu : tout de suite, le titre « Rédaction du prompt… » ; le voyant d'enregistrement s'éteint ; « Conclure » est
+     grisé ; l'aide et le pied « Échap annule… » disparaissent ; puis la relecture avec le prompt. Ce que vous disiez au moment
+     du clic n'est pas perdu : votre dernière phrase, même inachevée, est transcrite micro fermé et fait partie du prompt.
+2. **La touche, en bascule.** Un seul appui sur ⌃⌥Espace.
+   - Attendu : même déroulé qu'au point 1. Un entretien lancé par le raccourci d'un mode (essai 69, point 4) ne se conclut que
+     par ce raccourci ; un entretien lancé par la pastille ou par ⌃⌥Espace se conclut par ⌃⌥Espace.
+3. **La touche, en maintien.** Réglage « Maintenir pour dicter », entretien lancé en maintenant la touche.
+   - Attendu : relâcher ne conclut pas ; un nouvel appui conclut. Rétablissez la bascule.
+4. **La voix.** Dites « Je veux conclure. », puis, dans un autre entretien, acceptez une proposition de Supervox (essai 68,
+   point 4).
+   - Attendu : Supervox dit une courte phrase de fin sans poser de question, puis « Rédaction du prompt… » comme au point 1.
+     **Comportement du modèle à confirmer** : il doit écrire le marqueur de conclusion ; s'il continue de poser des questions,
+     notez vos mots exacts. Un marqueur mal écrit par le modèle (avec des espaces, sans crochet fermant) serait **dit à haute
+     voix** : notez-le.
+5. **Pendant la réflexion.** Répondez, puis cliquez sur « Conclure » avant que la voix ne parte.
+   - Attendu : la requête de la question est abandonnée, rien n'est dit, et votre réponse est dans le prompt.
+6. **Pendant que Supervox parle.** Cliquez sur « Conclure » au milieu d'une réplique de plusieurs phrases.
+   - Attendu : la voix s'arrête, la conclusion démarre. Les phrases entendues restent dans la conversation (une phrase coupée
+     compte comme entendue si au moins la moitié de sa durée a été jouée : essai 75) ; vérifiez dans l'Historique (essai 87).
+7. Cliquez sur « Conclure » pendant la préparation.
+   - Attendu : le bouton est grisé, rien ne se passe.
+   - Si la relecture dit « Prompt rédigé à partir de l'entretien, sans vos derniers mots, qui n'ont pas pu être transcrits :
+     relisez-le, puis collez-le ou copiez-le. », c'est prévu (panne ou délai du moteur de transcription sur votre dernière
+     phrase, avec au moins un tour déjà dit) : notez dans quelles conditions elle est apparue. Elle n'a jamais été vue.
+   - Si ce n'est pas le cas, noter : un micro qui reste allumé après « Rédaction du prompt… », une conclusion qui demande plus
+     d'un appui, un dernier mot perdu.
+
+### 71. Plafond de questions (ouvre le micro, joue un son)
+
+1. Onglet Entretien : « Nombre maximal de questions » à 2. Lancez un entretien, dites votre demande de départ.
+   - Attendu : « Question 1 sur 2 ». Répondez : « Question 2 sur 2 », avec l'avis « Dernière question : après votre réponse,
+     Supervox rédige le prompt. ».
+2. Répondez à la seconde question.
+   - Attendu : aucune troisième question : « Rédaction du prompt… » démarre tout de suite, sans phrase de fin dite, puis la
+     relecture. Votre demande de départ et vos deux réponses sont dans le prompt. (D'après le code, la demande de départ ne
+     compte pas : le plafond compte les questions de Supervox, deux ici.)
+3. Remettez 8.
+   - Si ce n'est pas le cas, noter : le numéro de la question où cela s'est arrêté, une question de trop, une question en
+     moins, un compteur qui saute un numéro.
+
+### 72. Annuler à chaque état : Échap, fermeture du panneau, Réglages, Quitter (ouvre le micro)
+
+Dans chaque cas : rien n'est collé (collez ⌘V : votre ancien presse-papiers revient), aucune relecture ne s'ouvre, le voyant
+d'enregistrement s'éteint, **et rien n'est gardé dans l'Historique** (essai 87). Copiez avant un texte reconnaissable (⌘C).
+
+1. Lancez un entretien et tapez Échap à chaque état, un entretien par état : pendant « Préparation de l'entretien… », pendant
+   « À vous » (sans avoir parlé, puis en pleine phrase), pendant « Réflexion… », pendant « Supervox parle », pendant
+   « Rédaction du prompt… ».
+   - Attendu : le panneau se ferme à chaque fois. Échap marche aussi pendant la rédaction, bien que le pied ne le dise plus :
+     la requête du modèle fort est annulée, aucun prompt n'arrive après coup.
+2. Lancez un entretien, puis menu de l'icône, « Fermer le panneau ».
+   - Attendu : même résultat. Recommencez avec « Réglages… » (menu de l'icône, puis menu « … » du panneau) : la fenêtre des
+     réglages s'ouvre et l'entretien est annulé ; puis avec « Quitter Supervox » : l'application se termine, le voyant s'éteint.
+3. Pendant un entretien, cliquez dans une autre application.
+   - Attendu : le panneau reste ouvert (comme pendant une dictée), l'entretien continue.
+4. Tapez Échap, puis lancez tout de suite une dictée (⌃⌥Espace en « Dictée brute »).
+   - Attendu : la dictée démarre sans erreur de capture, une fois le micro de l'entretien rendu. **Comportement à confirmer** :
+     le temps d'attente éventuel.
+5. Tapez Échap pendant le tout premier téléchargement de modèle de l'entretien (si vous pouvez le provoquer), puis lancez une
+   dictée.
+   - Attendu : le code ne fait pas attendre la dictée l'entretien annulé avant son micro. **Comportement à confirmer** : que le
+     téléchargement lui-même s'arrête à l'annulation n'est pas établi. Notez le temps passé en préparation.
+   - Si ce n'est pas le cas, noter : un micro resté allumé, un texte arrivé après l'annulation, une relecture inattendue, une
+     entrée d'Historique, l'état où cela s'est produit.
+
+### 73. Écho sur haut-parleurs : Supervox ne se coupe jamais seul (ouvre le micro, joue un son fort)
+
+Haut-parleurs intégrés, casque débranché (un casque supprimerait l'écho). **Volume fort** : plus haut que d'habitude, que vous
+augmentez par paliers.
+
+1. Lancez un entretien. Dans votre demande de départ, demandez à Supervox de poser des questions longues et détaillées.
+   - Attendu : la première réplique est longue (**comportement du modèle à confirmer** : il peut ignorer la demande).
+2. **Restez silencieux et ne touchez à rien** pendant toute une réplique, sans bouger le clavier.
+   - Attendu : Supervox va au bout de sa réplique ; ensuite « À vous », sans avis « Rien n'a été compris », et la carte « Vous »
+     ne change pas (elle garde votre dernière réponse, rien de nouveau n'y apparaît). Répétez sur au moins trois répliques.
+3. Si Supervox se coupe seul, ou si la carte « Vous » montre ensuite un texte que vous n'avez pas dit (un tour fait de
+   l'écho), notez le volume (position du curseur), la pièce (taille, murs nus ou meublés), la distance, et passez à l'essai 78
+   (monter le niveau vers −20 dB). Ce texte est pour vous : ne le copiez pas dans le dépôt.
+4. Pendant ou après une réplique de plus de huit lignes (sans rapport avec l'écho ; en texte seul, essai 82, le texte arrive d'un
+   coup), regardez la zone « Supervox » et essayez de la faire défiler (molette ou pavé tactile).
+   - Attendu : la zone fait au plus 128 points (de l'ordre de huit lignes ; choix de mise en page, non mesuré) et défile au-delà ;
+     le début de la réplique reste en haut ; un fondu estompe le bas tant qu'il reste du texte dessous et disparaît en fin de
+     course ; la carte « Vous » (limitée à la fin de votre réponse, trois lignes), « Conclure », le pied et le menu « … » restent
+     visibles, et le panneau ne dépasse pas la hauteur de l'écran (budget de 600 points, non vérifié sur un écran réel).
+     **Comportement à confirmer** : que le défilement marche dans un panneau qui n'a pas la frappe ; jamais vu.
+   - Si ce n'est pas le cas, noter : le nombre de répliques essayées sans coupure ; un texte coupé sans défilement possible, un
+     fondu qui reste ou qui manque, un pied ou un menu poussé hors du panneau.
+
+D'après le code, il faut deux choses pour que Supervox se coupe : que le détecteur de voix ait ouvert un passage pendant qu'il
+parlait, **et** 0,30 s de voix à −30 dB au moins (essai 78). Que l'annulation d'écho du système laisse un écho que le détecteur
+annonce comme de la voix **n'est pas établi** (« Jamais exécuté… »).
+
+### 74. Bruits sans voix pendant que Supervox parle (ouvre le micro, joue un son)
+
+1. Lancez un entretien. Pendant une réplique, tapez sur le clavier de façon continue (une dizaine de secondes de frappe : elle va
+   à l'application au premier plan, choisissez une zone de saisie sans importance), puis posez un objet sur la table, ou claquez
+   une porte, sans rien dire.
+   - Attendu : Supervox ne se coupe pas : un bruit sans voix annoncée par le détecteur ne coupe jamais. **Comportement à
+     confirmer** : avec un passage de voix déjà ouvert, des trames fortes rapprochées (0,30 s dans une fenêtre de 0,60 s)
+     coupent ; des claquements épars non.
+   - Si Supervox se coupe : c'est que le détecteur a pris l'écho, ou le bruit, pour de la voix. Notez le bruit qui l'a coupé et
+     le volume, puis essai 78.
+2. Toussez ou dites « hm » très bas pendant une réplique.
+   - Attendu : à noter seulement : coupe ou non, selon le détecteur.
+   - Si ce n'est pas le cas, noter : le bruit (frappe, objet, porte, toux), sa durée, le volume, et si Supervox s'est coupé.
+
+### 75. Interrompre en parlant par-dessus, sur haut-parleurs (ouvre le micro, joue un son)
+
+1. Pendant une réplique de plusieurs phrases, au milieu de la deuxième, dites distinctement « Attends, je précise que le script
+   doit tourner sous macOS. ».
+   - Attendu : Supervox se tait au plus tôt 0,30 s après le début de votre voix, plus la réaction du détecteur (il décide par blocs de
+     0,256 s : délai non mesuré, **notez ce que vous percevez**). Le titre revient à « À vous », le bloc « Supervox » ne garde
+     que ce qui a été dit, votre phrase s'écrit dans la carte « Vous » **depuis son début** (le début n'est pas perdu), puis
+     Supervox répond à ce que vous avez dit.
+2. Coupez Supervox dès les premiers mots de sa première phrase.
+   - Attendu : la question ne compte pas (le même numéro, « Question n sur m », revient à la question suivante), et votre parole
+     s'ajoute à votre tour précédent : Supervox répond aux deux ensemble.
+3. Coupez pendant « Réflexion… », avant que la voix parte.
+   - Attendu : la requête en cours est abandonnée, rien n'a été dit, Supervox reprend avec ce que vous ajoutez.
+4. Après la conclusion, ouvrez l'Historique (essai 87) et lisez la conversation.
+   - Attendu : les lignes « Supervox : » ne contiennent que ce qui a été dit : une phrase coupée après au moins la moitié de sa
+     durée y est **en entier** ; une phrase coupée avant la moitié n'y est pas. Cette moitié est un choix non mesuré
+     (`ConversationChain+Reply.swift`).
+   - Si ce n'est pas le cas, noter : le délai ressenti entre votre voix et le silence ; une coupure que vous n'avez pas
+     provoquée ; une phrase que vous avez entendue en entier et qui manque, ou l'inverse.
+
+### 76. Casque filaire : écho et interruption (ouvre le micro, joue un son)
+
+Branchez un casque filaire avec micro, choisissez-le en entrée et en sortie dans les Réglages Système. Notez son modèle
+**seulement dans vos notes personnelles**.
+
+1. Reprenez l'essai 73 (silence pendant une réplique), puis l'essai 75, points 1 et 2.
+   - Attendu : aucun écho, donc aucune coupure seule ; la parole par-dessus coupe comme sur haut-parleurs.
+   - Si ce n'est pas le cas, noter : ce qui diffère des haut-parleurs (délai, coupure seule, voix non reconnue).
+2. Débranchez le casque pendant la lecture d'une réplique.
+   - Attendu : à noter seulement : ce que fait le système (bascule sur un autre micro, arrêt de l'entretien), et ce que montre
+     le panneau (essai 83).
+
+### 77. Casque Bluetooth : écho, interruption, mode appel (ouvre le micro, joue un son)
+
+**Avertissement.** Le traitement de la voix est activé dès que le micro s'ouvre (`AudioCapture.swift`). Avec un casque
+Bluetooth, le système peut alors **passer le casque en mode appel** : le son devient moins bon, et il peut changer de
+fréquence. C'est un comportement du système, non mesuré dans ce dépôt (les mesures de la tâche 2 ont été faites sur un casque Bluetooth, mais
+n'ont pas regardé la qualité). Cela concerne **aussi vos autres applications audio** tant que l'entretien est ouvert. Ne faites
+cet essai qu'après les essais 73 à 76.
+
+1. Casque Bluetooth en entrée et en sortie. Lancez un entretien, répondez à deux questions.
+   - Attendu : l'entretien démarre malgré le changement de profil (le micro peut tarder à livrer sa première tranche : le délai
+     toléré est de 3 s, choix non mesuré) ; notez le temps entre le lancement et « À vous », et la qualité du son.
+2. Reprenez l'essai 73 (silence), puis l'essai 75 point 1.
+   - Attendu : même résultat qu'au casque filaire.
+3. Concluez, puis regardez le casque.
+   - Attendu : le son retrouve sa qualité d'avant. **Comportement à confirmer** : jamais vu.
+   - Si ce n'est pas le cas, noter : le message affiché au lancement (« Le micro ne donne plus aucun son… » serait une
+     panne du micro), la qualité du son, un casque qui reste en mode appel, la durée du changement.
+
+### 78. Régler le niveau d'interruption (ouvre le micro, joue un son)
+
+À faire si l'essai 73, 74 ou 75 a échoué, ou pour voir l'effet des réglages avancés.
+
+1. Onglet Entretien, « Réglages avancés » : « Niveau de voix pour couper la parole » à −20 dB (le texte de la note le propose).
+   Reprenez le silence de l'essai 73.
+   - Attendu : si Supervox se coupait seul à −30, il ne se coupe plus.
+2. Parlez par-dessus Supervox normalement, puis moins fort.
+   - Attendu : voix normale, coupe encore ; **comportement à confirmer** : la voix douce ne coupe plus. Le plan donnait, comme
+     ordres de grandeur, un écho vers −40 dB et une voix de −15 à −25 dB (chiffres du brief de la tâche, non vérifiés ici) : notez
+     le niveau qui sépare, dans votre pièce, ce qui coupe de ce qui ne coupe pas.
+3. « Durée de voix » à 0,10 s, puis à 1,00 s.
+   - Attendu : à 0,10 s, un bruit bref risque de couper ; à 1,00 s, il faut parler plus longtemps avant que Supervox se
+     taise. Notez le réglage que vous gardez.
+4. Rétablissez les valeurs d'origine (« Rétablir les valeurs d'origine »), à moins de vouloir garder les vôtres.
+   - Si ce n'est pas le cas, noter : les trois valeurs qui marchent dans votre pièce.
+
+### 79. Refus au départ : aucun micro ouvert, aucun son
+
+Dans chaque cas, l'entretien est lancé (pastille « Entretien ») et le panneau montre une phrase **sans ouvrir le micro**
+(voyant éteint) ; aucune voix. Après, une dictée marche normalement. Rétablissez l'état à la fin de chaque point.
+
+1. Modèle rapide sur « Aucun » (onglet Modes).
+   - Attendu : « Aucun modèle rapide n'est choisi : choisissez-en un en tête de Réglages, onglet Modes, pour mener l'entretien. »
+2. Modèle fort sur « Aucun ».
+   - Attendu : « Aucun modèle fort n'est choisi : choisissez-en un en tête de Réglages, onglet Modes, pour rédiger le prompt de
+     l'entretien. »
+3. Clé effacée du trousseau (méthode de l'essai 52.2).
+   - Attendu : « Aucune clé n'est enregistrée pour « <le nom de votre fournisseur> » : ajoutez-la dans Réglages, onglet
+     Fournisseurs. »
+4. Fournisseur du modèle supprimé (essai 52.7).
+   - Attendu : « Le fournisseur du modèle de l'entretien n'existe plus : choisissez un autre modèle en tête de Réglages, onglet
+     Modes. »
+   - Si ce n'est pas le cas, noter : la phrase vue, un micro allumé malgré le refus.
+
+### 80. Pannes du modèle rapide pendant l'entretien (ouvre le micro, joue un son)
+
+Dans chaque cas, **votre tour est gardé** et l'écoute reprend. Rétablissez à la fin.
+
+1. **Modèle rapide inexistant.** Quittez Supervox. Dans `settings.json`, sous « fastModel », ajoutez des lettres à la valeur de
+   « model » ; relancez, lancez un entretien, répondez une fois.
+   - Attendu : un avis « Le modèle rapide n'existe pas chez ce fournisseur : choisissez-en un autre en tête de Réglages, onglet
+     Modes. » (si le serveur répond « introuvable » ; sinon la phrase « Supervox n'a pas pu formuler sa question : répétez votre
+     réponse, ou appuyez sur Conclure. ») ; « À vous » ; rien n'est dit. **Comportement à confirmer** : la phrase suit la
+     réponse du serveur. Répétez votre réponse : elle est jointe à la précédente (le même tour). Remettez le modèle.
+2. **Clé fausse.** Dans « Modifier… » du fournisseur, saisissez une clé inventée. Lancez un entretien, répondez.
+   - Attendu : « Le fournisseur refuse la clé : vérifiez-la dans Réglages, onglet Fournisseurs, puis relancez l'entretien. » Le
+     tour est gardé ; la conclusion échouera aussi si le même fournisseur sert le modèle fort (essai 81). Remettez la clé.
+3. **Réseau coupé** en plein entretien (ou arrêtez votre serveur local), après une réponse.
+   - Attendu : « Supervox n'a pas pu formuler sa question : répétez votre réponse, ou appuyez sur Conclure. ». Rétablissez le
+     réseau, répétez : Supervox reprend la conversation.
+4. **Réponse trop lente.** Si votre modèle met plus de 30 s à répondre à un tour, même phrase générale (délai de 30 s par
+   tour : `RewritePolicy.turn`, choix non mesuré ; 1 024 jetons au plus par réponse).
+   - Si ce n'est pas le cas, noter : la phrase vue pour chaque panne ; une panne qui arrête l'entretien au lieu de reprendre ;
+     un tour perdu.
+
+### 81. Modèle fort en panne : la conversation arrive en relecture (ouvre le micro, joue un son)
+
+1. Quittez Supervox. Dans `settings.json`, sous « strongModel », ajoutez des lettres à la valeur de « model » ; relancez.
+   Lancez un entretien, répondez à une question, cliquez sur « Conclure ».
+   - Attendu : « Rédaction du prompt… », puis la relecture montre **la conversation** (des paragraphes « Vous : » et
+     « Supervox : » séparés par une ligne vide) avec « Le prompt n'a pas pu être rédigé : le texte ci-dessus est la
+     conversation de l'entretien. Corrigez-la, collez-la ou copiez-la. ». Rien n'est collé ; pas de « Version précédente ».
+2. Ouvrez l'Historique (essai 87).
+   - Attendu : l'entretien y est, titré « Conversation sans prompt (la rédaction avait échoué) ».
+3. Remettez le modèle fort (menu, essai 59).
+   - Si ce n'est pas le cas, noter : une conversation perdue, un texte manquant dans la relecture, la phrase vue.
+
+### 82. Voix en panne : texte seul, et voix de fournisseur fausse (ouvre le micro, joue un son)
+
+Ces réglages n'ont pas d'écran : ils s'éditent dans `settings.json`, **Supervox fermé** (une application ouverte réécrirait
+le fichier). L'entrée « voice » existe déjà, avec `"language" : "fr-FR"`. Copiez le fichier avant, et remettez-le à la fin.
+
+1. **Voix du système introuvable.** Mettez `"language" : "zz-ZZ"` dans « voice », relancez, lancez un entretien.
+   - Attendu : une seule fois, l'avis « La voix ne fonctionne pas : lisez la question à l'écran, puis répondez à voix haute. » ;
+     le titre devient « Supervox répond » (au lieu de « Supervox parle »), l'aide « Lisez la réponse à l'écran, puis parlez. »,
+     la question s'affiche à l'écran, sans aucun son. L'entretien continue en texte seul jusqu'au bout, la question compte, la
+     conclusion marche.
+2. **Voix de fournisseur fausse.** Dans « voice », écrivez l'identifiant (`id`) d'un de vos fournisseurs « Compatible OpenAI » dans
+   `"providerID"`, puis `"model" : "modele-exemple-voix"` et `"identifier" : "voix-exemple"` (des noms qui n'existent pas chez
+   lui). Relancez, lancez un entretien.
+   - Attendu : la ligne de vie privée du panneau nomme aussi ce fournisseur : « Le texte que dit Supervox part chez
+     « <nom> ». » ; à la première phrase, la voix du système parle à la place (au plus 4 s d'attente, choix non mesuré) avec
+     l'avis « La voix choisie ne répond pas : l'entretien continue avec la voix du système. », dit une seule fois ; les phrases
+     suivantes vont directement à la voix du système, sans nouvel essai de l'autre. Remettez le fichier.
+3. Facultatif : avec un vrai modèle de voix et un vrai identifiant de voix de votre fournisseur, la voix du fournisseur parle.
+   **Jamais essayé.** Notez ce qui est entendu, et si le fournisseur refuse (une voix qui demande des paramètres propres ne peut
+   pas les recevoir).
+   - Si ce n'est pas le cas, noter : l'avis vu (ou son absence), un silence long avant la première phrase, une phrase dite deux
+     fois.
+
+### 83. Micro débranché pendant l'entretien (ouvre le micro)
+
+Un micro que vous pouvez débrancher (casque USB ou filaire). Rien n'est gardé dans l'Historique pour une panne.
+
+1. Lancez un entretien, répondez à une question, puis débranchez le micro pendant « À vous ».
+   - Attendu : au bout d'environ 1 s sans tranche du micro (3 s pour la toute première : choix non mesurés, `MicrophoneWatchdog`),
+     l'entretien s'arrête et la relecture montre la conversation jusque-là avec « Le micro s'est arrêté pendant l'entretien :
+     le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la. ». Rien n'est perdu. **Comportement à
+     confirmer** : ce que fait le système (bascule sur un autre micro, arrêt du moteur audio) n'a jamais été vu.
+2. Recommencez en débranchant avant d'avoir dit quoi que ce soit.
+   - Attendu : le panneau dit « Le micro ne donne plus aucun son : vérifiez qu'il est branché, puis relancez l'entretien. »
+     (ou, si le système ne propose plus aucune entrée, « Aucun micro n'est disponible : branchez-en un, puis relancez
+     l'entretien. » : notez la phrase vue).
+3. **Après « Conclure »** : concluez, puis coupez le micro (éteignez le casque) pendant « Rédaction du prompt… ».
+   - Attendu : ce n'est **plus** une panne : le micro est déjà fermé, le prompt est rédigé.
+   - Si ce n'est pas le cas, noter : la phrase vue, un texte perdu, une panne après « Conclure ».
+
+### 84. Rien dit, rien compris (ouvre le micro)
+
+1. Lancez un entretien, attendez « À vous », cliquez sur « Conclure » sans avoir parlé.
+   - Attendu : le panneau revient au repos avec « Rien n'a été dit : il n'y a pas de prompt à rédiger. Relancez l'entretien pour
+     recommencer. » ; aucune requête n'est partie (aucune connexion vers votre fournisseur) ; rien dans l'Historique.
+2. Lancez un entretien et faites un bruit bref (claquez des doigts), sans parole, puis attendez.
+   - Attendu : si le détecteur y voit de la voix et que la transcription est vide : « Rien n'a été compris : répétez, un peu plus
+     près du micro. » ; l'écoute reprend. **Comportement à confirmer** : cela dépend du détecteur ; notez si rien ne s'affiche.
+   - Si ce n'est pas le cas, noter : la phrase vue, un entretien qui ne revient pas à « À vous ».
+
+### 85. Corriger à la voix le prompt d'un entretien (ouvre le micro)
+
+À partir d'une relecture de prompt d'entretien (essai 68).
+
+1. Regardez la rangée de boutons.
+   - Attendu : « Corriger à la voix », « Copier », « Coller », et **pas** de « Version précédente » (il apparaît après une
+     correction).
+2. Cliquez sur « Corriger à la voix » (ou tapez ⌃⌥Espace), dites « Ajoute un critère de réussite sur les tests. », puis
+   « Terminer ».
+   - Attendu : le déroulé de l'essai 57 (« Préparation… », « Écoute de la consigne », « Transcription de la consigne… »,
+     « Réécriture… », « À relire ») ; le nouveau texte remplace le prompt et mentionne les tests (**comportement du modèle à
+     confirmer**). « Version précédente » rend le prompt rédigé par l'entretien. Cliquez sur « Coller » : le texte corrigé est
+     collé.
+3. Ouvrez l'Historique.
+   - Attendu : le prompt gardé est celui que l'entretien a rédigé, **pas** le texte corrigé (aucun code ne réécrit
+     l'historique après la relecture : lu, non vu).
+   - Si ce n'est pas le cas, noter : une correction qui ne s'ouvre pas, une version perdue, un historique modifié.
+
+### 86. Gabarit modifié et vocabulaire personnel dans l'entretien (ouvre le micro, joue un son)
+
+1. Onglet Entretien : ajoutez à la fin du gabarit « Écris tout le prompt en anglais. ». Faites un entretien court, concluez.
+   - Attendu : le prompt est en anglais (**comportement du modèle à confirmer** : un modèle peut ignorer l'ajout). Le gabarit
+     part au modèle fort avec une règle qui dit que la conversation est une donnée. « Revenir au gabarit d'origine ».
+2. Réglages, onglet Transcription : ajoutez deux termes inventés au vocabulaire, par exemple « Zorbline » et « Kelvexa ».
+   Lancez un entretien (moteur Parakeet, celui de l'entretien) et dites une phrase qui contient « Zorbline ».
+   - Attendu : le terme est écrit comme dans votre liste, dans la carte « Vous » et dans le prompt. **Comportement à
+     confirmer** : jamais essayé.
+3. Feuille « Modifier… » d'Entretien, « Moteur de dictée » sur WhisperKit (modèle téléchargé), même essai.
+   - Attendu : même résultat. Même règle que la dictée (essai 21) : si le petit modèle du vocabulaire n'a pas pu être
+     téléchargé, ou si la liste ne tient pas dans le moteur, le vocabulaire est retiré avec un avis dès la préparation (« Le
+     vocabulaire n'a pas servi à cet entretien… »). Retirez les deux termes, remettez le moteur par défaut.
+   - Si ce n'est pas le cas, noter : un terme mal écrit, un avis vu ou son absence.
+
+### 87. Historique après des entretiens (sans micro, sans son)
+
+Après les essais 68 à 86 : un entretien conclu, un entretien annulé (72), un entretien en panne de micro (83), un entretien
+dont le modèle fort a échoué (81).
+
+1. Réglages, onglet Historique.
+   - Attendu : la liste montre les entretiens conclus et celui de l'essai 81, du plus récent au plus ancien (date, début du
+     prompt ou « Conversation sans prompt (la rédaction avait échoué) »). L'entretien annulé et celui en panne de micro **n'y
+     sont pas**.
+2. Choisissez un entretien.
+   - Attendu : à droite, la date, « Supprimer », la section « Prompt » avec « Copier le prompt », la section « Conversation »
+     avec « Copier la conversation ». Cliquez sur « Copier le prompt » : « Copié. » ; collez ailleurs : le texte est exact. Même
+     chose avec la conversation : des paragraphes « Vous : » et « Supervox : ».
+3. Dans le Terminal : `ls -ld ~/Library/Application\ Support/Supervox/Historique` puis
+   `ls -l ~/Library/Application\ Support/Supervox/Historique`.
+   - Attendu : le dossier en `drwx------` (0700), un fichier `.json` par entretien en `-rw-------` (0600), nommés
+     `aaaa-mm-jj-hhmmss-<identifiant>.json` (date en UTC). Un `@` ou un `+` à la fin des droits (attributs étendus du
+     système) est possible : notez-le.
+4. « Supprimer » sur un entretien.
+   - Attendu : il disparaît de la liste et du dossier, **sans confirmation** (un seul clic). C'est un choix du constructeur à
+     rediscuter : un prompt et sa conversation partent sans retour. Dites si vous voulez une confirmation.
+5. « Garder les entretiens » sur « 7 jours », avec au moins un entretien plus vieux que 7 jours (si vous n'en avez pas, sautez
+   ce point).
+   - Attendu : une confirmation « n entretiens plus anciens seront supprimés maintenant. » (« 1 entretien plus ancien sera
+     supprimé maintenant. »), avec « Annuler » et « Supprimer ». « Annuler » ne change rien ; « Supprimer » supprime ces
+     entretiens et garde la durée. **Comportement à confirmer** : que la feuille reste ouverte dans la vraie fenêtre.
+6. « Ne rien garder ».
+   - Attendu : « Les n entretiens gardés seront supprimés maintenant. » (« L'entretien gardé sera supprimé maintenant. »).
+     Confirmez : la liste est vide. Faites un entretien et concluez : rien n'est écrit dans le dossier. Remettez « 30 jours ».
+7. Placez dans le dossier un fichier `essai.json` qui contient n'importe quel texte.
+   - Attendu : il n'apparaît pas dans la liste, et une note dit « 1 fichier de l'historique n'a pas pu être lu : il
+     n'apparaît pas dans la liste, et « Tout supprimer… » le supprime aussi. ».
+8. « Tout supprimer… ».
+   - Attendu : « Supprimer les n entretiens gardés ? C'est définitif. » (« Supprimer l'entretien gardé ? C'est définitif. »),
+     « Annuler », « Tout supprimer ». « Annuler » ne supprime rien ; confirmer vide la liste et le dossier, y compris
+     `essai.json`.
+9. Choisissez une durée courte (7 jours), quittez et relancez Supervox.
+   - Attendu : seuls les entretiens plus vieux que la durée ont disparu au lancement. Avec un fichier de réglages abîmé ou plus
+     récent, aucune suppression ce jour-là (code lu). Si vous n'avez rien d'assez vieux, ne testez pas. Rétablissez 30 jours.
+   - Si ce n'est pas le cas, noter : un entretien qui manque (annulé ou en panne : voulu ; conclu : pas voulu), un texte
+     différent de ce que vous avez vu, des droits de fichier plus larges, une purge inattendue.
+
+### 88. Vie privée : ce qui part, et vers où, pendant un entretien (ouvre le micro, joue un son)
+
+Avec un outil de journal réseau de votre choix (essai 60), voix du système.
+
+1. Observez un entretien complet, du lancement à la relecture.
+   - Attendu : des requêtes vers l'adresse de votre fournisseur seulement : au moins une par réponse de votre part au modèle rapide (un
+     POST dont le chemin se termine par `/v1/chat/completions` ou `/v1/messages`), puis une pour la conclusion, vers le
+     fournisseur du modèle fort. Aucune donnée audio. Avec la voix du système : aucune requête de voix. Le premier lancement
+     peut aussi télécharger des modèles, vers leurs sources.
+2. Si l'outil déchiffre le trafic, lisez le corps d'un tour, puis celui de la conclusion.
+   - Attendu : tour : le nom du modèle rapide, la consigne de l'intervieweur, la conversation jusque-là, **sans** le vocabulaire.
+     Conclusion : le nom du modèle fort, le gabarit, la règle, le vocabulaire s'il n'est pas vide, et la conversation entre
+     `<entretien-…>` et `</entretien-…>` (suffixe de seize chiffres hexadécimaux, différent à chaque requête). Rien d'autre.
+     **Comportement à confirmer.**
+3. Avec la voix d'un fournisseur (essai 82, point 3) : une requête de synthèse par phrase de Supervox, vers le fournisseur de la
+   voix (chemin `…/v1/audio/speech`), qui reçoit le texte que dit Supervox. La ligne du panneau le dit.
+4. Annulez un entretien par Échap avant toute conclusion.
+   - Attendu : aucune requête de conclusion ne part ensuite.
+   - Si ce n'est pas le cas, noter : un hôte inattendu, une requête de plus, du son qui part, ce que le panneau dit à propos
+     de l'hôte.
+
+### 89. VoiceOver et « Réduire les animations » pendant l'entretien (ouvre le micro, joue un son)
+
+Activez VoiceOver (⌘F5). **Rien n'a été écouté** : cet essai dit ce que VoiceOver lit et annonce vraiment.
+
+1. Lancez un entretien et laissez-le avancer sans toucher à rien.
+   - Attendu (code lu, non écouté) : l'application poste une annonce à chaque changement de titre (« Préparation de
+     l'entretien… », « À vous », « Réflexion… », « Supervox parle », « Rédaction du prompt… ») et à l'apparition d'un avis ; ni le
+     niveau du micro, ni les textes, ni le numéro de la question ne sont annoncés. **Comportement à confirmer** : que
+     VoiceOver dise ces annonces depuis un panneau qui n'a pas la frappe. Notez ce qu'il dit ; il peut se taire.
+2. Placez-vous sur chaque élément du panneau.
+   - Attendu : l'orbe se lit comme le titre de l'état (une image, pas un bouton) ; le bloc « Supervox » et la carte « Vous »
+     se lisent avec leur texte ; « Conclure » se lit avec l'aide « Rédige le prompt à partir de ce qui a été dit. » ; chaque
+     pastille dit « Indisponible pendant un entretien. ». **Comportement à confirmer** : que VoiceOver puisse atteindre ces
+     éléments, le panneau n'ayant pas la frappe.
+3. Pendant une réplique, laissez VoiceOver lire.
+   - Attendu : à noter seulement : sa voix est-elle captée par le micro et coupe-t-elle Supervox ?
+4. Dans l'Historique, placez-vous sur la liste et sur les boutons : leurs noms sont lus. Non vérifié.
+5. **« Réduire les animations »** (réglage du système, dans Accessibilité ; le nom exact du groupe dépend de la version de
+   macOS). Lancez un entretien avant, puis avec le réglage.
+   - Attendu : sans le réglage, le halo de l'orbe grandit avec le niveau du micro pendant l'écoute (jusqu'à 15 %) et les trois
+     points pulsent pendant « Rédaction du prompt… » ; avec le réglage, rien ne grandit ni ne pulse, seule l'opacité suit le
+     niveau. Désactivez VoiceOver (⌘F5) et rétablissez le réglage.
+   - Si ce n'est pas le cas, noter : ce que VoiceOver a dit ou tu, à quel titre ; une animation qui continue.
+
+### 90. Tests du son : `SUPERVOX_SPEAKER=1` (ouvre le micro, joue des tons)
+
+Quatre tests écrits pour cette étape, **désactivés par défaut** (suite « Son réel », `RealAudioIOTests`).
+
+```sh
+SUPERVOX_SPEAKER=1 swift test --filter RealAudioIOTests
+```
+
+**Ce que la commande fait à la machine.** Elle ouvre le micro (avec le traitement de la voix : un casque Bluetooth en entrée
+passe sans doute en mode appel, essai 77) et joue, sur la sortie par défaut, des tons de 440 Hz à faible amplitude (0,05, soit
+−26 dB pleine échelle : calcul 20·log10(0,05) ; le niveau entendu dépend de votre volume) : un de 0,5 s, deux de 3 s coupés
+après 0,3 s, un de 3 s coupé après 0,2 s, et des tons de 0,3 s. Aucun réglage du système n'est changé. Rien n'est écrit sur le
+disque.
+
+1. Autorisez d'abord le micro à l'application qui lance les tests (le Terminal, par exemple).
+   **Piège** : sans cette autorisation, chaque test sort tôt avec l'avertissement « non établi : le micro n'est pas autorisé pour
+   cet hôte de test (aucune invite n'est déclenchée) » et **paraît vert**. Lisez les lignes d'avertissement : elles portent
+   aussi les mesures.
+2. Lancez la commande.
+   - Attendu : quatre tests verts, et des lignes d'avertissement avec des mesures (par exemple « fin .played à … s de play() pour
+     0.5 s de son ; position à 0,2 s : … ; tranches du micro pendant la lecture : … »). Aucune ligne « non établi ». La fin
+     naturelle arrive après la durée du son ; les deux clips coupés reçoivent une fin « coupée » ; aucune tranche après l'arrêt.
+     Le quatrième test (`aRestartAfterANaturalEndPlaysAgain`) **n'a jamais été exécuté**.
+   - Si ce n'est pas le cas, noter : le nom du test, la sortie, et si le processus de test s'est arrêté sur une exception
+     (`_auv3 != nil` à l'activation du traitement de la voix, vue une fois à la tâche 2, non reproduite) ; le casque ou les
+     haut-parleurs en entrée et en sortie.
+
+### 91. Tests du micro : `SUPERVOX_MIC=1` (ouvre le micro, ne joue rien)
+
+Trois tests (suite « Micro réel », `RealMicrophoneTests`), écrits aux étapes précédentes, **désactivés par défaut**.
+
+```sh
+SUPERVOX_MIC=1 swift test --filter RealMicrophoneTests
+```
+
+**Ce que la commande fait à la machine.** Elle ouvre le micro quatre fois environ une seconde (deux prises pour le premier test, une pour chacun des deux autres ; avec
+le traitement de la voix),
+garde le son en mémoire seulement : rien n'est écrit sur le disque, aucune valeur d'échantillon n'est affichée, aucun son
+n'est joué. L'autorisation du micro doit déjà être accordée à l'application qui lance les tests.
+
+1. Lancez la commande.
+   - Attendu : trois tests verts, avec des lignes d'avertissement qui donnent le nombre de tranches, la durée et la fréquence.
+     Une prise « silence parfait » (casque non porté, ou accès refusé) est signalée sans afficher le contenu.
+   - Si ce n'est pas le cas, noter : le nom du test et la sortie.
+
+### 92. Test de la voix du système : `SUPERVOX_SPEECH=1` (fait travailler la voix du système)
+
+Un test (`SystemSpeechIntegrationTests`), **désactivé par défaut**.
+
+```sh
+SUPERVOX_SPEECH=1 swift test --filter SystemSpeechIntegrationTests
+```
+
+**Ce que la commande fait à la machine.** Elle demande à la voix française du système de dire la phrase « Bonjour, ceci est un
+essai de la voix du système. » (`AVSpeechSynthesizer.write`) et vérifie que le clip n'est pas vide et dure de 0,3 à 10 s. D'après
+le commentaire du test, la synthèse est rendue en mémoire et rien n'est envoyé à la sortie audio : **non vérifié à l'oreille,
+dites si vous entendez quelque chose**. Il faut une voix française du système installée.
+
+1. Lancez la commande.
+   - Attendu : le test est vert. C'est la **première exécution** de la couche système de la voix telle qu'elle est livrée.
+   - Si ce n'est pas le cas, noter : la sortie, la voix installée, et un délai inhabituel (le garde-fou est de 8 s par phrase,
+     choix non mesuré).
+
+### 93. Tests de fenêtre : `SUPERVOX_WINDOWS=1` (affiche brièvement un panneau)
+
+Les tests de vraies fenêtres d'AppKit, **désactivés par défaut**. Ils ne tournent pas écran verrouillé ou en veille : ils
+échouent tous sur `isKeyWindow`.
+
+```sh
+ioreg -n Root -d1 -a | grep -c CGSSessionScreenIsLocked
+SUPERVOX_WINDOWS=1 perl -e 'alarm 200; exec @ARGV' swift test --filter WindowIntegrationTests
+```
+
+**Ce que la commande fait à la machine.** Le premier `ioreg` doit répondre `0` (écran déverrouillé). Le second construit de
+vraies fenêtres de réglages et de panneau ; **certains tests font apparaître brièvement le panneau** (`orderFrontRegardless`,
+puis `orderOut`) : n'utilisez pas la machine pendant ce temps. Des tests fabriquent des événements clavier et les passent
+directement à leurs fenêtres (`performKeyEquivalent`) : aucune frappe n'est envoyée au système.
+
+1. Lancez les deux commandes, écran déverrouillé.
+   - Attendu : tous les tests passent. Le fichier en compte 29 à HEAD (décompte des `@Test`) ; 29 sur 29 au dernier passage
+     connu (tâche 8, `8dcf25c`, mesuré). Les tests n'ont pas été relancés depuis, l'écran étant verrouillé.
+   - Si ce n'est pas le cas, noter : le nom du test, la sortie, l'état du verrou (`ioreg`).
+
+### 94. Banc `supervox-bench interview` (appelle un service, n'ouvre ni micro ni haut-parleur)
+
+Le banc mène un entretien entier à partir de fichiers WAV (un par tour de la personne), avec la vraie conversation, sans micro
+ni haut-parleur : la lecture est simulée par une attente. Il appelle **votre service** (le texte part chez lui), charge le
+détecteur de voix et Parakeet (téléchargés au premier lancement), et, sans `--voice-model`, fait travailler la voix du système
+(synthèse en mémoire, rien n'est joué).
+
+Préparatifs : un WAV mono de 16 bits par tour (par exemple avec `supervox-bench record`, qui, lui, ouvre le micro), **hors du
+dépôt** ; un dossier de sortie **ignoré par git** (`bench-data/` l'est : sinon la commande refuse). Les noms de modèles et
+l'adresse viennent de vous.
+
+```sh
+swift run supervox-bench interview --help
+```
+
+(l'aide seule : rien n'est lancé.) Puis le lancement réel :
+
+```sh
+export SUPERVOX_BASE_URL="$ADRESSE_DU_SERVICE"
+export SUPERVOX_API_KEY="$CLE_DU_SERVICE"
+swift run supervox-bench interview \
+  "$WAV_TOUR_1" "$WAV_TOUR_2" "$WAV_TOUR_3" \
+  --fast-model "$MODELE_RAPIDE" --strong-model "$MODELE_FORT" \
+  --max-questions 8 --turn-silence 0.5 \
+  --output "$DOSSIER_IGNORE/entretien.md"
+```
+
+Variantes : `--voice-model "$MODELE_VOIX" --voice "$IDENTIFIANT_VOIX"` (voix du fournisseur, repli sur la voix du système) ;
+`--interrupt-after 0.5` (chaque tour suivant est poussé 0,5 s après le début de la lecture de la réplique : une interruption ;
+voix des fichiers assez forte et assez longue pour la porte, au moins −30 dB pendant 0,30 s) ; `--overwrite` pour remplacer un
+rapport. La durée est à peu près celle de l'audio des répliques.
+
+1. Lancez l'aide, puis le lancement réel.
+   - Attendu : l'aide en français ; un rapport Markdown (durées par tour, questions, interruptions, avis, fin) et, sur la sortie,
+     le prompt rédigé. Ni la clé, ni l'adresse, ni les noms de modèle et de voix ne sont écrits dans le rapport ni sur la sortie.
+     Code de sortie non nul si l'entretien ne rend pas de prompt (le rapport est écrit avant). La commande refuse un dossier de
+     sortie suivi par git, un rapport qui existe sans `--overwrite`, et un `--output` qui est l'un des WAV d'entrée.
+     `--turn-silence` va de 0,3 à 2,0 s (comme l'onglet Entretien).
+   - Les durées du rapport ne sont **pas comparables** à celles de `latency` (la forme des requêtes diffère) ; elles ne
+     contiennent pas le silence de fin de tour.
+   - Si ce n'est pas le cas, noter : le message d'erreur, le tour où l'entretien s'est arrêté, un tour sans réaction (le banc le
+     note après 150 s : 120 s de délai de transcription plus 30 s de marge, choix non mesuré), un nom ou une adresse visible
+     dans le rapport. **Jamais lancé contre un service.**
+
+### 95. Retour à faire
 
 À la fin, notez : les essais pas OK ; ce qui était lent (préparation, transcription, téléchargement, et le temps entre
 « Coller » et l'arrivée du texte) ; ce qui était déroutant dans le panneau ou les réglages (la relecture, l'aide sous le
@@ -1397,4 +2237,12 @@ application) ; s'il y a eu un clignotement ; si le message sur les « morceaux d
 la durée de « Mise en forme… » avec votre modèle (et si 30 ou 120 secondes ont été atteintes) ; si les phrases des pannes
 disent bien quoi faire ; si la consigne d'origine de Dictée nettoyée ou de Prompt a produit un texte qu'on garderait ; si
 la feuille d'un mode, la section « Modèles » ou la rangée de boutons de la relecture étaient déroutantes ; ce que
-VoiceOver a dit ou tu.
+VoiceOver a dit ou tu. Pour l'étape 6 : la durée de « Préparation de l'entretien… » (premier lancement compris) et le nombre
+d'invites du trousseau ; le délai entre la fin de votre phrase et la voix de Supervox ; si Supervox s'est coupé seul (volume,
+pièce, matériel) ou, au contraire, n'a pas voulu s'arrêter, et les réglages avancés qui ont marché ; l'écho, selon les
+haut-parleurs, le casque filaire et le casque Bluetooth (le modèle du casque dans vos notes personnelles seulement, jamais dans
+ce dépôt) ; si les questions et le prompt étaient utiles, et si le modèle a respecté la conclusion à la voix ; si les phrases
+des pannes disent bien quoi faire ; si l'Historique contient exactement ce qu'il devait contenir ; si la suppression d'un
+entretien sans confirmation pose problème ; si l'onglet Entretien tient dans la fenêtre ; ce que les tests matériels
+(essais 90 à 93) et le banc (essai 94) ont montré ; et, pour chaque ligne de « Jamais exécuté pendant la construction », ce
+que vous avez fini par voir.
