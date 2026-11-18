@@ -182,13 +182,13 @@ public actor InterviewHistory: InterviewHistoryStoring {
 
     // MARK: - Suppression
 
-    /// Supprime le fichier de cet entretien (jamais un autre). Un identifiant inconnu n'est pas une erreur.
+    /// Supprime le fichier de cet entretien (jamais un autre), celui dont le CONTENU porte cet identifiant (le même fichier que `list`
+    /// a lu : le nom, lui, peut avoir été changé à la main). Un identifiant inconnu n'est pas une erreur.
     public func delete(_ id: UUID) async throws {
         guard rootState() == .directory else { return }
-        let suffix = "-" + id.uuidString.lowercased() + ".json"
         var failed = false
-        for name in historyFileNames() where name.lowercased().hasSuffix(suffix) {
-            if unlink(path(name)) != 0 { failed = true }
+        for entry in readAll() where entry.record.id == id {
+            if unlink(path(entry.name)) != 0 { failed = true }
         }
         if failed { throw Failure.writeFailed }
     }

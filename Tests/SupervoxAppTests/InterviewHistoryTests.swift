@@ -491,6 +491,41 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: url(of: first).path))
     }
 
+    @Test("m4 : delete vise le fichier LU : un entretien dont le fichier a été renommé à la main est supprimé pour de bon")
+    func deleteTargetsTheFileThatWasRead() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        let record = Self.record(1)
+        try await history.save(record)
+        let renamed = root.appendingPathComponent("copie-manuelle.json")
+        try FileManager.default.moveItem(at: url(of: record), to: renamed)
+        #expect(await history.list() == [record], "l'entretien est lu malgré son nouveau nom")
+
+        try await history.delete(record.id)
+
+        #expect(!FileManager.default.fileExists(atPath: renamed.path), "le fichier renommé est supprimé, pas seulement annoncé")
+        #expect(await history.list().isEmpty)
+    }
+
+    @Test("m4 : un fichier dont le NOM porte l'identifiant d'un autre entretien n'est pas supprimé à sa place")
+    func deleteIgnoresAFileThatOnlyCarriesTheIdentifierInItsName() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        let wanted = Self.record(1, daysAgo: 1)
+        let other = Self.record(2, daysAgo: 2)
+        try await history.save(wanted)
+        try await history.save(other)
+        // Le fichier de `other` est nommé comme celui de `wanted`, et inversement.
+        let swapped = root.appendingPathComponent("tmp-echange.json")
+        try FileManager.default.moveItem(at: url(of: wanted), to: swapped)
+        try FileManager.default.moveItem(at: url(of: other), to: url(of: wanted))
+        try FileManager.default.moveItem(at: swapped, to: url(of: other))
+
+        try await history.delete(wanted.id)
+
+        #expect(await history.list().map(\.id) == [other.id], "c'est l'entretien demandé qui est parti, selon son contenu")
+    }
+
     @Test("delete sur un dossier d'historique qui n'existe pas ne lève pas et ne le crée pas")
     func deleteWithoutAFolderDoesNothing() async throws {
         defer { cleanUp() }
