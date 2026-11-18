@@ -454,7 +454,7 @@ final class SetupModelFactory: Sendable {
     }
 
     @Test("annulée pendant la lecture de la clé de la voix, la résolution lève l'annulation et ne se rabat pas sur le système")
-    func cancellationWhileResolvingTheVoiceIsNotSwallowed() async {
+    func cancellationWhileResolvingTheVoiceIsNotSwallowed() async throws {
         let store = SetupAccountStore(keys: keys(), held: [voiceProvider.id])
         let access = access(store)
         let current = settings(voice: providerVoice)
@@ -469,7 +469,8 @@ final class SetupModelFactory: Sendable {
         task.cancel()
         store.release.signal()
 
-        await #expect(throws: CancellationError.self) { try await task.value }
+        let result = try #require(await bounded(task), "la résolution annulée ne rend pas la main")
+        #expect(throws: CancellationError.self) { try result.get() }
         #expect(voices.calls.isEmpty, "aucune voix n'est fabriquée pour un entretien annulé")
     }
 

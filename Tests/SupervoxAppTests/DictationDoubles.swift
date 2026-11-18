@@ -490,6 +490,22 @@ func until(_ condition: @MainActor () -> Bool) async -> Bool {
     return condition()
 }
 
+/// Le résultat d'une tâche, attendu au plus le temps de `until` : `nil` si elle n'a pas fini. Le test échoue alors à sa limite au
+/// lieu de rester suspendu sur `.value` (la tâche qui la regarde reste en attente, sans retenir le test).
+@MainActor
+func bounded<Success: Sendable, Failure: Error>(_ task: Task<Success, Failure>) async -> Result<Success, Failure>? {
+    let box = TaskResultBox<Success, Failure>()
+    Task { box.set(await task.result) }
+    guard await until({ box.result != nil }) else { return nil }
+    return box.result
+}
+
+final class TaskResultBox<Success: Sendable, Failure: Error>: Sendable {
+    private let state = Mutex<Result<Success, Failure>?>(nil)
+    var result: Result<Success, Failure>? { state.withLock { $0 } }
+    func set(_ result: Result<Success, Failure>) { state.withLock { $0 = result } }
+}
+
 /// Laisse le temps à tout ce qui est déjà en route d'arriver (pour prouver qu'une chose n'a PAS lieu).
 @MainActor
 func settle() async {

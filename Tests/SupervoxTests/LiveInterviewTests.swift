@@ -160,6 +160,21 @@ import Testing
         return condition()
     }
 
+    /// Le résultat d'une tâche, attendu au plus le temps de `until` : `nil` si elle n'a pas fini (M-7 : le test échoue à sa limite au
+    /// lieu de rester suspendu sur `.value`).
+    private func bounded<Success: Sendable, Failure: Error>(_ task: Task<Success, Failure>) async -> Result<Success, Failure>? {
+        let box = ResultBox<Success, Failure>()
+        Task { box.set(await task.result) }
+        guard await until({ box.result != nil }) else { return nil }
+        return box.result
+    }
+
+    final class ResultBox<Success: Sendable, Failure: Error>: Sendable {
+        private let state = Mutex<Result<Success, Failure>?>(nil)
+        var result: Result<Success, Failure>? { state.withLock { $0 } }
+        func set(_ result: Result<Success, Failure>) { state.withLock { $0 = result } }
+    }
+
     // MARK: - Préparation et construction (règle 11, amendement I)
 
     /// Le câblage réel donne à l'onglet Entretien la formule du détecteur (et non l'identité du repli) : 0,6 et 0,7 s demandées
@@ -234,16 +249,16 @@ import Testing
         #expect(rig.ledger.requests == [EngineCache.dictationMinSilence], "aucun détecteur de l'entretien")
 
         gate.open()
-        await preload.value
-        try await made.value
-        try await prepared.value
+        _ = try #require(await bounded(preload), "le préchargement ne finit pas")
+        try #require(await bounded(made), "la fabrication ne finit pas").get()
+        try #require(await bounded(prepared), "la préparation ne finit pas").get()
         #expect(rig.made.parts.count == 1)
         #expect(await rig.engines.cache.detector(minSilence: setup.turnSilence).isPrepared)
         #expect(!rig.doubles.network.isOffline, "le réseau est rétabli quand l'entretien passe")
     }
 
     @Test("une tâche annulée pendant l'attente de la porte ne construit rien")
-    func aCancelledWaitBuildsNothing() async {
+    func aCancelledWaitBuildsNothing() async throws {
         let rig = Self.rig()
         let gate = Gate()
         defer { gate.open() }
@@ -257,8 +272,9 @@ import Testing
         await settle()
         made.cancel()
         gate.open()
-        await preload.value
-        if case .success = await made.result { Issue.record("l'annulation n'est pas rendue") }
+        _ = try #require(await bounded(preload), "le préchargement ne finit pas")
+        let result = try #require(await bounded(made), "la fabrication annulée ne finit pas")
+        if case .success = result { Issue.record("l'annulation n'est pas rendue") }
         #expect(rig.made.parts.isEmpty && rig.made.audios.isEmpty)
     }
 
