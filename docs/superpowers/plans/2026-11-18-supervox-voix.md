@@ -176,7 +176,7 @@ Celles de l'étape 6 valent toutes (plan `2026-11-16-supervox-entretien.md`, sec
 **Règles :**
 1. Un avis d'enregistrement montre la phrase d'une `SettingsError` (déjà fixe, en français) ou, pour toute autre erreur, une phrase fixe qui dit quoi faire (« Les réglages n'ont pas pu être enregistrés : vérifiez que le disque n'est pas plein, puis recommencez. »). Jamais `localizedDescription`. Tests : une erreur étrangère au texte reconnaissable (`"TEXTE-BRUT"`) ne se retrouve dans aucun message, pour les cinq sites.
 2. Journal : le type de l'erreur seulement (`String(reflecting: type(of: error))`), jamais son texte.
-3. Garde de source : `localizedDescription` interdit dans tout `Sources/SupervoxApp` et `Sources/SupervoxSnapshots`, commentaires compris (les balayages lisent les lignes entières, aucun ne retire les commentaires : on ne commence pas ici) : le commentaire de `InterviewText.swift` qui cite ce nom est reformulé (« le texte d'erreur du système ») ; les deux sites de `SupervoxCore/Endpoint` (texte de transport masqué) restent, nommés dans la garde avec leur raison.
+3. Garde de source : `localizedDescription` interdit dans tout `Sources/SupervoxApp` et `Sources/SupervoxSnapshots`, par l'auxiliaire de balayage existant (il retire les lignes entières de commentaire et garde un commentaire qui suit du code : constat de la tâche 1) ; aucun commentaire n'a donc à être reformulé pour elle ; les deux sites de `SupervoxCore/Endpoint` (texte de transport masqué) restent, nommés dans la garde avec leur raison.
 
 **Pannes volontaires :** remettre `localizedDescription` à un site : le test du site et la garde tombent.
 
