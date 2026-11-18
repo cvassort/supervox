@@ -110,18 +110,26 @@ public struct VoicesPane: View {
     /// Les langues du sélecteur. `VoicesModel.languages` contient toujours la langue en cours, mais dédoublonne sans casse et en
     /// confondant `-` et `_` : la langue en cours peut y figurer sous une autre écriture (`fr_FR` pour `fr-FR`). L'entrée de même clé
     /// prend alors l'écriture exacte de la langue en cours, pour que le sélecteur ait toujours une étiquette égale à sa valeur.
-    static func languageOptions(_ languages: [String], current: String?) -> [String] {
-        guard let current else { return languages }
-        let key = VoicesModel.languageKey(current)
-        return languages.map { VoicesModel.languageKey($0) == key ? current : $0 }
+    /// Le libellé est la langue en clair (`VoicesText.languageName`) : deux codes d'une même langue y restent distincts.
+    struct LanguageOption: Hashable {
+        let code: String
+        let label: String
+    }
+
+    static func languageOptions(_ languages: [String], current: String?) -> [LanguageOption] {
+        languages.map { language in
+            var code = language
+            if let current, VoicesModel.languageKey(language) == VoicesModel.languageKey(current) { code = current }
+            return LanguageOption(code: code, label: VoicesText.languageName(code))
+        }
     }
 
     private var filters: some View {
         HStack(spacing: 16) {
             Picker(VoicesText.languageFilterLabel, selection: $model.language) {
                 Text(VoicesText.allLanguages).tag(String?.none)
-                ForEach(Self.languageOptions(model.languages, current: model.language), id: \.self) { language in
-                    Text(language).tag(Optional(language))
+                ForEach(Self.languageOptions(model.languages, current: model.language), id: \.code) { option in
+                    Text(option.label).tag(Optional(option.code))
                 }
             }
             .fixedSize()
@@ -417,6 +425,13 @@ public struct VoiceEditor: View {
 
     /// La taille de la feuille, en points : 520×540 (décision du contrôleur, tour 1 : les six champs, deux paramètres et
     /// « Ajouter un paramètre » se voient sans défiler). Choix non mesuré, vu en image.
+    /// Le nom en clair montré à côté du champ de la langue (le champ garde le code, qui est enregistré) ; `nil` pour un code
+    /// sans nom (inconnu, vide) : il n'y a rien de plus clair à dire.
+    static func languageHint(_ code: String) -> String? {
+        let name = VoicesText.languageName(code)
+        return name == code ? nil : name
+    }
+
     public static let size = CGSize(width: 520, height: 540)
 
     /// Les fournisseurs proposés : ceux qui savent parler ; le fournisseur du brouillon s'il n'y est pas (supprimé, ou qui ne sait
@@ -499,7 +514,12 @@ public struct VoiceEditor: View {
             }
             GridRow {
                 fieldLabel(VoicesText.languageField)
-                TextField(VoicesText.languageField, text: draft.language).labelsHidden()
+                HStack(spacing: 8) {
+                    TextField(VoicesText.languageField, text: draft.language).labelsHidden()
+                    if let hint = Self.languageHint(draft.wrappedValue.language) {
+                        Text(hint).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                    }
+                }
             }
             GridRow {
                 fieldLabel(VoicesText.genderField)

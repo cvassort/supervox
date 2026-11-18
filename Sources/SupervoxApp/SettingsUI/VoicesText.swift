@@ -109,6 +109,17 @@ public enum VoicesText {
     public static let noLongerInstalled = InterviewText.fr("Cette voix n'est plus installée sur cet ordinateur.")
     public static let notSaved = InterviewText.fr("Cette voix n'est pas enregistrée dans la liste.")
 
+    /// La langue d'un code (`fr-FR`), en clair et en français (« français (France) »), calculée avec une locale française FIXE,
+    /// pas celle de la machine. Un code que la locale ne connaît pas, vide ou blanc : rendu tel quel (mesuré sur macOS 26 :
+    /// `zz-ZZ`, `code-invente` et la chaîne vide n'ont pas de nom ; `fr-ZZ` donne « français (région inconnue) »).
+    public static func languageName(_ code: String) -> String {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let name = Self.frenchLocale.localizedString(forIdentifier: trimmed) else { return code }
+        return name
+    }
+
+    private static let frenchLocale = Locale(identifier: "fr_FR")
+
     /// Le genre d'une voix, dans le détail d'une ligne.
     public static func genderTitle(_ gender: VoiceGender?) -> String {
         switch gender {
@@ -193,7 +204,15 @@ public enum VoicesText {
 
     // MARK: - Écritures
 
-    public static let deleteConfirmation = InterviewText.fr("Supprimer cette voix ?")
+    /// La question posée avant de supprimer une voix enregistrée : elle la nomme. La voix en vigueur : une seconde phrase dit ce
+    /// que Supervox prendra à sa place (la voix de `deletedActive`). Le nom est repris tel quel (les espaces insécables ne
+    /// touchent que la phrase autour).
+    public static func deleteConfirmation(name: String, isActive: Bool) -> String {
+        let question = InterviewText.fr("Supprimer la voix « ") + name + InterviewText.fr(" » ?")
+        guard isActive else { return question }
+        return question + " "
+            + InterviewText.fr("C'est la voix en vigueur : Supervox reprendra la voix automatique du système, en français.")
+    }
     public static let deletedActive = InterviewText.fr(
         "La voix supprimée était la voix en vigueur : Supervox reprend la voix automatique du système, en français.")
 

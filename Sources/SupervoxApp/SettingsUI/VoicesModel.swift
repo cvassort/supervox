@@ -109,16 +109,19 @@ public final class VoicesModel {
     /// Les voix installées à la dernière lecture.
     private var installed: [SystemVoiceInfo]
     /// Le filtre de langue ; `nil` : toutes les langues. Au départ, la langue de la voix en vigueur. Un changement qui cache la
-    /// ligne choisie la désélectionne et arrête l'écoute.
+    /// ligne choisie la désélectionne et arrête l'écoute. Tout changement efface une panne d'écoute affichée.
     public var language: String? {
-        didSet { dropHiddenSelection() }
+        didSet { filtersChanged(language != oldValue) }
     }
     /// Le filtre de genre ; même règle que la langue.
     public var gender: GenderFilter = .all {
-        didSet { dropHiddenSelection() }
+        didSet { filtersChanged(gender != oldValue) }
     }
-    /// La ligne choisie. Une ligne que les filtres cachent n'est jamais visée par un geste (`selectedRow` ne la rend pas).
-    public var selection: Row.ID?
+    /// La ligne choisie. Une ligne que les filtres cachent n'est jamais visée par un geste (`selectedRow` ne la rend pas). Un
+    /// changement efface une panne d'écoute affichée ; une écoute en cours continue (« Arrêter » reste là).
+    public var selection: Row.ID? {
+        didSet { if selection != oldValue { clearFailedPreview() } }
+    }
     public var draft: VoiceDraft?
     public private(set) var message: String?
     public private(set) var previewState: VoicePreview.State = .idle
@@ -206,7 +209,8 @@ public final class VoicesModel {
             system.append(
                 Row(
                     id: .automatic(language: language), section: .system, title: VoicesText.automatic,
-                    detail: "\(language) · \(VoicesText.automaticDetail)", language: language, genderGroup: .unspecified,
+                    detail: "\(VoicesText.languageName(language)) · \(VoicesText.automaticDetail)", language: language,
+                    genderGroup: .unspecified,
                     choice: VoiceChoice(language: language), isActive: false, note: nil, canUse: true))
             let voices = installed
                 .filter { languageKey($0.language) == languageKey(language) }
@@ -217,7 +221,8 @@ public final class VoicesModel {
                     Row(
                         id: .system(identifier: voice.identifier), section: .system,
                         title: voice.name.isEmpty ? voice.identifier : voice.name,
-                        detail: "\(voice.language) · \(VoicesText.genderTitle(gender)) · \(VoicesText.quality(voice.quality))",
+                        detail: "\(VoicesText.languageName(voice.language)) · \(VoicesText.genderTitle(gender)) · "
+                            + VoicesText.quality(voice.quality),
                         language: voice.language, genderGroup: group(gender),
                         choice: VoiceChoice(identifier: voice.identifier, language: voice.language, gender: gender),
                         isActive: false, note: nil, canUse: true))
@@ -236,13 +241,15 @@ public final class VoicesModel {
         let active = settings.voice
         if let index = rows.firstIndex(where: { active.isSameVoice(as: $0.choice) }) {
             rows[index].isActive = true
+            // La voix déjà en vigueur : « Utiliser cette voix » n'a rien à faire (tâche 4, C3).
+            rows[index].canUse = false
         } else {
             let normalized = active.normalized
             let isSystem = normalized.providerID == nil
             let row = Row(
                 id: .active, section: isSystem ? .system : .provider, title: VoicesText.activeVoice,
                 detail: isSystem
-                    ? "\(normalized.language) · \(normalized.identifier ?? VoicesText.automatic)"
+                    ? "\(VoicesText.languageName(normalized.language)) · \(normalized.identifier ?? VoicesText.automatic)"
                     : providerDetail(normalized, settings: settings),
                 language: normalized.language, genderGroup: group(normalized.gender), choice: active, isActive: true,
                 note: isSystem ? VoicesText.noLongerInstalled : VoicesText.notSaved, canUse: false)
@@ -266,11 +273,14 @@ public final class VoicesModel {
             canUse: usable)
     }
 
-    /// « Fournisseur · modèle » (le fournisseur absent des réglages : « Fournisseur supprimé »).
+    /// « Fournisseur · modèle · langue en clair » (le fournisseur absent des réglages : « Fournisseur supprimé » ; sans langue,
+    /// rien à sa place — une voix normalisée en a toujours une).
     private static func providerDetail(_ voice: VoiceChoice, settings: AppSettings) -> String {
         let provider = settings.providers.first { $0.id == voice.providerID }
         let name = provider.map { Provider.shortName($0.name) } ?? VoicesText.providerRemovedName
-        return [name, voice.model].compactMap { $0 }.joined(separator: " · ")
+        let language = voice.language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? nil : VoicesText.languageName(voice.language)
+        return [name, voice.model, language].compactMap { $0 }.joined(separator: " · ")
     }
 
     /// La ligne cochée, sur ces réglages : celle de l'affichage.
@@ -366,6 +376,17 @@ public final class VoicesModel {
         listeningRow = nil
     }
 
+    /// Une panne d'écoute affichée est effacée (une écoute en cours n'est pas touchée). Appelé par les gestes qui la rendent
+    /// ancienne : changement de sélection ou de filtre, écriture réussie (`use`, `save`, suppression confirmée).
+    private func clearFailedPreview() {
+        if case .failed = previewState { previewState = .idle }
+    }
+
+    private func filtersChanged(_ changed: Bool) {
+        if changed { clearFailedPreview() }
+        dropHiddenSelection()
+    }
+
     /// Un filtre a caché la ligne choisie : elle n'est plus choisie, l'écoute en cours s'arrête, et une demande de suppression
     /// en attente est lâchée avec elle.
     private func dropHiddenSelection() {
@@ -378,7 +399,11 @@ public final class VoicesModel {
     // MARK: - Supprimer (règle 6)
 
     /// La question posée avant de supprimer, `nil` sans demande en cours.
-    public var confirmationText: String? { pendingDeletion == nil ? nil : VoicesText.deleteConfirmation }
+    public var confirmationText: String? {
+        guard let id = pendingDeletion, let saved = settings.voices.first(where: { $0.id == id }) else { return nil }
+        let isActive = Self.activeRowID(settings: settings, installed: installed) == .saved(id)
+        return VoicesText.deleteConfirmation(name: saved.name, isActive: isActive)
+    }
 
     public func requestDeletion() {
         guard let id = selectedRow?.savedID else { return }
@@ -517,6 +542,7 @@ public final class VoicesModel {
         do {
             try update(change)
             message = nil
+            clearFailedPreview()
             settings = read()
             return true
         } catch {

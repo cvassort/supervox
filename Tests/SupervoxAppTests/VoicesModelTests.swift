@@ -136,16 +136,16 @@ import Testing
 
         let female = rows[3]
         #expect(female.title == "Voix d'exemple A")
-        #expect(female.detail == "fr-FR · \(VoicesText.genderTitle(.female)) · \(VoicesText.quality(2))")
+        #expect(female.detail == "\(VoicesText.languageName("fr-FR")) · \(VoicesText.genderTitle(.female)) · \(VoicesText.quality(2))")
         #expect(female.choice == VoiceChoice(identifier: "voix.exemple.a", language: "fr-FR", gender: .female))
         let unspecified = rows[1]
-        #expect(unspecified.detail == "en-US · \(VoicesText.genderUnspecified) · \(VoicesText.quality(1))")
+        #expect(unspecified.detail == "\(VoicesText.languageName("en-US")) · \(VoicesText.genderUnspecified) · \(VoicesText.quality(1))")
         #expect(rows[4].detail.contains(VoicesText.quality(3)))
 
         // Le nom plié (sans casse ni accents) : « voix d'exemple É » passe avant « Voix d'exemple F ».
         let folded = rows[6]
         #expect(folded.title == "voix d'exemple É")
-        #expect(folded.detail == "Fournisseur d'exemple · modele-exemple")
+        #expect(folded.detail == "Fournisseur d'exemple · modele-exemple · \(VoicesText.languageName("fr-FR"))")
         #expect(folded.choice == a.voice)
         #expect(Set([1, 2, 3].map(VoicesText.quality)).count == 3, "trois qualités, trois libellés")
     }
@@ -488,7 +488,7 @@ import Testing
         model.confirmDeletion()
         #expect(rig.updates == 0, "rien sans demande")
         model.requestDeletion()
-        #expect(model.confirmationText == VoicesText.deleteConfirmation)
+        #expect(model.confirmationText == VoicesText.deleteConfirmation(name: "Voix d'exemple A", isActive: true))
         #expect(rig.updates == 0, "rien avant la confirmation")
         model.cancelConfirmation()
         #expect(model.confirmationText == nil)
@@ -575,12 +575,17 @@ import Testing
         #expect(await until { model.previewState == .failed(.notInstalled) })
         #expect(model.previewMessage == VoicesText.failure(.notInstalled))
 
-        // Listée à l'ouverture, désinstallée avant l'écoute : la liste est relue (par l'écoute).
+        // Listée à l'ouverture, désinstallée avant l'écoute : `listen()` relit la liste, la ligne n'est plus montrée, rien n'est
+        // écouté (la panne d'avant est effacée par le changement de sélection : sans cela, l'attente passait sur l'ANCIENNE
+        // panne). La désinstallation entre la décision et l'écoute est tenue par l'écoute elle-même (`VoicePreviewTests`).
         model.selection = RowID.system(identifier: "voix.exemple.a")
+        #expect(model.previewState == .idle)
         rig.setInstalled([Self.voiceB, Self.voiceC])
         model.listen()
-        #expect(await until { model.previewState == .failed(.notInstalled) })
+        #expect(model.selectedRow == nil, "la ligne désinstallée n'est plus montrée")
+        #expect(model.listeningRow == nil)
         await settle()
+        #expect(model.previewState == .idle)
         #expect(rig.factory.calls.isEmpty, "aucune voix fabriquée")
         #expect(rig.player.clips.isEmpty)
     }
@@ -657,6 +662,8 @@ import Testing
         #expect(model.message?.contains("https") == false)
         #expect(model.rows.first { $0.isActive }?.id == .saved(saved.id), "l'affichage est relu après le refus")
         rig.failure = nil
+        // La ligne choisie est maintenant la voix en vigueur : « Utiliser » y est inactif (C3, tâche 4). Une autre ligne.
+        model.selection = RowID.system(identifier: "voix.exemple.a")
         model.use()
         #expect(model.message == nil)
     }
@@ -810,5 +817,181 @@ import Testing
         rig.settings.voices = []
         model.use()
         #expect(rig.updates == 0, "relu avant d'écrire : la ligne n'existe plus")
+    }
+
+    // MARK: - Tâche 4, tour de correction 1 : ce que la liste dit (C1 à C5)
+
+    /// C1 : la langue en clair, par une locale française FIXE. Pas d'égalité sur la chaîne entière du système (elle peut changer
+    /// d'une version à l'autre) : on tient ce qui doit y être, et ce qui distingue.
+    @Test func aLanguageCodeIsNamedInPlainFrench() {
+        #expect(VoicesText.languageName("fr-FR").contains("français"))
+        #expect(VoicesText.languageName("en-US").contains("anglais"))
+        #expect(VoicesText.languageName("fr-FR") != "fr-FR", "un code connu n'est pas rendu tel quel")
+        // Deux codes d'une même langue : deux libellés différents (le filtre doit pouvoir les distinguer).
+        #expect(VoicesText.languageName("fr-FR") != VoicesText.languageName("fr-CA"))
+        #expect(VoicesText.languageName("fr-CA").contains("français"))
+        // Un code inventé, vide ou blanc : rendu tel quel.
+        for code in ["zz-ZZ", "code-invente", "", "  "] {
+            #expect(VoicesText.languageName(code) == code, "« \(code) »")
+        }
+    }
+
+    /// C1 et C2 : chaque ligne de détail dit la langue en clair, jamais le code ; une voix de fournisseur la dit aussi, après son
+    /// fournisseur et son modèle. Une langue inventée reste son code (rien d'autre à montrer).
+    @Test func everyDetailLineSaysTheLanguageInPlainWords() {
+        let saved = Self.saved("Voix d'exemple A", id: 1, language: "en-US")
+        let invented = Self.saved("Voix d'exemple B", id: 2, language: "zz-ZZ")
+        let rig = Rig(Self.settings(voices: [saved, invented], voice: VoiceChoice(identifier: "voix.exemple.absente", language: "fr-FR")))
+        let model = rig.model
+        model.language = nil
+        let rows = Dictionary(uniqueKeysWithValues: model.rows.map { ($0.id, $0) })
+        let french = VoicesText.languageName("fr-FR")
+        let english = VoicesText.languageName("en-US")
+        for id: RowID in [.automatic(language: "fr-FR"), .system(identifier: "voix.exemple.a"), .active] {
+            let detail = rows[id]?.detail ?? ""
+            #expect(detail.hasPrefix(french), "\(id) : \(detail)")
+            #expect(!detail.contains("fr-FR"), "\(id) : pas de code (\(detail))")
+        }
+        #expect(rows[.automatic(language: "en-US")]?.detail.hasPrefix(english) == true)
+        #expect(rows[.saved(saved.id)]?.detail == "Fournisseur d'exemple · modele-voix-exemple · \(english)")
+        #expect(rows[.saved(invented.id)]?.detail == "Fournisseur d'exemple · modele-voix-exemple · zz-ZZ")
+    }
+
+    /// C3 : « Utiliser cette voix » est inactif sur la ligne cochée (la voix déjà en vigueur), et `use()` n'y écrit rien ; une
+    /// autre ligne reste utilisable, et le devient de nouveau dès qu'elle n'est plus en vigueur.
+    @Test func theVoiceInForceCannotBeUsedAgain() {
+        let saved = Self.saved("Voix d'exemple A", id: 1)
+        let rig = Rig(Self.settings(voices: [saved], voice: VoiceChoice(identifier: "voix.exemple.b", language: "fr-FR")))
+        let model = rig.model
+        let rowB = RowID.system(identifier: "voix.exemple.b")
+        let rowA = RowID.system(identifier: "voix.exemple.a")
+        model.selection = rowB
+        #expect(model.selectedRow?.isActive == true)
+        #expect(model.selectedRow?.canUse == false)
+        #expect(!model.canUse)
+        model.use()
+        #expect(rig.updates == 0, "rien n'est écrit sur la voix déjà en vigueur")
+
+        model.selection = rowA
+        #expect(model.canUse)
+        model.use()
+        #expect(rig.updates == 1)
+        #expect(!model.canUse, "A est maintenant la voix en vigueur")
+        model.selection = rowB
+        #expect(model.canUse, "B ne l'est plus")
+
+        // Une voix enregistrée en vigueur, de même.
+        model.selection = .saved(saved.id)
+        model.use()
+        #expect(model.selectedRow?.isActive == true)
+        #expect(!model.canUse)
+    }
+
+    /// Ce qui doit effacer une panne d'écoute affichée (C4).
+    enum StaleFailureTrigger: String, CaseIterable, CustomTestStringConvertible, Sendable {
+        case selection, languageFilter, genderFilter, use, save, confirmedDeletion
+        var testDescription: String { rawValue }
+    }
+
+    /// C4 : une panne d'écoute ancienne ne reste pas affichée. La panne (micro tenu, refus immédiat de l'écoute) est d'abord vue
+    /// affichée ; puis un seul déclencheur, qui ne cache pas la ligne choisie (sinon c'est l'arrêt d'une ligne cachée qui
+    /// efface, déjà tenu ailleurs) : l'état revient à `.idle` et la phrase disparaît.
+    @Test(arguments: StaleFailureTrigger.allCases)
+    func aStaleListeningFailureIsClearedBy(_ trigger: StaleFailureTrigger) {
+        let saved = Self.saved("Voix d'exemple D", id: 1, gender: .female)
+        let rig = Rig(Self.settings(voices: [saved]))
+        let model = rig.model
+        let rowA = RowID.system(identifier: "voix.exemple.a")  // féminine, fr-FR
+        model.selection = trigger == .confirmedDeletion ? .saved(saved.id) : rowA
+        rig.microphone.held = true
+        model.listen()
+        rig.microphone.held = false
+        #expect(model.previewState == .failed(.microphoneBusy), "témoin : la panne est affichée")
+        #expect(model.previewMessage != nil)
+
+        switch trigger {
+        case .selection:
+            model.selection = RowID.system(identifier: "voix.exemple.b")
+        case .languageFilter:
+            model.language = nil
+            #expect(model.selection == rowA, "la ligne choisie reste montrée")
+        case .genderFilter:
+            model.gender = .female
+            #expect(model.selection == rowA, "la ligne choisie reste montrée")
+        case .use:
+            model.use()
+            #expect(rig.updates == 1)
+        case .save:
+            model.beginAdding()
+            model.draft = Self.validDraft()
+            model.save()
+            #expect(rig.updates == 1)
+        case .confirmedDeletion:
+            model.requestDeletion()
+            model.confirmDeletion()
+            #expect(rig.updates == 1)
+        }
+        #expect(model.previewState == .idle, "\(trigger)")
+        #expect(model.previewMessage == nil, "\(trigger)")
+    }
+
+    /// C4 : un geste REFUSÉ n'efface pas la panne (seul un geste réussi le fait) : sans ce témoin, un effacement à chaque appel
+    /// passerait le test précédent.
+    @Test func aRefusedGestureKeepsTheListeningFailure() {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        rig.microphone.held = true
+        model.listen()
+        rig.microphone.held = false
+        model.beginAdding()
+        model.save()  // sans nom : refusé
+        model.draft = nil
+        rig.failure = ForeignError()
+        model.use()  // écriture refusée
+        #expect(rig.updates == 1)
+        #expect(model.previewState == .failed(.microphoneBusy))
+    }
+
+    /// C4 : une écoute EN COURS n'est pas touchée par un changement de sélection (« Arrêter » reste là), ni par un filtre qui
+    /// garde la ligne choisie.
+    @Test func aListeningInProgressSurvivesASelectionChange() async {
+        let gate = TestGate()
+        defer { gate.open() }
+        let rig = Rig(Self.settings(), systemVoice: PreviewVoice(.held(gate, VoicePreviewTests.clip)))
+        let model = rig.model
+        let rowA = RowID.system(identifier: "voix.exemple.a")
+        model.selection = rowA
+        model.listen()
+        #expect(model.previewState == .preparing)
+        model.selection = RowID.system(identifier: "voix.exemple.b")
+        #expect(model.previewState == .preparing)
+        #expect(model.listeningRow == rowA)
+        #expect(VoicesPane.listenButton(listeningRow: model.listeningRow, state: model.previewState, canListen: model.canListen).stops)
+        model.language = nil
+        #expect(model.previewState == .preparing)
+        #expect(model.listeningRow == rowA)
+        model.stopListening()
+    }
+
+    /// C5 : la confirmation nomme la voix ; si c'est la voix en vigueur (la ligne cochée), une seconde phrase dit que Supervox
+    /// reprendra la voix du système. La jumelle non cochée de la voix en vigueur n'a pas cette phrase.
+    @Test func theConfirmationNamesTheVoiceAndSaysWhenItIsInForce() {
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let twin = Self.saved("Voix d'exemple B", id: 2)
+        let rig = Rig(Self.settings(voices: [first, twin], voice: first.voice))
+        let model = rig.model
+        model.selection = .saved(twin.id)
+        model.requestDeletion()
+        #expect(model.confirmationText == InterviewText.fr("Supprimer la voix « Voix d'exemple B » ?"))
+        model.cancelConfirmation()
+
+        model.selection = .saved(first.id)
+        model.requestDeletion()
+        let active = model.confirmationText ?? ""
+        #expect(active.hasPrefix(InterviewText.fr("Supprimer la voix « Voix d'exemple A » ?")))
+        #expect(active == VoicesText.deleteConfirmation(name: "Voix d'exemple A", isActive: true))
+        #expect(active.contains("voix automatique du système"), "\(active)")
+        #expect(VoicesText.deleteConfirmation(name: "Voix d'exemple A", isActive: false).count < active.count)
     }
 }

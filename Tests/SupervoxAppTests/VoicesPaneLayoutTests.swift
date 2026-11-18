@@ -452,11 +452,32 @@ import Testing
         let rig = Rig(VoicesModelTests.settings(voice: VoiceChoice(language: current)))
         let model = rig.model
         #expect(model.language == current)
-        let options = VoicesPane.languageOptions(model.languages, current: model.language)
+        let options = VoicesPane.languageOptions(model.languages, current: model.language).map(\.code)
         #expect(options.contains(current), "\(options)")
         #expect(options.count == model.languages.count, "aucune entrée ajoutée ni perdue")
         #expect(Set(options.map(VoicesModel.languageKey)).count == options.count, "aucun doublon")
-        #expect(VoicesPane.languageOptions(model.languages, current: nil) == model.languages)
+        #expect(VoicesPane.languageOptions(model.languages, current: nil).map(\.code) == model.languages)
+    }
+
+    /// C1 (tâche 4, tour de correction 1) : le filtre montre la langue en clair, et garde le code pour valeur. Deux codes d'une même
+    /// langue y ont deux libellés différents ; un code inventé y reste son code.
+    @Test func theLanguageFilterShowsPlainNamesAndKeepsCodes() {
+        let options = VoicesPane.languageOptions(["fr-CA", "fr-FR", "zz-ZZ"], current: "fr_FR")
+        #expect(options.map(\.code) == ["fr-CA", "fr_FR", "zz-ZZ"])
+        #expect(options[0].label.contains("français") && options[1].label.contains("français"))
+        #expect(options[0].label != options[1].label, "deux libellés différents pour deux codes du français")
+        #expect(options[1].label == VoicesText.languageName("fr-FR"))
+        #expect(options[2].label == "zz-ZZ")
+        #expect(options.allSatisfy { !$0.label.contains("fr-") && !$0.label.contains("fr_") })
+    }
+
+    /// C1 : l'éditeur garde le code dans le champ (c'est ce qui est enregistré) et montre le nom en clair à côté ; rien à côté
+    /// d'un code inconnu ou vide (il n'y a rien de plus clair à dire).
+    @Test func theEditorShowsThePlainNameBesideTheCode() {
+        #expect(VoiceEditor.languageHint("fr-FR") == VoicesText.languageName("fr-FR"))
+        #expect(VoiceEditor.languageHint("fr-FR")?.contains("français") == true)
+        #expect(VoiceEditor.languageHint("zz-ZZ") == nil)
+        #expect(VoiceEditor.languageHint("") == nil)
     }
 
     /// L'éditeur : le sélecteur du fournisseur et celui du genre ont toujours une étiquette égale à la valeur du brouillon.
