@@ -56,6 +56,10 @@ public actor FluidStreamingVoiceDetector: StreamingVoiceDetector {
         self.minSilence = minSilence
     }
 
+    /// Plafond du silence demandé pour `effectiveSilence`, en secondes (une heure) : choix non mesuré, loin de toute valeur de
+    /// l'interface (0,3 à 2,0 s) ; il ne sert qu'à garder le calcul entier sans piège.
+    public static let silenceCap = 3600.0
+
     /// Le silence, en secondes, après lequel ce détecteur ferme réellement un passage de voix quand on lui demande `minSilence` : la
     /// bibliothèque ne décide qu'à la fin d'un bloc, et compte le silence à partir de la fin du premier bloc silencieux. Il faut donc
     /// `1 + ⌈Int(minSilence × 16 000) / 4 096⌉` blocs silencieux (code lu : FluidAudio 0.18.3, `VadManager+Streaming.swift`,
@@ -64,7 +68,9 @@ public actor FluidStreamingVoiceDetector: StreamingVoiceDetector {
     public static func effectiveSilence(_ minSilence: Double) -> Double {
         let block = VadManager.chunkSize
         let rate = VadManager.sampleRate
-        let needed = max(0, Int(minSilence * Double(rate)))
+        // Pas un silence (NaN, négatif) : zéro ; au-delà du plafond : le plafond. `Int(Double)` piège sur un nombre non fini.
+        let seconds = minSilence.isNaN ? 0 : min(max(minSilence, 0), silenceCap)
+        let needed = Int(seconds * Double(rate))
         let silentBlocks = 1 + (needed + block - 1) / block
         return Double(silentBlocks * block) / Double(rate)
     }

@@ -62,4 +62,17 @@ import Testing
             previous = effective
         }
     }
+    /// Une valeur qui n'est pas un silence (NaN, négative, infinie, énorme) ne fait pas planter la fonction publique : NaN et le négatif
+    /// comptent comme zéro (un seul bloc), l'infini et l'énorme sont plafonnés. Avant, `Int(...)` piégeait.
+    @Test func aValueThatIsNotASilenceNeitherCrashesNorExceedsTheCap() {
+        let oneBlock = FluidStreamingVoiceDetector.effectiveSilence(0)
+        #expect(oneBlock == 0.256)
+        #expect(FluidStreamingVoiceDetector.effectiveSilence(.nan) == oneBlock)
+        #expect(FluidStreamingVoiceDetector.effectiveSilence(-1) == oneBlock)
+        #expect(FluidStreamingVoiceDetector.effectiveSilence(-.infinity) == oneBlock)
+        let capped = FluidStreamingVoiceDetector.effectiveSilence(FluidStreamingVoiceDetector.silenceCap)
+        #expect(capped >= FluidStreamingVoiceDetector.silenceCap)
+        #expect(FluidStreamingVoiceDetector.effectiveSilence(.infinity) == capped)
+        #expect(FluidStreamingVoiceDetector.effectiveSilence(1e300) == capped)
+    }
 }
