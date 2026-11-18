@@ -472,6 +472,29 @@ struct ConversationInterruptionTests {
         #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
     }
 
+    /// Revue finale, m-A : « Un. » et « Deux. » (deux clips de 0,01 s) sont en file ; « Un. » finit à l'instant même où la position
+    /// est lue (sa fin est livrée, la position rendue est celle de sa fin, 0,01 s). Cette position est celle de « Un. » : elle ne
+    /// fait pas entendre « Deux. », à peine commencée.
+    @Test func aClipThatEndsWhileThePositionIsReadDoesNotMakeTheNextSentenceHeard() async {
+        let h = ConversationHarness(turns: firstTurn, transcripts: texts("t1"), fast: [question("Un. Deux.")], completion: .manual,
+                                    events: [6: .speechStart(sample: 0)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 2)
+
+        let inner = h.audio.inner
+        inner.scriptedPosition = 0.01
+        h.audio.onPositionRead {
+            inner.finishPlayback(.played)
+            inner.flushEnds()
+        }
+        pushLoud(h, from: 0, count: 5)
+        await log.wait(where: isInterrupted)
+
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "Un.")])
+        await finish(h)
+    }
+
     // MARK: Règle 12 : un passage né pendant la transcription du tour
 
     /// La personne reprend pendant que son tour est transcrit, assez fort et assez longtemps : ce passage est gardé depuis son début et

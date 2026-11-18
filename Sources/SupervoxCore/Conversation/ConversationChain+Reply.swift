@@ -153,9 +153,13 @@ extension ConversationChain {
             // La position du clip en cours se lit AVANT l'arrêt (après, plus aucun clip n'est en cours). Le clip en cours est le
             // premier en file dont la fin n'est pas encore arrivée ; s'il finit de lui-même avant l'arrêt, sa fin est `.played` et la
             // position ne sert à rien.
-            let position = audio.playbackPosition
+            // Les fins se lisent AVANT la position (revue finale, m-A) : les fins arrivent par la file de livraison, après le registre
+            // qui donne la position, donc cet instantané est toujours en retard sur elle. Un clip qui finit entre les deux lectures
+            // reste le clip en cours, avec sa propre position (sa fin `.played` arrive ensuite) ; lues dans l'autre ordre, sa position
+            // serait attribuée au clip suivant, à peine commencé, et le ferait compter comme entendu.
             let ended = tracker.ends
             let playing = reply.outcomes.filter { $0.value == .queued && ended[$0.key] == nil }.map(\.key).min()
+            let position = audio.playbackPosition
             audio.stopPlayback()
             await tracker.waitUntilIdle()
             if let playing, let position, let duration = reply.durations[playing], duration > 0,

@@ -68,7 +68,8 @@ final class ObservedAudio: AudioIO, @unchecked Sendable {
     /// Ouverte quand `stop()` a rendu la main.
     let stopped = Gate()
     private let state = OSAllocatedUnfairLock(
-        initialState: (playError: nil as (any Error)?, inQueue: 0, peak: 0, onStart: nil as (@Sendable () -> Void)?))
+        initialState: (playError: nil as (any Error)?, inQueue: 0, peak: 0, onStart: nil as (@Sendable () -> Void)?,
+                       onPositionRead: nil as (@Sendable () -> Void)?))
 
     init(completion: ScriptedAudioIO.Completion, startError: AudioCaptureError?, journal: CallJournal) {
         inner = ScriptedAudioIO(startError: startError, completion: completion)
@@ -120,7 +121,18 @@ final class ObservedAudio: AudioIO, @unchecked Sendable {
         inner.stopPlayback()
     }
 
-    var playbackPosition: Double? { inner.playbackPosition }
+    /// Appelée une seule fois, à la prochaine lecture de `playbackPosition`, avant celle du double : le test y fait finir un clip
+    /// à cet instant précis.
+    func onPositionRead(_ body: @escaping @Sendable () -> Void) { state.withLock { $0.onPositionRead = body } }
+
+    var playbackPosition: Double? {
+        let hook = state.withLock { s -> (@Sendable () -> Void)? in
+            defer { s.onPositionRead = nil }
+            return s.onPositionRead
+        }
+        hook?()
+        return inner.playbackPosition
+    }
 }
 
 // MARK: - Voix
