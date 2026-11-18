@@ -912,7 +912,7 @@ final class TimeoutLog: Sendable {
     @Test func theInterviewPillAndThenTheGlobalHotKeyLaunchTheInterviewWithoutADictation() async {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
-        controller.panelModel.select(ModeChip.interviewID)
+        controller.panelModel.chipTapped(ModeChip.interviewID)
         #expect(controller.panelModel.interview != nil, "la pastille lance l'entretien")
         #expect(controller.panelModel.isOpen)
         #expect(await until { controller.panelModel.interview == nil })
@@ -1107,7 +1107,7 @@ final class TimeoutLog: Sendable {
         controller.panelModel.editDraft("Texte à garder.")
         let before = controller.panelModel.dictation
 
-        controller.panelModel.select(ModeChip.interviewID)
+        controller.panelModel.chipTapped(ModeChip.interviewID)
         #expect(controller.panelModel.dictation == before)
         #expect(controller.panelModel.dictation.stage == .review)
         #expect(controller.settings.lastModeID == ModeChip.interviewID, "le mode choisi est enregistré")
