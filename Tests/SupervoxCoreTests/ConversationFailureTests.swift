@@ -130,7 +130,9 @@ struct ConversationFailureTests {
         await h.chain.conclude()
         await h.transcriber.waitForCalls(1)   // la fin transcrit le passage ouvert : elle est retenue
         #expect(!h.audio.inner.isRunning && h.journal.count(of: "audio.stop.returned") == 1)
-        #expect(log.items.contains(.state(.concluding)))
+        // Le journal, pas le flux : le tap est appelé dans `emit`, avant que le transcripteur soit sollicité ; le lecteur du flux,
+        // une tâche à part, peut être en retard (revue finale, m-E).
+        #expect(h.journal.count(of: "event.state.concluding") == 1)
         for block in 3..<6 { h.audio.inner.push(rampChunk((block * 1000)..<((block + 1) * 1000))) }   // micro fermé : rien n'est livré
         await h.watchdogSleeper.waitForSleeps(1)
         h.clock.advance(by: 10)
