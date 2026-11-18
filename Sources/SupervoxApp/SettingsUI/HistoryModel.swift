@@ -159,6 +159,12 @@ public final class HistoryModel {
         return text
     }
 
+    /// La ligne de l'entretien choisi (sa date, son titre), `nil` sans sélection.
+    public var selectedRow: Row? {
+        guard let selection else { return nil }
+        return rows.first { $0.id == selection }
+    }
+
     public var selectedRecord: InterviewRecord? {
         guard let selection else { return nil }
         return records.first { $0.id == selection }

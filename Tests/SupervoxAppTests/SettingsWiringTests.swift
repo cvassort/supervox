@@ -589,6 +589,72 @@ import Testing
         #expect(plain.tabs == SettingsTab.visible(hasInterview: false))
     }
 
+    // MARK: - Onglet Historique (tâche 11)
+
+    /// Les onglets : Historique ferme la barre, et n'existe que si son modèle est donné (sans dossier d'historique, ni l'onglet ni
+    /// l'entrée du panneau). L'ordre est celui du brief : après Entretien.
+    @Test func theHistoryTabClosesTheBarAndExistsOnlyWithItsModel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(SettingsTab.visible(hasInterview: true, hasHistory: true).last == .history)
+        #expect(
+            SettingsTab.visible(hasInterview: true, hasHistory: true).map(\.title)
+                == ["Fournisseurs", "Raccourci", "Permissions", "Transcription", "Modes", "Entretien", "Historique"])
+        #expect(SettingsTab.visible(hasInterview: true, hasHistory: false).map(\.title).contains("Historique") == false)
+        #expect(SettingsTab.visible(hasInterview: false, hasHistory: true).last == .history)
+
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let controller = makeController()
+        func content(history: HistoryModel?) -> SettingsContent {
+            SettingsView.content(
+                providers: SettingsView.makeProvidersModel(controller),
+                hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+                openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), history: history,
+                navigation: controller.settingsNavigation)
+        }
+        #expect(content(history: nil).tabs == SettingsTab.visible(hasInterview: true, hasHistory: false))
+        #expect(content(history: rig.makeModel()).tabs == SettingsTab.visible(hasInterview: true, hasHistory: true))
+        #expect(content(history: rig.makeModel()).tabs.last == .history)
+    }
+
+    /// La présentation de la fenêtre relit l'historique et efface le message d'avant ; la sortie de la fenêtre ne défait PAS une
+    /// confirmation en attente (une feuille de confirmation fait perdre la touche à la fenêtre : `onLeave` s'appelle alors, et
+    /// annuler la confirmation ferait disparaître la feuille à peine ouverte).
+    @Test func presentingTheWindowReloadsTheHistoryAndLeavingKeepsAPendingConfirmation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rig = try HistoryModelTests.Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([HistoryModelTests.record(1, daysAgo: 100)])
+        let history = rig.makeModel()
+        let controller = makeController()
+        let content = SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, history: history)
+        #expect(!history.isLoaded)
+        rig.copyAccepts = false
+        await history.reload()
+        history.copyPrompt()
+        #expect(history.message != nil)
+        try await rig.seed([HistoryModelTests.record(2, daysAgo: 1)])
+
+        await content.onPresent()
+
+        #expect(history.records.count == 2, "la présentation relit le disque")
+        #expect(history.message == nil, "et efface le message d'avant")
+
+        history.requestRetention(30)
+        #expect(history.pendingRetention == 30)
+        content.onLeave()
+        #expect(history.pendingRetention == 30, "la sortie de la fenêtre ne défait pas la confirmation en attente")
+    }
+
     /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien.
     @Test func theProductionWindowHasTheInterviewTab() throws {
         defer { try? FileManager.default.removeItem(at: directory) }

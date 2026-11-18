@@ -34,21 +34,22 @@ import Testing
 
         var root: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
 
-        /// La durée en vigueur, lue par le magasin à chaque appel (comme la fermeture de `AppController`).
+        /// La durée en vigueur, lue par le magasin à chaque appel (comme la fermeture de `AppController`). Les fermetures du banc
+        /// tiennent le banc fortement (un cycle, voulu : une tâche d'un volet affiché peut relire après la fin du test).
         func retention() -> Int { settings.history.retentionDays }
 
         lazy var history = InterviewHistory(
-            root: root, retentionDays: { [unowned self] in await self.retention() }, now: { HistoryModelTests.now })
+            root: root, retentionDays: { await self.retention() }, now: { HistoryModelTests.now })
 
         func makeModel(locale: Locale = Locale(identifier: "fr_FR"), timeZone: TimeZone = .gmt) -> HistoryModel {
             HistoryModel(
-                history: history, read: { [unowned self] in self.settings },
-                update: { [unowned self] change in
+                history: history, read: { self.settings },
+                update: { change in
                     self.updates += 1
                     if let failure = self.failure { throw failure }
                     change(&self.settings)
                 },
-                copy: { [unowned self] text in
+                copy: { text in
                     self.copied.append(text)
                     return self.copyAccepts
                 },
@@ -149,6 +150,8 @@ import Testing
         try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 2)])
         await model.reload()
         #expect(model.selection == InterviewHistoryTests.id(1))
+        #expect(model.selectedRow?.id == InterviewHistoryTests.id(1))
+        #expect(model.selectedRow?.title == "Écris un outil d'exemple.")
 
         model.selection = InterviewHistoryTests.id(2)
         await model.reload()

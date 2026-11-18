@@ -18,7 +18,7 @@ public enum SystemSettingsPane: Sendable {
 
 /// Les onglets de la fenêtre de réglages.
 public enum SettingsTab: Hashable, Sendable {
-    case providers, hotKey, permissions, transcription, modes, interview
+    case providers, hotKey, permissions, transcription, modes, interview, history
 
     /// Le nom de l'onglet.
     public var title: String {
@@ -29,6 +29,7 @@ public enum SettingsTab: Hashable, Sendable {
         case .transcription: "Transcription"
         case .modes: "Modes"
         case .interview: "Entretien"
+        case .history: "Historique"
         }
     }
 
@@ -40,16 +41,19 @@ public enum SettingsTab: Hashable, Sendable {
         case .transcription: "waveform"
         case .modes: "square.stack"
         case .interview: "person.wave.2"
+        case .history: "clock.arrow.circlepath"
         }
     }
 
-    /// Les onglets montrés, dans l'ordre : Entretien vient après Modes, et n'existe que si son modèle est donné.
-    static func visible(hasInterview: Bool) -> [SettingsTab] {
+    /// Les onglets montrés, dans l'ordre : Entretien vient après Modes, et n'existe que si son modèle est donné ; Historique ferme la
+    /// barre, et n'existe que si son modèle est donné (sans dossier d'historique, ni l'onglet ni l'entrée « Historique… » du panneau).
+    static func visible(hasInterview: Bool, hasHistory: Bool = false) -> [SettingsTab] {
         [.providers, .hotKey, .permissions, .transcription, .modes] + (hasInterview ? [.interview] : [])
+            + (hasHistory ? [.history] : [])
     }
 }
 
-/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription, modes, entretien.
+/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription, modes, entretien, historique.
 public struct SettingsView: View {
     let providers: ProvidersModel
     let hotKey: HotKeySettingsModel
@@ -59,20 +63,22 @@ public struct SettingsView: View {
     let openSystemSettings: @MainActor (SystemSettingsPane) -> Void
     /// `nil` : pas d'onglet Entretien (les appelants d'avant l'entretien).
     let interview: InterviewSettingsModel?
+    /// `nil` : pas d'onglet Historique (aucun dossier d'historique : tests, outil de rendu).
+    let history: HistoryModel?
     /// L'onglet courant, partagé avec le contrôleur (`AppController.settingsNavigation`).
     let navigation: SettingsNavigation
 
     /// Les onglets montrés, dans l'ordre : UNE seule source, lue par le corps de la vue et par `SettingsContent.tabs` (que les tests
-    /// lisent). Entretien n'y est que si son modèle est donné.
-    var tabs: [SettingsTab] { SettingsTab.visible(hasInterview: interview != nil) }
+    /// lisent). Entretien et Historique n'y sont que si leur modèle est donné.
+    var tabs: [SettingsTab] { SettingsTab.visible(hasInterview: interview != nil, hasHistory: history != nil) }
 
     /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut), quand aucune `navigation` n'est donnée. `interview` :
-    /// l'onglet Entretien n'apparaît que s'il est donné.
+    /// l'onglet Entretien n'apparaît que s'il est donné, et l'onglet Historique de même avec `history`.
     public init(
         providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel, modes: ModesModel,
         permissions: PermissionsModel,
         openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void, initialTab: SettingsTab = .providers,
-        interview: InterviewSettingsModel? = nil, navigation: SettingsNavigation? = nil
+        interview: InterviewSettingsModel? = nil, history: HistoryModel? = nil, navigation: SettingsNavigation? = nil
     ) {
         self.providers = providers
         self.hotKey = hotKey
@@ -81,6 +87,7 @@ public struct SettingsView: View {
         self.permissions = permissions
         self.openSystemSettings = openSystemSettings
         self.interview = interview
+        self.history = history
         self.navigation = navigation ?? SettingsNavigation(tab: initialTab)
     }
 
@@ -113,11 +120,12 @@ public struct SettingsView: View {
     static func content(
         providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel, modes: ModesModel,
         permissions: PermissionsModel, openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void,
-        interview: InterviewSettingsModel? = nil, navigation: SettingsNavigation = SettingsNavigation()
+        interview: InterviewSettingsModel? = nil, history: HistoryModel? = nil,
+        navigation: SettingsNavigation = SettingsNavigation()
     ) -> SettingsContent {
         let view = SettingsView(
             providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
-            permissions: permissions, openSystemSettings: openSystemSettings, interview: interview,
+            permissions: permissions, openSystemSettings: openSystemSettings, interview: interview, history: history,
             navigation: navigation)
         return SettingsContent(
             view: AnyView(view), tabs: view.tabs, navigation: view.navigation,
@@ -129,8 +137,10 @@ public struct SettingsView: View {
                 modes.clearMessage()
                 interview?.reload()
                 interview?.clearMessage()
+                history?.clearMessage()
                 await providers.checkKeys()
                 await transcription.refresh()
+                await history?.reload()
             },
             onLeave: {
                 hotKey.cancelRecording()
@@ -236,6 +246,8 @@ public struct SettingsView: View {
         case .modes: ModesPane(model: modes)
         case .interview:
             if let interview { InterviewPane(model: interview) }
+        case .history:
+            if let history { HistoryPane(model: history) }
         }
     }
 }

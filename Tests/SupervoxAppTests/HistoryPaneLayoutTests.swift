@@ -1,0 +1,121 @@
+import AppKit
+import SupervoxCore
+import SwiftUI
+import Testing
+
+@testable import SupervoxApp
+
+/// La disposition de l'onglet Historique dans la fenêtre de réglages, qui a une taille FIXE (`SettingsView.windowSize`) : la liste et
+/// le détail doivent tenir et défiler, le pied (durée, « Tout supprimer… ») doit rester dans la fenêtre quoi que contiennent la liste
+/// et le détail, et la zone du milieu doit garder de la place.
+///
+/// Mesure : le volet est posé dans une vue d'hébergement, sans fenêtre affichée ; il rapporte la hauteur de la zone du milieu et le
+/// bas du pied (`GeometryReader`, repère du volet). C'est la hauteur de mise en page réelle de SwiftUI, pas une estimation. Limites :
+/// (1) la barre d'onglets n'est pas mesurable hors fenêtre affichée : le volet reçoit la hauteur de la fenêtre moins
+/// `tabStripAllowance` (choix non mesuré, la même marge que l'onglet Entretien) ; (2) la mise en page dépend de la police et de la
+/// taille du texte du système : le test vaut pour la configuration de la machine qui le lance.
+@MainActor @Suite(.timeLimit(.minutes(1))) struct HistoryPaneLayoutTests {
+    static let tabStripAllowance = InterviewPaneLayoutTests.tabStripAllowance
+    static var paneHeight: CGFloat { SettingsView.windowSize.height - tabStripAllowance }
+
+    /// Mesure le volet à cette taille.
+    private func measure(_ model: HistoryModel, width: CGFloat = SettingsView.windowSize.width) throws -> HistoryPane.Metrics {
+        var measured: HistoryPane.Metrics?
+        let height = Self.paneHeight
+        let host = NSHostingView(rootView: HistoryPane(model: model, onMeasure: { measured = $0 }).frame(width: width, height: height))
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        // Bornée : la mise en page se fait au passage de la boucle, jamais d'attente sans fin.
+        for _ in 0..<300 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        return try #require(measured, "le volet n'a rien mesuré")
+    }
+
+    /// Un historique chargé de `count` entretiens aux textes très longs, un fichier illisible, et un message d'échec : tout ce qui peut
+    /// pousser le pied.
+    private func loadedModel(_ rig: HistoryModelTests.Rig, count: Int, longTexts: Bool, withExtras: Bool) async throws -> HistoryModel {
+        var records: [InterviewRecord] = []
+        for number in 1...max(count, 1) where count > 0 {
+            var conversation = Conversation()
+            let turns = longTexts ? 60 : 1
+            for turn in 0..<turns {
+                conversation.appendInterviewer("Question d'exemple numéro \(turn), assez longue pour passer à la ligne dans le détail ? " + String(repeating: "mot ", count: longTexts ? 40 : 1))
+                conversation.appendUser("Réponse d'exemple numéro \(turn). " + String(repeating: "texte ", count: longTexts ? 40 : 1))
+            }
+            let prompt = longTexts
+                ? (0..<80).map { "Ligne \($0) du prompt d'exemple, assez longue pour passer à la ligne sur plusieurs lignes du détail." }.joined(separator: "\n")
+                : "Un prompt court."
+            records.append(
+                InterviewRecord(
+                    id: InterviewHistoryTests.id(number), date: HistoryModelTests.now.addingTimeInterval(-Double(number) * 3600),
+                    prompt: prompt, conversation: conversation))
+        }
+        if count > 0 { try await rig.seed(records) }
+        if withExtras {
+            try FileManager.default.createDirectory(at: rig.root, withIntermediateDirectories: true)
+            try Data("pas du json".utf8).write(to: rig.root.appendingPathComponent("abîmé.json"))
+        }
+        let model = rig.makeModel()
+        await model.reload()
+        if withExtras {
+            rig.copyAccepts = false
+            model.copyPrompt()  // pose un message d'échec : la rangée du haut apparaît.
+            try #require(model.message != nil)
+        }
+        return model
+    }
+
+    @Test("le pied est collé au bas de la fenêtre, ni poussé dehors ni remonté, avec 40 entretiens très longs, un illisible et un message")
+    func theFooterStaysAtTheBottomWithTheWorstContent() async throws {
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let model = try await loadedModel(rig, count: 40, longTexts: true, withExtras: true)
+        #expect(model.unreadableNote != nil)
+
+        let metrics = try measure(model)
+
+        #expect(abs(metrics.footerMaxY - Self.paneHeight) < 0.5, "pied à \(metrics.footerMaxY) points, volet de \(Self.paneHeight)")
+    }
+
+    @Test("même pied, même place, avec un seul entretien court, sans entretien, et avant la première lecture")
+    func theFooterDoesNotDependOnTheContent() async throws {
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let one = try await loadedModel(rig, count: 1, longTexts: false, withExtras: false)
+        #expect(abs(try measure(one).footerMaxY - Self.paneHeight) < 0.5)
+
+        let emptyRig = try HistoryModelTests.Rig()
+        defer { emptyRig.cleanUp() }
+        let empty = emptyRig.makeModel()
+        #expect(abs(try measure(empty).footerMaxY - Self.paneHeight) < 0.5, "avant la première lecture")
+        await empty.reload()
+        #expect(empty.records.isEmpty && empty.isLoaded)
+        #expect(abs(try measure(empty).footerMaxY - Self.paneHeight) < 0.5, "sans entretien")
+    }
+
+    /// La liste et le détail gardent de la place : même avec l'en-tête, le message et la note des fichiers illisibles, la zone du
+    /// milieu fait au moins ce qu'il faut pour montrer quelques lignes.
+    @Test("la zone du milieu garde au moins 150 points avec l'en-tête, le message et la note des illisibles")
+    func theMainAreaKeepsRoom() async throws {
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let model = try await loadedModel(rig, count: 40, longTexts: true, withExtras: true)
+
+        let metrics = try measure(model)
+
+        #expect(metrics.mainAreaHeight >= 150, "zone du milieu de \(metrics.mainAreaHeight) points")
+    }
+
+    @Test("la mesure est vivante : un volet plus étroit passe l'en-tête à la ligne et la zone du milieu rétrécit")
+    func theMeasureFollowsTheLayout() async throws {
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let model = try await loadedModel(rig, count: 3, longTexts: false, withExtras: false)
+
+        let wide = try measure(model)
+        let narrow = try measure(model, width: 360)
+
+        #expect(narrow.mainAreaHeight < wide.mainAreaHeight, "étroit : \(narrow.mainAreaHeight), large : \(wide.mainAreaHeight)")
+    }
+}
