@@ -153,7 +153,8 @@ public final class AppController {
                 try await choice.resolve(in: settings, secrets: secretAccess)
             },
             systemVoices: interviewEnvironment.systemVoices,
-            microphoneHeld: { false },
+            // Lu à l'appel, par le relais : les contrôleurs n'existent pas encore.
+            microphoneHeld: { relay.microphoneHeld?() ?? false },
             sleep: { try await Task.sleep(for: .seconds($0)) })
         voicePreview = preview
         // LA fermeture d'avant micro : la même pour la dictée, la correction et l'entretien.
@@ -228,6 +229,13 @@ public final class AppController {
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }
+        // LA source de vérité « un micro est tenu », pour l'écoute d'une voix : une dictée ou une correction de l'appui à sa fin,
+        // un entretien de son lancement à sa fin (`isBusy`), puis tant que sa conversation n'a pas rendu son micro.
+        // Limite admise : une dictée annulée dont la session ferme encore son micro n'est pas comptée (la dictée suivante ne
+        // l'attend pas non plus, et un `cancel()` qui ne reviendrait jamais refuserait l'écoute sans fin).
+        relay.microphoneHeld = { [weak dictationController, weak interviewController] in
+            (dictationController?.isBusy ?? false) || (interviewController?.isReleasingMicrophone ?? false)
+        }
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
         retention.read = { [weak self] in Self.retentionDays(of: self) }
@@ -798,6 +806,7 @@ private final class ActionRelay {
     var openSettings: (@MainActor () -> Void)?
     var quit: (@MainActor () -> Void)?
     var settings: (@MainActor () -> AppSettings?)?
+    var microphoneHeld: (@MainActor () -> Bool)?
 }
 
 /// Délégué de menu qui rafraîchit les titres juste avant l'affichage.

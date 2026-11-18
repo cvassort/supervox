@@ -376,7 +376,7 @@ final class SaveTimers: Sendable {
                     secrets: SecretAccess(secrets, queue: DispatchQueue(label: "test.interview.\(UUID())")),
                     makeModel: { _, _ in ScriptedModel(.never) }, makeVoice: fakeEnvironment.environment.makeVoice)
             },
-            history: history, panel: panel, now: { date }, saveWait: { _ in try await timers.wait() })
+            history: history, panel: panel, now: { date }, saveWait: { _ in try await timers.wait() }, beforeMicrophone: {})
         relay.rig = self
         panel.onConclude = { [controller] in controller.conclude() }
     }

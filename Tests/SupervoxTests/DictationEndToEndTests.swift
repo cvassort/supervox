@@ -112,7 +112,8 @@ final class CountingFeed: MicrophoneFeed, @unchecked Sendable {
             behavior: { behavior }, modeID: { "dictee-brute" }, microphoneAllowed: { true }, panel: panel,
             hotKeyModifiers: { [.control, .option] },
             // Une attente qui ne rend la main qu'à l'annulation : aucun sondage réel du clavier.
-            hold: HoldWatch(anyHeld: { _ in true }, wait: { _ in try? await Task.sleep(for: .seconds(3600)) }))
+            hold: HoldWatch(anyHeld: { _ in true }, wait: { _ in try? await Task.sleep(for: .seconds(3600)) }),
+            beforeMicrophone: {})
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
     }
 

@@ -313,7 +313,7 @@ import Testing
         let setup = Self.setup(vocabulary: ["terme-un", "terme-deux"])
         let controller = InterviewController(
             environment: rig.live.environment, settings: { .defaults }, behavior: { .toggle }, resolve: { _, _ in setup },
-            history: DiscardingInterviewHistory(), panel: panel)
+            history: DiscardingInterviewHistory(), panel: panel, beforeMicrophone: {})
         let outcomes = Outcomes()
         controller.start(engine: nil) { outcomes.append($0) }
 

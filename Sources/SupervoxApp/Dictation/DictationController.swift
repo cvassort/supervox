@@ -226,7 +226,7 @@ public final class DictationController {
         wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
         interview: (any InterviewRunning)? = nil,
         concludeInterview: (@MainActor () -> Void)? = nil,
-        beforeMicrophone: @escaping @MainActor () -> Void = {}
+        beforeMicrophone: @escaping @MainActor () -> Void
     ) {
         self.environment = environment
         self.inserter = inserter
