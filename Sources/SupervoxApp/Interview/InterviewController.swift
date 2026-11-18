@@ -51,6 +51,8 @@ public final class InterviewController: InterviewRunning {
     private let panel: PanelModel
     private let now: @Sendable () -> Date
     private let saveWait: @Sendable (Double) async throws -> Void
+    /// Appelée sur le fil principal juste avant l'ouverture du micro de l'entretien (`start()` de la conversation).
+    private let beforeMicrophone: @MainActor () -> Void
     private let log = Logger(subsystem: "dev.supervox.app", category: "interview")
 
     /// L'entretien en cours, `nil` hors entretien.
@@ -66,12 +68,15 @@ public final class InterviewController: InterviewRunning {
     ///   - resolve: la résolution des réglages (`InterviewSetup.resolve` dans l'application ; un double dans les tests).
     ///   - history: où va un entretien conclu.
     ///   - panel: le modèle du panneau, où l'état de l'entretien est posé.
+    ///   - beforeMicrophone: appelée de façon synchrone juste avant d'ouvrir le micro (`start()` de la conversation). Dans
+    ///     l'application : l'arrêt de l'écoute d'une voix, pour que le micro ne l'entende jamais.
     public init(
         environment: InterviewEnvironment, settings: @escaping @MainActor () -> AppSettings,
         behavior: @escaping @MainActor () -> HotKeyBehavior,
         resolve: @escaping @MainActor (AppSettings, TranscriptionEngine?) async throws -> InterviewSetup,
         history: any InterviewHistoryStoring, panel: PanelModel, now: @escaping @Sendable () -> Date = Date.init,
-        saveWait: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
+        saveWait: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+        beforeMicrophone: @escaping @MainActor () -> Void = {}
     ) {
         self.environment = environment
         self.settings = settings
@@ -81,6 +86,7 @@ public final class InterviewController: InterviewRunning {
         self.panel = panel
         self.now = now
         self.saveWait = saveWait
+        self.beforeMicrophone = beforeMicrophone
     }
 
     public var isActive: Bool { current != nil }
@@ -175,6 +181,8 @@ public final class InterviewController: InterviewRunning {
         guard isLive(attempt) else { return }
         attempt.conversation = conversation
         attempt.holdsConversation = true
+        // L'écoute d'une voix est arrêtée avant que le micro ne s'ouvre (arrêt fait au retour) : il ne l'entend jamais.
+        beforeMicrophone()
         let events = await conversation.start()
         attempt.started = true
         // Annulé pendant `start()` : la demande d'arrêt partie de `cancel()` a pu arriver avant le démarrage (le moteur ignore un

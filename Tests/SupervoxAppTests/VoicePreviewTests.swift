@@ -467,3 +467,173 @@ final class PlayerCount: Sendable {
         #expect(phrases.values.allSatisfy { !$0.isEmpty })
     }
 }
+
+// MARK: - Le micro n'entend jamais la voix d'essai (règle 9, amendement 3)
+
+/// Un relais vers `ScriptedClipPlayer` qui note « lecteur arrêté » au journal commun à chaque `stopNow()` (pas un second double de
+/// lecteur : tout le reste passe au double existant).
+final class JournaledPlayer: ClipPlayer {
+    let inner = ScriptedClipPlayer(completion: .manual)
+    let journal: Journal
+    init(journal: Journal) { self.journal = journal }
+    func play(_ clip: AudioClip) async throws { try await inner.play(clip) }
+    func stop() { inner.stop() }
+    @MainActor func stopNow() {
+        journal.append("lecteur arrêté")
+        inner.stopNow()
+    }
+}
+
+/// Un relais vers la session double qui note « micro demandé » au journal commun quand `start()` (l'ouverture du micro) est appelé.
+final class JournaledSession: DictationSessioning {
+    let inner: any DictationSessioning
+    let journal: Journal
+    init(_ inner: any DictationSessioning, journal: Journal) {
+        self.inner = inner
+        self.journal = journal
+    }
+    func start() async {
+        journal.append("micro demandé")
+        await inner.start()
+    }
+    func finish() async { await inner.finish() }
+    func cancel() async { await inner.cancel() }
+    var snapshots: AsyncStream<DictationSnapshot> { inner.snapshots }
+}
+
+/// L'application assemblée : une écoute qui joue pendant la PRÉPARATION d'une dictée, d'une correction ou d'un entretien (la
+/// fabrication est retenue par une porte) est arrêtée juste avant l'ouverture du micro, pas à l'appui : l'ordre au journal est
+/// « lecteur arrêté » puis « micro demandé ». Réglages dans un dossier temporaire ; sessions, conversation, voix et lecteur doubles.
+@MainActor @Suite(.timeLimit(.minutes(1))) struct PreviewBeforeMicrophoneTests {
+    let directory: URL
+    let store: SettingsStore
+    let hotKeys = HotKeyTests.FakeRegistrar()
+    let escape = HotKeyTests.FakeRegistrar()
+    let modeRegistrars = ModeRegistrars()
+    let surface = FakePanelSurface()
+    let clicks = FakeClickMonitor()
+    let presenter = Presenter()
+    let engines = FakeEngines()
+    let journal = Journal()
+    let interviewFake: FakeInterviewEnvironment
+    let player: JournaledPlayer
+    let secrets = InMemorySecretStore()
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("supervox-preview-micro-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
+        interviewFake = FakeInterviewEnvironment(journal: journal)
+        player = JournaledPlayer(journal: journal)
+        try secrets.write("cle-exemple", account: InterviewRig.provider.id.uuidString)
+    }
+
+    func makeController(settings: AppSettings) throws -> AppController {
+        try store.save(settings)
+        var dictation = engines.environment
+        let makeSession = dictation.makeSession
+        let journal = journal
+        dictation.makeSession = { JournaledSession(try await makeSession($0), journal: journal) }
+        var interview = interviewFake.environment
+        let clip = VoicePreviewTests.clip
+        interview.makeVoice = { _, _ in PreviewVoice(.clip(clip)) }
+        interview.makePlayer = { [player] in player }
+        let fake = interviewFake.environment
+        let access = SecretAccess(secrets, queue: DispatchQueue(label: "test.preview.micro.\(UUID())"))
+        let controller = AppController(
+            settingsStore: store, secrets: secrets, hotKeyRegistrar: hotKeys,
+            escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
+            permissionsProbe: FakePermissionsProbe(microphone: .granted, accessibility: .granted),
+            systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi,
+            makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
+            makeSettingsWindow: presenter.make, terminate: presenter.terminate,
+            dictation: dictation, rewriter: .unavailable, inserter: InsertionRig().inserter,
+            holdWatch: HoldWatch(anyHeld: { _ in true }, wait: { _ in }), reviewHandoverWait: { _ in },
+            interview: interview,
+            resolveInterview: { settings, engine in
+                try await InterviewSetup.resolve(
+                    settings: settings, engine: engine, secrets: access, makeModel: { _, _ in ScriptedModel(.never) },
+                    makeVoice: fake.makeVoice)
+            },
+            interviewHistory: FakeInterviewHistory(), announcer: RecordingAnnouncer())
+        controller.launch()
+        return controller
+    }
+
+    /// L'écoute de la voix du système, jusqu'à la lecture.
+    func listen(_ controller: AppController) async throws {
+        controller.voicePreview.start(VoiceChoice(language: "fr-FR"), settings: controller.settings, onState: { _ in })
+        try #require(await until { player.inner.isPlaying }, "l'écoute doit jouer avant l'ouverture du micro")
+    }
+
+    func expectStoppedThenMicrophone(_ microphone: String) {
+        let stopped = journal.index(of: "lecteur arrêté")
+        let opened = journal.index(of: microphone)
+        #expect(stopped != nil, "le lecteur doit être arrêté : \(journal.entries)")
+        #expect(opened != nil, "le micro doit être demandé : \(journal.entries)")
+        if let stopped, let opened { #expect(stopped < opened, "\(journal.entries)") }
+        #expect(!player.inner.isPlaying)
+    }
+
+    @Test func aDictationStopsThePreviewBeforeItsMicrophone() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = TestGate()
+        defer { gate.open() }
+        engines.configure { $0.makeGate = gate }
+        let controller = try makeController(settings: .defaults)
+        hotKeys.press()
+        #expect(await until { engines.events.contains("make") })
+        try await listen(controller)
+        #expect(journal.index(of: "lecteur arrêté") == nil, "l'appui seul ne coupe pas : seul le micro coupe")
+        gate.open()
+        #expect(await until { journal.index(of: "micro demandé") != nil })
+        expectStoppedThenMicrophone("micro demandé")
+    }
+
+    @Test func aCorrectionStopsThePreviewBeforeItsMicrophone() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        let raw = try #require(settings.modes.firstIndex { $0.id == ModeChip.rawID })
+        settings.modes[raw].reviewBeforePaste = true
+        let controller = try makeController(settings: settings)
+        hotKeys.press()
+        #expect(await until { engines.sessions.count == 1 })
+        let session = engines.sessions[0]
+        #expect(await until { session.calls.contains("start") })
+        session.emit(.preparing)
+        session.emit(.recording)
+        session.emit(.finished("Un texte à corriger."))
+        try #require(await until { controller.panelModel.dictation.stage == .review })
+
+        let gate = TestGate()
+        defer { gate.open() }
+        engines.configure { $0.makeGate = gate }
+        let before = journal.entries.filter { $0 == "micro demandé" }.count
+        controller.dictation.startCorrection()
+        #expect(await until { engines.events.filter { $0 == "make" }.count == 2 })
+        try await listen(controller)
+        gate.open()
+        #expect(await until { journal.entries.filter { $0 == "micro demandé" }.count == before + 1 })
+        let entries = journal.entries
+        let stopped = try #require(entries.lastIndex(of: "lecteur arrêté"), "\(entries)")
+        let opened = try #require(entries.lastIndex(of: "micro demandé"))
+        #expect(stopped < opened, "\(entries)")
+        #expect(!player.inner.isPlaying)
+    }
+
+    @Test func anInterviewStopsThePreviewBeforeItsMicrophone() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let gate = TestGate()
+        defer { gate.open() }
+        interviewFake.configure { $0.makeGate = gate }
+        let controller = try makeController(settings: InterviewRig.readySettings())
+        controller.panelModel.chipTapped(ModeChip.interviewID)
+        #expect(await until { interviewFake.makeCount == 1 })
+        try await listen(controller)
+        #expect(journal.index(of: "lecteur arrêté") == nil, "l'appui seul ne coupe pas : seul le micro coupe")
+        gate.open()
+        #expect(await until { journal.index(of: "conversation démarrée") != nil })
+        expectStoppedThenMicrophone("conversation démarrée")
+    }
+}
