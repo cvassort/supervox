@@ -176,9 +176,6 @@ public final class DictationController {
     @ObservationIgnored private var insertionsInFlight = 0
     /// Le raccourci qui a lancé l'entretien en cours (une pastille : le raccourci global), `nil` hors entretien.
     @ObservationIgnored private var interviewOwner: HotKeyOwner?
-    /// Vrai pendant que le raccourci d'un mode choisit ce mode : `modeChosen`, appelé par ce choix, ne lance rien (l'appui
-    /// lui-même lance, avec son propriétaire).
-    @ObservationIgnored private var choosingByHotKey = false
 
     /// - Parameters:
     ///   - settings: les réglages de transcription, relus à chaque dictée.
@@ -306,9 +303,9 @@ public final class DictationController {
         }
         var modeChanged = false
         if case .mode(let id) = owner, modeID() != id {
-            choosingByHotKey = true
+            // Le choix passe par `PanelModel.select`, qui ne rappelle que l'enregistrement (`onModeChanged`), jamais `modeChosen` :
+            // l'appui lance lui-même, avec son propriétaire.
             selectMode(id)
-            choosingByHotKey = false
             // Une sélection refusée (mode inconnu, pastilles verrouillées) ne lance rien : pas de dictée sur un autre mode que
             // celui du raccourci, et aucun effet de bord (T9-1).
             guard modeID() == id else { return }
@@ -420,7 +417,7 @@ public final class DictationController {
     /// Au repos (aucune dictée, relecture ni entretien), la pastille Entretien lance l'entretien, avec le raccourci global pour
     /// propriétaire ; toute autre pastille ne fait que choisir. `modeChanged: true` : un clic montre, il ne referme jamais le panneau.
     public func modeChosen(_ id: String) {
-        guard !choosingByHotKey, run == nil, review == nil, interview?.isActive != true else { return }
+        guard run == nil, review == nil, interview?.isActive != true else { return }
         guard case .interview(let engine) = modes(id) else { return }
         beginInterview(owner: .global, engine: engine, modeChanged: true)
     }
