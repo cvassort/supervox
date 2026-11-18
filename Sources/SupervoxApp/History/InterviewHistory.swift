@@ -118,8 +118,10 @@ public actor InterviewHistory: InterviewHistoryStoring {
 
     /// La SEULE réponse à « garde-t-on quelque chose ? » : non si la durée des réglages vaut 0 OU si la durée confirmée du dossier vaut
     /// 0 (« Ne rien garder » choisi dans l'onglet reste respecté après une remise à zéro des réglages). Une durée confirmée absente ou
-    /// illisible ne dit rien. `save`, l'onglet (`HistoryModel.keepsNothing`, ses lignes) et l'avis de relecture en dépendent : ils ne
-    /// peuvent pas se contredire.
+    /// illisible ne dit rien. Deux lecteurs : `save` (qui lit le DISQUE à chaque appel) et l'onglet (`HistoryModel.keepsNothing` et ses
+    /// lignes, qui lisent le CACHE du modèle). Le modèle met son cache à jour dès qu'il a écrit la durée confirmée et les réglages : ils
+    /// s'accordent, pas seulement après la relecture. L'avis de relecture d'un entretien ne lit pas cette règle : il dépend de ce que
+    /// `save` fait (rien n'est écrit, rien ne lève, donc aucun avertissement).
     public static func keepsNothing(settingsDays: Int, confirmed: ConfirmedRetention) -> Bool {
         normalized(settingsDays) == 0 || confirmed == .days(0)
     }

@@ -200,7 +200,7 @@ public final class HistoryModel {
 
     public var canCopyConversation: Bool { Self.nonBlank(conversationText) != nil }
 
-    /// La ligne sous l'en-tête quand la durée confirmée du dossier n'est plus celle des réglages : les réglages ont changé hors de
+    /// La ligne de durée (dans le pied, au-dessus du sélecteur, avec son bouton) quand la durée confirmée du dossier n'est plus celle des réglages : les réglages ont changé hors de
     /// l'onglet (remis à zéro, fichier mis de côté, édité à la main), et la purge au lancement ne supprime rien tant que la personne
     /// n'a pas choisi la durée de nouveau.
     public static let retentionChangedNote = InterviewText.fr(
@@ -215,8 +215,9 @@ public final class HistoryModel {
     /// Garde-t-on quelque chose ? La même réponse que `save` (`InterviewHistory.keepsNothing`).
     public var keepsNothing: Bool { InterviewHistory.keepsNothing(settingsDays: retentionDays, confirmed: confirmedRetention) }
 
-    /// Le libellé du bouton, à côté de la ligne de durée : « Confirmer « 30 jours » » (il nomme la durée des réglages, celle que le
-    /// sélecteur montre). `nil` sans ligne de durée. Ne pas compter sur le sélecteur pour rechoisir la valeur déjà affichée : on ne sait
+    /// Le libellé du bouton, à côté de la ligne de durée : « Confirmer « 30 jours » » (il nomme la durée des RÉGLAGES ; pendant
+    /// l'application d'une durée, le sélecteur montre la durée demandée, mais la ligne et le bouton n'existent alors pas). `nil` sans
+    /// ligne de durée. Ne pas compter sur le sélecteur pour rechoisir la valeur déjà affichée : on ne sait
     /// pas si SwiftUI appelle alors son setter ; ce bouton passe par le même chemin, sans dépendre de lui.
     public var confirmRetentionButtonTitle: String? {
         retentionNote == nil ? nil : InterviewText.fr("Confirmer « \(Self.label(forDays: retentionDays)) »")

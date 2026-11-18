@@ -1144,7 +1144,7 @@ import Testing
 
     // MARK: - Le bouton qui confirme la durée affichée
 
-    @Test("le bouton nomme la durée affichée (« Confirmer « 30 jours » ») quand une ligne de durée est là, et n'existe pas sinon")
+    @Test("le bouton nomme la durée des réglages (« Confirmer « 30 jours » ») quand une ligne de durée est là, et n'existe pas sinon")
     func theConfirmButtonNamesTheShownDuration() async throws {
         let rig = try Rig(retention: 30)
         defer { rig.cleanUp() }
@@ -1156,7 +1156,7 @@ import Testing
         await model.reload()
         #expect(model.confirmRetentionButtonTitle == "Confirmer «\u{00A0}30 jours\u{00A0}»")
 
-        // « Ne rien garder » confirmé, réglages à 30 : la durée affichée est celle des réglages, le bouton la nomme.
+        // « Ne rien garder » confirmé, réglages à 30 : le bouton nomme la durée des réglages.
         try await rig.history.confirmRetention(0)
         await model.reload()
         #expect(model.retentionNote == Self.keptNothingNote)
@@ -1169,7 +1169,7 @@ import Testing
         #expect(model.confirmRetentionButtonTitle == "Confirmer «\u{00A0}Ne rien garder\u{00A0}»")
     }
 
-    @Test("le bouton confirme la durée affichée par le MÊME chemin que le sélecteur : sans entretien échu, il écrit la durée confirmée et la ligne disparaît")
+    @Test("le bouton confirme la durée des réglages par le MÊME chemin que le sélecteur : sans entretien échu, il écrit la durée confirmée et la ligne disparaît")
     func theConfirmButtonWritesTheConfirmationAndTheNoteDisappears() async throws {
         let rig = try Rig(retention: 30)
         defer { rig.cleanUp() }
