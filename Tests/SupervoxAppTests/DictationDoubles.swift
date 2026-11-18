@@ -106,6 +106,8 @@ final class FakeEngines: Sendable {
         var loadedGate: TestGate?
         var preloadedFor: [TranscriptionSettings] = []
         var preloadGate: TestGate?
+        /// Un journal commun à d'autres doubles (l'entretien) : « session de dictée fabriquée » y est écrit à chaque fabrication.
+        var journal: Journal?
     }
 
     let state = Mutex(State())
@@ -134,6 +136,7 @@ final class FakeEngines: Sendable {
                 let (error, session) = state.withLock { state -> ((any Error)?, FakeSession) in
                     let session = state.queue.isEmpty ? FakeSession() : state.queue.removeFirst()
                     if state.makeError == nil { state.sessions.append(session) }
+                    state.journal?.append("session de dictée fabriquée")
                     return (state.makeError, session)
                 }
                 if let error { throw error }
@@ -311,8 +314,10 @@ final class RewriteCall: Sendable {
     /// absent n'en a aucun. `modeModifierReads` garde chaque lecture.
     var modeModifiers: [String: Modifiers] = [:]
     var modeModifierReads: [String] = []
-    /// Les modes que le raccourci d'un mode a fait choisir, dans l'ordre ; le mode choisi (`modeID`) les suit.
+    /// Les modes que le raccourci d'un mode a fait choisir, dans l'ordre ; le mode choisi (`modeID`) les suit, sauf quand le
+    /// panneau refuse la sélection (`refusesSelection`, comme `PanelModel.select` pour un mode inconnu ou des pastilles verrouillées).
     var selectedModes: [String] = []
+    var refusesSelection = false
     /// Les propriétaires dont le raccourci n'est plus enregistré (le mode a perdu le sien, ou n'existe plus).
     var unbound: Set<HotKeyOwner> = []
     /// Ce que répond la sonde des modificateurs ; `probes` garde chaque question posée (les modificateurs demandés).
@@ -384,7 +389,8 @@ final class RewriteCall: Sendable {
     /// de touches double répond aux sondages des modificateurs.
     init(
         trusted: Bool = true, wait: (@MainActor (Double) async -> Void)? = nil, log: CallLog = CallLog(),
-        limit: Int = 1000, heldModifiers: [Bool] = [false]
+        limit: Int = 1000, heldModifiers: [Bool] = [false], interview: (any InterviewRunning)? = nil,
+        concludeInterview: (@MainActor () -> Void)? = nil
     ) {
         rig = InsertionRig(log: log, trusted: trusted, held: heldModifiers, wait: wait)
         engines.configure { $0.limit = limit }
@@ -404,7 +410,7 @@ final class RewriteCall: Sendable {
             },
             selectMode: { mode in
                 knobs.selectedModes.append(mode)
-                knobs.modeID = mode
+                if !knobs.refusesSelection { knobs.modeID = mode }
             },
             ownerIsBound: { !knobs.unbound.contains($0) },
             hold: HoldWatch(
@@ -431,7 +437,7 @@ final class RewriteCall: Sendable {
                 return knobs.front
             },
             hotKeyLabel: { knobs.hotKeyLabel },
-            wait: { await handover.wait($0) })
+            wait: { await handover.wait($0) }, interview: interview, concludeInterview: concludeInterview)
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
         controller.onViewChange = { [weak self] in self?.views.append($0) }
@@ -482,6 +488,22 @@ func until(_ condition: @MainActor () -> Bool) async -> Bool {
         if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
     }
     return condition()
+}
+
+/// Le résultat d'une tâche, attendu au plus le temps de `until` : `nil` si elle n'a pas fini. Le test échoue alors à sa limite au
+/// lieu de rester suspendu sur `.value` (la tâche qui la regarde reste en attente, sans retenir le test).
+@MainActor
+func bounded<Success: Sendable, Failure: Error>(_ task: Task<Success, Failure>) async -> Result<Success, Failure>? {
+    let box = TaskResultBox<Success, Failure>()
+    Task { box.set(await task.result) }
+    guard await until({ box.result != nil }) else { return nil }
+    return box.result
+}
+
+final class TaskResultBox<Success: Sendable, Failure: Error>: Sendable {
+    private let state = Mutex<Result<Success, Failure>?>(nil)
+    var result: Result<Success, Failure>? { state.withLock { $0 } }
+    func set(_ result: Result<Success, Failure>) { state.withLock { $0 = result } }
 }
 
 /// Laisse le temps à tout ce qui est déjà en route d'arriver (pour prouver qu'une chose n'a PAS lieu).

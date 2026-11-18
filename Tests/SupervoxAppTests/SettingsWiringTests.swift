@@ -7,7 +7,7 @@ import Testing
 
 /// Le contrôleur et la fenêtre de réglages : un seul détenteur des réglages, le raccourci réappliqué,
 /// et une fenêtre construite sans lire aucune clé.
-@MainActor @Suite struct SettingsWiringTests {
+@MainActor @Suite(.timeLimit(.minutes(1))) struct SettingsWiringTests {
     let directory: URL
     let store: SettingsStore
     let secrets = RecordingSecretStore()
@@ -29,9 +29,10 @@ import Testing
     }
 
     /// Un fichier de réglages existe toujours (réglages par défaut) : `launch()` suit le chemin d'un lancement ordinaire.
-    func makeController(settingsView: @escaping AppController.SettingsViewProvider = AppController.emptySettings)
-        -> AppController
-    {
+    func makeController(
+        settingsView: @escaping AppController.SettingsViewProvider = AppController.emptySettings,
+        interview: InterviewEnvironment = .unavailable
+    ) -> AppController {
         if !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
         return AppController(
             settingsStore: store, secrets: secrets, hotKeyRegistrar: registrar,
@@ -40,28 +41,45 @@ import Testing
             systemHotKeys: FakeSystemHotKeys(), keyboardLayout: HotKeyTests.ansi, settingsView: settingsView,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            rewriter: .unavailable, inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter, interview: interview, announcer: RecordingAnnouncer())
+    }
+
+    /// Attend la présentation de la fenêtre, BORNÉE (`bounded`) : une présentation qui ne finit pas fait échouer le test au lieu de
+    /// le suspendre sur `.value`.
+    func finished(_ task: Task<Void, Never>?) async {
+        guard let task else { return }
+        #expect(await bounded(task) != nil, "la présentation de la fenêtre ne finit pas")
     }
 
     /// Les modèles que la fenêtre de test a reçus, pour agir comme l'utilisateur.
     @MainActor final class Built {
         var hotKey: HotKeySettingsModel?
         var modes: ModesModel?
+        var interview: InterviewSettingsModel?
+        var history: HistoryModel?
+        var content: SettingsContent?
     }
 
     /// La vraie composition de la fenêtre (`SettingsView.content`), avec disposition et moniteur de touches doubles.
-    func testProvider(_ built: Built) -> AppController.SettingsViewProvider {
+    /// `history` : l'onglet Historique de la fenêtre (absent par défaut, comme sans dossier d'historique).
+    func testProvider(_ built: Built, history: HistoryModel? = nil) -> AppController.SettingsViewProvider {
         { [monitor] controller in
+            built.history = history
             let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
             built.hotKey = hotKey
             let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
             built.modes = modes
-            return SettingsView.content(
+            let interview = SettingsView.makeInterviewModel(controller)
+            built.interview = interview
+            let content = SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
                 modes: modes,
-                permissions: controller.permissions, openSystemSettings: { _ in })
+                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview, history: history,
+                navigation: controller.settingsNavigation)
+            built.content = content
+            return content
         }
     }
 
@@ -151,11 +169,11 @@ import Testing
         #expect(secrets.calls.isEmpty)
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(secrets.calls.map(\.name) == ["contains"])
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(secrets.calls.map(\.name) == ["contains"])
         #expect(secrets.readCount == 0)
     }
@@ -401,7 +419,7 @@ import Testing
         let controller = makeController(settingsView: testProvider(built))
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         let modes = try #require(built.modes)
         #expect(modes.rows.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"])
 
@@ -414,7 +432,7 @@ import Testing
         #expect(modes.rows.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"], "pas encore relu")
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(built.modes === modes, "la fenêtre et son modèle sont gardés")
         #expect(modes.rows.map(\.title) == ["Dictée brute", "Écrit ailleurs", "Prompt", "Entretien", "Autre mode"])
         #expect(modes.modelOptions.map(\.providerName) == ["Ajouté ailleurs"])
@@ -468,7 +486,7 @@ import Testing
         #expect(catalog.listCount == 0)
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(catalog.listCount == 1)
     }
 
@@ -484,6 +502,362 @@ import Testing
         await transcription.refresh()
         #expect(transcription.hasListed)
         #expect(transcription.models.isEmpty)
+    }
+
+    // MARK: - Onglet Entretien et navigation (tâche 10)
+
+    /// Règle 6, sur la VRAIE composition de la fenêtre AVEC l'onglet Entretien (`SettingsView.content`, modèle et navigation du
+    /// contrôleur) : `openSettings(tab:)` ouvre la fenêtre sur l'onglet demandé, sans la construire en double ; l'onglet est dans la
+    /// liste de la vue, et la vue est liée à la navigation du contrôleur.
+    @Test func openingTheSettingsOnATabSelectsItInTheRealCompositionAndPresentsTheWindow() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        #expect(controller.settingsNavigation.tab == .providers, "premier affichage : Fournisseurs")
+
+        controller.openSettings(tab: .interview)
+
+        let content = try #require(built.content)
+        #expect(content.tabs.contains(.interview), "l'onglet est dans la barre de la vraie fenêtre")
+        let navigation = try #require(content.navigation)
+        #expect(navigation === controller.settingsNavigation, "la vue suit la navigation du contrôleur")
+        #expect(navigation.tab == .interview)
+        #expect(content.tabs.contains(navigation.tab), "l'onglet choisi existe dans la fenêtre")
+        #expect(presenter.windows.count == 1)
+        #expect(presenter.windows.first?.presentations == 1)
+    }
+
+    /// Règle 6 : la fenêtre déjà ouverte sur un autre onglet est ramenée au premier plan, sur l'onglet demandé, dans la vraie
+    /// composition.
+    @Test func anOpenRealWindowIsBroughtBackOnTheRequestedTab() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings()
+        let navigation = try #require(built.content?.navigation)
+        navigation.tab = .modes  // la personne a cliqué sur Modes
+
+        controller.openSettings(tab: .interview)
+
+        #expect(presenter.windows.count == 1, "la même fenêtre")
+        #expect(presenter.windows.first?.presentations == 2)
+        #expect(navigation.tab == .interview)
+        #expect(try #require(built.content).tabs.contains(navigation.tab))
+    }
+
+    /// Règle 6 : `openSettings()` sans onglet garde l'onglet courant (« Réglages… » du menu rouvre là où l'on s'était arrêté), dans
+    /// la vraie composition.
+    @Test func openingTheRealWindowWithoutATabKeepsTheCurrentTab() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings()
+        let navigation = try #require(built.content?.navigation)
+        #expect(navigation.tab == .providers)
+        navigation.tab = .transcription
+
+        controller.openSettings()
+
+        #expect(navigation.tab == .transcription)
+        #expect(presenter.windows.first?.presentations == 2)
+    }
+
+    /// Les onglets : l'onglet Entretien n'existe que si son modèle est donné (les appelants d'avant la tâche 10 rendent les mêmes
+    /// cinq onglets), et vient après Modes, dont il dépend.
+    @Test func theInterviewTabExistsOnlyWithItsModelAndComesAfterModes() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(SettingsTab.visible(hasInterview: false) == [.providers, .hotKey, .permissions, .transcription, .modes])
+        #expect(SettingsTab.visible(hasInterview: true).last == .interview)
+        #expect(
+            SettingsTab.visible(hasInterview: true).map(\.title)
+                == ["Fournisseurs", "Raccourci", "Permissions", "Transcription", "Modes", "Entretien"])
+
+        let controller = makeController()
+        let plain = SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in })
+        #expect(plain.tabs == SettingsTab.visible(hasInterview: false))
+    }
+
+    // MARK: - Onglet Historique (tâche 11)
+
+    /// Les onglets : Historique ferme la barre, et n'existe que si son modèle est donné (sans dossier d'historique, ni l'onglet ni
+    /// l'entrée du panneau). L'ordre est celui du brief : après Entretien.
+    @Test func theHistoryTabClosesTheBarAndExistsOnlyWithItsModel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(SettingsTab.visible(hasInterview: true, hasHistory: true).last == .history)
+        #expect(
+            SettingsTab.visible(hasInterview: true, hasHistory: true).map(\.title)
+                == ["Fournisseurs", "Raccourci", "Permissions", "Transcription", "Modes", "Entretien", "Historique"])
+        #expect(SettingsTab.visible(hasInterview: true, hasHistory: false).map(\.title).contains("Historique") == false)
+        #expect(SettingsTab.visible(hasInterview: false, hasHistory: true).last == .history)
+
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let controller = makeController()
+        func content(history: HistoryModel?) -> SettingsContent {
+            SettingsView.content(
+                providers: SettingsView.makeProvidersModel(controller),
+                hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+                openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), history: history,
+                navigation: controller.settingsNavigation)
+        }
+        #expect(content(history: nil).tabs == SettingsTab.visible(hasInterview: true, hasHistory: false))
+        #expect(content(history: rig.makeModel()).tabs == SettingsTab.visible(hasInterview: true, hasHistory: true))
+        #expect(content(history: rig.makeModel()).tabs.last == .history)
+    }
+
+    /// La présentation de la fenêtre relit l'historique et efface le message d'avant ; la sortie de la fenêtre ne défait PAS une
+    /// confirmation en attente (une feuille de confirmation fait perdre la touche à la fenêtre : `onLeave` s'appelle alors, et
+    /// annuler la confirmation ferait disparaître la feuille à peine ouverte).
+    @Test func presentingTheWindowReloadsTheHistoryAndLeavingKeepsAPendingConfirmation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rig = try HistoryModelTests.Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([HistoryModelTests.record(1, daysAgo: 100)])
+        let history = rig.makeModel()
+        let controller = makeController()
+        let content = SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, history: history)
+        #expect(!history.isLoaded)
+        rig.copyAccepts = false
+        await history.reload()
+        history.copyPrompt()
+        #expect(history.message != nil)
+        try await rig.seed([HistoryModelTests.record(2, daysAgo: 1)])
+
+        await content.onPresent()
+
+        #expect(history.records.count == 2, "la présentation relit le disque")
+        #expect(history.message == nil, "et efface le message d'avant")
+
+        await history.requestRetention(30)
+        #expect(history.pendingRetention == 30)
+        content.onLeave()
+        #expect(history.pendingRetention == 30, "la sortie de la fenêtre ne défait pas la confirmation en attente")
+    }
+
+    /// I-1 : le branchement de l'onglet Historique dans la fenêtre, par le CONTRÔLEUR : `openSettings` présente la fenêtre, `onPresent`
+    /// relit le disque et efface le message d'avant (un entretien conclu pendant que la fenêtre était gardée apparaît), et la sortie
+    /// de la fenêtre (`didResignKey` : la feuille de confirmation la provoque) ne défait pas une confirmation en attente.
+    @Test func openingTheWindowReloadsTheHistoryClearsItsMessageAndLeavingKeepsTheConfirmation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let rig = try HistoryModelTests.Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([HistoryModelTests.record(1, daysAgo: 100)])
+        let history = rig.makeModel()
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built, history: history))
+
+        controller.openSettings(tab: .history)
+        await finished(controller.settingsPresentation)
+        #expect(built.history === history, "le fournisseur a bien reçu le modèle de l'historique")
+        #expect(try #require(built.content).tabs.last == .history)
+        #expect(history.records.count == 1, "la première présentation relit le disque")
+
+        rig.copyAccepts = false
+        history.copyPrompt()
+        #expect(history.message != nil)
+        try await rig.seed([HistoryModelTests.record(2, daysAgo: 1)])
+
+        controller.openSettings(tab: .history)  // la fenêtre gardée est présentée de nouveau
+        await finished(controller.settingsPresentation)
+
+        #expect(history.records.count == 2, "un entretien conclu entre-temps apparaît")
+        #expect(history.message == nil, "le message d'avant est effacé")
+        #expect(presenter.windows.count == 1, "la même fenêtre")
+
+        await history.requestRetention(30)
+        #expect(history.pendingRetention == 30)
+        presenter.windows.first?.leave()  // la feuille fait perdre la main à la fenêtre
+        #expect(history.pendingRetention == 30, "onLeave n'annule PAS la confirmation en attente")
+    }
+
+    /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien.
+    @Test func theProductionWindowHasTheInterviewTab() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let content = SettingsView.provider(catalog: catalog, promptTokenLimit: Self.promptTokenLimit)(controller)
+        #expect(content.tabs == SettingsTab.visible(hasInterview: true))
+        #expect(content.tabs.contains(.interview))
+        #expect(content.navigation === controller.settingsNavigation, "la vraie fenêtre suit la navigation du contrôleur")
+    }
+
+    /// Règle 1, de bout en bout : le modèle de l'onglet écrit par le contrôleur (réglages en mémoire et fichier), sans écraser ce qui
+    /// s'écrit ailleurs ; et le silence en pratique vient de l'environnement de l'entretien du contrôleur.
+    @Test func theInterviewModelWritesThroughTheControllerAndAsksItsEnvironmentForTheEffectiveSilence() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var environment = FakeInterviewEnvironment(journal: Journal()).environment
+        environment.effectiveTurnSilence = { _ in 1.024 }
+        let controller = makeController(interview: environment)
+        let interview = SettingsView.makeInterviewModel(controller)
+
+        try controller.updateSettings {
+            $0.providers = [
+                Provider(id: UUID(), name: "Ajouté ailleurs", baseURL: "https://example.com", kind: .anthropic, models: [])
+            ]
+        }
+        interview.maxQuestions = 5
+        interview.turnSilence = 0.6
+
+        #expect(controller.settings.interview.maxQuestions == 5)
+        #expect(controller.settings.providers.map(\.name) == ["Ajouté ailleurs"])
+        let onDisk = store.load().settings
+        #expect(onDisk.interview.maxQuestions == 5)
+        #expect(onDisk.interview.turnSilence == 0.6)
+        #expect(interview.effectiveSilenceText.hasPrefix("0,60 s demandées, 1,02 s en pratique"))
+    }
+
+    /// Un fichier de réglages illisible refuse l'enregistrement : le modèle le dit, et rien n'est écrit.
+    @Test func aRefusedSaveIsSaidByTheInterviewTabAndWritesNothing() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let interview = SettingsView.makeInterviewModel(controller)
+        try Data("pas du json".utf8).write(to: store.file)
+
+        interview.maxQuestions = 5
+
+        #expect(interview.maxQuestions == InterviewSettings.defaults.maxQuestions)
+        #expect(controller.settings.interview.maxQuestions == InterviewSettings.defaults.maxQuestions)
+        #expect(interview.message?.contains("settings.json") == true)
+        #expect(try Data(contentsOf: store.file) == Data("pas du json".utf8), "le fichier n'a pas été touché")
+    }
+
+    /// La présentation de la fenêtre efface le message d'un refus d'avant : la personne rouvre la fenêtre, le bandeau d'erreur ne
+    /// reste pas.
+    @Test func presentingTheWindowClearsAnOldRefusalOfTheInterviewTab() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+        try Data("pas du json".utf8).write(to: store.file)
+        interview.maxQuestions = 5
+        #expect(interview.message != nil, "le refus est affiché")
+
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+
+        #expect(interview.message == nil, "rouverte, la fenêtre n'affiche plus le refus d'avant")
+    }
+
+    /// La présentation de la fenêtre relit l'onglet Entretien : un réglage écrit ailleurs s'y voit.
+    @Test func presentingTheWindowRereadsTheInterviewTab() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+
+        try controller.updateSettings { $0.interview.maxQuestions = 12 }
+        #expect(interview.maxQuestions == InterviewSettings.defaults.maxQuestions, "pas encore relu")
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+
+        #expect(built.interview === interview, "la fenêtre et son modèle sont gardés")
+        #expect(interview.maxQuestions == 12)
+    }
+
+    /// Ce que la personne a tapé dans le gabarit est enregistré quand elle quitte la fenêtre (fermée, plus au premier plan, application
+    /// passée en arrière-plan) : `SettingsContent.onLeave`, ici par la fenêtre double.
+    @Test func leavingTheWindowSavesTheTypedTemplate() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+        let window = try #require(presenter.windows.first)
+
+        interview.template = "Mon gabarit, tapé."
+        #expect(store.load().settings.interview.template == nil, "rien n'est écrit pendant la frappe")
+        window.leave()
+
+        #expect(store.load().settings.interview.template == "Mon gabarit, tapé.")
+        #expect(controller.settings.interview.template == "Mon gabarit, tapé.")
+    }
+
+    /// Quitter (menu, panneau) enregistre le gabarit tapé avant la fin de l'application, et la fin a bien lieu.
+    @Test func quittingSavesTheTypedTemplateBeforeTerminating() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+
+        interview.template = "Tapé juste avant Quitter."
+        controller.quit()
+
+        #expect(store.load().settings.interview.template == "Tapé juste avant Quitter.")
+        #expect(presenter.terminations == 1)
+    }
+
+    /// Une fin demandée par le système (déconnexion, arrêt) enregistre aussi le gabarit tapé.
+    @Test func aSystemTerminationRequestSavesTheTypedTemplate() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+
+        interview.template = "Tapé avant l'arrêt du système."
+        let decision = controller.requestTermination(reply: { _ in })
+
+        #expect(decision == .now)
+        #expect(store.load().settings.interview.template == "Tapé avant l'arrêt du système.")
+    }
+
+    /// Fenêtre jamais ouverte : quitter ne plante pas et n'écrit rien.
+    @Test func quittingWithoutAnOpenSettingsWindowWritesNothing() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let before = try Data(contentsOf: store.file)
+        controller.quit()
+        #expect(presenter.terminations == 1)
+        #expect(try Data(contentsOf: store.file) == before)
     }
 
     /// Changement de mode dans le panneau, puis ajout d'un fournisseur dans la fenêtre : les deux restent.

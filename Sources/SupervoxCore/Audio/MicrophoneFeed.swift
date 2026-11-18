@@ -62,9 +62,12 @@ final class DeliveryGate: @unchecked Sendable {
 
     /// `stop()` depuis `onChunk` : le verrou de livraison serait pris deux fois par le même fil, ce que le système
     /// sanctionne par la mort du processus (mesuré avec `OSAllocatedUnfairLock`). On préfère un message clair.
-    func assertNotDelivering() {
+    ///
+    /// Le même contrôle sert aux appels de la lecture (`play()`, `stopPlayback()`) : ils prennent le verrou de cycle de vie que `stop()`
+    /// tient en attendant la fin de `onChunk`, donc `onChunk` qui les appelle pendant un `stop()` d'un autre fil bloquerait les deux.
+    func assertNotDelivering(calling call: String = "stop()") {
         precondition(!isCurrentThreadDelivering,
-                     "stop() appelé depuis onChunk : erreur de programmation. Signaler un autre contexte qui appellera stop().")
+                     "\(call) appelé depuis onChunk : erreur de programmation. Signaler un autre contexte qui appellera \(call).")
     }
 }
 
@@ -110,6 +113,16 @@ extension AudioCapture: StreamingCapture {
         try start(onChunk: onChunk, accumulate: accumulate)
     }
 }
+
+/// Ce que `LiveAudioIO` demande à l'appareil : la capture de `StreamingCapture` et la lecture dans le même moteur. `AudioCapture`
+/// la satisfait ; les tests la remplacent pour vérifier le câblage (un seul objet reçoit `start` et `play`) sans matériel.
+protocol PlaybackCapture: StreamingCapture {
+    func play(_ clip: AudioClip, onEnd: @escaping @Sendable (PlaybackEnd) -> Void) throws
+    func stopPlayback()
+    var playbackPosition: Double? { get }
+}
+
+extension AudioCapture: PlaybackCapture {}
 
 /// Le vrai micro, vu comme une `MicrophoneFeed` : possède une `AudioCapture` qui ne déclenche jamais l'invite système
 /// (l'application demande l'autorisation par son propre parcours) ; sans autorisation, `start` lève

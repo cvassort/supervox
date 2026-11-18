@@ -33,6 +33,13 @@ public final class AppController {
     public let permissions: PermissionsModel
     /// La dictée : le raccourci, Échap et la fermeture du panneau y mènent.
     public let dictation: DictationController
+    /// L'entretien du mode Entretien : la dictée le lance, le conclut et l'annule ; « Conclure » du panneau y mène.
+    public let interview: InterviewController
+    /// L'historique local des entretiens : `nil` sans dossier donné (`historyRoot`), et alors ni onglet Historique, ni entrée
+    /// « Historique… » du panneau, ni purge, et l'entretien ne garde rien (`DiscardingInterviewHistory`).
+    public let history: InterviewHistory?
+    /// Met un texte dans le presse-papiers par l'insertion, qui le tient (un seul accès) : la copie de l'onglet Historique.
+    let copyText: @MainActor (String) -> Bool
     /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
     public let systemHotKeys: any SystemHotKeys
     /// Nomme les touches des raccourcis (libellés, avis) et reconnaît ⌘Q, ⌘W, ⌘H et ⌘M.
@@ -52,11 +59,17 @@ public final class AppController {
     private let makeSettingsWindow: SettingsWindowMaker
     private let terminate: @MainActor () -> Void
     private let dictationEnvironment: DictationEnvironment
+    /// L'environnement de l'entretien : l'onglet Entretien lui demande le silence que le détecteur applique en pratique.
+    let interviewEnvironment: InterviewEnvironment
+    /// L'onglet que la fenêtre de réglages montre : `openSettings(tab:)` le change, un clic dessus aussi.
+    public let settingsNavigation = SettingsNavigation()
     private let terminationWait: @Sendable (Double) async -> Void
     /// La fin demandée pendant une insertion : l'attente en cours (une seule).
     private var terminationTask: Task<Void, Never>?
     /// Le préchargement des moteurs lancé au lancement (les tests l'attendent).
     private(set) var preloadTask: Task<Void, Never>?
+    /// La purge de l'historique lancée au lancement (les tests l'attendent).
+    private(set) var historyPurgeTask: Task<Void, Never>?
     private var statusItem: NSStatusItem?
     private var statusMenuRefresher: MenuRefresher?
     private var settingsWindow: (any SettingsWindowSurface)?
@@ -91,7 +104,12 @@ public final class AppController {
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
-        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        interview interviewEnvironment: InterviewEnvironment = .unavailable,
+        resolveInterview: (@MainActor (AppSettings, TranscriptionEngine?) async throws -> InterviewSetup)? = nil,
+        interviewHistory: (any InterviewHistoryStoring)? = nil,
+        historyRoot: URL? = nil,
+        announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         self.terminationWait = terminationWait
         self.settingsStore = settingsStore
@@ -100,6 +118,7 @@ public final class AppController {
         self.makeSettingsWindow = makeSettingsWindow
         self.terminate = terminate
         dictationEnvironment = dictation
+        self.interviewEnvironment = interviewEnvironment
         self.systemHotKeys = systemHotKeys
         self.keyboardLayout = keyboardLayout
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar, layout: keyboardLayout)
@@ -123,8 +142,23 @@ public final class AppController {
             openSettings: { relay.openSettings?() }, quit: { relay.quit?() })
         let panel = PanelController(
             model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
-            surface: makePanelSurface(AnyView(content)))
+            surface: makePanelSurface(AnyView(content)), announcer: announcer)
         self.panel = panel
+        // L'historique réel n'existe que si une racine est donnée : `nil` veut dire « pas d'historique », jamais « le vrai dossier »
+        // (seul le programme `Supervox` donne la vraie racine). La durée est relue à chaque appel dans les réglages en vigueur.
+        let retention = RetentionSource()
+        let realHistory = historyRoot.map { root in
+            InterviewHistory(root: root, retentionDays: { await retention.days() })
+        }
+        history = realHistory
+        copyText = { [inserter] in inserter.copy($0) }
+        // Sans résolution fournie (tests de l'assemblage qui ne portent pas sur l'entretien), l'entretien ne démarre pas et le dit.
+        let interviewController = InterviewController(
+            environment: interviewEnvironment, settings: { relay.settings?() ?? .defaults },
+            behavior: { relay.settings?()?.hotKeyBehavior ?? .toggle },
+            resolve: resolveInterview ?? { _, _ in throw InterviewEnvironment.Unavailable() },
+            history: interviewHistory ?? realHistory ?? DiscardingInterviewHistory(), panel: panelModel)
+        self.interview = interviewController
         let dictationController = DictationController(
             environment: dictation, inserter: inserter,
             settings: { relay.settings?()?.transcription ?? .defaults },
@@ -141,7 +175,7 @@ public final class AppController {
             // Le raccourci réellement enregistré, pas celui des réglages : un changement que le système a refusé laisse l'ancien
             // actif, et c'est lui que l'on tient.
             modeHotKeyModifiers: { [modeHotKeys] in modeHotKeys.active[$0]?.modifiers ?? [] },
-            selectMode: { [panelModel] in panelModel.select($0) },
+            selectMode: { [panelModel] in _ = panelModel.select($0) },
             ownerIsBound: { [hotKeys, modeHotKeys] owner in
                 switch owner {
                 case .global: hotKeys.active != nil
@@ -157,7 +191,10 @@ public final class AppController {
             frontApplication: frontApplication,
             // Le libellé du raccourci global réellement enregistré, celui que le reste du panneau montre.
             hotKeyLabel: { [panelModel] in panelModel.hotKeyLabel },
-            wait: reviewHandoverWait)
+            wait: reviewHandoverWait,
+            interview: interviewController,
+            // L'appui qui conclut passe par le bouton : il se grise, et une seule conclusion part.
+            concludeInterview: { [panelModel] in panelModel.concludeInterview() })
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
             panelModel.setDictation($0)
@@ -171,14 +208,21 @@ public final class AppController {
         panelModel.onFinishCorrection = { [dictationController] in dictationController.finishCorrection() }
         panelModel.onPreviousVersion = { [dictationController] in dictationController.previousVersion() }
         panelModel.onNextVersion = { [dictationController] in dictationController.nextVersion() }
+        panelModel.onConclude = { [interviewController] in interviewController.conclude() }
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
+        retention.read = { [weak self] in Self.retentionDays(of: self) }
+        // « Historique… » du menu « … » n'existe que si un historique est branché.
+        if realHistory != nil { panelModel.onOpenHistory = { [weak self] in self?.openSettings(tab: .history) } }
 
         panelModel.onOpen = { [permissions] in permissions.refresh() }
         panelModel.onModeChanged = { [weak self] id in self?.saveLastMode(id) }
+        // Un clic sur la pastille Entretien au repos lance l'entretien, même déjà choisie (la dictée décide si c'est le moment).
+        // Le changement de mode seul ne lance rien : un seul lancement par clic, et le raccourci d'un mode lance de son côté.
+        panelModel.onChipTapped = { [weak self] id in self?.dictation.modeChosen(id) }
 
         if let notice = loaded.notice { log.notice("réglages : \(notice, privacy: .public)") }
     }
@@ -207,9 +251,14 @@ public final class AppController {
         inserter: TextInserter,
         holdWatch: HoldWatch = .system,
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
-        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        interview: InterviewEnvironment = .unavailable,
+        interviewHistory: (any InterviewHistoryStoring)? = nil,
+        historyRoot: URL? = nil,
+        announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         let current = ActionRelay()
+        let access = SecretAccess(secrets)
         self.init(
             settingsStore: settingsStore, secrets: secrets, hotKeyRegistrar: hotKeyRegistrar,
             escapeRegistrar: escapeRegistrar, makeModeHotKeyRegistrar: makeModeHotKeyRegistrar,
@@ -217,19 +266,29 @@ public final class AppController {
             settingsView: settingsView, makePanelSurface: makePanelSurface, clickMonitor: clickMonitor,
             makeSettingsWindow: makeSettingsWindow, terminate: terminate, dictation: dictation,
             rewriter: LiveRewriter.environment(
-                settings: { current.settings?() ?? .defaults }, secrets: SecretAccess(secrets), makeModel: makeModel),
+                settings: { current.settings?() ?? .defaults }, secrets: access, makeModel: makeModel),
             frontApplication: frontApplication, inserter: inserter, holdWatch: holdWatch, terminationWait: terminationWait,
-            reviewHandoverWait: reviewHandoverWait)
+            reviewHandoverWait: reviewHandoverWait, interview: interview,
+            // La résolution de l'entretien : les réglages en vigueur au lancement, les clés par la file commune des secrets, les
+            // clients par `makeModel`, la voix par l'environnement (la cible `Supervox` y branche la vraie).
+            resolveInterview: { settings, engine in
+                try await InterviewSetup.resolve(
+                    settings: settings, engine: engine, secrets: access, makeModel: makeModel, makeVoice: interview.makeVoice)
+            },
+            interviewHistory: interviewHistory, historyRoot: historyRoot, announcer: announcer)
         current.settings = { [weak self] in self?.settings }
     }
 
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
-    /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, que la cible `Supervox` construit
-    /// (`SupervoxApp` ne dépend pas d'eux). Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
+    /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, `interview` : ceux de l'entretien (son réel, voix),
+    /// que la cible `Supervox` construit (`SupervoxApp` ne dépend pas d'eux). `historyRoot` : le dossier de l'historique des
+    /// entretiens, donné par la cible `Supervox` seule ; `nil` (le défaut) : pas d'historique. Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
     /// ci-dessus, que les tests exécutent.
     public convenience init(
         settingsView: @escaping SettingsViewProvider = SettingsView.provider,
         dictation: DictationEnvironment = .unavailable,
+        interview: InterviewEnvironment = .unavailable,
+        historyRoot: URL? = nil,
         inserter: TextInserter
     ) {
         let file = (try? SettingsStore.defaultFile())
@@ -249,7 +308,8 @@ public final class AppController {
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
             dictation: dictation, makeModel: LiveRewriter.client, frontApplication: FrontApplication.system,
-            inserter: inserter)
+            inserter: inserter, interview: interview, historyRoot: historyRoot,
+            announcer: SystemAccessibilityAnnouncer())
     }
 
     /// Installe l'élément de barre de menus et le raccourci global. À appeler une fois,
@@ -285,6 +345,44 @@ public final class AppController {
         }
         if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
         preloadEngines()
+        purgeHistory()
+    }
+
+    /// La purge de l'historique au lancement : les entretiens plus vieux que la durée en vigueur sont supprimés, en tâche de fond.
+    ///
+    /// Seulement quand la durée est CELLE DE LA PERSONNE : au premier lancement (aucun réglage encore choisi) ou quand le fichier de
+    /// réglages n'a pas été lu (illisible, mis de côté, d'une version plus récente), la durée en vigueur est le défaut de 30 jours,
+    /// pas un choix : purger avec elle supprimerait des entretiens qu'elle voulait garder plus longtemps.
+    ///
+    /// Ces gardes ne regardent que CE lancement : un incident de réglages laisse, au lancement suivant, un fichier lisible qui dit 30
+    /// jours sans que personne l'ait choisi. Le dossier de l'historique garde donc la durée que la personne a CONFIRMÉE dans
+    /// l'onglet (`InterviewHistory.confirmedRetention`) : la purge ne part que si elle est absente (jamais réglée : la durée des
+    /// réglages est le défaut annoncé) ou égale à celle des réglages. Différente ou illisible : aucune purge.
+    private func purgeHistory() {
+        guard let history else { return }
+        guard !isFirstLaunch, !hasLoadNotice, saveRefusal == nil else {
+            log.notice("historique : purge au lancement ignorée, durée de conservation non lue")
+            return
+        }
+        let settingsDays = Self.retentionDays(of: self)
+        historyPurgeTask = Task {
+            // La durée des réglages n'est celle de la personne que si le dossier la reconnaît : remise à zéro, fichier mis de côté,
+            // édité à la main ou illisible (lu 30 jours), elle diffère de la durée confirmée dans l'onglet, et RIEN n'est supprimé.
+            switch await history.confirmedRetention() {
+            case .absent: break
+            case .days(let confirmed) where confirmed == settingsDays: break
+            case .days, .unreadable:
+                self.log.notice("historique : purge au lancement ignorée, durée de conservation différente de celle confirmée")
+                return
+            }
+            _ = await history.purge()
+        }
+    }
+
+    /// La durée de conservation en jours : celle des réglages en vigueur, bornée ; sans contrôleur (il a disparu), le défaut de 30
+    /// jours. JAMAIS 0 : 0 veut dire « ne rien garder », et la purge effacerait tout.
+    static func retentionDays(of controller: AppController?) -> Int {
+        controller?.settings.history.normalized.retentionDays ?? HistorySettings.defaults.retentionDays
     }
 
     /// Prépare les moteurs des réglages courants en tâche de fond, hors du fil principal et à basse priorité : rien n'est
@@ -598,8 +696,13 @@ public final class AppController {
 
     // MARK: - Actions
 
-    /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`.
-    func openSettings() {
+    /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`. `tab` : l'onglet à montrer ;
+    /// sans lui, la fenêtre garde l'onglet courant (Fournisseurs à la première ouverture).
+    func openSettings(tab: SettingsTab? = nil) {
+        // Un onglet Historique n'est jamais choisi sans historique : la barre ne l'a pas.
+        if let tab, tab != .history || history != nil { settingsNavigation.tab = tab }
+        // L'entretien s'annule aussi quand le panneau est déjà fermé (la fermeture l'annule sinon) : rien n'est gardé.
+        interview.cancel()
         panel.close()
         let window: any SettingsWindowSurface
         let content: SettingsContent
@@ -620,6 +723,9 @@ public final class AppController {
     }
 
     func quit() {
+        // Ce que la personne a tapé dans la fenêtre des réglages (le gabarit de l'entretien) est enregistré avant la fin.
+        settingsContent?.onLeave()
+        interview.cancel()
         panel.close()
         log.notice("quitter")
         terminate()
@@ -645,6 +751,8 @@ public final class AppController {
     /// perdrait celui de l'utilisateur : la fin attend la restauration (bornée), puis appelle `reply(true)`. Une seconde demande
     /// pendant l'attente ne lance pas une seconde attente.
     public func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> TerminationDecision {
+        // Fin demandée par le système (déconnexion, arrêt) : le gabarit tapé est enregistré aussi.
+        settingsContent?.onLeave()
         guard dictation.isInserting else { return .now }
         if terminationTask == nil {
             let dictation = dictation
@@ -657,6 +765,15 @@ public final class AppController {
         }
         return .afterInsertion
     }
+}
+
+/// La durée de conservation de l'historique, lue à chaque appel dans les réglages en vigueur du contrôleur. Posée avant que le
+/// contrôleur soit entièrement construit (l'historique est fabriqué avant lui) : tant que `read` n'est pas posée, et si le contrôleur
+/// a disparu, c'est le défaut des réglages, jamais 0.
+@MainActor
+final class RetentionSource {
+    var read: @MainActor () -> Int = { HistorySettings.defaults.retentionDays }
+    func days() -> Int { read() }
 }
 
 /// Relais d'actions, posé avant que le contrôleur soit entièrement construit.

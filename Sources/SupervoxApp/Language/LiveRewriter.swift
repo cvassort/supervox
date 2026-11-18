@@ -23,15 +23,17 @@ public enum LiveRewriter {
     ///   - secrets: l'accès aux clés des fournisseurs (compte : l'identifiant du fournisseur).
     ///   - makeModel: fabrique le client ; injectée pour que les tests n'ouvrent aucune connexion.
     ///   - policy: les bornes d'une réécriture.
+    ///   - resolve: retrouve le fournisseur, vérifie l'adresse et lit la clé ; `ProviderResolver.resolve`, ou un double.
     public static func environment(
         settings: @escaping @MainActor () -> AppSettings, secrets: SecretAccess,
         makeModel: @escaping @Sendable (ProviderKind, EndpointConfig) -> any LanguageModel = LiveRewriter.client,
-        policy: RewritePolicy = .standard
+        policy: RewritePolicy = .standard, resolve: @escaping ProviderResolution = ProviderResolver.resolve
     ) -> RewriteEnvironment {
         RewriteEnvironment(
             rewrite: { job, onText in
                 let outcome = await rewrite(
-                    job, settings: settings(), secrets: secrets, makeModel: makeModel, policy: policy, onText: onText)
+                    job, settings: settings(), secrets: secrets, makeModel: makeModel, policy: policy, resolve: resolve,
+                    onText: onText)
                 if case .failed(let failure) = outcome { log.notice("mise en forme échouée : \(kind(of: failure), privacy: .public)") }
                 return outcome
             },
@@ -46,27 +48,23 @@ public enum LiveRewriter {
     private static func rewrite(
         _ job: RewriteJob, settings: AppSettings, secrets: SecretAccess,
         makeModel: @Sendable (ProviderKind, EndpointConfig) -> any LanguageModel, policy: RewritePolicy,
-        onText: @escaping @MainActor (String) -> Void
+        resolve: ProviderResolution, onText: @escaping @MainActor (String) -> Void
     ) async -> RewriteOutcome {
         guard let choice = job.model ?? settings.strongModel else { return .failed(.noModel) }
-        guard let provider = settings.providers.first(where: { $0.id == choice.providerID }) else {
-            return .failed(.providerMissing)
-        }
-        // L'adresse avant la clé : une adresse refusée ne coûte pas une invite du trousseau.
-        guard let address = try? ProvidersModel.validatedBaseURL(provider.baseURL), let url = URL(string: address) else {
-            return .failed(.unreachable)
-        }
-        let key: String?
+        // Le fournisseur, l'adresse, puis la clé : l'ordre et les refus sont ceux de `ProviderResolver`.
+        let resolved: ResolvedProvider
         do {
-            key = try await secrets.read(account: provider.id.uuidString)
+            resolved = try await resolve(choice.providerID, settings, secrets)
+        } catch let failure as RewriteFailure {
+            return .failed(failure)
+        } catch is CancellationError {
+            return .cancelled
         } catch {
-            return Task.isCancelled ? .cancelled : .failed(.keychain)
+            // Une erreur que le résolveur ne doit pas lever : une panne dite, jamais une annulation que personne n'a demandée. `.malformed`
+            // est le cas que `RewriteFailure.from` rend déjà pour une erreur inconnue ; la phrase ne reprend rien de l'erreur.
+            return .failed(RewriteFailure.from(error))
         }
-        if Task.isCancelled { return .cancelled }
-        guard let apiKey = key?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
-            return .failed(.noKey(provider: Provider.shortName(provider.name)))
-        }
-        let model = makeModel(provider.kind, EndpointConfig(baseURL: url, apiKey: apiKey))
+        let model = makeModel(resolved.kind, resolved.config)
 
         // Les morceaux passent par un flux ordonné jusqu'au fil principal, et tous sont rendus avant l'issue : aucun ne la suit.
         let (texts, sink) = AsyncStream<String>.makeStream()

@@ -30,18 +30,22 @@ import os
 ///   texte dans les versions précédentes (`Review.previousVersions`) et vide les suivantes.
 /// - Le texte dicté est une donnée privée : il n'est écrit dans aucun journal ni message. `lastTranscript` le garde en
 ///   mémoire seulement, jamais dans un fichier.
+/// - Entretien. Le mode Entretien ne dicte pas : l'appui (ou un clic sur sa pastille au repos, `modeChosen`) lance un entretien
+///   (`InterviewRunning`), que ce contrôleur ne mène pas mais dont il garde les règles communes : propriétaire du raccourci (celui
+///   qui l'a lancé conclut, ou tout raccourci si le sien n'est plus enregistré), relâchement toujours ignoré, Échap et fermeture du
+///   panneau qui l'annulent, relecture de son texte (`openReview`). Pendant l'entretien, un appui est intercepté avant tout le
+///   chemin de la dictée : aucune dictée, aucun changement de mode, aucune fermeture du panneau. Une dictée ne prend le micro
+///   qu'une fois celui d'un entretien rendu (`InterviewRunning.waitUntilStopped`).
 @MainActor @Observable
 public final class DictationController {
     // Les phrases que le panneau montre, publiques pour que l'outil de rendu des écrans montre celles de l'application.
-    public static let laterModeNotice = "Ce mode arrive à une étape suivante."
     public static let downloadNotice = "Téléchargement du modèle…"
     /// Pendant que les moteurs se chargent en mémoire (après le téléchargement, ou au premier appui qui suit le lancement).
     public static let loadingNotice = "Chargement du modèle…"
     public static let interruptedNotice = "La dictée a été interrompue."
-    public static let uncountableNotice =
-        "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
-    public static let vocabularyModelNotice =
-        "Le vocabulaire n'a pas servi à cette dictée : le petit modèle qui le reconnaît n'a pas pu être téléchargé. Il sera retenté à la prochaine dictée."
+    /// Les avis du vocabulaire viennent de la règle partagée avec l'entretien (`EffectiveVocabulary`).
+    nonisolated public static let uncountableNotice = EffectiveVocabulary.uncountableNotice(.dictation)
+    nonisolated public static let vocabularyModelNotice = EffectiveVocabulary.modelUnavailableNotice(.dictation)
     public static let preparationFailedNotice =
         "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription : vérifiez le moteur et le modèle choisis ; si le modèle manque, téléchargez-le ; s'il est indiqué « Prêt », vous pouvez le supprimer puis le télécharger de nouveau (cela demande une connexion à Internet)."
 
@@ -142,6 +146,8 @@ public final class DictationController {
     @ObservationIgnored private let frontApplication: @MainActor () -> Int32?
     @ObservationIgnored private let hotKeyLabel: @MainActor () -> String?
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
+    @ObservationIgnored private let interview: (any InterviewRunning)?
+    @ObservationIgnored private let concludeInterview: @MainActor () -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
     /// Vrai de l'appui jusqu'à la fin de la dictée : fin du collage (sans relecture), échec, annulation, ou arrivée du texte en
@@ -151,7 +157,10 @@ public final class DictationController {
     ///
     /// Pendant une correction : vrai tant qu'une session tient le modèle de transcription (`preparing`, `recording`,
     /// `transcribing`), faux pendant la réécriture, qui ne passe que par le modèle de langage.
+    ///
+    /// Pendant un entretien, de son lancement à sa fin : vrai (le moteur de transcription sert à l'entretien).
     public var isBusy: Bool {
+        if interview?.isActive == true { return true }
         guard let run else { return false }
         return !(run.isCorrection && run.rewriting)
     }
@@ -165,6 +174,8 @@ public final class DictationController {
     @ObservationIgnored private var insertionTail: Task<Void, Never>?
     /// Insertions lancées et pas encore finies (voir `isInserting`).
     @ObservationIgnored private var insertionsInFlight = 0
+    /// Le raccourci qui a lancé l'entretien en cours (une pastille : le raccourci global), `nil` hors entretien.
+    @ObservationIgnored private var interviewOwner: HotKeyOwner?
 
     /// - Parameters:
     ///   - settings: les réglages de transcription, relus à chaque dictée.
@@ -187,6 +198,10 @@ public final class DictationController {
     ///   - hotKeyLabel: le libellé du raccourci GLOBAL réellement enregistré (celui que le panneau montre), `nil` s'il n'y en a
     ///     aucun ; lu chaque fois que la phrase de la correction est composée.
     ///   - wait: attend ce nombre de secondes (`focusHandoverDelay`) ; injectée pour qu'aucun test n'attende une durée réelle.
+    ///   - interview: l'entretien du mode Entretien ; `nil` (tests de la dictée seulement) : le mode Entretien dit « L'entretien n'a
+    ///     pas pu démarrer : relancez Supervox. » sans toucher au micro.
+    ///   - concludeInterview: ce que fait l'appui qui conclut l'entretien. Dans l'application, `PanelModel.concludeInterview()`, le
+    ///     chemin du bouton « Conclure » (qui se grise) ; par défaut, `interview.conclude()`.
     public init(
         environment: DictationEnvironment, inserter: TextInserter,
         settings: @escaping @MainActor () -> TranscriptionSettings,
@@ -204,7 +219,9 @@ public final class DictationController {
         rewriter: RewriteEnvironment = .unavailable,
         frontApplication: @escaping @MainActor () -> Int32? = { nil },
         hotKeyLabel: @escaping @MainActor () -> String? = { nil },
-        wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) }
+        wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
+        interview: (any InterviewRunning)? = nil,
+        concludeInterview: (@MainActor () -> Void)? = nil
     ) {
         self.environment = environment
         self.inserter = inserter
@@ -224,6 +241,8 @@ public final class DictationController {
         self.frontApplication = frontApplication
         self.hotKeyLabel = hotKeyLabel
         self.wait = wait
+        self.interview = interview
+        self.concludeInterview = concludeInterview ?? { [weak interview] in interview?.conclude() }
     }
 
     // MARK: - Raccourci
@@ -260,6 +279,13 @@ public final class DictationController {
     }
 
     private func press(by owner: HotKeyOwner) {
+        // Pendant l'entretien, avant tout le chemin de la dictée : le propriétaire conclut (tout raccourci si le sien n'est plus
+        // enregistré), tout autre appui est ignoré, sans choisir de mode ni fermer le panneau. Le relâchement ne compte jamais.
+        if interview?.isActive == true {
+            guard let interviewOwner else { return }
+            if owner == interviewOwner || !ownerIsBound(interviewOwner) { concludeInterview() }
+            return
+        }
         if let run {
             // Le propriétaire seul la termine, tant que son raccourci existe ; sinon n'importe quel autre le peut (la dictée ne
             // reste pas sans issue, et son texte n'est pas perdu avec Échap). Une correction n'a pas cette échappatoire : seul le
@@ -277,13 +303,20 @@ public final class DictationController {
         }
         var modeChanged = false
         if case .mode(let id) = owner, modeID() != id {
+            // Le choix passe par `PanelModel.select`, qui ne rappelle que l'enregistrement (`onModeChanged`), jamais `modeChosen` :
+            // l'appui lance lui-même, avec son propriétaire.
             selectMode(id)
+            // Une sélection refusée (mode inconnu, pastilles verrouillées) ne lance rien : pas de dictée sur un autre mode que
+            // celui du raccourci, et aucun effet de bord (T9-1).
+            guard modeID() == id else { return }
             modeChanged = true
         }
         begin(hold: behavior() == .hold, owner: owner, modeChanged: modeChanged)
     }
 
     private func release(by owner: HotKeyOwner) {
+        // En entretien, le raccourci fonctionne toujours en bascule : un relâchement n'y fait rien, même en maintien.
+        guard interview?.isActive != true else { return }
         guard let run, run.owner == owner, run.startedByHold, view.stage.isCapturing else { return }
         requestFinish(run)
     }
@@ -300,6 +333,8 @@ public final class DictationController {
             returnToReview(notice: nil)
             return
         }
+        // Un entretien est annulé sans rien garder : ni relecture, ni historique, ni presse-papiers.
+        interview?.cancel()
         closeReview()
         cancelCurrentRun()
         panel.close()
@@ -308,6 +343,7 @@ public final class DictationController {
 
     /// Le panneau s'est fermé (menu, Quitter, Réglages, Échap, clic en dehors) : une dictée en cours est annulée.
     public func panelClosedByUser() {
+        interview?.cancel()
         closeReview()
         cancelCurrentRun()
         setView(DictationViewState())
@@ -319,16 +355,16 @@ public final class DictationController {
         let mode = modeID()
         // Lu ici, une seule fois, avec le réglage de relecture : modifier ou supprimer le mode pendant la dictée ne la change pas.
         let plan = modes(mode)
-        guard plan != .later else {
-            // Rien à dicter dans ce mode : l'appui ouvre le panneau, ou le ferme s'il est déjà ouvert. Le raccourci d'un mode
-            // qui vient de le choisir ne ferme pas : le panneau, déjà ouvert sur un autre mode, montre la phrase.
-            if panel.isOpen, !modeChanged {
-                panel.close()
-            } else {
-                setView(DictationViewState(notice: Self.laterModeNotice))
-                if !panel.isOpen { panel.open() }
-            }
+        switch plan {
+        case .interview(let engine):
+            beginInterview(owner: owner, engine: engine, modeChanged: modeChanged)
             return
+        case .missing:
+            // Le mode n'existe plus : rien ne démarre. L'appui ouvre le panneau, ou le ferme s'il est déjà ouvert.
+            showOrClose(DictationViewState(), modeChanged: modeChanged)
+            return
+        case .raw, .rewrite:
+            break
         }
         guard microphoneAllowed() else {
             // Pas de session : la ligne des permissions du panneau dit ce qui manque.
@@ -362,6 +398,60 @@ public final class DictationController {
         log.notice("dictée commencée ; maintien : \(hold, privacy: .public) ; moteur : \(current.engine.rawValue, privacy: .public)")
         run.task = Task { await self.execute(run, settings: current) }
         if hold { run.watch = Task { await self.watchModifiers(run) } }
+    }
+
+    /// Rien ne démarre : l'appui ouvre le panneau sur cette vue, ou le ferme s'il est déjà ouvert. Le raccourci d'un mode qui vient
+    /// de le choisir ne ferme pas : le panneau, déjà ouvert sur un autre mode, montre la vue.
+    private func showOrClose(_ state: DictationViewState, modeChanged: Bool) {
+        if panel.isOpen, !modeChanged {
+            panel.close()
+        } else {
+            setView(state)
+            if !panel.isOpen { panel.open() }
+        }
+    }
+
+    // MARK: - Entretien
+
+    /// Un clic sur une pastille, qu'elle ait été choisie à l'instant (et enregistrée) ou qu'elle le soit déjà (`PanelModel.chipTapped`).
+    /// Au repos (aucune dictée, relecture ni entretien), la pastille Entretien lance l'entretien, avec le raccourci global pour
+    /// propriétaire ; toute autre pastille ne fait que choisir. `modeChanged: true` : un clic montre, il ne referme jamais le panneau.
+    public func modeChosen(_ id: String) {
+        guard run == nil, review == nil, interview?.isActive != true else { return }
+        guard case .interview(let engine) = modes(id) else { return }
+        beginInterview(owner: .global, engine: engine, modeChanged: true)
+    }
+
+    private func beginInterview(owner: HotKeyOwner, engine: TranscriptionEngine?, modeChanged: Bool) {
+        guard let interview else {
+            showOrClose(DictationViewState(notice: InterviewText.couldNotStart), modeChanged: modeChanged)
+            return
+        }
+        guard microphoneAllowed() else {
+            // Comme la dictée : pas d'entretien, la ligne des permissions du panneau dit ce qui manque.
+            setView(DictationViewState())
+            if !panel.isOpen { panel.open() }
+            log.notice("entretien refusé : micro non autorisé")
+            return
+        }
+        interviewOwner = owner
+        // L'écran de la dictée précédente (échec, copie) ne reste pas sous l'entretien : il revient au repos.
+        setView(DictationViewState())
+        interview.start(engine: engine) { [weak self] outcome in self?.interviewEnded(outcome) }
+        if !panel.isOpen { panel.open() }
+    }
+
+    private func interviewEnded(_ outcome: InterviewOutcome) {
+        interviewOwner = nil
+        switch outcome {
+        case .review(let text, let notice):
+            openReview(text, notice: notice)
+        case .notice(let notice):
+            setView(DictationViewState(notice: notice))
+            if !panel.isOpen { panel.open() }
+        case .cancelled:
+            break
+        }
     }
 
     /// Maintien seulement. Tant que la dictée prépare ou écoute, regarde à intervalle court si Échap est enfoncée (annulation,
@@ -423,38 +513,25 @@ public final class DictationController {
         run.loadingNotice = loaded ? nil : Self.loadingNotice
         refreshNotice(run)
 
+        // La règle du vocabulaire, la même que celle de l'entretien (`EffectiveVocabulary`) : petit modèle absent, aucun terme ;
+        // sous WhisperKit, les premiers termes qui tiennent dans l'amorce, aucun si la longueur ne se compte pas. La dictée ne doit
+        // jamais échouer à cause du vocabulaire ; la notice dit ce qui n'a pas servi.
         var effective = settings
-        if vocabularyModelUnavailable {
-            // Le petit modèle de vocabulaire ne s'est pas téléchargé alors que le reste est là : la dictée a lieu sans
-            // vocabulaire, et la notice le dit. Plus rien à compter.
-            effective.vocabulary = []
-            run.vocabularyNotice = Self.vocabularyModelNotice
-            refreshNotice(run)
-        } else if settings.engine == .whisperKit, !settings.vocabulary.isEmpty {
-            let model = settings.whisperModel
-            let environment = self.environment
-            let outcome = await VocabularyFit.fit(settings.vocabulary, limit: environment.promptTokenLimit) {
-                await environment.promptTokenCount($0, model)
-            }
+        if let vocabulary = await EffectiveVocabulary.resolve(
+            for: settings, vocabularyModelUnavailable: vocabularyModelUnavailable, activity: .dictation,
+            limit: environment.promptTokenLimit, count: environment.promptTokenCount)
+        {
             guard isLive(run) else { return }
-            switch outcome {
-            case .fits:
-                break
-            case .trimmed(let kept, let total):
-                effective.vocabulary = kept
-                run.vocabularyNotice = Self.trimmedNotice(kept: kept.count, of: total)
-            case .unknown:
-                // Longueur impossible à compter (tokenizer introuvable) : le moteur refuserait une liste trop longue après
-                // que l'utilisateur a parlé, et la dictée ne doit jamais échouer à cause du vocabulaire. La liste ne part pas
-                // pour cette dictée, et la notice le dit.
-                effective.vocabulary = []
-                run.vocabularyNotice = Self.uncountableNotice
-            }
+            effective.vocabulary = vocabulary.terms
+            run.vocabularyNotice = vocabulary.notice
             refreshNotice(run)
         }
 
         // Ce que la mise en forme enverra avec la consigne : le vocabulaire que cette dictée a réellement reçu.
         run.vocabulary = effective.vocabulary
+        // Le micro d'un entretien qui s'arrête (annulé à l'instant) est rendu avant d'en ouvrir un autre.
+        await interview?.waitUntilStopped()
+        guard isLive(run) else { return }
         let session: any DictationSessioning
         do {
             session = try await environment.makeSession(effective)
@@ -539,7 +616,7 @@ public final class DictationController {
         switch run.plan {
         case .rewrite(let instruction, let model, _):
             startFormatting(text, instruction: instruction, model: model, run)
-        case .raw, .later:
+        case .raw, .interview, .missing:
             deliver(text, run)
         }
     }
@@ -709,6 +786,16 @@ public final class DictationController {
         setView(DictationViewState(stage: .review, notice: notice, draft: text))
         if !panel.isOpen { panel.open() }
         panel.setKeyboard(keyboard)
+    }
+
+    /// Le texte d'un entretien (prompt rédigé, ou conversation gardée) passe en relecture, sans dictée : mêmes vues, mêmes versions,
+    /// même correction à la voix que la relecture d'une dictée, avec les réglages de transcription en vigueur.
+    private func openReview(_ text: String, notice: String) {
+        log.notice("entretien terminé ; relecture")
+        review = Review(previous: nil, settings: settings())
+        setView(DictationViewState(stage: .review, notice: notice, draft: text))
+        if !panel.isOpen { panel.open() }
+        panel.setKeyboard(.focused)
     }
 
     /// L'utilisateur a modifié le texte. Ignoré hors relecture (et pendant le collage : le texte qui part est celui qu'on a vu).
@@ -1049,15 +1136,6 @@ public final class DictationController {
         }
     }
 
-    private static func trimmedNotice(kept: Int, of total: Int) -> String {
-        let used =
-            switch kept {
-            case 0: "aucun terme n'a pu servir"
-            case 1: "seul le premier terme sur \(total) sert"
-            default: "seuls les \(kept) premiers termes sur \(total) servent"
-            }
-        return "Vocabulaire trop long pour ce modèle : \(used) à cette dictée. Raccourcissez la liste dans Réglages, onglet Transcription."
-    }
 }
 
 /// Reprend la continuation une seule fois, par le premier qui arrive.

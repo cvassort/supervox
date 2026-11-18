@@ -35,7 +35,7 @@ let package = Package(
             name: "Supervox",
             dependencies: ["SupervoxApp", "SupervoxCore", "SupervoxEngines"]
         ),
-        .executableTarget(name: "SupervoxSnapshots", dependencies: ["SupervoxApp"]),
+        .executableTarget(name: "SupervoxSnapshots", dependencies: ["SupervoxApp", "SupervoxEngines"]),
         .executableTarget(
             name: "SupervoxBench",
             dependencies: [

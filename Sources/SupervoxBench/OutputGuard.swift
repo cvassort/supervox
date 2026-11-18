@@ -60,6 +60,22 @@ enum OutputGuard {
         }
     }
 
+    /// Les deux URL désignent-elles le même fichier ? Par l'**identité du fichier** (`fileResourceIdentifier`) quand les deux existent :
+    /// deux noms d'un même fichier (lien physique, autre graphie de la casse sur un volume qui l'ignore) ont la même identité, et des
+    /// chemins que rien ne rapproche. Si l'un des deux n'existe pas (une sortie pas encore écrite ne peut pas être un fichier existant,
+    /// mais une entrée absente peut porter le même chemin), les chemins résolus (sans `.`, `..` ni lien symbolique) sont comparés.
+    static func isSameFile(_ first: URL, _ second: URL) -> Bool {
+        let (a, b) = (first.standardizedFileURL.resolvingSymlinksInPath(), second.standardizedFileURL.resolvingSymlinksInPath())
+        if let idA = identity(of: a), let idB = identity(of: b) { return idA.isEqual(idB) }
+        return a == b
+    }
+
+    /// L'identité du fichier, lue à neuf (une URL garde en cache ce qu'elle a déjà lu) ; `nil` s'il n'existe pas.
+    private static func identity(of url: URL) -> (any NSObjectProtocol)? {
+        let fresh = URL(fileURLWithPath: url.path)
+        return try? fresh.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
+    }
+
     /// Chemin sans lien symbolique (`/var` devient `/private/var`, comme dans la réponse de git).
     private static func realPath(_ path: String) -> String? {
         guard let resolved = realpath(path, nil) else { return nil }

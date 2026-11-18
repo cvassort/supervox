@@ -18,10 +18,42 @@ public enum SystemSettingsPane: Sendable {
 
 /// Les onglets de la fenêtre de réglages.
 public enum SettingsTab: Hashable, Sendable {
-    case providers, hotKey, permissions, transcription, modes
+    case providers, hotKey, permissions, transcription, modes, interview, history
+
+    /// Le nom de l'onglet.
+    public var title: String {
+        switch self {
+        case .providers: "Fournisseurs"
+        case .hotKey: "Raccourci"
+        case .permissions: "Permissions"
+        case .transcription: "Transcription"
+        case .modes: "Modes"
+        case .interview: "Entretien"
+        case .history: "Historique"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .providers: "server.rack"
+        case .hotKey: "keyboard"
+        case .permissions: "lock.shield"
+        case .transcription: "waveform"
+        case .modes: "square.stack"
+        case .interview: "person.wave.2"
+        case .history: "clock.arrow.circlepath"
+        }
+    }
+
+    /// Les onglets montrés, dans l'ordre : Entretien vient après Modes, et n'existe que si son modèle est donné ; Historique ferme la
+    /// barre, et n'existe que si son modèle est donné (sans dossier d'historique, ni l'onglet ni l'entrée « Historique… » du panneau).
+    static func visible(hasInterview: Bool, hasHistory: Bool = false) -> [SettingsTab] {
+        [.providers, .hotKey, .permissions, .transcription, .modes] + (hasInterview ? [.interview] : [])
+            + (hasHistory ? [.history] : [])
+    }
 }
 
-/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription, modes.
+/// Fenêtre de réglages : fournisseurs, raccourci, permissions, transcription, modes, entretien, historique.
 public struct SettingsView: View {
     let providers: ProvidersModel
     let hotKey: HotKeySettingsModel
@@ -29,13 +61,24 @@ public struct SettingsView: View {
     let modes: ModesModel
     let permissions: PermissionsModel
     let openSystemSettings: @MainActor (SystemSettingsPane) -> Void
-    @State private var tab: SettingsTab
+    /// `nil` : pas d'onglet Entretien (les appelants d'avant l'entretien).
+    let interview: InterviewSettingsModel?
+    /// `nil` : pas d'onglet Historique (aucun dossier d'historique : tests, outil de rendu).
+    let history: HistoryModel?
+    /// L'onglet courant, partagé avec le contrôleur (`AppController.settingsNavigation`).
+    let navigation: SettingsNavigation
 
-    /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut).
+    /// Les onglets montrés, dans l'ordre : UNE seule source, lue par le corps de la vue et par `SettingsContent.tabs` (que les tests
+    /// lisent). Entretien et Historique n'y sont que si leur modèle est donné.
+    var tabs: [SettingsTab] { SettingsTab.visible(hasInterview: interview != nil, hasHistory: history != nil) }
+
+    /// `initialTab` : l'onglet montré à l'ouverture (Fournisseurs par défaut), quand aucune `navigation` n'est donnée. `interview` :
+    /// l'onglet Entretien n'apparaît que s'il est donné, et l'onglet Historique de même avec `history`.
     public init(
         providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel, modes: ModesModel,
         permissions: PermissionsModel,
-        openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void, initialTab: SettingsTab = .providers
+        openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void, initialTab: SettingsTab = .providers,
+        interview: InterviewSettingsModel? = nil, history: HistoryModel? = nil, navigation: SettingsNavigation? = nil
     ) {
         self.providers = providers
         self.hotKey = hotKey
@@ -43,7 +86,9 @@ public struct SettingsView: View {
         self.modes = modes
         self.permissions = permissions
         self.openSystemSettings = openSystemSettings
-        _tab = State(initialValue: initialTab)
+        self.interview = interview
+        self.history = history
+        self.navigation = navigation ?? SettingsNavigation(tab: initialTab)
     }
 
     /// La vraie fenêtre, branchée sur le contrôleur : toutes ses écritures passent par
@@ -65,7 +110,9 @@ public struct SettingsView: View {
                 hotKey: makeHotKeyModel(controller, keyMonitor: LocalKeyDownMonitor()),
                 transcription: makeTranscriptionModel(controller, catalog: catalog, promptTokenLimit: promptTokenLimit),
                 modes: makeModesModel(controller, keyMonitor: LocalKeyDownMonitor()),
-                permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) })
+                permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) },
+                interview: makeInterviewModel(controller), history: makeHistoryModel(controller),
+                navigation: controller.settingsNavigation)
         }
     }
 
@@ -73,25 +120,34 @@ public struct SettingsView: View {
     /// disque ; quand l'utilisateur la quitte, mettre fin à une capture de raccourci (le raccourci global revient).
     static func content(
         providers: ProvidersModel, hotKey: HotKeySettingsModel, transcription: TranscriptionModel, modes: ModesModel,
-        permissions: PermissionsModel, openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void
+        permissions: PermissionsModel, openSystemSettings: @escaping @MainActor (SystemSettingsPane) -> Void,
+        interview: InterviewSettingsModel? = nil, history: HistoryModel? = nil,
+        navigation: SettingsNavigation = SettingsNavigation()
     ) -> SettingsContent {
-        SettingsContent(
-            view: AnyView(
-                SettingsView(
-                    providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
-                    permissions: permissions, openSystemSettings: openSystemSettings)),
+        let view = SettingsView(
+            providers: providers, hotKey: hotKey, transcription: transcription, modes: modes,
+            permissions: permissions, openSystemSettings: openSystemSettings, interview: interview, history: history,
+            navigation: navigation)
+        return SettingsContent(
+            view: AnyView(view), tabs: view.tabs, navigation: view.navigation,
             onPresent: {
                 // La fenêtre gardée d'une ouverture à l'autre relit les réglages : un mode ou un fournisseur changé entre-temps
                 // (le panneau, un autre onglet, le fichier) s'y voit. Avant les attentes ci-dessous : la fenêtre ne s'affiche pas
                 // un instant avec l'ancien état.
                 modes.reload()
                 modes.clearMessage()
+                interview?.reload()
+                interview?.clearMessage()
+                history?.clearMessage()
                 await providers.checkKeys()
                 await transcription.refresh()
+                await history?.reload()
             },
             onLeave: {
                 hotKey.cancelRecording()
                 modes.cancelRecording()
+                // Fenêtre fermée ou quittée, ou fin de l'application : le gabarit tapé est enregistré.
+                interview?.commitTemplate()
             })
     }
 
@@ -120,6 +176,25 @@ public struct SettingsView: View {
                 resume: { [weak controller] in controller?.resumeHotKeys() ?? false },
                 global: { [weak controller] in controller?.settings.hotKey }),
             layout: controller.keyboardLayout, systemHotKeys: controller.systemHotKeys, keyMonitor: keyMonitor)
+    }
+
+    /// L'onglet Entretien lit les réglages en vigueur à chaque geste et les écrit par `AppController.updateSettings`, comme les
+    /// autres ; le silence en pratique vient de l'environnement de l'entretien du contrôleur (la formule du détecteur de voix réel).
+    static func makeInterviewModel(_ controller: AppController) -> InterviewSettingsModel {
+        InterviewSettingsModel(
+            read: { [weak controller] in controller?.settings ?? .defaults },
+            update: { [weak controller] change in try controller?.updateSettings(change) },
+            effectiveTurnSilence: controller.interviewEnvironment.effectiveTurnSilence)
+    }
+
+    /// L'onglet Historique : `nil` sans historique (le contrôleur n'a pas reçu de dossier). Il lit les réglages en vigueur, écrit la
+    /// durée par `AppController.updateSettings`, et copie par l'insertion du contrôleur (jamais un accès direct au presse-papiers).
+    static func makeHistoryModel(_ controller: AppController) -> HistoryModel? {
+        guard let history = controller.history else { return nil }
+        return HistoryModel(
+            history: history, read: { [weak controller] in controller?.settings ?? .defaults },
+            update: { [weak controller] change in try controller?.updateSettings(change) },
+            copy: { [weak controller] in controller?.copyText($0) ?? false })
     }
 
     /// Construit sans appeler le magasin de secrets.
@@ -152,23 +227,39 @@ public struct SettingsView: View {
     }
 
     public var body: some View {
-        TabView(selection: $tab) {
-            Tab("Fournisseurs", systemImage: "server.rack", value: .providers) { ProvidersPane(model: providers) }
-            Tab("Raccourci", systemImage: "keyboard", value: .hotKey) { HotKeyPane(model: hotKey) }
-            Tab("Permissions", systemImage: "lock.shield", value: .permissions) {
-                PermissionsPane(model: permissions, openSystemSettings: openSystemSettings)
+        @Bindable var navigation = navigation
+        TabView(selection: $navigation.tab) {
+            ForEach(tabs, id: \.self) { tab in
+                Tab(tab.title, systemImage: tab.systemImage, value: tab) { pane(for: tab) }
             }
-            Tab("Transcription", systemImage: "waveform", value: .transcription) {
-                TranscriptionPane(model: transcription)
-            }
-            Tab("Modes", systemImage: "square.stack", value: .modes) { ModesPane(model: modes) }
         }
         // Une capture ne survit pas à un changement d'onglet (en plus de `onDisappear` de l'onglet Raccourci).
-        .onChange(of: tab) {
+        .onChange(of: navigation.tab) {
             hotKey.cancelRecording()
             modes.cancelRecording()
+            // Un autre onglet : le gabarit tapé dans celui-ci est enregistré.
+            interview?.commitTemplate()
         }
-        .frame(width: 600, height: 460)
+        .frame(width: Self.windowSize.width, height: Self.windowSize.height)
+    }
+
+    /// La taille de la fenêtre de réglages, en points : fixe. Les onglets s'y règlent sans que la fenêtre grandisse ; les images de
+    /// l'outil de rendu et les mesures de hauteur la lisent ici.
+    public static let windowSize = CGSize(width: 600, height: 460)
+
+    @ViewBuilder
+    private func pane(for tab: SettingsTab) -> some View {
+        switch tab {
+        case .providers: ProvidersPane(model: providers)
+        case .hotKey: HotKeyPane(model: hotKey)
+        case .permissions: PermissionsPane(model: permissions, openSystemSettings: openSystemSettings)
+        case .transcription: TranscriptionPane(model: transcription)
+        case .modes: ModesPane(model: modes)
+        case .interview:
+            if let interview { InterviewPane(model: interview) }
+        case .history:
+            if let history { HistoryPane(model: history) }
+        }
     }
 }
 

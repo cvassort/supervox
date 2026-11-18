@@ -16,7 +16,8 @@ public final class AnthropicClient: LanguageModel, Sendable {
     }
 
     /// `POST <base>/v1/messages` (`stream: true`), en-têtes `x-api-key`, `anthropic-version`, `content-type` et `accept`.
-    /// La consigne part en `system`, le texte en seul message de l'utilisateur. Ni `temperature`, ni `top_p`, ni `top_k` :
+    /// La consigne part en `system` ; `messages` est l'historique dans l'ordre, puis le texte en dernier message de
+    /// l'utilisateur (sans historique : ce texte seul). Ni `temperature`, ni `top_p`, ni `top_k` :
     /// cette version d'API les refuse (référence locale de l'API, codes d'erreur 400).
     ///
     /// Le flux se termine normalement, et seulement, après l'événement `message_stop` et au moins un morceau de texte ou
@@ -50,7 +51,8 @@ public final class AnthropicClient: LanguageModel, Sendable {
         request.setValue("text/event-stream", forHTTPHeaderField: "accept")
         request.httpBody = try JSONEncoder().encode(
             Body(model: completion.model, max_tokens: completion.maxTokens, system: completion.instruction,
-                 messages: [.init(role: "user", content: completion.input)]))
+                 messages: completion.history.map { .init(role: $0.role.rawValue, content: $0.text) }
+                     + [.init(role: "user", content: completion.input)]))
         return request
     }
 }

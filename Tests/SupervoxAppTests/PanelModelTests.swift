@@ -104,6 +104,28 @@ import Testing
         #expect(reported == ["entretien"])
     }
 
+    /// I-2 : le clic est signalé à chaque fois, même sur la pastille déjà choisie ; le changement de mode seulement quand il y en a un,
+    /// et avant le clic. Pendant l'entretien ou pour un mode inconnu, rien.
+    @Test func aChipClickIsAlwaysReportedAndTheChangeOnlyWhenThereIsOne() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var events: [String] = []
+        model.onModeChanged = { events.append("changé \($0)") }
+        model.onChipTapped = { events.append("clic \($0)") }
+
+        model.chipTapped("entretien")
+        #expect(events == ["changé entretien", "clic entretien"])
+        model.chipTapped("entretien")
+        #expect(events == ["changé entretien", "clic entretien", "clic entretien"], "déjà choisie : le clic seul")
+        model.chipTapped("mode-inconnu")
+        #expect(events.count == 3)
+
+        model.setInterview(InterviewViewState(maxQuestions: 6, privacy: ""))
+        model.chipTapped("entretien")
+        model.chipTapped("dictee-brute")
+        #expect(events.count == 3, "pendant l'entretien, aucun clic n'est pris")
+        #expect(model.selectedModeID == "entretien")
+    }
+
     @Test func selectingAnUnknownModeChangesNothing() {
         let model = PanelModel(lastModeID: "prompt")
         var reported: [String] = []
@@ -569,5 +591,235 @@ import Testing
             #expect(copied == 0, "\(stage)")
             #expect(model.copyState == .idle, "\(stage)")
         }
+    }
+
+    // MARK: - L'entretien (tâche 8)
+
+    private static func interview(_ phase: InterviewPhase = .listening) -> InterviewViewState {
+        var state = InterviewViewState(maxQuestions: 6, privacy: "La vie privée.")
+        state.phase = phase
+        return state
+    }
+
+    @Test func thereIsNoInterviewUntilOneIsSet() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(model.interview == nil)
+        #expect(!model.holdsPanel && !model.modesLocked)
+        model.setInterview(Self.interview())
+        #expect(model.interview == Self.interview())
+        model.setInterview(nil)
+        #expect(model.interview == nil)
+    }
+
+    @Test("règle 3 : le panneau est tenu pendant tout l'entretien, quelle que soit la phase", arguments: InterviewTextTests.phases)
+    func theInterviewHoldsThePanel(phase: InterviewPhase) {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.setInterview(Self.interview(phase))
+        #expect(model.holdsPanel)
+        #expect(model.modesLocked)
+        model.setInterview(nil)
+        #expect(!model.holdsPanel && !model.modesLocked)
+    }
+
+    @Test("règle 3 : la dictée tient toujours le panneau comme avant, et ne verrouille pas les pastilles")
+    func theDictationStillHoldsThePanelAsBefore() {
+        for stage in [DictationStage.preparing, .recording, .finalizing, .formatting, .review, .pasting, .correcting(.recording)] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.setDictation(DictationViewState(stage: stage))
+            #expect(model.holdsPanel, "\(stage)")
+            #expect(!model.modesLocked, "\(stage) : le verrou des pastilles n'existait pas pour la dictée")
+        }
+        for stage in [DictationStage.idle, .copied, .cancelled, .failed(.clipboard)] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.setDictation(DictationViewState(stage: stage))
+            #expect(!model.holdsPanel, "\(stage)")
+        }
+    }
+
+    @Test("règle 3 : une pastille touchée pendant l'entretien ne change pas de mode ; elle le change de nouveau après")
+    func aChipTouchedDuringTheInterviewChangesNothing() {
+        let model = PanelModel(lastModeID: "prompt")
+        var saved: [String] = []
+        model.onModeChanged = { saved.append($0) }
+        model.setInterview(Self.interview())
+        #expect(!model.select("dictee-nettoyee"), "T9-1 : le refus se dit à l'appelant")
+        #expect(model.selectedModeID == "prompt")
+        #expect(saved.isEmpty, "le mode non changé a été enregistré")
+        model.setInterview(nil)
+        #expect(!model.select("dictee-inconnue"), "un mode inconnu n'est pas un changement")
+        #expect(!model.select("prompt"), "le mode déjà choisi n'est pas un changement")
+        #expect(model.select("dictee-nettoyee"))
+        #expect(model.selectedModeID == "dictee-nettoyee")
+        #expect(saved == ["dictee-nettoyee"])
+    }
+
+    @Test("règle 4 : « Conclure » appelle onConclude, sauf en préparation et en conclusion (bouton grisé)")
+    func concludeCallsOnConcludeExceptWhilePreparingAndConcluding() {
+        for phase in InterviewTextTests.phases {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            var calls = 0
+            model.onConclude = { calls += 1 }
+            model.setInterview(Self.interview(phase))
+            model.concludeInterview()
+            #expect(calls == (phase == .preparing || phase == .concluding ? 0 : 1), "\(phase)")
+        }
+    }
+
+    @Test("règle 4 : sans entretien « Conclure » ne fait rien")
+    func concludeWithoutAnInterviewDoesNothing() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var calls = 0
+        model.onConclude = { calls += 1 }
+        model.concludeInterview()
+        #expect(calls == 0)
+    }
+
+    @Test("règle 5 : seul un changement de titre, ou un nouvel avis, est annoncé, au rythme où l'état est posé")
+    func onlyATitleChangeOrANewNoticeIsAnnounced() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var announced: [String] = []
+        model.onAnnounce = { announced.append($0) }
+        model.setInterview(Self.interview(.preparing))
+        var listening = Self.interview(.listening)
+        model.setInterview(listening)
+        for level: Float in [0.1, 0.5, 0.9] {  // le niveau arrive à chaque tranche : jamais annoncé
+            listening.level = level
+            model.setInterview(listening)
+        }
+        listening.notice = "Un avis."
+        model.setInterview(listening)
+        listening.level = 0.2
+        model.setInterview(listening)
+        model.setInterview(Self.interview(.thinking))
+        model.setInterview(nil)
+        #expect(announced == ["Préparation de l'entretien…", "À vous", "Un avis.", "Réflexion…"])
+    }
+
+    // MARK: - Tour de correction 1 : un seul contenu, « Conclure » une seule fois
+
+    @Test("I1 : le contenu du panneau est l'entretien OU la dictée, jamais les deux")
+    func theContentIsTheInterviewOrTheDictationNeverBoth() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(model.content == .dictation)
+        // Une dictée en cours : tant qu'un entretien est posé, le contenu est l'entretien, quelle que soit la dictée.
+        model.setDictation(DictationViewState(stage: .recording, liveText: "du texte"))
+        #expect(model.content == .dictation)
+        model.setInterview(Self.interview(.speaking))
+        #expect(model.content == .interview(Self.interview(.speaking)))
+        model.setDictation(DictationViewState(stage: .idle))
+        #expect(model.content == .interview(Self.interview(.speaking)))
+        model.setInterview(nil)
+        #expect(model.content == .dictation)
+    }
+
+    @Test("M10 : un second clic sur « Conclure » n'appelle pas onConclude ; un nouvel entretien le permet de nouveau")
+    func aSecondConcludeClickDoesNothingUntilTheNextInterview() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var calls = 0
+        model.onConclude = { calls += 1 }
+        model.setInterview(Self.interview(.listening))
+        model.concludeInterview()
+        model.concludeInterview()
+        #expect(calls == 1)
+        #expect(model.concludeRequested)
+        // Le niveau du micro arrive à chaque tranche : il ne rend pas le clic.
+        var louder = Self.interview(.listening)
+        louder.level = 0.9
+        model.setInterview(louder)
+        model.concludeInterview()
+        #expect(calls == 1, "une mise à jour de l'état a remis le clic à neuf")
+        // Un clic refusé (phase grisée) ne compte pas comme une demande.
+        model.setInterview(nil)
+        #expect(!model.concludeRequested)
+        model.setInterview(Self.interview(.preparing))
+        model.concludeInterview()
+        #expect(calls == 1 && !model.concludeRequested)
+        model.setInterview(Self.interview(.listening))
+        model.concludeInterview()
+        #expect(calls == 2)
+    }
+
+    // MARK: - Entrée « Historique… » du menu « … » (tâche 11)
+
+    @Test func theHistoryEntryExistsOnlyWhenAHistoryIsWired() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        #expect(!model.canOpenHistory)
+        model.openHistory()  // sans branchement : rien, et pas de plantage
+
+        var opened = 0
+        model.onOpenHistory = { opened += 1 }
+        #expect(model.canOpenHistory)
+        model.openHistory()
+        #expect(opened == 1)
+    }
+
+    @Test func theMenuListsSettingsHistoryThenQuitAndHidesHistoryWithoutOne() {
+        func view(_ model: PanelModel) -> PanelView {
+            PanelView(
+                model: model, permissions: PermissionsModel(probe: FakePermissionsProbe(microphone: .granted, accessibility: .granted)),
+                openSettings: {}, quit: {})
+        }
+        let without = PanelModel(lastModeID: "dictee-brute")
+        #expect(view(without).menuEntries.map(\.title) == ["Réglages…", "Quitter Supervox"])
+
+        let with = PanelModel(lastModeID: "dictee-brute")
+        with.onOpenHistory = {}
+        #expect(view(with).menuEntries.map(\.title) == ["Réglages…", "Historique…", "Quitter Supervox"])
+    }
+
+    // MARK: - I3 : « Historique… » ne peut pas annuler un entretien ou une dictée sans rien demander
+
+    private func view(_ model: PanelModel) -> PanelView {
+        PanelView(
+            model: model, permissions: PermissionsModel(probe: FakePermissionsProbe(microphone: .granted, accessibility: .granted)),
+            openSettings: {}, quit: {})
+    }
+
+    @Test("I3 : l'entrée « Historique… » est grisée pendant l'entretien, quelle que soit la phase ; les autres entrées restent actives",
+        arguments: InterviewTextTests.phases)
+    func theHistoryEntryIsDisabledDuringTheInterview(phase: InterviewPhase) {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.onOpenHistory = {}
+        let panel = view(model)
+        #expect(panel.menuItems.map(\.isEnabled) == [true, true, true], "au repos : tout est actif")
+
+        model.setInterview(Self.interview(phase))
+
+        #expect(panel.menuItems.map(\.entry.title) == ["Réglages…", "Historique…", "Quitter Supervox"])
+        #expect(panel.menuItems.map(\.isEnabled) == [true, false, true], "seule « Historique… » est grisée")
+        model.setInterview(nil)
+        #expect(panel.menuItems.map(\.isEnabled) == [true, true, true], "l'entretien fini, elle revient")
+    }
+
+    @Test("I3 : « Historique… » est grisée tant qu'une dictée tient le panneau, active quand elle ne le tient plus")
+    func theHistoryEntryIsDisabledWhileADictationHoldsThePanel() throws {
+        for stage in [DictationStage.preparing, .recording, .finalizing, .formatting, .review, .pasting] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.onOpenHistory = {}
+            model.setDictation(DictationViewState(stage: stage))
+            #expect(model.holdsPanel)
+            #expect(!model.isHistoryEntryEnabled, "\(stage)")
+            let entry = try #require(view(model).menuItems.first { $0.entry == .history }, "entrée Historique absente du menu")
+            #expect(!entry.isEnabled, "\(stage)")
+        }
+        let idle = PanelModel(lastModeID: "dictee-brute")
+        idle.onOpenHistory = {}
+        idle.setDictation(DictationViewState(stage: .copied))
+        #expect(idle.isHistoryEntryEnabled)
+    }
+
+    @Test("I3 : invoquée alors que le panneau est tenu, l'ouverture de l'historique n'appelle pas son rappel")
+    func openingTheHistoryWhileHeldDoesNotCallTheHandler() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var opened = 0
+        model.onOpenHistory = { opened += 1 }
+        model.setInterview(Self.interview())
+
+        model.openHistory()
+        #expect(opened == 0, "l'entretien tient le panneau : le rappel n'est pas appelé")
+
+        model.setInterview(nil)
+        model.openHistory()
+        #expect(opened == 1)
     }
 }

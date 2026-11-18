@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Contenu du panneau : pastilles de modes en haut, la dictée au centre (« Prêt » avec le raccourci, ou la dictée en cours),
-/// ligne des permissions et ligne d'avis si besoin, menu « … » en bas à droite.
+/// Contenu du panneau : pastilles de modes en haut, la dictée au centre (« Prêt » avec le raccourci, ou la dictée en cours) ou, pendant
+/// un entretien, la vue de l'entretien à sa place, ligne des permissions et ligne d'avis si besoin, menu « … » en bas à droite.
 public struct PanelView: View {
     let model: PanelModel
     let permissions: PermissionsModel
@@ -24,7 +24,10 @@ public struct PanelView: View {
             if let welcome = model.welcome {
                 welcomeLine(welcome)
             }
-            dictation
+            switch model.content {
+            case .interview(let interview): InterviewView(state: interview, conclude: { model.concludeInterview() })
+            case .dictation: dictation
+            }
             if let summary = permissions.summary {
                 permissionsLine(summary)
             }
@@ -34,15 +37,26 @@ public struct PanelView: View {
         .frame(width: 520)
     }
 
-    private var chips: some View {
-        // Les pastilles des réglages, dans leur ordre ; à la ligne quand elles débordent, le panneau grandit.
-        ChipFlowLayout {
-            ForEach(model.modes) { mode in
-                ModeChipButton(
-                    title: mode.title, isSelected: mode.id == model.selectedModeID
-                ) { model.select(mode.id) }
-            }
+    /// Les entrées du menu « … », dans l'ordre (UNE source : la vue les montre, les tests les lisent).
+    var menuEntries: [PanelMenuEntry] { PanelMenuEntry.entries(hasHistory: model.canOpenHistory) }
+
+    /// Les entrées avec leur état : « Historique… » est grisée tant qu'un entretien ou une dictée tient le panneau (l'ouvrir
+    /// l'annulerait sans rien demander). L'état vient du modèle, pas de la vue.
+    var menuItems: [(entry: PanelMenuEntry, isEnabled: Bool)] {
+        menuEntries.map { ($0, $0 == .history ? model.isHistoryEntryEnabled : true) }
+    }
+
+    private func run(_ entry: PanelMenuEntry) {
+        switch entry {
+        case .settings: openSettings()
+        case .history: model.openHistory()
+        case .quit: quit()
         }
+    }
+
+    private var chips: some View {
+        ModeChips(
+            modes: model.modes, selectedID: model.selectedModeID, locked: model.modesLocked, select: { model.chipTapped($0) })
     }
 
     /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.
@@ -95,9 +109,11 @@ public struct PanelView: View {
             }
             Spacer(minLength: 0)
             Menu {
-                Button("Réglages…") { openSettings() }
-                Divider()
-                Button("Quitter Supervox") { quit() }
+                ForEach(menuItems, id: \.entry) { item in
+                    if item.entry == .quit { Divider() }
+                    Button(item.entry.title) { run(item.entry) }
+                        .disabled(!item.isEnabled)
+                }
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -110,7 +126,7 @@ public struct PanelView: View {
 }
 
 /// Pastille de mode : capsule pleine si choisie, discrète sinon.
-private struct ModeChipButton: View {
+struct ModeChipButton: View {
     let title: String
     let isSelected: Bool
     let action: () -> Void
@@ -129,5 +145,23 @@ private struct ModeChipButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// Une entrée du menu « … » du panneau (publique : l'outil de rendu en dessine un aperçu à partir de la même source).
+public enum PanelMenuEntry: Hashable, Sendable {
+    case settings, history, quit
+
+    public var title: String {
+        switch self {
+        case .settings: "Réglages…"
+        case .history: "Historique…"
+        case .quit: "Quitter Supervox"
+        }
+    }
+
+    /// Réglages, puis Historique (seulement si un historique est branché), puis Quitter après un séparateur.
+    public static func entries(hasHistory: Bool) -> [PanelMenuEntry] {
+        hasHistory ? [.settings, .history, .quit] : [.settings, .quit]
     }
 }

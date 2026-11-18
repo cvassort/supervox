@@ -61,6 +61,12 @@ import Testing
     func signalKeyChange(_ isKey: Bool) { onKeyChange?(isKey) }
 }
 
+/// Annonceur double : rien n'est posé au système, le test lit ce qui l'aurait été.
+@MainActor final class RecordingAnnouncer: AccessibilityAnnouncing {
+    private(set) var spoken: [String] = []
+    func announce(_ text: String) { spoken.append(text) }
+}
+
 /// Moniteur de clics double : le test déclenche lui-même un clic hors de l'application.
 @MainActor final class FakeClickMonitor: OutsideClickMonitor {
     private var handler: (@MainActor () -> Void)?
@@ -88,9 +94,10 @@ import Testing
     let escape = HotKeyTests.FakeRegistrar()
     let clicks = FakeClickMonitor()
     let surface = FakePanelSurface()
+    let announcer = RecordingAnnouncer()
 
     func makeController() -> PanelController {
-        PanelController(model: model, escapeRegistrar: escape, clickMonitor: clicks, surface: surface)
+        PanelController(model: model, escapeRegistrar: escape, clickMonitor: clicks, surface: surface, announcer: announcer)
     }
 
     // MARK: - Hauteur du panneau
@@ -326,11 +333,11 @@ import Testing
         let notice = try #require(model.notices[.escape])
         #expect(notice.contains("Échap"))
         // L'avis dit comment fermer quand même : le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en
-        // dehors est ignoré pendant une dictée comme pendant une relecture (`holdsPanel`) ; le menu de la barre de menus ferme
-        // toujours.
+        // dehors est ignoré pendant une dictée, une relecture ou un entretien (`holdsPanel`, tenu pour l'entretien par
+        // `outsideClickClosesOnceTheInterviewIsOver`) ; le menu de la barre de menus ferme toujours.
         #expect(notice.contains("menu"))
         #expect(notice.contains("barre de menus"))
-        #expect(notice.contains("clic en dehors, sauf pendant une dictée ou une relecture"))
+        #expect(notice.contains("clic en dehors, sauf pendant une dictée, une relecture ou un entretien."))
         #expect(!notice.contains("aucune dictée"), "pendant la relecture aucune dictée ne court, et le clic est ignoré")
         #expect(!notice.contains("⌃⌥Espace"))
 
@@ -453,5 +460,52 @@ import Testing
         #expect(!controller.isOpen)
         controller.open()
         #expect(controller.isOpen)
+    }
+
+    // MARK: - Entretien (tâche 8)
+
+    @Test("règle 3 : le clic en dehors est ignoré pendant tout l'entretien, quelle que soit la phase", arguments: InterviewTextTests.phases)
+    func outsideClickIsIgnoredWhileAnInterviewRuns(_ phase: InterviewPhase) {
+        let controller = makeController()
+        controller.open()
+        var state = InterviewViewState(maxQuestions: 6, privacy: "La vie privée.")
+        state.phase = phase
+        model.setInterview(state)
+
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        #expect(surface.isShown)
+        #expect(clicks.isWatching)
+        #expect(!surface.calls.contains(.hide))
+    }
+
+    @Test("règle 3 : l'entretien fini (état retiré), le clic en dehors ferme de nouveau")
+    func outsideClickClosesOnceTheInterviewIsOver() {
+        let controller = makeController()
+        controller.open()
+        model.setInterview(InterviewViewState(maxQuestions: 6, privacy: "La vie privée."))
+        clicks.clickOutside()
+        #expect(model.isOpen)
+        model.setInterview(nil)
+        clicks.clickOutside()
+        #expect(!model.isOpen)
+        #expect(surface.calls.last == .hide)
+    }
+
+    @Test("I4 : le titre qui change et l'avis qui apparaît arrivent à l'annonceur du contrôleur, le niveau du micro jamais")
+    func theControllerHandsTitlesAndNoticesToItsAnnouncer() {
+        _ = makeController()
+        var state = InterviewViewState(maxQuestions: 6, privacy: "La vie privée.")
+        model.setInterview(state)
+        state.phase = .listening
+        model.setInterview(state)
+        for level: Float in [0.2, 0.7] {
+            state.level = level
+            model.setInterview(state)
+        }
+        state.notice = "Un avis."
+        model.setInterview(state)
+        model.setInterview(nil)
+        #expect(announcer.spoken == ["Préparation de l'entretien…", "À vous", "Un avis."])
     }
 }

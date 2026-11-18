@@ -7,7 +7,8 @@ public enum ProviderKind: String, Codable, Sendable {
     case anthropic
 }
 
-/// Un fournisseur de modèles. Aucune clé d'API ici : elles vivent dans le trousseau.
+/// Un fournisseur de modèles. Aucune clé d'API ici : elles vivent dans le trousseau. Un champ que cette version ne connaît pas
+/// est gardé et réécrit tel quel (`UnknownFields`) ; l'égalité ne compare que les champs connus.
 public struct Provider: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
@@ -15,6 +16,8 @@ public struct Provider: Codable, Equatable, Identifiable, Sendable {
     public var kind: ProviderKind
     /// Dernière liste de modèles lue depuis l'endpoint.
     public var models: [String]
+    /// Ce que cette version ne connaît pas, réécrit tel quel.
+    var unknown = UnknownFields()
 
     public init(id: UUID, name: String, baseURL: String, kind: ProviderKind, models: [String]) {
         self.id = id
@@ -24,17 +27,38 @@ public struct Provider: Codable, Equatable, Identifiable, Sendable {
         self.models = models
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, baseURL, kind, models }
+    /// Les champs connus seulement : un champ inconnu ne change pas l'égalité.
+    public static func == (lhs: Provider, rhs: Provider) -> Bool {
+        lhs.id == rhs.id && lhs.name == rhs.name && lhs.baseURL == rhs.baseURL && lhs.kind == rhs.kind
+            && lhs.models == rhs.models
+    }
+
+    private enum CodingKeys: String, CaseIterable { case id, name, baseURL, kind, models }
+
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
     /// Décodage tolérant (voir `AppSettings`) : sans identité, adresse ni type, un fournisseur n'a pas de sens ; la
     /// liste des modèles, elle, se relit en un clic.
     public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(UUID.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
-        baseURL = try container.decode(String.self, forKey: .baseURL)
-        kind = try container.decode(ProviderKind.self, forKey: .kind)
-        models = try container.decodeIfPresent([String].self, forKey: .models) ?? []
+        let container = try decoder.container(keyedBy: JSONKey.self)
+        func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
+        id = try container.decode(UUID.self, forKey: key(.id))
+        name = try container.decode(String.self, forKey: key(.name))
+        baseURL = try container.decode(String.self, forKey: key(.baseURL))
+        kind = try container.decode(ProviderKind.self, forKey: key(.kind))
+        models = try container.decodeIfPresent([String].self, forKey: key(.models)) ?? []
+        unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: JSONKey.self)
+        func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
+        try container.encode(id, forKey: key(.id))
+        try container.encode(name, forKey: key(.name))
+        try container.encode(baseURL, forKey: key(.baseURL))
+        try container.encode(kind, forKey: key(.kind))
+        try container.encode(models, forKey: key(.models))
+        try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 }
 
@@ -67,11 +91,15 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 /// saurait pas lire ou réécrire correctement (voir `SettingsStore`).
 ///
 /// Ce que cette version garde, et ce qu'elle perd, à la réécriture d'un fichier :
-/// - un champ inconnu de `AppSettings` (premier niveau) ou de `Mode` est lu, gardé et réécrit tel quel (`UnknownFields`) ;
-///   `modeOptions` de la version 1 en fait partie ;
-/// - un champ inconnu de `Provider`, `HotKey`, `TranscriptionSettings` ou `ModelChoice` est PERDU à l'enregistrement
-///   (`SettingsStoreTests.unknownFieldsAreKeptAndWrittenBack` le fixe). Ajouter un champ à l'un de ces types exige donc
-///   d'augmenter `current`, ou d'étendre la garde à ce type.
+/// - un champ inconnu de `AppSettings` (premier niveau), de `Mode` et, depuis la version 3, de chaque type imbriqué (`Provider`,
+///   `HotKey`, `TranscriptionSettings`, `ModelChoice`, `InterviewSettings`, `VoiceChoice`, `HistorySettings`) est lu, gardé et
+///   réécrit tel quel, à la même place dans l'arbre (`UnknownFields`) ; `modeOptions` de la version 1 en fait partie. L'égalité
+///   de ces types ne compare que leurs champs connus. Ce qui est gardé l'est d'une lecture à la réécriture de la même valeur :
+///   un type reconstruit à neuf (`HotKey(keyCode:modifiers:)` à la place de l'ancien) repart sans champ inconnu ;
+/// - un champ connu d'une autre forme dans les types de la version 3 (`InterviewSettings`, `VoiceChoice`, `HistorySettings`)
+///   retombe sur son défaut, les autres champs restant lus ; réécrit, il l'est avec ce défaut. Un bloc `interview`, `voice` ou
+///   `history` qui n'est pas un objet prend tous ses défauts, sans que le reste du fichier soit mis de côté ;
+///   une valeur hors borne de `InterviewSettings` ou de `HistorySettings` est ramenée dans sa borne à la lecture.
 ///
 /// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, `TranscriptionEngine`, ou toute énumération
 /// ajoutée plus tard) est un tel format : il exige d'augmenter `current`. Sans cela, une application plus ancienne lit un cas
@@ -84,9 +112,13 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 /// Version 2 : les modes deviennent des données (`modes`). Un fichier de la version 1 n'a pas `modes` : il reçoit `Mode.base`,
 /// avec le choix de relecture que `modeOptions` portait. `modeOptions` reste dans le fichier, tel quel, mais ne sert qu'à cette
 /// migration, faite une fois : un fichier qui a `modes`, ou qui est déjà en version 2, ne le relit jamais.
+///
+/// Version 3 : les réglages de l'entretien (`interview`), le choix de voix (`voice`) et la durée de conservation de l'historique
+/// (`history`). Un fichier de la version 2 se lit sans perte, les trois champs prennent leurs défauts, et la première écriture
+/// le met en version 3. Une application de la version 2 qui ouvre ce fichier le garde intact (version plus récente).
 public struct AppSettings: Codable, Equatable, Sendable {
     /// Version du format du fichier que cette application sait lire et écrire.
-    public static let current = 2
+    public static let current = 3
 
     public var version: Int
     public var providers: [Provider]
@@ -105,6 +137,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var strongModel: ModelChoice?
     /// Le modèle rapide, enregistré dès cette version et employé à l'étape 6. `nil` : aucun choix fait.
     public var fastModel: ModelChoice?
+    /// Les réglages de l'entretien vocal. Absent d'un fichier de la version 2 : `InterviewSettings.defaults`.
+    public var interview: InterviewSettings
+    /// La voix de l'assistant. Absent d'un fichier de la version 2 : la voix du système.
+    public var voice: VoiceChoice
+    /// La conservation de l'historique des entretiens. Absent d'un fichier de la version 2 : `HistorySettings.defaults`.
+    public var history: HistorySettings
     /// Ce que cette version ne connaît pas, réécrit tel quel.
     var unknown = UnknownFields()
 
@@ -112,7 +150,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         version: Int, providers: [Provider], hotKey: HotKey,
         hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil,
         transcription: TranscriptionSettings = .defaults, modes: [Mode] = Mode.base,
-        strongModel: ModelChoice? = nil, fastModel: ModelChoice? = nil
+        strongModel: ModelChoice? = nil, fastModel: ModelChoice? = nil, interview: InterviewSettings = .defaults,
+        voice: VoiceChoice = .system, history: HistorySettings = .defaults
     ) {
         self.version = version
         self.providers = providers
@@ -124,19 +163,26 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.modes = modes
         self.strongModel = strongModel
         self.fastModel = fastModel
+        self.interview = interview
+        self.voice = voice
+        self.history = history
     }
 
     private enum CodingKeys: String, CaseIterable {
         case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription, modes, strongModel,
-            fastModel
+            fastModel, interview, voice, history
     }
 
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
     /// Le champ de la version 1 que la migration lit une fois.
     private static let legacyOptionsKey = "modeOptions"
 
-    /// Un champ absent prend sa valeur par défaut ; un champ inconnu est gardé ; un champ présent mais d'une autre
-    /// forme lève une erreur (le fichier est alors illisible). Seul `version` est obligatoire.
+    /// Un champ absent prend sa valeur par défaut ; un champ inconnu est gardé ; seul `version` est obligatoire. Un champ présent
+    /// mais d'une autre forme lève une erreur (le fichier est alors illisible), SAUF les trois blocs de la version 3 (`interview`,
+    /// `voice`, `history`) : un bloc qui n'est pas un objet prend ses défauts, et dans un bloc, un champ d'une autre forme prend le
+    /// sien, sans faire perdre le reste du fichier. Conséquence à connaître : une durée de conservation de la mauvaise forme
+    /// (`"retentionDays": "365"`) se lit 30 jours SANS avis ; le dossier de l'historique garde donc la durée confirmée
+    /// (`InterviewHistory.confirmedRetention`) pour que la purge au lancement ne s'en serve pas.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: JSONKey.self)
         func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
@@ -153,6 +199,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
             ?? defaults.transcription
         strongModel = try container.decodeIfPresent(ModelChoice.self, forKey: key(.strongModel))
         fastModel = try container.decodeIfPresent(ModelChoice.self, forKey: key(.fastModel))
+        // Les trois blocs de la version 3 sont optionnels : un bloc qui n'est pas un objet prend ses défauts, sans faire perdre
+        // le reste du fichier (fournisseurs, modes, raccourcis).
+        interview = (try? container.decodeIfPresent(InterviewSettings.self, forKey: key(.interview))) ?? defaults.interview
+        voice = (try? container.decodeIfPresent(VoiceChoice.self, forKey: key(.voice))) ?? defaults.voice
+        history = (try? container.decodeIfPresent(HistorySettings.self, forKey: key(.history))) ?? defaults.history
         if let modes = try container.decodeIfPresent([Mode].self, forKey: key(.modes)) {
             self.modes = Mode.normalized(modes)
         } else if version < 2 {
@@ -184,6 +235,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         try container.encode(modes, forKey: key(.modes))
         try container.encodeIfPresent(strongModel, forKey: key(.strongModel))
         try container.encodeIfPresent(fastModel, forKey: key(.fastModel))
+        try container.encode(interview, forKey: key(.interview))
+        try container.encode(voice, forKey: key(.voice))
+        try container.encode(history, forKey: key(.history))
         try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 

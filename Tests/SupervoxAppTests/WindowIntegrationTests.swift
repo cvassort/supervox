@@ -438,7 +438,8 @@ struct WindowIntegrationTests {
         let surface = FloatingPanelSurface(
             content: PanelView(model: model, permissions: PermissionsModel(probe: WindowProbe()), openSettings: {}, quit: {}))
         let controller = PanelController(
-            model: model, escapeRegistrar: HotKeyTests.FakeRegistrar(), clickMonitor: FakeClickMonitor(), surface: surface)
+            model: model, escapeRegistrar: HotKeyTests.FakeRegistrar(), clickMonitor: FakeClickMonitor(), surface: surface,
+            announcer: RecordingAnnouncer())
         _ = controller
         let panel = surface.panel
         panel.setFrame(NSRect(x: -20_000, y: -20_000, width: 520, height: 400), display: false)

@@ -68,7 +68,7 @@ public struct ModeEditor: View {
                 }
                 Section {
                     Picker("Moteur de dictée", selection: $draft.engine) {
-                        Text(ModesModel.noTranscriptionEngineTitle).tag(TranscriptionEngine?.none)
+                        Text(ModesModel.defaultEngineTitle(for: draft.id)).tag(TranscriptionEngine?.none)
                         ForEach(TranscriptionEngine.allCases, id: \.self) { engine in
                             Text(engine.title).tag(TranscriptionEngine?.some(engine))
                         }

@@ -439,10 +439,10 @@ Activé seulement si `SUPERVOX_INTEGRATION=1` (téléchargement de modèles). Il
 }
 @Test func speechSendsExtraParametersAtTopLevel() async throws {
     let data = try await stubbedClient(status: 200, fixture: "speech-200.wav")
-        .speech(model: "m", input: "Bonjour", voice: "v", format: "wav", extra: ["lang_code": "f"])
+        .speech(model: "m", input: "Bonjour", voice: "v", format: "wav", extra: ["cle_exemple": "f"])
     #expect(data.count > 44)
     let json = try JSONSerialization.jsonObject(with: StubURLProtocol.lastBody) as? [String: Any]
-    #expect(json?["lang_code"] as? String == "f" && json?["input"] as? String == "Bonjour" && json?["voice"] as? String == "v")
+    #expect(json?["cle_exemple"] as? String == "f" && json?["input"] as? String == "Bonjour" && json?["voice"] as? String == "v")
 }
 @Test func speechRejectsEmptyAudio() async {
     await #expect(throws: EndpointError.malformedResponse) {

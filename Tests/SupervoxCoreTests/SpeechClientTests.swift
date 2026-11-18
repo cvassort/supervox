@@ -19,11 +19,11 @@ private func sentJSON(_ client: OpenAICompatibleClient) throws -> [String: Any] 
 struct SpeechClientTests {
     @Test func speechSendsExtraParametersAtTopLevel() async throws {
         let client = stubbedClient(status: 200, fixture: "speech-200.wav")
-        let data = try await client.speech(model: "m", input: "Bonjour", voice: "v", format: "wav", extra: ["lang_code": "f"])
+        let data = try await client.speech(model: "m", input: "Bonjour", voice: "v", format: "wav", extra: ["cle_exemple": "f"])
         #expect(data == fixtureData("speech-200.wav"))
         #expect(data.count > 44)
         let json = try JSONSerialization.jsonObject(with: StubURLProtocol.lastBody(of: client)) as? [String: Any]
-        #expect(json?["lang_code"] as? String == "f" && json?["input"] as? String == "Bonjour" && json?["voice"] as? String == "v")
+        #expect(json?["cle_exemple"] as? String == "f" && json?["input"] as? String == "Bonjour" && json?["voice"] as? String == "v")
     }
 
     @Test func speechRejectsEmptyAudio() async {
@@ -34,14 +34,14 @@ struct SpeechClientTests {
 
     @Test func requestIsAJSONPostToTheSpeechPathWithExactlyTheExpectedFields() async throws {
         let client = stubbedClient(status: 200, fixture: "speech-200.wav", baseURL: "https://exemple.test/v1", apiKey: "cle-de-test-0123")
-        _ = try await speak(client, extra: ["lang_code": "f"])
+        _ = try await speak(client, extra: ["cle_exemple": "f"])
         let request = try #require(StubURLProtocol.lastRequest(of: client))
         #expect(request.httpMethod == "POST")
         #expect(request.url?.absoluteString == "https://exemple.test/v1/audio/speech")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer cle-de-test-0123")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         let json = try sentJSON(client)
-        #expect(json as? [String: String] == ["model": "m", "input": "Bonjour", "voice": "v", "response_format": "wav", "lang_code": "f"])
+        #expect(json as? [String: String] == ["model": "m", "input": "Bonjour", "voice": "v", "response_format": "wav", "cle_exemple": "f"])
 
         let bare = stubbedClient(status: 200, fixture: "speech-200.wav")
         _ = try await speak(bare)
@@ -52,10 +52,10 @@ struct SpeechClientTests {
     /// de l'argument `format`, celui que l'appelant s'attend à recevoir.
     @Test func extraParametersCannotOverwriteTheExplicitArguments() async throws {
         let client = stubbedClient(status: 200, fixture: "speech-200.wav")
-        let extra = ["model": "intrus", "input": "intrus", "voice": "intrus", "response_format": "mp3", "lang_code": "f"]
+        let extra = ["model": "intrus", "input": "intrus", "voice": "intrus", "response_format": "mp3", "cle_exemple": "f"]
         _ = try await client.speech(model: "m", input: "Bonjour", voice: "v", format: "wav", extra: extra)
         let json = try sentJSON(client)
-        #expect(json as? [String: String] == ["model": "m", "input": "Bonjour", "voice": "v", "response_format": "wav", "lang_code": "f"])
+        #expect(json as? [String: String] == ["model": "m", "input": "Bonjour", "voice": "v", "response_format": "wav", "cle_exemple": "f"])
     }
 
     @Test func textIsSentAsValidJSONWhateverItContains() async throws {

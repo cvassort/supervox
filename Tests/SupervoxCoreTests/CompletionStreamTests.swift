@@ -61,6 +61,45 @@ struct CompletionStreamTests {
         #expect(body == expected)
     }
 
+    /// Règle 1 : `messages` = consigne, puis l'historique dans l'ordre, puis `input` (qui reste le dernier message).
+    @Test func theHistoryGoesBetweenTheInstructionAndTheInputInOrder() async throws {
+        let client = stubbedClient(status: 200, fixture: "chat-stream-content.sse")
+        let request = CompletionRequest(
+            model: "modele-exemple", instruction: "Consigne.", input: "Dernier message.", maxTokens: 50,
+            history: [CompletionTurn(role: .user, text: "Première réponse."),
+                      CompletionTurn(role: .assistant, text: "Seconde question ?"),
+                      CompletionTurn(role: .user, text: "Seconde réponse."),
+                      CompletionTurn(role: .assistant, text: "Troisième question ?")])
+        _ = await collectEvents(client.complete(request))
+
+        let body = try #require(try JSONSerialization.jsonObject(with: StubURLProtocol.lastBody(of: client)) as? NSDictionary)
+        let expected: NSDictionary = [
+            "model": "modele-exemple",
+            "messages": [["role": "system", "content": "Consigne."],
+                         ["role": "user", "content": "Première réponse."],
+                         ["role": "assistant", "content": "Seconde question ?"],
+                         ["role": "user", "content": "Seconde réponse."],
+                         ["role": "assistant", "content": "Troisième question ?"],
+                         ["role": "user", "content": "Dernier message."]],
+            "max_tokens": 50,
+            "stream": true,
+        ]
+        #expect(body == expected)
+    }
+
+    /// Règle 1 : sans historique, le corps est celui de l'étape 5 (deux messages, mêmes clés).
+    @Test func anEmptyHistoryLeavesTheBodyOfStepFiveUnchanged() async throws {
+        let client = stubbedClient(status: 200, fixture: "chat-stream-content.sse")
+        let request = CompletionRequest(model: "modele-exemple", instruction: "Consigne.", input: "Texte à traiter.", maxTokens: 50, history: [])
+        _ = await collectEvents(client.complete(request))
+
+        let body = try #require(try JSONSerialization.jsonObject(with: StubURLProtocol.lastBody(of: client)) as? [String: Any])
+        #expect(Set(body.keys) == ["model", "messages", "max_tokens", "stream"])
+        let messages = try #require(body["messages"] as? [[String: String]])
+        #expect(messages == [["role": "system", "content": "Consigne."], ["role": "user", "content": "Texte à traiter."]])
+        #expect(CompletionRequest(model: "m", instruction: "i", input: "t", maxTokens: 1).history.isEmpty)
+    }
+
     @Test func everyRequestCarriesTheClientTimeout() async {
         let client = stubbedClient(status: 200, fixture: "chat-stream-content.sse", requestTimeout: 12)
         _ = await collectEvents(client.complete(sampleRequest))

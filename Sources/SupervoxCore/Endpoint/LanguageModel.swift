@@ -1,19 +1,39 @@
 import Foundation
 
-/// Une demande de complétion : une consigne et un texte à traiter. Sans historique ni outils.
+/// Qui a dit un tour de l'historique d'une demande.
+public enum CompletionRole: String, Codable, Sendable {
+    case user, assistant
+}
+
+/// Un tour de conversation déjà joué, envoyé avant le dernier message.
+public struct CompletionTurn: Equatable, Sendable {
+    public var role: CompletionRole
+    public var text: String
+
+    public init(role: CompletionRole, text: String) {
+        self.role = role
+        self.text = text
+    }
+}
+
+/// Une demande de complétion : une consigne, un éventuel historique et un texte à traiter. Sans outils.
 public struct CompletionRequest: Equatable, Sendable {
     public var model: String
     /// Part comme consigne système.
     public var instruction: String
-    /// Part comme seul message de l'utilisateur.
+    /// Part comme dernier message de l'utilisateur, après l'historique.
     public var input: String
     public var maxTokens: Int
+    /// Les tours déjà joués, dans l'ordre : ils partent entre la consigne et `input`. Vide, la demande est celle d'un seul
+    /// message de l'utilisateur.
+    public var history: [CompletionTurn]
 
-    public init(model: String, instruction: String, input: String, maxTokens: Int) {
+    public init(model: String, instruction: String, input: String, maxTokens: Int, history: [CompletionTurn] = []) {
         self.model = model
         self.instruction = instruction
         self.input = input
         self.maxTokens = maxTokens
+        self.history = history
     }
 }
 

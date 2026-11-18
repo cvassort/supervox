@@ -46,7 +46,7 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system, keyboardLayout: HotKeyTests.ansi,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            rewriter: .unavailable, inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter, announcer: RecordingAnnouncer())
     }
 
     func hotKeyLines(_ controller: AppController) -> [String] {
@@ -151,11 +151,13 @@ import Testing
         #expect(controller.panelModel.selectedModeID == "perso-un")
         #expect(controller.panelModel.isOpen)
         #expect(controller.panelModel.dictation.stage == .preparing)
-        #expect(controller.panelModel.dictation.notice != DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview == nil)
         #expect(store.load().settings.lastModeID == "perso-un")
     }
 
-    @Test func theInterviewsHotKeyStillOpensThePanelWithTheLaterModeSentence() async throws {
+    /// Le raccourci du mode Entretien lance l'entretien sur son mode (ce constructeur ne reçoit aucune résolution : il s'arrête
+    /// sur « n'a pas pu démarrer »).
+    @Test func theInterviewsHotKeyLaunchesTheInterview() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         var settings = Self.settings([Self.report])
         settings.modes[2].hotKey = Self.keyC
@@ -165,8 +167,10 @@ import Testing
         modeRegistrars.press(Self.keyC)
         #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
         #expect(controller.panelModel.isOpen)
-        #expect(controller.panelModel.dictation.notice == DictationController.laterModeNotice)
+        #expect(controller.panelModel.interview?.phase == .preparing)
         #expect(store.load().settings.lastModeID == ModeChip.interviewID)
+        #expect(await until { controller.panelModel.interview == nil })
+        #expect(controller.panelModel.dictation.notice == InterviewText.couldNotStart)
     }
 
     // MARK: - Refus, dits dans le panneau
@@ -506,6 +510,6 @@ import Testing
             permissionsProbe: probe, systemHotKeys: system, keyboardLayout: HotKeyTests.ansi,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: FakeClickMonitor(),
             makeSettingsWindow: presenter.make, terminate: presenter.terminate,
-            rewriter: .unavailable, inserter: InsertionRig().inserter)
+            rewriter: .unavailable, inserter: InsertionRig().inserter, announcer: RecordingAnnouncer())
     }
 }

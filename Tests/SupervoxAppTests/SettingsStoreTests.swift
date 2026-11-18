@@ -97,8 +97,8 @@ private func sampleSettings() -> AppSettings {
 
     @Test func defaultsMatchTheSpecification() {
         let defaults = AppSettings.defaults
-        #expect(defaults.version == 2)
-        #expect(AppSettings.current == 2)
+        #expect(defaults.version == 3)
+        #expect(AppSettings.current == 3)
         #expect(defaults.providers.isEmpty)
         #expect(defaults.hotKey == HotKey(keyCode: 49, modifiers: [.control, .option]))
         #expect(defaults.hotKeyBehavior == .toggle)
@@ -215,7 +215,7 @@ private func sampleSettings() -> AppSettings {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        let original = Data(#"{"version": 3, "providers": "une autre forme"}"#.utf8)
+        let original = Data(#"{"version": 4, "providers": "une autre forme"}"#.utf8)
         try original.write(to: file)
         let store = SettingsStore(file: file, now: fixedClock)
 
@@ -224,7 +224,7 @@ private func sampleSettings() -> AppSettings {
         let notice = try #require(result.notice)
         #expect(notice.contains("plus récente"))
         #expect(try names(in: directory) == ["settings.json"])
-        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 3)) {
+        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 4)) {
             try store.save(sampleSettings())
         }
         #expect(try Data(contentsOf: file) == original)
@@ -283,7 +283,7 @@ private func sampleSettings() -> AppSettings {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        let original = Data(#"{"version": 3, "hotKeyBehavior": "comportementDuFutur", "lastModeID": "mode-du-futur"}"#.utf8)
+        let original = Data(#"{"version": 4, "hotKeyBehavior": "comportementDuFutur", "lastModeID": "mode-du-futur"}"#.utf8)
         try original.write(to: file)
         let store = SettingsStore(file: file, now: fixedClock)
 
@@ -295,8 +295,8 @@ private func sampleSettings() -> AppSettings {
     }
 
     /// M7 : un champ inconnu du premier niveau (écrit par une version future qui a gardé le même numéro, ou à la main) est lu,
-    /// gardé, et réécrit à l'identique ; le fichier n'est pas mis de côté. Pour un fournisseur, le champ inconnu est perdu :
-    /// voir la fin du test.
+    /// gardé, et réécrit à l'identique ; le fichier n'est pas mis de côté. Depuis la version 3, il en va de même d'un champ
+    /// inconnu d'un fournisseur (voir la fin du test, et `SettingsMigrationV3Tests` pour les autres types imbriqués).
     @Test func unknownFieldsAreKeptAndWrittenBack() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
@@ -321,14 +321,11 @@ private func sampleSettings() -> AppSettings {
         #expect(written["langue"] as? String == "fr")
         #expect((written["moteur"] as? NSDictionary)?.isEqual(to: ["nom": "x"]) == true)
 
-        // Limite connue, fixée ici pour qu'elle reste visible (I2) : seuls `AppSettings` et `Mode` gardent leurs champs
-        // inconnus. Ceux d'un fournisseur (`couleur`), de `HotKey`, de `TranscriptionSettings` et de `ModelChoice` sont perdus
-        // à la réécriture ; ajouter un champ à l'un de ces types exige donc d'augmenter `AppSettings.current`, ou d'étendre la
-        // garde (`UnknownFields`) à ce type. Si ce test tombe parce que la garde a été étendue, mettre le commentaire de
-        // `AppSettings` à jour avec elle.
+        // La limite fixée ici à l'étape 5 (I2 : le champ inconnu d'un fournisseur était perdu) est levée à la version 3 :
+        // `Provider` garde ses champs inconnus, comme `HotKey`, `TranscriptionSettings` et `ModelChoice`.
         let providers = try #require(written["providers"] as? [[String: Any]])
         #expect(providers.count == 1)
-        #expect(providers[0]["couleur"] == nil)
+        #expect(providers[0]["couleur"] as? String == "bleu")
         #expect(providers[0]["name"] as? String == "Local")
     }
 
@@ -646,8 +643,8 @@ private func sampleSettings() -> AppSettings {
         #expect(try Data(contentsOf: file) == Data(Self.stepFourFile.utf8))
     }
 
-    /// Enregistré puis relu : égal ; et le JSON écrit est en version 2, garde toutes les clés d'origine avec leurs valeurs
-    /// (`modeOptions` compris, avec son entrée `mode-inconnu`) et ajoute `modes`.
+    /// Enregistré puis relu : égal ; et le JSON écrit est en version 3, garde toutes les clés d'origine avec leurs valeurs
+    /// (`modeOptions` compris, avec son entrée `mode-inconnu`) et ajoute `modes` et les trois champs de la version 3.
     @Test func aStepFourFileSurvivesASaveWithAllItsKeysAndValues() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
@@ -665,9 +662,13 @@ private func sampleSettings() -> AppSettings {
         let original = try #require(
             try JSONSerialization.jsonObject(with: Data(Self.stepFourFile.utf8)) as? [String: Any])
         var written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-        #expect(written["version"] as? Int == 2)
+        #expect(written["version"] as? Int == 3)
         let modes = try #require(written["modes"] as? [[String: Any]])
         #expect(modes.compactMap { $0["id"] as? String } == ModeChip.fixed.map(\.id))
+        for added in ["interview", "voice", "history"] {
+            #expect(written[added] is [String: Any], "\(added) absent du fichier écrit")
+            written[added] = nil
+        }
         written["modes"] = nil
         written["version"] = nil
         var expected = original
@@ -778,21 +779,21 @@ private func sampleSettings() -> AppSettings {
         #expect(try names(in: directory) == ["settings.json"])
     }
 
-    /// Un fichier en version 3 : lu autant que possible, gardé intact et non enregistrable.
-    @Test func aVersionThreeFileStaysIntactAndUnsavable() throws {
+    /// Un fichier en version 4 (future) : lu autant que possible, gardé intact et non enregistrable.
+    @Test func aVersionFourFileStaysIntactAndUnsavable() throws {
         let directory = try makeTemporaryDirectory()
         defer { removeTemporaryDirectory(directory) }
         let file = directory.appendingPathComponent("settings.json")
-        let original = Data(#"{"version": 3, "lastModeID": "prompt", "modes": [{"id": "dictee-brute", "name": "B", "futur": 1}]}"#.utf8)
+        let original = Data(#"{"version": 4, "lastModeID": "prompt", "modes": [{"id": "dictee-brute", "name": "B", "futur": 1}]}"#.utf8)
         try original.write(to: file)
         let store = SettingsStore(file: file, now: fixedClock)
 
         let result = store.load()
-        #expect(result.saveRefusal == .newerVersionKept(fileName: "settings.json", version: 3))
+        #expect(result.saveRefusal == .newerVersionKept(fileName: "settings.json", version: 4))
         #expect(result.notice?.contains("plus récente") == true)
         #expect(result.settings.lastModeID == "prompt")
         #expect(result.settings.version == AppSettings.current)
-        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 3)) {
+        #expect(throws: SettingsError.newerVersionKept(fileName: "settings.json", version: 4)) {
             try store.save(result.settings)
         }
         #expect(try Data(contentsOf: file) == original)

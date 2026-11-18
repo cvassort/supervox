@@ -8,7 +8,7 @@ import Testing
 /// L'onglet Modes : créer, modifier, dupliquer, déplacer, supprimer ; consigne d'origine ; modèles ; raccourci de chaque mode.
 /// `read` et `update` sont doublés par des réglages en mémoire, dont l'enregistrement peut lever sur ordre ; aucun réseau, aucun
 /// disque, aucun raccourci du système.
-@MainActor @Suite struct ModesModelTests {
+@MainActor @Suite(.timeLimit(.minutes(1))) struct ModesModelTests {
     /// Une erreur d'ailleurs, dont le texte porte une adresse : il ne doit jamais arriver à l'écran.
     struct ForeignError: LocalizedError {
         var errorDescription: String? { "échec de la requête vers https://api.example.com/v1/cle" }
@@ -148,9 +148,12 @@ import Testing
         #expect(ModesModel.strongTitle == "Modèle fort")
         #expect(
             ModesModel.strongNote
-                == "Réécrit le texte quand vous le corrigez à la voix, et sert aux modes qui n'ont pas de modèle propre.")
+                == "Réécrit le texte quand vous le corrigez à la voix, rédige le prompt de l'entretien, et sert aux modes qui n'ont pas de modèle propre."
+        )
         #expect(ModesModel.fastTitle == "Modèle rapide")
-        #expect(ModesModel.fastNote == "Servira à l'entretien vocal, à une étape suivante.")
+        #expect(
+            ModesModel.fastNote
+                == "Pose les questions de l'entretien vocal\u{00A0}: choisissez un modèle qui répond vite.")
         #expect(
             ModesModel.privacyNote(providerName: "Fournisseur d'exemple")
                 == "Ce mode envoie le texte dicté à « Fournisseur d'exemple ». L'audio reste sur cet ordinateur.")
@@ -160,9 +163,10 @@ import Testing
         let model = Rig(settings).makeModel()
         #expect(
             try row(model, ModeChip.interviewID).note
-                == "Toujours relu : l'entretien passe toujours par la relecture. Ce mode arrive à une étape suivante.")
-        #expect(try row(model, ModeChip.cleanedID).note == nil, "la note « étape suivante » a disparu de Dictée nettoyée")
-        #expect(try row(model, ModeChip.promptID).note == nil, "et de Prompt")
+                == "Toujours relu : l'entretien passe toujours par la relecture. Ses questions et son gabarit se règlent dans l'onglet Entretien."
+        )
+        #expect(try row(model, ModeChip.cleanedID).note == nil)
+        #expect(try row(model, ModeChip.promptID).note == nil)
         #expect(try row(model, ModeChip.rawID).note == nil)
     }
 
@@ -176,7 +180,30 @@ import Testing
             try row(model, "perso-un").summary == "modele-exemple-fort (Fournisseur d'exemple) · Parakeet · ⌃⌥B")
         // Sans consigne, le texte est collé tel quel : aucun modèle n'est en jeu.
         #expect(try row(model, ModeChip.rawID).summary == "Texte collé tel quel · \(engine)")
-        #expect(try row(model, ModeChip.interviewID).summary == engine)
+        // Entretien sans moteur propre dit quel moteur il prend : celui de l'entretien, pas celui de l'onglet Transcription.
+        #expect(
+            try row(model, ModeChip.interviewID).summary
+                == "\(TranscriptionEngine.interviewDefault.title) (moteur de l'entretien)")
+    }
+
+    /// Entretien : le moteur par défaut est `TranscriptionEngine.interviewDefault` (titre lu du type, jamais recopié), le même
+    /// dans le résumé et dans le choix « par défaut » de la feuille ; un moteur choisi est nommé tel quel ; les autres modes gardent
+    /// « Moteur de l'onglet Transcription ».
+    @Test func theInterviewModeNamesItsOwnDefaultEngine() throws {
+        let title = "\(TranscriptionEngine.interviewDefault.title) (moteur de l'entretien)"
+        #expect(ModesModel.interviewEngineTitle == title)
+        #expect(ModesModel.defaultEngineTitle(for: ModeChip.interviewID) == title)
+        #expect(ModesModel.defaultEngineTitle(for: ModeChip.cleanedID) == ModesModel.noTranscriptionEngineTitle)
+        #expect(ModesModel.defaultEngineTitle(for: "perso-un") == ModesModel.noTranscriptionEngineTitle)
+
+        var settings = Rig.defaultSettings()
+        let other = try #require(TranscriptionEngine.allCases.first { $0 != .interviewDefault })
+        let index = try #require(settings.modes.firstIndex { $0.id == ModeChip.interviewID })
+        settings.modes[index].engine = other
+        settings.modes[index].hotKey = Self.keyA
+        let model = Rig(settings).makeModel()
+        #expect(try row(model, ModeChip.interviewID).summary == "\(other.title) · \(Self.labelA)")
+        #expect(model.draft(for: ModeChip.interviewID).engine == other)
     }
 
     /// Le nom d'un fournisseur trop long est rogné dans les lignes comme dans la note de vie privée.
@@ -1022,7 +1049,8 @@ import Testing
                 == "Ce mode n'a pas de consigne : le texte y est collé tel quel.")
         #expect(
             ModesModel.lockedInstructionNote(for: ModeChip.interviewID)
-                == "Ce mode n'a pas de consigne à modifier. Ce mode arrive à une étape suivante.")
+                == "Ce mode n'a pas de consigne à modifier\u{00A0}: ses questions et son gabarit se règlent dans l'onglet Entretien."
+        )
     }
 
     /// La feuille a une hauteur fixe qui tient sous une fenêtre de réglages sur un écran de 800 points, et un champ de consigne

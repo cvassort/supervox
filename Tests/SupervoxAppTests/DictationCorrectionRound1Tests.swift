@@ -687,7 +687,7 @@ import SupervoxCore
         #expect(await until { h.controller.view.liveText == "consigne provisoire" })
         session.emit(.finished("Consigne finale."))
         let call = await h.rewriter.call()
-        let expected = RewritePrompt.correction(text: Self.original, change: "Consigne finale.", vocabulary: [])
+        let expected = ExpectedPrompt.correction(sentInput: call.job.input, text: Self.original, change: "Consigne finale.", vocabulary: [])
         #expect(call.job == RewriteJob(instruction: expected.instruction, input: expected.input, model: nil))
         #expect(!call.job.input.contains("provisoire"))
     }

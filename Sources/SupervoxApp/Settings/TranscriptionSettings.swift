@@ -7,6 +7,10 @@ public enum TranscriptionEngine: String, Codable, CaseIterable, Sendable {
     case whisperKit = "whisperkit"
     case parakeet
 
+    /// Le moteur de l'entretien vocal : le moteur local rapide (design 6.4 : Parakeet pour l'entretien, où la vitesse prime),
+    /// distinct de celui de la dictée par défaut.
+    public static let interviewDefault: TranscriptionEngine = .parakeet
+
     /// Le nom que l'interface montre.
     public var title: String {
         switch self {
@@ -22,7 +26,8 @@ public enum TranscriptionEngine: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// Réglages de la transcription, enregistrés dans `settings.json` (voir la règle d'évolution de `AppSettings`).
+/// Réglages de la transcription, enregistrés dans `settings.json` (voir la règle d'évolution de `AppSettings`). Un champ que cette
+/// version ne connaît pas est gardé et réécrit tel quel (`UnknownFields`) ; l'égalité ne compare que les champs connus.
 public struct TranscriptionSettings: Codable, Equatable, Sendable {
     public var engine: TranscriptionEngine
     /// Variante WhisperKit, par le nom que lui donne le dépôt de modèles de WhisperKit.
@@ -31,6 +36,8 @@ public struct TranscriptionSettings: Codable, Equatable, Sendable {
     public var language: String
     /// Termes que le moteur doit mieux reconnaître, un par entrée.
     public var vocabulary: [String]
+    /// Ce que cette version ne connaît pas, réécrit tel quel.
+    var unknown = UnknownFields()
 
     public init(engine: TranscriptionEngine, whisperModel: String, language: String, vocabulary: [String]) {
         self.engine = engine
@@ -43,16 +50,36 @@ public struct TranscriptionSettings: Codable, Equatable, Sendable {
     public static let defaults = TranscriptionSettings(
         engine: .whisperKit, whisperModel: "large-v3-v20240930_turbo", language: "fr", vocabulary: [])
 
-    private enum CodingKeys: String, CodingKey { case engine, whisperModel, language, vocabulary }
+    /// Les champs connus seulement : un champ inconnu ne change pas l'égalité.
+    public static func == (lhs: TranscriptionSettings, rhs: TranscriptionSettings) -> Bool {
+        lhs.engine == rhs.engine && lhs.whisperModel == rhs.whisperModel && lhs.language == rhs.language
+            && lhs.vocabulary == rhs.vocabulary
+    }
+
+    private enum CodingKeys: String, CaseIterable { case engine, whisperModel, language, vocabulary }
+
+    private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
 
     /// Un champ absent prend sa valeur par défaut ; un moteur inconnu se lit `whisperkit`.
     public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let container = try decoder.container(keyedBy: JSONKey.self)
+        func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
         let defaults = Self.defaults
         self.init(
-            engine: try container.decodeIfPresent(TranscriptionEngine.self, forKey: .engine) ?? defaults.engine,
-            whisperModel: try container.decodeIfPresent(String.self, forKey: .whisperModel) ?? defaults.whisperModel,
-            language: try container.decodeIfPresent(String.self, forKey: .language) ?? defaults.language,
-            vocabulary: try container.decodeIfPresent([String].self, forKey: .vocabulary) ?? defaults.vocabulary)
+            engine: try container.decodeIfPresent(TranscriptionEngine.self, forKey: key(.engine)) ?? defaults.engine,
+            whisperModel: try container.decodeIfPresent(String.self, forKey: key(.whisperModel)) ?? defaults.whisperModel,
+            language: try container.decodeIfPresent(String.self, forKey: key(.language)) ?? defaults.language,
+            vocabulary: try container.decodeIfPresent([String].self, forKey: key(.vocabulary)) ?? defaults.vocabulary)
+        unknown = try UnknownFields(reading: container, excluding: Self.knownKeys)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: JSONKey.self)
+        func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
+        try container.encode(engine, forKey: key(.engine))
+        try container.encode(whisperModel, forKey: key(.whisperModel))
+        try container.encode(language, forKey: key(.language))
+        try container.encode(vocabulary, forKey: key(.vocabulary))
+        try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 }

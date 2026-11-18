@@ -3,5 +3,6 @@ import ArgumentParser
 @main
 struct BenchCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "supervox-bench",
-                                                    subcommands: [RecordCommand.self, TranscribeCommand.self, LatencyCommand.self, LiveCommand.self])
+                                                    subcommands: [RecordCommand.self, TranscribeCommand.self, LatencyCommand.self, LiveCommand.self,
+                                                                  InterviewCommand.self])
 }

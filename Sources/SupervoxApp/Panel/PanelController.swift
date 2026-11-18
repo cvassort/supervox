@@ -68,7 +68,7 @@ public protocol OutsideClickMonitor: AnyObject {
 ///
 /// Clic en dehors. Tant que le panneau est ouvert, un clic dans une autre application le ferme
 /// (le clic arrive quand même à cette application), sauf pendant une dictée (`preparing`, `recording`, `finalizing`), une
-/// relecture ou un collage (`review`, `pasting`).
+/// relecture ou un collage (`review`, `pasting`), ou un entretien (`PanelModel.holdsPanel`).
 ///
 /// Dictée. Le panneau ne connaît de la dictée que son état (`PanelModel.dictation`). Sa fermeture est signalée par `onClosed`,
 /// et Échap peut être confié à un gestionnaire (`escapeHandler`).
@@ -91,7 +91,8 @@ public final class PanelController: PanelOpening {
 
     public init(
         model: PanelModel, escapeRegistrar: any HotKeyRegistrar,
-        clickMonitor: any OutsideClickMonitor, surface: any PanelSurface
+        clickMonitor: any OutsideClickMonitor, surface: any PanelSurface,
+        announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         self.model = model
         self.escapeRegistrar = escapeRegistrar
@@ -100,6 +101,8 @@ public final class PanelController: PanelOpening {
         (surface as? any ContentSizeObserving)?.onContentSizeChange = { [weak self] in self?.contentChanged() }
         // La frappe du panneau, telle que la surface la voit : seule source de ce que l'aide de la relecture annonce.
         (surface as? any KeyStateObserving)?.onKeyChange = { [weak self] isKey in self?.model.panelHasKeyboard = isKey }
+        // Le titre de l'entretien qui change et ses avis sont annoncés à VoiceOver, par l'annonceur reçu (le système, ou un double).
+        model.onAnnounce = { announcer.announce($0) }
     }
 
     /// Le contenu du panneau a changé (l'état de la dictée, un texte, une permission) : si sa hauteur n'est plus celle de la
@@ -160,11 +163,11 @@ public final class PanelController: PanelOpening {
         if let escapeHandler { escapeHandler() } else { close() }
     }
 
-    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée, une relecture ou un collage
-    /// (`DictationStage.holdsPanel`) : le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas annuler ce
+    /// Un clic dans une autre application ferme le panneau, sauf pendant une dictée, une relecture, un collage ou un entretien
+    /// (`PanelModel.holdsPanel`) : le clic qui sert à passer à la fenêtre où le texte doit aller ne doit pas annuler ce
     /// qu'on dit ni ce qu'on relit.
     private func outsideClick() {
-        guard !model.dictation.stage.holdsPanel else { return }
+        guard !model.holdsPanel else { return }
         close()
     }
 
@@ -184,11 +187,11 @@ public final class PanelController: PanelOpening {
         }
     }
 
-    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée comme
-    /// pendant une relecture (`DictationStage.holdsPanel`) : seul le menu de l'icône ferme toujours. (Pendant la relecture,
+    /// Le raccourci lance une dictée (il ne ferme plus le panneau) et le clic en dehors est ignoré pendant une dictée, une
+    /// relecture ou un entretien (`PanelModel.holdsPanel`) : seul le menu de l'icône ferme toujours. (Pendant la relecture,
     /// « Coller » ferme aussi, mais l'avis ne le dit pas : il parle du panneau en général.)
     private static let escapeRefusedNotice =
-        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors, sauf pendant une dictée ou une relecture."
+        "Échap n'a pas pu être réservé : refermez le panneau par le menu de l'icône de Supervox, dans la barre de menus, ou d'un clic en dehors, sauf pendant une dictée, une relecture ou un entretien."
 
     /// Le cadre de la fenêtre pour une nouvelle hauteur : le haut ne bouge pas, la fenêtre grandit et rétrécit vers le bas.
     /// Si le bas sortirait de la zone utile de l'écran, la fenêtre remonte ; plus haute que la zone utile, elle est bornée à

@@ -39,11 +39,15 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+          sysctl -n hw.ncpu
 
       # Les tests d'intégration (modèles à télécharger, micro) restent désactivés : ni SUPERVOX_INTEGRATION
       # ni SUPERVOX_MIC ne sont définies ici.
       - name: Compilation
         run: swift build --build-tests
 
+      # En série (`--no-parallel`) : le lanceur a peu de cœurs, et près de 2 900 tests lancés en parallèle y saturent le
+      # processus de test une quinzaine de secondes ; les tests qui passent par une vraie pile réseau (délai de requête,
+      # redirection) y dépassaient alors leur borne de temps, sans défaut du code. Les lancements locaux restent en parallèle.
       - name: Tests unitaires
-        run: swift test
+        run: swift test --no-parallel

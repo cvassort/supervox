@@ -1,12 +1,14 @@
 import AppKit
 import SupervoxApp
 import SupervoxCore
+import SupervoxEngines
 import SwiftUI
 
 // supervox-snapshots <dossier> : rend chaque écran de l'application en PNG, en clair et en sombre.
 //
 // Données d'exemple seulement (adresses `example.com`), doubles partout : aucun accès au trousseau, au réseau, aux
-// réglages réels, au clavier ni aux permissions du système. Chaque vue est posée dans une fenêtre placée hors de
+// réglages réels, au clavier ni aux permissions du système. Seule écriture hors du dossier de sortie : les historiques d'exemple
+// (`ExampleHistory`), sous `FileManager.default.temporaryDirectory`, à un nom unique, retirés par `defer` (jamais le dossier de l'application). Chaque vue est posée dans une fenêtre placée hors de
 // l'écran, puis la vue d'hébergement SwiftUI (le contenu de la fenêtre, sans cadre, barre de titre ni barre d'onglets)
 // est copiée par `cacheDisplay` ; le fond est peint explicitement, sans quoi il serait transparent. Voir `render`.
 
@@ -253,6 +255,150 @@ let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple
     return model
 }
 
+/// Le silence que le détecteur de voix applique en pratique : la VRAIE formule (`FluidStreamingVoiceDetector.effectiveSilence`, fonction
+/// pure : elle ne charge aucun modèle), pas une copie qui pourrait diverger de l'application.
+let examplePracticalSilence: @Sendable (Double) -> Double = { FluidStreamingVoiceDetector.effectiveSilence($0) }
+
+/// Les réglages en mémoire de l'onglet Entretien : `read` les donne, `update` les modifie, ou lève si `failure` est posé. Aucun
+/// fichier : l'application réelle est remplacée par des doubles.
+@MainActor final class ExampleInterview {
+    var settings: AppSettings
+    var failure: (any Error)?
+
+    /// Par défaut : les réglages d'entretien d'origine, un fournisseur d'exemple, les modèles fort et rapide choisis.
+    init(_ settings: AppSettings? = nil) { self.settings = settings ?? ExampleModes().settings }
+
+    func makeModel() -> InterviewSettingsModel {
+        InterviewSettingsModel(
+            read: { self.settings },
+            update: { change in
+                if let failure = self.failure { throw failure }
+                change(&self.settings)
+            },
+            effectiveTurnSilence: examplePracticalSilence)
+    }
+}
+
+/// Un entretien réglé à la main : gabarit propre, silence plus long, voix d'un fournisseur, raccourci en maintien.
+@MainActor func customInterviewSettings() -> AppSettings {
+    var settings = ExampleModes().settings
+    settings.interview = InterviewSettings(
+        maxQuestions: 12,
+        template: "Rédige un prompt en trois parties : Objectif, Contraintes, Résultat attendu. Reste factuel et n'invente rien.",
+        turnSilence: 0.9, interruptMinDuration: 0.45, interruptLevel: -22)
+    settings.voice = VoiceChoice(providerID: modesProvider.id, model: "voix-modele-exemple", identifier: "voix-exemple")
+    settings.hotKeyBehavior = .hold
+    return settings
+}
+
+/// L'historique d'exemple : un VRAI `InterviewHistory` dans un dossier temporaire (supprimé à la fin), horloge fixe, textes inventés
+/// et neutres. Les réglages sont en mémoire et la copie répond selon `copyAccepts` : aucun fichier de réglages, aucun
+/// presse-papiers.
+@MainActor final class ExampleHistory {
+    /// 2026-11-17 12:00:00 UTC, fixe.
+    nonisolated static let now = Date(timeIntervalSince1970: 1_794_916_800)
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("supervox-snapshots-history-\(UUID().uuidString)", isDirectory: true)
+    var settings = AppSettings.defaults
+    var copyAccepts = true
+    /// Pose : l'enregistrement des réglages refuse (la phrase du réglage arrive à l'écran).
+    var settingsFailure: (any Error)?
+    var root: URL { directory.appendingPathComponent("entretiens-exemple", isDirectory: true) }
+    lazy var history = InterviewHistory(root: root, retentionDays: { 365 }, now: { ExampleHistory.now })
+
+    func seed(withExamples: Bool = true, unreadable: Bool = false, older: Bool = false) async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if withExamples {
+            func conversation(_ turns: [(ConversationTurn.Speaker, String)]) -> Conversation {
+                var conversation = Conversation()
+                for (speaker, text) in turns {
+                    if speaker == .user { conversation.appendUser(text) } else { conversation.appendInterviewer(text) }
+                }
+                return conversation
+            }
+            try await history.save(
+                InterviewRecord(
+                    id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+                    date: ExampleHistory.now.addingTimeInterval(-3_600),
+                    prompt:
+                        "Rédige un résumé en trois points d'un courriel d'exemple, dans un ton neutre.\nPrécise la date limite en dernière ligne.",
+                    conversation: conversation([
+                        (.interviewer, "Quel est le but du prompt ?"),
+                        (.user, "Résumer des courriels longs en trois points."),
+                        (.interviewer, "Pour quel public ?"),
+                        (.user, "Une équipe d'exemple, sans vocabulaire technique."),
+                    ])))
+            try await history.save(
+                InterviewRecord(
+                    id: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+                    date: ExampleHistory.now.addingTimeInterval(-3 * 86_400), prompt: nil,
+                    conversation: conversation([
+                        (.interviewer, "Que voulez-vous construire ?"),
+                        (.user, "Un petit outil d'exemple pour trier des notes."),
+                    ])))
+        }
+        if older {
+            // Deux entretiens de plus de 7 jours : une durée de 7 jours en supprimerait deux.
+            for (number, days) in [(3, 45.0), (4, 60.0)] {
+                var conversation = Conversation()
+                conversation.appendInterviewer("Que voulez-vous construire ?")
+                conversation.appendUser("Une idée d\'exemple numéro \(number).")
+                try await history.save(
+                    InterviewRecord(
+                        id: UUID(uuidString: "00000000-0000-4000-8000-00000000000\(number)")!,
+                        date: ExampleHistory.now.addingTimeInterval(-days * 86_400), prompt: "Un prompt d\'exemple numéro \(number).",
+                        conversation: conversation))
+            }
+        }
+        if unreadable {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("pas du json".utf8).write(to: root.appendingPathComponent("2026-01-01-000000-exemple.json"))
+        }
+    }
+
+    func makeModel() async -> HistoryModel {
+        let model = HistoryModel(
+            history: history, read: { self.settings },
+            update: { change in
+                if let failure = self.settingsFailure { throw failure }
+                change(&self.settings)
+            },
+            copy: { _ in self.copyAccepts }, now: { ExampleHistory.now }, locale: Locale(identifier: "fr_FR"),
+            timeZone: TimeZone(identifier: "Europe/Paris")!)
+        await model.reload()
+        return model
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+}
+
+/// L'aperçu du menu « … » : la liste des entrées de `PanelMenuEntry` (la même source que le panneau). Le vrai menu du système ne
+/// se rend pas par cet outil (il s'ouvre dans sa propre fenêtre) : ceci en est un dessin, pas une capture.
+struct PanelMenuPreview: View {
+    let entries: [PanelMenuEntry]
+    /// `PanelModel.isHistoryEntryEnabled` : « Historique… » est grisée quand un entretien ou une dictée tient le panneau.
+    let historyEnabled: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Aperçu du menu « … » (dessin de l'outil)").font(.caption2).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(entries, id: \.self) { entry in
+                    if entry == .quit { Divider().padding(.vertical, 2) }
+                    Text(entry.title)
+                        .foregroundStyle(entry == .history && !historyEnabled ? Color.secondary.opacity(0.5) : Color.primary)
+                        .padding(.horizontal, 12).padding(.vertical, 3)
+                }
+            }
+            .padding(6)
+            .frame(width: 190, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
+        }
+        .padding(12)
+    }
+}
+
 /// Les quatre modes de base et deux modes personnels : l'un avec son modèle, son moteur et son raccourci, l'autre dont le
 /// fournisseur a été supprimé.
 @MainActor func exampleModesSettings() -> AppSettings {
@@ -355,6 +501,39 @@ let exampleCorrectedStream =
     return "(raison introuvable)"
 }
 
+/// Le panneau pendant un entretien : l'état que le contrôleur de l'entretien y poserait, avec des textes inventés et neutres.
+@MainActor func interviewPanelModel(
+    phase: InterviewPhase, question: Int = 0, level: Float = 0, questionText: String = "", lastReply: String = "",
+    notice: String? = nil, holdNote: Bool = false, strongProvider: String = exampleProvider, voiceProvider: String? = nil,
+    textOnly: Bool = false, keyboard: Bool = true,
+    maxQuestions: Int = 6
+) -> PanelModel {
+    let model = panelModel(mode: ModeChip.interviewID)
+    var state = InterviewViewState(
+        maxQuestions: maxQuestions,
+        privacy: InterviewText.privacy(provider: exampleProvider, strongProvider: strongProvider, voiceProvider: voiceProvider))
+    state.phase = phase
+    state.question = question
+    state.level = level
+    state.questionText = questionText
+    state.lastReply = lastReply
+    state.notice = notice
+    state.holdNote = holdNote
+    state.textOnly = textOnly
+    model.setInterview(state)
+    model.panelHasKeyboard = keyboard
+    return model
+}
+
+let exampleInterviewQuestion = "Quel est l'objectif principal de ce prompt ?"
+let exampleInterviewReply = "Je voudrais un prompt qui résume des courriels longs en trois points."
+/// Une réplique de quatre lignes : la zone qui défile la montre entière.
+let exampleInterviewLongQuestion =
+    "D'accord, vous voulez des résumés en trois points, et je vous remercie de ces précisions. Avant de continuer, une dernière chose sur le public : pour qui sont-ils écrits, vos collègues, vos clients, ou seulement vous ? Et faut-il garder les noms propres, les dates et les montants, ou les retirer pour que le résumé reste court et lisible, même pour quelqu'un qui n'a pas suivi le dossier ?"
+/// Un texte bien plus long que la zone qui défile (plusieurs paragraphes) : la zone est plafonnée, son début est visible.
+let exampleInterviewVeryLongQuestion =
+    (0..<4).map { _ in exampleInterviewLongQuestion }.joined(separator: "\n\n")
+
 // MARK: - Rendu
 
 /// La vue seule, posée dans une fenêtre hors écran, à la taille donnée ou à sa taille idéale.
@@ -371,7 +550,7 @@ let exampleCorrectedStream =
 ) throws {
     // La fenêtre de réglages et ses feuilles ont la frappe quand on les regarde : elles sont rendues comme une fenêtre clé (contrôles
     // actifs, interrupteurs à la couleur d'accent). Le panneau, lui, dit lui-même s'il a la frappe (`keyWindow`).
-    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme", "correction"].contains { name.hasPrefix($0) }
+    let isPanel = ["panneau", "dictee", "relecture", "mise-en-forme", "correction", "entretien"].contains { name.hasPrefix($0) }
     let keyWindow = requested || !isPanel
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
     let host = NSHostingView(
@@ -405,7 +584,7 @@ let application = ActiveApplication.shared
 application.setActivationPolicy(.accessory)
 
 /// La taille de la vraie fenêtre (`SettingsView`).
-let settingsSize = NSSize(width: 600, height: 460)
+let settingsSize = NSSize(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
 for dark in [false, true] {
     let panelBackground = dark ? NSColor(white: 0.16, alpha: 1) : NSColor(white: 0.95, alpha: 1)
     let window = NSColor.windowBackgroundColor
@@ -481,9 +660,11 @@ for dark in [false, true] {
                 stage: .failed(.engine("x")), notice: reason + " " + reason,
                 lastTranscript: exampleLongText + " " + exampleLongText)),
          granted),
-        ("dictee-mode-indisponible",
-         dictationPanelModel(
-            mode: ModeChip.interviewID, state: DictationViewState(notice: DictationController.laterModeNotice)), granted),
+        // Le mode Entretien choisi : l'appui lance l'entretien, qui prend la place de la dictée (ici à l'écoute, comme
+        // `entretien-ecoute`).
+        ("dictee-mode-entretien",
+         interviewPanelModel(
+            phase: .listening, question: 1, level: 0.5, questionText: exampleInterviewQuestion, lastReply: ""), granted),
         ("dictee-dernier-texte", dictationPanelModel(state: DictationViewState(lastTranscript: exampleShortText)), granted),
         ("dictee-dernier-texte-copie", {
             let model = dictationPanelModel(state: DictationViewState(lastTranscript: exampleLongText))
@@ -622,6 +803,47 @@ for dark in [false, true] {
             name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
     }
 
+    // L'entretien : un panneau tenu, où la vue de l'entretien prend la place de la dictée et les pastilles sont inactives. Le panneau a
+    // la frappe pendant un entretien (`keyWindow`), le bouton « Conclure » y prend sa couleur ; grisé en préparation et en conclusion.
+    let interviewCases: [(name: String, model: PanelModel)] = [
+        ("entretien-preparation", interviewPanelModel(phase: .preparing)),
+        ("entretien-ecoute", interviewPanelModel(
+            phase: .listening, question: 2, level: 0.7, questionText: exampleInterviewQuestion, lastReply: exampleInterviewReply,
+            holdNote: true)),
+        ("entretien-reflexion", interviewPanelModel(
+            phase: .thinking, question: 2, level: 0.35, questionText: exampleInterviewQuestion,
+            lastReply: exampleInterviewReply + " Et il faudrait garder le ton neutre.")),
+        ("entretien-parole", interviewPanelModel(
+            phase: .speaking, question: 3, level: 0.15, questionText: exampleInterviewLongQuestion,
+            lastReply: exampleInterviewReply, voiceProvider: "Fournisseur de voix d'exemple")),
+        ("entretien-proposition", interviewPanelModel(
+            phase: .listening, question: 5, level: 0.5, questionText: "Avez-vous autre chose à préciser avant que je rédige le prompt ?",
+            lastReply: exampleInterviewReply, notice: InterviewText.notice(.proposal))),
+        ("entretien-voix-indisponible", interviewPanelModel(
+            phase: .speaking, question: 1, level: 0, questionText: exampleInterviewQuestion, lastReply: "",
+            notice: InterviewText.notice(.voiceUnavailable), textOnly: true)),
+        ("entretien-conclusion", interviewPanelModel(
+            phase: .concluding, question: 6, level: 0, questionText: "Merci, j'ai tout ce qu'il me faut : je rédige le prompt.",
+            lastReply: exampleInterviewReply)),
+        // Le pire cas réaliste de hauteur : une réplique et une réponse bien plus longues que la zone qui défile, l'avis le plus long,
+        // la note de maintien, la vie privée à trois fournisseurs (modèle rapide, modèle fort de 40 caractères, voix de 40 caractères), la dernière question de douze.
+        ("entretien-pire-cas", interviewPanelModel(
+            phase: .listening, question: 12, level: 0.8, questionText: exampleInterviewVeryLongQuestion,
+            lastReply: exampleInterviewVeryLongQuestion, notice: InterviewText.failure(.engine("transcriptionNotPrepared")),
+            holdNote: true, strongProvider: String(repeating: "F", count: 40), voiceProvider: String(repeating: "V", count: 40),
+            maxQuestions: 12)),
+        // Le panneau qui n'a pas la frappe : « Conclure » actif et grisé restent lisibles hors fenêtre clé.
+        ("entretien-preparation-sans-frappe", interviewPanelModel(phase: .preparing, keyboard: false)),
+        ("entretien-ecoute-sans-frappe", interviewPanelModel(
+            phase: .listening, question: 2, level: 0.7, questionText: exampleInterviewQuestion, lastReply: exampleInterviewReply,
+            keyboard: false)),
+    ]
+    for (name, model) in interviewCases {
+        try render(
+            PanelView(model: model, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {}),
+            name: name, dark: dark, background: panelBackground, keyWindow: model.panelHasKeyboard)
+    }
+
     // Réglages : vides, puis deux fournisseurs.
     for (name, list) in [("reglages-vide", [Provider]()), ("reglages-fournisseurs", [firstProvider, secondProvider])] {
         try render(
@@ -661,6 +883,177 @@ for dark in [false, true] {
                 permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .modes),
             name: name, dark: dark, background: window, size: settingsSize)
     }
+    // Onglet Entretien : à la taille RÉELLE de la fenêtre (`SettingsView.windowSize`), groupe replié (la vraie vue) puis ouvert (le volet
+    // seul : la vue ne peut pas s'ouvrir d'elle-même), puis le contenu entier, un entretien réglé à la main et un refus d'enregistrement.
+    try render(
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
+            interview: ExampleInterview().makeModel()),
+        name: "reglages-entretien", dark: dark, background: window, size: settingsSize)
+    try render(
+        InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true)
+            .frame(width: settingsSize.width, height: settingsSize.height),
+        name: "reglages-entretien-avance", dark: dark, background: window, size: settingsSize)
+    try render(
+        InterviewPane(model: ExampleInterview().makeModel()).frame(width: 600, height: 760),
+        name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: 600, height: 760))
+    try render(
+        InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true)
+            .frame(width: 600, height: 1_000),
+        name: "reglages-entretien-regle-complet", dark: dark, background: window, size: NSSize(width: 600, height: 1_000))
+    let interviewRefusing = ExampleInterview()
+    let interviewRefused = interviewRefusing.makeModel()
+    interviewRefusing.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+    interviewRefused.maxQuestions = 5
+    try render(
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
+            interview: interviewRefused),
+        name: "reglages-entretien-erreur", dark: dark, background: window, size: settingsSize)
+
+    // Onglet Historique : à la taille RÉELLE de la fenêtre. Un VRAI historique dans un dossier temporaire, deux entretiens d'exemple
+    // (l'un sans prompt), puis vide, puis un illisible et une copie refusée, puis « Copié. », puis les deux confirmations.
+    func historyTab(_ model: HistoryModel) async -> SettingsView {
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .history,
+            interview: ExampleInterview().makeModel(), history: model)
+    }
+    let historyExample = ExampleHistory()
+    defer { historyExample.remove() }  // retiré même si un rendu lève
+    try await historyExample.seed()
+    try await render(
+        historyTab(await historyExample.makeModel()), name: "reglages-historique", dark: dark, background: window,
+        size: settingsSize)
+    let historyCopied = await historyExample.makeModel()
+    historyCopied.copyPrompt()
+    try await render(
+        historyTab(historyCopied), name: "reglages-historique-copie", dark: dark, background: window, size: settingsSize)
+    let historyEmptyExample = ExampleHistory()
+    defer { historyEmptyExample.remove() }  // retiré même si un rendu lève
+    try await historyEmptyExample.seed(withExamples: false)
+    try await render(
+        historyTab(await historyEmptyExample.makeModel()), name: "reglages-historique-vide", dark: dark, background: window,
+        size: settingsSize)
+    // C-1 : le dossier a confirmé 365 jours, les réglages disent 30 (remis à zéro hors de l'onglet) : une ligne le dit.
+    let historyChangedExample = ExampleHistory()
+    defer { historyChangedExample.remove() }  // retiré même si un rendu lève
+    try await historyChangedExample.seed()
+    try await historyChangedExample.history.confirmRetention(365)
+    try await render(
+        historyTab(await historyChangedExample.makeModel()), name: "reglages-historique-duree-changee", dark: dark,
+        background: window, size: settingsSize)
+    // m-9 : « Ne rien garder » confirmé dans le dossier, réglages remis à 30 jours : rien n'est gardé, la ligne le dit, le bouton nomme 30 jours.
+    let historyForgottenExample = ExampleHistory()
+    defer { historyForgottenExample.remove() }  // retiré même si un rendu lève
+    try await historyForgottenExample.seed()
+    try await historyForgottenExample.history.confirmRetention(0)
+    try await render(
+        historyTab(await historyForgottenExample.makeModel()), name: "reglages-historique-rien-garder-oublie", dark: dark,
+        background: window, size: settingsSize)
+    let historyNoneExample = ExampleHistory()
+    defer { historyNoneExample.remove() }  // retiré même si un rendu lève
+    historyNoneExample.settings.history.retentionDays = 0
+    try await historyNoneExample.seed(withExamples: false)
+    try await render(
+        historyTab(await historyNoneExample.makeModel()), name: "reglages-historique-rien-garder", dark: dark,
+        background: window, size: settingsSize)
+    let historyWorstExample = ExampleHistory()
+    defer { historyWorstExample.remove() }  // retiré même si un rendu lève
+    try await historyWorstExample.seed(unreadable: true)
+    historyWorstExample.copyAccepts = false
+    let historyWorst = await historyWorstExample.makeModel()
+    historyWorst.copyPrompt()
+    try await render(
+        historyTab(historyWorst), name: "reglages-historique-erreur", dark: dark, background: window, size: settingsSize)
+    // Le refus de réglages le plus long (version plus récente) : deux lignes dans l'emplacement du message, sans coupure.
+    let historyRefusingExample = ExampleHistory()
+    defer { historyRefusingExample.remove() }  // retiré même si un rendu lève
+    try await historyRefusingExample.seed()
+    historyRefusingExample.settingsFailure = SettingsError.newerVersionKept(fileName: "settings.json", version: 9)
+    let historyRefusing = await historyRefusingExample.makeModel()
+    await historyRefusing.requestRetention(90)
+    try await render(
+        historyTab(historyRefusing), name: "reglages-historique-refus-reglages", dark: dark, background: window,
+        size: settingsSize)
+    // m-2 : la durée est notée dans le dossier, les réglages refusés (erreur qui n'est pas une `SettingsError`) : la phrase la plus longue
+    // de la bande du message, sur deux lignes.
+    struct ExampleSettingsWriteFailure: Error {}
+    let historyNotedExample = ExampleHistory()
+    defer { historyNotedExample.remove() }  // retiré même si un rendu lève
+    try await historyNotedExample.seed()
+    historyNotedExample.settingsFailure = ExampleSettingsWriteFailure()
+    let historyNoted = await historyNotedExample.makeModel()
+    if let applying = await historyNoted.requestRetention(90) { await applying.value }
+    try await render(
+        historyTab(historyNoted), name: "reglages-historique-duree-notee-reglages-refuses", dark: dark, background: window,
+        size: settingsSize)
+    // La phrase la plus longue de l'onglet (échec d'écriture), pour voir qu'elle tient dans l'emplacement du message : « Tout
+    // supprimer » sur un dossier sans droit d'écriture (dossier temporaire de l'outil, droits rendus ensuite).
+    let historyFailingExample = ExampleHistory()
+    defer { historyFailingExample.remove() }  // retiré même si un rendu lève
+    try await historyFailingExample.seed()
+    let historyFailing = await historyFailingExample.makeModel()
+    await historyFailing.requestDeleteAll()
+    chmod(historyFailingExample.root.path, 0o500)
+    await historyFailing.deleteAll()
+    chmod(historyFailingExample.root.path, 0o700)
+    try await render(
+        historyTab(historyFailing), name: "reglages-historique-echec-ecriture", dark: dark, background: window,
+        size: settingsSize)
+    // Les deux confirmations : la durée la plus courte qui supprime (le compte annoncé vient de la règle d'âge de `purge`), puis « Tout
+    // supprimer ».
+    let historyOldExample = ExampleHistory()
+    defer { historyOldExample.remove() }  // retiré même si un rendu lève
+    try await historyOldExample.seed(older: true)
+    let historyAsking = await historyOldExample.makeModel()
+    await historyAsking.requestRetention(7)
+    try render(
+        HistoryConfirmationSheet(
+            text: historyAsking.retentionConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle, cancel: {}, confirm: {}),
+        name: "historique-confirmation-duree", dark: dark, background: window)
+    historyAsking.cancelConfirmation()
+    historyAsking.requestDeleteSelected()
+    try render(
+        HistoryConfirmationSheet(
+            text: historyAsking.deleteSelectedConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle, cancel: {}, confirm: {}),
+        name: "historique-confirmation-entretien", dark: dark, background: window)
+    historyAsking.cancelConfirmation()
+    await historyAsking.requestDeleteAll()
+    try render(
+        HistoryConfirmationSheet(
+            text: historyAsking.deleteAllConfirmation ?? "", confirmTitle: "Tout supprimer", cancel: {}, confirm: {}),
+        name: "historique-confirmation-tout", dark: dark, background: window)
+
+    // Le panneau avec « Historique… » branché : le menu « … » ne s'ouvre pas dans cet outil, son aperçu est dessiné à côté du panneau.
+    let withHistory = panelModel(mode: ModeChip.rawID)
+    withHistory.onOpenHistory = {}
+    try render(
+        HStack(alignment: .bottom, spacing: 0) {
+            PanelView(model: withHistory, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {})
+            PanelMenuPreview(
+                entries: PanelMenuEntry.entries(hasHistory: withHistory.canOpenHistory),
+                historyEnabled: withHistory.isHistoryEntryEnabled)
+        },
+        name: "panneau-menu", dark: dark, background: panelBackground)
+    // Pendant un entretien, le panneau est tenu : « Historique… » est grisée (l'ouvrir annulerait l'entretien sans rien demander).
+    let heldPanel = interviewPanelModel(
+        phase: .listening, question: 2, level: 0.5, questionText: exampleInterviewQuestion, lastReply: exampleInterviewReply)
+    heldPanel.onOpenHistory = {}
+    try render(
+        HStack(alignment: .bottom, spacing: 0) {
+            PanelView(model: heldPanel, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {})
+            PanelMenuPreview(
+                entries: PanelMenuEntry.entries(hasHistory: heldPanel.canOpenHistory),
+                historyEnabled: heldPanel.isHistoryEntryEnabled)
+        },
+        name: "panneau-menu-grise", dark: dark, background: panelBackground, keyWindow: true)
+
     // Toute la liste, avec deux modes personnels (modèle, moteur, raccourci ; fournisseur supprimé) : la vraie fenêtre la fait
     // défiler.
     try render(

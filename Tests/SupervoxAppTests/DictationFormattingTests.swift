@@ -134,7 +134,7 @@ import SupervoxCore
         #expect(h.controller.lastTranscript == Self.raw)
         #expect(h.controller.view.lastTranscript == Self.raw)
         #expect(h.controller.isBusy, "le modèle sert encore")
-        let expected = RewritePrompt.format(instruction: Self.instruction, text: Self.raw, vocabulary: [])
+        let expected = ExpectedPrompt.format(sentInput: call.job.input, instruction: Self.instruction, text: Self.raw, vocabulary: [])
         #expect(call.job == RewriteJob(instruction: expected.instruction, input: expected.input, model: nil))
         await settle()
         #expect(h.writtenTexts == 0)
@@ -152,7 +152,7 @@ import SupervoxCore
         let call = await h.rewriter.call()
 
         #expect(h.engines.settingsSeen.last?.vocabulary == ["Supervox"], "le moteur n'a reçu que le terme gardé")
-        let expected = RewritePrompt.format(instruction: Self.instruction, text: Self.raw, vocabulary: ["Supervox"])
+        let expected = ExpectedPrompt.format(sentInput: call.job.input, instruction: Self.instruction, text: Self.raw, vocabulary: ["Supervox"])
         #expect(call.job.instruction == expected.instruction)
         #expect(!call.job.instruction.contains("Kubernetes"))
     }
@@ -162,7 +162,7 @@ import SupervoxCore
         let h = harness()
         h.knobs.settings.vocabulary = ["Supervox", "Kubernetes"]
         let call = await formatting(h)
-        let expected = RewritePrompt.format(instruction: Self.instruction, text: Self.raw, vocabulary: ["Supervox", "Kubernetes"])
+        let expected = ExpectedPrompt.format(sentInput: call.job.input, instruction: Self.instruction, text: Self.raw, vocabulary: ["Supervox", "Kubernetes"])
         #expect(call.job.instruction == expected.instruction)
     }
 

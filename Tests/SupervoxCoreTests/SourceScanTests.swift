@@ -2,7 +2,11 @@ import Foundation
 import Testing
 
 /// Contrôles par recherche dans les sources du dépôt, lancés avec la suite.
-@Suite struct SourceScanTests {
+///
+/// Ces gardes sont des filets contre la maladresse (une écriture naturelle ou voisine qui échappe à la relecture), pas contre une
+/// écriture délibérée : un alias de type, une chaîne composée ou une variable intermédiaire passent. Chaque motif est épinglé par
+/// des tests de forme (ce qu'il attrape, et une forme innocente proche qu'il laisse).
+@Suite(.timeLimit(.minutes(1))) struct SourceScanTests {
     /// Racine du dépôt, retrouvée depuis ce fichier (`Tests/SupervoxCoreTests/`).
     private static let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -48,11 +52,69 @@ import Testing
         #expect(quiet.lowerBound < engines.lowerBound)
     }
 
+    /// Amendement A de la tâche 9 : le son réel et la voix du système ne sont construits que par le programme (`main.swift`), hors de
+    /// leur fichier de définition. Tests, outil de rendu et constructeurs par défaut n'en ont pas (`InterviewEnvironment.unavailable`).
+    /// Les tests du cœur (`Tests/SupervoxCoreTests`) en ont le droit : leurs essais sur le matériel sont gardés par une variable
+    /// d'environnement (`SUPERVOX_MIC`, `SUPERVOX_SPEAKER`, `SUPERVOX_SPEECH`), et `LiveAudioIO(device:)` y reçoit un double.
+    static let realAudioOrSystemVoice = #"\b(?:LiveAudioIO|SystemSpeechSynthesizer)"# + construction
+    /// Ce qui suit le nom du type quand on le construit : `(`, `.init`, `.self.init`, ou `= .init` (`let io: LiveAudioIO = .init()`).
+    static let construction = #"\s*(?:\(|\.\s*init\b|\.\s*self\s*\.\s*init\b|=\s*\.\s*init\b)"#
+
+    @Test func theRealSoundAndTheSystemVoiceAreBuiltOnlyByTheProgram() throws {
+        let pattern = try Regex(Self.realAudioOrSystemVoice)
+        let allowed: Set<String> = [
+            "Supervox/main.swift", "SupervoxCore/Audio/AudioIO.swift", "SupervoxCore/Speech/SystemSpeechSynthesizer.swift",
+        ]
+        let sources = try Self.sources(under: "Sources")
+        let main = try #require(sources.first { $0.place == "Supervox/main.swift" })
+        #expect(main.code.contains(pattern), "le balayage doit voir le programme les construire")
+        // Le banc est un programme lui aussi : sa commande `interview` construit la voix du système dans sa fabrique de vrais moteurs
+        // (`InterviewEngines.real`), jamais le son réel : son seul `AudioIO` est `WavTurnFeed`, qui simule la lecture. Les tests du banc
+        // ne font que construire cette fabrique (le constructeur de la voix range deux fermetures, code lu) ; ils ne la font pas parler.
+        let benchVoice = "SupervoxBench/InterviewCommand.swift"
+        let realAudio = try Regex(#"\bLiveAudioIO"# + Self.construction)
+        let offending = sources
+            .filter { !allowed.contains($0.place) && $0.code.contains(pattern) }
+            .filter { $0.place != benchVoice || $0.code.contains(realAudio) }
+            .map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+        let bench = try #require(sources.first { $0.place == benchVoice })
+        #expect(bench.code.contains(pattern), "le balayage doit voir le banc construire la voix du système")
+        let tests = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasPrefix("SupervoxCoreTests/") && $0.code.contains(pattern) }
+            .map(\.place)
+        #expect(tests.isEmpty, "\(tests)")
+    }
+
+    @Test(arguments: [
+        "LiveAudioIO()", "LiveAudioIO ( )", "LiveAudioIO.init()", "SystemSpeechSynthesizer(language: \"fr-FR\")",
+        "SystemSpeechSynthesizer . init(language: x)", "{ LiveAudioIO() }",
+        // m-F : les formes par le type déclaré et par `.self`.
+        "let io: LiveAudioIO = .init()", "let v: SystemSpeechSynthesizer = .init(language: l)", "LiveAudioIO.self.init()",
+        "SystemSpeechSynthesizer.self.init(language: l)",
+    ])
+    func theRealSoundPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realAudioOrSystemVoice)))
+    }
+
+    @Test func theRealSoundPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.realAudioOrSystemVoice)
+        for code in [
+            "let io: LiveAudioIO", "ScriptedAudioIO()", "public final class LiveAudioIO: AudioIO {", "MyLiveAudioIO()",
+            "makeSystemVoice: { made.systemVoice($0) }", "x is SystemSpeechSynthesizer",
+            // m-F : formes proches et innocentes (une référence au type, une valeur qui n'est pas construite ici).
+            "let io: LiveAudioIO = makeAudio()", "ObjectIdentifier(LiveAudioIO.self)", "let v: SystemSpeechSynthesizer = voice",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
     /// Formes interdites hors de `EndpointSession.swift` : la session partagée, quelle que soit la coupure de ligne
     /// (`URLSession.shared`, `session: .shared`, `URLSession = .shared`), et toute session construite à la main
     /// (`URLSession(`), qui pourrait recevoir une configuration avec cache.
     static let forbiddenSession =
         #"URLSession\s*\.\s*shared|session\s*:\s*\.shared\b|URLSession\s*=\s*\.shared\b|URLSession\s*\("#
+        + #"|URLSession\s*\.\s*init\b|URLSession\s*=\s*\.\s*init\b"#
 
     /// C1 : la session partagée garde les réponses dans le cache disque. Toute requête vers un point d'accès passe
     /// par `EndpointSession`, seul fichier autorisé à construire une session.
@@ -67,6 +129,8 @@ import Testing
     @Test(arguments: [
         "let s = URLSession.shared", "let s = URLSession\n    .shared", "call(session: .shared)",
         "init(session: URLSession = .shared)", "URLSession(configuration: .default)", "URLSession (configuration: c)",
+        // m-F : la construction par `.init`, directe ou par le type déclaré.
+        "URLSession.init(configuration: c)", "let s: URLSession = .init(configuration: c)",
     ])
     func theForbiddenPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenSession)))
@@ -74,7 +138,11 @@ import Testing
 
     @Test func theForbiddenPatternLeavesOrdinaryUsesAlone() throws {
         let pattern = try Regex(Self.forbiddenSession)
-        for code in ["let session: URLSession", "session: URLSession = EndpointSession.shared", "URLSessionTaskMetrics"] {
+        for code in [
+            "let session: URLSession", "session: URLSession = EndpointSession.shared", "URLSessionTaskMetrics",
+            // m-F : formes proches et innocentes.
+            "URLSessionConfiguration.init()", "let s: URLSession = EndpointSession.make()",
+        ] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }
@@ -172,8 +240,8 @@ import Testing
     @Test func noPanelMessageCarriesTheRawTextOfAnError() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
         let folders = [
-            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
-            "Sources/SupervoxApp/Language",
+            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Speech", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
+            "Sources/SupervoxApp/Language", "Sources/SupervoxCore/Conversation", "Sources/SupervoxApp/Interview",
         ]
         let offending = try folders.flatMap { folder in
             try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
@@ -199,7 +267,7 @@ import Testing
     /// Une ligne de journal de la couche de mise en forme de l'application n'interpole que la nature d'une panne
     /// (`kind(of:)`) : jamais la panne elle-même (`\(failure)`, qui porterait le nom du fournisseur), le travail, la consigne ni
     /// le texte. Toute interpolation d'une ligne `log.` autre que `kind(of:` est refusée.
-    static let forbiddenLogInterpolation = #"\blog\s*\.\s*\w+\s*\(.*\\\((?!\s*kind\s*\(\s*of\s*:)"#
+    static let forbiddenLogInterpolation = #"\blog\s*\.\s*\w+\s*\(.*\\\((?!\s*(?:self\s*\.\s*)?kind\s*\(\s*of\s*:)"#
 
     @Test func theRewritingLayerLogsOnlyTheKindOfAFailure() throws {
         let pattern = try Regex(Self.forbiddenLogInterpolation)
@@ -212,7 +280,7 @@ import Testing
 
     @Test(arguments: [
         #"log.notice("mise en forme échouée : \(failure)")"#, #"log.notice("\(job.input)")"#, #"log.error("x \(error, privacy: .public)")"#,
-        #"log . notice ( "\(provider.name)" )"#,
+        #"log . notice ( "\(provider.name)" )"#, #"log.notice("\(self.view.lastReply)")"#, #"log.notice("\(self.kindOf(end))")"#,
     ])
     func theLogInterpolationPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenLogInterpolation)))
@@ -222,6 +290,7 @@ import Testing
         let pattern = try Regex(Self.forbiddenLogInterpolation)
         for code in [
             #"log.notice("mise en forme échouée : \(kind(of: failure), privacy: .public)")"#, #"log.notice("fini")"#,
+            #"log.notice("entretien fini : \(self.kind(of: end), privacy: .public)")"#,
             #"let kind = String(describing: failure)"#,
         ] {
             #expect(!code.contains(pattern), "\(code)")
@@ -260,6 +329,124 @@ import Testing
         #expect(offending.isEmpty, "\(offending)")
     }
 
+    /// L'entretien (`Core/Conversation`) ne rend que des codes de panne et des phrases fixes : jamais le texte brut d'une erreur
+    /// (`localizedDescription`), et aucun journal (le texte dit pourrait y passer). Ses rappels (`onChunk`, `onEnd`, `onText`) arrivent
+    /// sur le fil que le système choisit : rien n'y suppose le fil principal. Le dossier doit bien contenir le moteur, sans quoi le
+    /// balayage ne vérifierait rien.
+    static let forbiddenLogging = #"\bLogger\s*\(|\bos_log\s*\(|\bprint\s*\(|\bNSLog\s*\(|\bdebugPrint\s*\("#
+
+    @Test func theConversationEngineShowsNoRawErrorTextLogsNothingAndAssumesNoThread() throws {
+        let sources = try Self.sources(under: "Sources/SupervoxCore/Conversation")
+        #expect(sources.contains { $0.place == "ConversationChain.swift" }, "le balayage doit voir le moteur de l'entretien")
+        let logging = try Regex(Self.forbiddenLogging)
+        let mainThread = try Regex(Self.forbiddenMainThreadAssumption)
+        let offending = sources.filter {
+            $0.code.contains("localizedDescription") || $0.code.contains(logging) || $0.code.contains(mainThread)
+        }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    /// La vue de l'entretien ne montre que des phrases fixes (`InterviewText`) : jamais le texte brut d'une erreur, et aucun journal
+    /// (le texte dit pourrait y passer). Le balayage voit l'état, la table de phrases et la vue ; sans eux il ne vérifierait rien.
+    /// Seul le contrôleur de l'entretien journalise, sous la règle de `theInterviewControllerLogsOnlyTheKindOfAnEvent`.
+    @Test func theInterviewViewShowsNoRawErrorTextAndLogsNothing() throws {
+        let state = try Self.sources(under: "Sources/SupervoxApp/Interview")
+        #expect(state.contains { $0.place == "InterviewText.swift" }, "le balayage doit voir la table de phrases")
+        #expect(state.contains { $0.place == "InterviewViewState.swift" }, "le balayage doit voir l'état de la vue")
+        let view = try Self.sources(under: "Sources/SupervoxApp/Panel").filter { $0.place == "InterviewView.swift" }
+        #expect(view.count == 1, "le balayage doit voir la vue de l'entretien")
+        let logging = try Regex(Self.forbiddenLogging)
+        let raw = (state + view).filter { $0.code.contains("localizedDescription") }.map(\.place)
+        #expect(raw.isEmpty, "\(raw)")
+        let logs = (state + view).filter { $0.place != "InterviewController.swift" && $0.code.contains(logging) }.map(\.place)
+        #expect(logs.isEmpty, "\(logs)")
+    }
+
+    /// Règle 12 : une ligne de journal de `App/Interview` n'interpole que la nature d'une fin ou d'un refus (`kind(of:)`) : ni le
+    /// texte dit, ni la réplique, ni le prompt, ni le nom d'un fournisseur.
+    @Test func theInterviewControllerLogsOnlyTheKindOfAnEvent() throws {
+        let pattern = try Regex(Self.forbiddenLogInterpolation)
+        let sources = try Self.sources(under: "Sources/SupervoxApp/Interview")
+        let controller = try #require(sources.first { $0.place == "InterviewController.swift" }, "le balayage doit voir le contrôleur")
+        #expect(controller.code.contains("log.notice"), "le balayage doit voir au moins une ligne de journal")
+        let offending = sources.filter { $0.code.contains(pattern) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    /// Aucune annonce réelle du système dans la suite : l'annonce VoiceOver n'est postée que par `Panel/AccessibilityAnnouncing.swift`,
+    /// que le contrôleur du panneau reçoit par `AccessibilityAnnouncing` (un double dans les tests). Aucun test ne nomme la
+    /// réalisation du système. Toute construction d'`AppController` ou de `PanelController` dans les tests reçoit un annonceur
+    /// (`theControllersBuiltByTestsReceiveAnAnnouncer`) : les tests qui lancent un entretien n'en postent aucune.
+    @Test func theSystemAnnouncementIsPostedInOnePlaceAndNoTestNamesIt() throws {
+        let sources = try Self.sources(under: "Sources/SupervoxApp")
+        let home = try #require(sources.first { $0.place == "Panel/AccessibilityAnnouncing.swift" }, "le fichier de l'annonce a disparu")
+        #expect(home.code.contains("AccessibilityNotification"))
+        let offending = sources.filter { $0.place != "Panel/AccessibilityAnnouncing.swift" && $0.code.contains("AccessibilityNotification") }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+        let tests = try Self.sources(under: "Tests")
+            .filter { !$0.place.hasSuffix("SourceScanTests.swift") && ($0.code.contains("AccessibilityNotification") || $0.code.contains("SystemAccessibilityAnnouncer")) }
+            .map(\.place)
+        #expect(tests.isEmpty, "\(tests)")
+    }
+
+    /// Les arguments d'un appel, de la parenthèse ouvrante à la fermante qui lui répond (le code des tests est bien formé).
+    private static func callArguments(in code: String, from open: String.Index) -> Substring {
+        var depth = 0
+        var index = open
+        while index < code.endIndex {
+            switch code[index] {
+            case "(": depth += 1
+            case ")":
+                depth -= 1
+                if depth == 0 { return code[open...index] }
+            default: break
+            }
+            index = code.index(after: index)
+        }
+        return code[open...]
+    }
+
+    /// Chaque `AppController(…)` ou `PanelController(…)` construit par un test reçoit `announcer:` : sans lui, le défaut est
+    /// l'annonceur du système, et un test qui pose un entretien posterait une vraie annonce VoiceOver.
+    @Test func theControllersBuiltByTestsReceiveAnAnnouncer() throws {
+        let construction = try Regex(#"\b(?:AppController|PanelController)\s*\("#)
+        var seen = 0
+        var offending: [String] = []
+        for file in try Self.sources(under: "Tests") where !file.place.hasSuffix("SourceScanTests.swift") {
+            for match in file.code.matches(of: construction) {
+                seen += 1
+                let open = file.code.index(before: match.range.upperBound)
+                if !Self.callArguments(in: file.code, from: open).contains("announcer:") { offending.append(file.place) }
+            }
+        }
+        #expect(seen >= 10, "le balayage doit voir les constructions des tests (\(seen))")
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test func theAnnouncerScanSeesAConstructionWithoutAnnouncer() throws {
+        let code = "let c = AppController(settingsStore: store, inserter: rig.inserter)\nlet d = PanelController(model: m, announcer: a)"
+        let construction = try Regex(#"\b(?:AppController|PanelController)\s*\("#)
+        let calls = code.matches(of: construction).map {
+            Self.callArguments(in: code, from: code.index(before: $0.range.upperBound)).contains("announcer:")
+        }
+        #expect(calls == [false, true])
+    }
+
+    @Test(arguments: [
+        "let log = Logger(subsystem: \"x\", category: \"y\")", "os_log(\"%@\", text)", "print(turn.text)", "NSLog(\"%@\", text)",
+        "debugPrint (reply)",
+    ])
+    func theLoggingPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenLogging)))
+    }
+
+    @Test func theLoggingPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenLogging)
+        for code in ["let footprint = 1", "func blueprint() {}", "emit(.notice(.notUnderstood))", "let logger = self.log"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
     /// Les identifiants de mode fixes (`ModeChip.rawID`, `cleanedID`, `interviewID`) ne sont écrits qu'à un endroit, dans
     /// `Panel/PanelModel.swift` : le reste de l'application les nomme par ces constantes. (`"prompt"`, trop courant, n'est pas
     /// balayé.) Le fichier d'origine doit bien les porter, sans quoi le balayage ne vérifierait rien.
@@ -274,5 +461,206 @@ import Testing
         let offending = sources.filter { $0.place != "Panel/PanelModel.swift" }
             .flatMap { source in Self.modeIdentifiers.filter { source.code.contains($0) }.map { "\(source.place) : \($0)" } }
         #expect(offending.isEmpty, "\(offending)")
+    }
+
+    /// I1 : les rappels de `AVSpeechSynthesizer` arrivent sur le fil que le système choisit ; rien dans la couche de voix ne suppose
+    /// le fil principal (`MainActor.assumeIsolated` planterait ailleurs). Ils copient et poussent dans un flux.
+    static let forbiddenMainThreadAssumption = #"assumeIsolated|MainActor\s*\.\s*run\b|DispatchQueue\s*\.\s*main\s*\.\s*(sync|async)"#
+
+    @Test func noSpeechCodeAssumesTheCallbackThread() throws {
+        let pattern = try Regex(Self.forbiddenMainThreadAssumption)
+        let sources = try Self.sources(under: "Sources/SupervoxCore/Speech")
+        #expect(sources.contains { $0.place == "AVSpeechBufferSource.swift" }, "le balayage doit voir la couche système")
+        let offending = sources.filter { $0.code.contains(pattern) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "MainActor.assumeIsolated { onBuffer(buffer) }", "MainActor\n    .assumeIsolated {", "MainActor . run { x }",
+        "DispatchQueue.main.async { }", "DispatchQueue . main . sync { }",
+    ])
+    func theMainThreadAssumptionPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.forbiddenMainThreadAssumption)))
+    }
+
+    @Test func theMainThreadAssumptionPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.forbiddenMainThreadAssumption)
+        for code in ["@MainActor final class AVSpeechBufferSource", "Task { @MainActor in }", "let mainQueue = 1", "events.yield(.end)"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+    /// Tâche 10 : l'onglet Entretien ne recopie aucune borne. Ni la vue ni le modèle n'écrivent de plage littérale (`0.3...2.0`,
+    /// `1...20`) : le modèle lit celles de `InterviewSettings`, la vue celles du modèle.
+    static let literalRange = #"-?\d+(?:\.\d+)?\s*\.\.[.<]\s*\(?-?\d"#
+
+    @Test func theInterviewTabReadsItsBoundsFromTheType() throws {
+        let pattern = try Regex(Self.literalRange)
+        let all = try Self.sources(under: "Sources/SupervoxApp/SettingsUI")
+        let model = try #require(all.first { $0.place == "InterviewSettingsModel.swift" })
+        let pane = try #require(all.first { $0.place == "InterviewPane.swift" })
+        #expect(!model.code.contains(pattern), "plage littérale dans le modèle")
+        #expect(!pane.code.contains(pattern), "plage littérale dans la vue")
+        for range in ["maxQuestionsRange", "turnSilenceRange", "interruptMinDurationRange", "interruptLevelRange"] {
+            #expect(model.code.contains("InterviewSettings.\(range)"), "le modèle ne lit pas \(range) dans le type")
+            #expect(pane.code.contains("model.\(range)"), "la vue ne lit pas \(range) dans le modèle")
+        }
+    }
+
+    @Test(arguments: ["0.3...2.0", "1 ... 20", "-50...(-10)", "0.1..<1.0", "in: 1...20"])
+    func theLiteralRangePatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.literalRange)))
+    }
+
+    @Test func theLiteralRangePatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.literalRange)
+        for code in ["{ InterviewSettings.turnSilenceRange }", "Array(0..<count)", "values[index...]", "let x: ClosedRange<Int>"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+    /// Tâche 10 : plus aucune note ne renvoie à « une étape suivante » (l'entretien est là). Commentaires compris, comme le `grep`
+    /// de la tâche.
+    @Test func noSourceSpeaksOfANextStep() throws {
+        let base = Self.root.appendingPathComponent("Sources", isDirectory: true)
+        let files = try #require(FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" }
+        try #require(files.count > 50, "le balayage doit voir les sources")
+        let offending = try files.filter { try String(contentsOf: $0, encoding: .utf8).contains("étape suivante") }
+            .map { String($0.path.dropFirst(base.path.count + 1)) }
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    // MARK: - Historique des entretiens (tâche 11)
+
+    /// Règle 6 : le code de l'historique (stockage, modèle, vue) ne journalise rien et ne montre jamais le texte brut d'une erreur : un
+    /// chemin ou un texte d'entretien n'y passe donc jamais. Le balayage doit voir le stockage, le format et les deux fichiers de
+    /// l'onglet, sans quoi il ne vérifierait rien.
+    @Test func theHistoryCodeLogsNothingAndShowsNoRawErrorText() throws {
+        let storage = try Self.sources(under: "Sources/SupervoxApp/History")
+        #expect(storage.contains { $0.place == "InterviewHistory.swift" }, "le balayage doit voir le stockage")
+        #expect(storage.contains { $0.place == "InterviewRecord.swift" }, "le balayage doit voir le format")
+        let tab = try Self.sources(under: "Sources/SupervoxApp/SettingsUI").filter {
+            ["HistoryModel.swift", "HistoryPane.swift"].contains($0.place)
+        }
+        #expect(tab.count == 2, "le balayage doit voir le modèle et la vue de l'onglet")
+        let all = storage + tab
+        let logging = try Regex(Self.forbiddenLogging)
+        let rawError = try Regex(Self.forbiddenErrorText)
+        #expect(all.filter { $0.code.contains("localizedDescription") }.isEmpty)
+        #expect(all.filter { $0.code.contains(logging) }.map(\.place).isEmpty)
+        #expect(all.filter { $0.code.contains(rawError) }.map(\.place).isEmpty)
+    }
+
+    /// Le dossier réel de l'historique (`Supervox/Historique`, à côté de `settings.json`) n'est nommé que par le programme `Supervox`
+    /// (`main.swift`, qui le donne à `AppController(historyRoot:)`). Nulle part ailleurs sous `Sources`, et aucun test : un test, la
+    /// purge au lancement ou l'outil de rendu toucheraient le vrai disque. Les deux faces : le programme le donne bien (sinon la
+    /// fonction serait morte en production), et personne d'autre ne le fait. La valeur par défaut de `historyRoot` reste `nil`.
+    static let realHistoryFolder = #"Supervox\s*/\s*Historique"#
+    /// Construire un chemin qui finit par « Historique » avec `appending` ou `appendingPathComponent`.
+    static let historyFolderBuilding = #"appending(?:PathComponent)?\s*\(\s*(?:path\s*:\s*)?"[^"]*Historique"#
+    /// Une valeur par défaut de `historyRoot` qui n'est pas `nil`.
+    static let historyRootDefault = #"historyRoot\s*:\s*URL\s*\?\s*=(?!\s*nil\b)"#
+
+    @Test func onlyTheSupervoxProgramNamesTheRealHistoryFolder() throws {
+        let chain = try Regex(Self.realHistoryFolder)
+        let building = try Regex(Self.historyFolderBuilding)
+        let sources = try Self.sources(under: "Sources")
+        let main = try #require(sources.first { $0.place == "Supervox/main.swift" }, "le balayage doit voir le programme")
+        #expect(main.code.contains(chain), "le programme doit nommer le vrai dossier")
+        #expect(main.code.contains("historyRoot:"), "et le donner à AppController")
+        // `main.swift` SEUL est exempté, pas toute la cible `Supervox` : `Tests/SupervoxTests` en dépend, et une constante du vrai dossier
+        // dans un autre de ses fichiers serait atteignable par un test sans que ce balayage le voie.
+        let elsewhere = sources.filter { $0.place != "Supervox/main.swift" && ($0.code.contains(chain) || $0.code.contains(building)) }
+        #expect(elsewhere.map(\.place).isEmpty, "\(elsewhere.map(\.place))")
+
+        // Dans les tests : la chaîne ET la construction d'un chemin finissant par « Historique » (un dossier temporaire de test ne porte
+        // pas ce nom).
+        let tests = try Self.sources(under: "Tests").filter {
+            !$0.place.hasSuffix("SourceScanTests.swift") && ($0.code.contains(chain) || $0.code.contains(building))
+        }
+        #expect(tests.map(\.place).isEmpty, "\(tests.map(\.place))")
+
+        let controller = try #require(sources.first { $0.place == "SupervoxApp/AppController.swift" })
+        let nilDefaults = controller.code.matches(of: try Regex(#"historyRoot\s*:\s*URL\s*\?\s*=\s*nil\b"#)).count
+        #expect(nilDefaults == 3, "les trois constructeurs d'AppController ont historyRoot à nil par défaut : \(nilDefaults)")
+        let anyDefault = try Regex(Self.historyRootDefault)
+        let otherDefaults = sources.filter { $0.code.contains(anyDefault) }.map(\.place)
+        #expect(otherDefaults.isEmpty, "\(otherDefaults)")
+    }
+
+    /// Le dossier de données de l'application (`applicationSupportDirectory`, `SettingsStore.defaultFile()`) n'est atteint ni par un
+    /// test ni par l'outil de rendu : un test ou une image écrirait dans le vrai dossier. Une seule exception : le test qui LIT le
+    /// chemin de `defaultFile()` sans rien écrire (`defaultFileIsInApplicationSupport`).
+    /// Pas de `\b` devant `defaultFile` : la limite de mot Unicode ne coupe pas entre `.` et une lettre (« SettingsStore.defaultFile »).
+    static let realDataFolderAccess = #"applicationSupportDirectory|defaultFile\s*\(\s*\)"#
+
+    @Test func noTestNorTheRenderToolReachesTheRealApplicationSupportFolder() throws {
+        let pattern = try Regex(Self.realDataFolderAccess)
+        let tests = try Self.sources(under: "Tests")
+        let snapshots = try Self.sources(under: "Sources/SupervoxSnapshots")
+        #expect(snapshots.contains { $0.place == "main.swift" }, "le balayage doit voir l'outil de rendu")
+        let offending =
+            tests.filter {
+                !$0.place.hasSuffix("SourceScanTests.swift") && $0.place != "SupervoxAppTests/SettingsStoreTests.swift"
+                    && $0.code.contains(pattern)
+            }.map(\.place) + snapshots.filter { $0.code.contains(pattern) }.map { "SupervoxSnapshots/" + $0.place }
+        #expect(offending.isEmpty, "\(offending)")
+
+        // L'exception est étroite : un seul `defaultFile()`, dans le test qui ne fait que lire le chemin, aucun `applicationSupportDirectory`.
+        let store = try #require(tests.first { $0.place == "SupervoxAppTests/SettingsStoreTests.swift" })
+        #expect(store.code.matches(of: pattern).count == 1)
+        #expect(store.code.contains("func defaultFileIsInApplicationSupport"))
+        #expect(!store.code.contains("applicationSupportDirectory"))
+    }
+
+    @Test(arguments: [
+        "let url = URL.applicationSupportDirectory", "try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask)",
+        "let file = try SettingsStore.defaultFile()", "SettingsStore.defaultFile ( )",
+    ])
+    func theRealDataFolderPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realDataFolderAccess)))
+    }
+
+    @Test func theRealDataFolderPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.realDataFolderAccess)
+        for code in ["let file = directory.appendingPathComponent(\"settings.json\")", "func defaultFileName() {}", "let supportDirectory = temporary"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
+    @Test(arguments: [
+        #"let root = URL.applicationSupportDirectory.appending(path: "Supervox/Historique")"#,
+        #"URL.applicationSupportDirectory.appending(path: "Supervox / Historique")"#,
+    ])
+    func theRealFolderPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realHistoryFolder)))
+    }
+
+    @Test(arguments: [
+        #"base.appending(path: "Historique", directoryHint: .isDirectory)"#,
+        #"support.appendingPathComponent("Supervox/Historique", isDirectory: true)"#,
+        #"x.appending ( path : "Autre/Historique" )"#,
+    ])
+    func theFolderBuildingPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.historyFolderBuilding)))
+    }
+
+    @Test(arguments: [
+        #"historyRoot: URL? = URL.applicationSupportDirectory"#, #"historyRoot : URL ? = defaultRoot"#,
+    ])
+    func theRootDefaultPatternSeesAnyDefaultButNil(code: String) throws {
+        #expect(code.contains(try Regex(Self.historyRootDefault)))
+    }
+
+    @Test func theRealFolderPatternsLeaveOrdinaryUsesAlone() throws {
+        let chain = try Regex(Self.realHistoryFolder)
+        let building = try Regex(Self.historyFolderBuilding)
+        let rootDefault = try Regex(Self.historyRootDefault)
+        for code in [#"Button("Historique…") { openHistory() }"#, #"case .history: "Historique""#, #"let title = "Historique""#] {
+            #expect(!code.contains(chain) && !code.contains(building), "\(code)")
+        }
+        for code in ["historyRoot: URL? = nil,", "historyRoot: URL?, ", "historyRoot: root"] {
+            #expect(!code.contains(rootDefault), "\(code)")
+        }
     }
 }

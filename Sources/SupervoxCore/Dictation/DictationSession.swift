@@ -137,13 +137,9 @@ public actor DictationSession: DictationSessioning {
     }
 
     /// Niveau affichable d'une tranche : RMS en décibels, ramené sur 0…1 (−60 dB → 0, 0 dB → 1). Une tranche vide ou
-    /// non numérique donne 0.
+    /// non numérique donne 0. La formule est celle d'`AudioLevel`.
     public static func level(of samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        let power = samples.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(samples.count)
-        let decibels = 10 * log10(power)   // 10·log10 de la puissance = 20·log10 du RMS
-        let level = (decibels + 60) / 60
-        return level.isNaN ? 0 : Float(min(max(level, 0), 1))
+        AudioLevel.display(of: samples)
     }
 
     // MARK: - Cycle de la prise
@@ -485,14 +481,7 @@ public actor DictationSession: DictationSessioning {
     /// `TranscriberError`) et celles qui portent un message d'elles-mêmes (`LocalizedError`) gardent leur message ; le
     /// reste devient une phrase générique.
     private static func describe(_ error: Error) -> String {
-        if let capture = error as? AudioCaptureError {
-            switch capture {
-            case .microphoneAccessDenied(let message): return message
-            case .noInputDevice: return "aucun micro utilisable n'a été trouvé"
-            case .alreadyRunning: return "le micro est déjà utilisé"
-            case .engineFailed(let message): return "le moteur audio a échoué (\(message))"
-            }
-        }
+        if let capture = error as? AudioCaptureError { return capture.reason }
         if let transcriber = error as? TranscriberError { return transcriber.description }
         if let localized = error as? LocalizedError, let description = localized.errorDescription { return description }
         return "erreur inattendue"

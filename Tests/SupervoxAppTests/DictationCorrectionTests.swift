@@ -271,7 +271,7 @@ import SupervoxCore
         let call = await h.rewriter.call()
         #expect(await until { h.controller.view.stage == .correcting(.rewriting) })
 
-        let expected = RewritePrompt.correction(text: Self.original, change: Self.change, vocabulary: ["Supervox"])
+        let expected = ExpectedPrompt.correction(sentInput: call.job.input, text: Self.original, change: Self.change, vocabulary: ["Supervox"])
         #expect(call.job == RewriteJob(instruction: expected.instruction, input: expected.input, model: nil))
         #expect(call.job.model == nil, "toujours le modèle fort des réglages")
         #expect(h.rewriter.nameAsks.isEmpty, "aucun fournisseur nommé : la phrase ne cite pas de modèle")

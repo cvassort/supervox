@@ -56,6 +56,12 @@ public enum CopyState: Equatable, Sendable {
     case failed
 }
 
+/// Ce que le panneau montre au centre. Un seul des deux à la fois : la dictée ne peut pas être dessinée sous l'entretien.
+public enum PanelContent: Equatable, Sendable {
+    case interview(InterviewViewState)
+    case dictation
+}
+
 /// État du panneau : ouvert ou fermé, mode choisi. Ne connaît ni AppKit ni le disque.
 @MainActor @Observable
 public final class PanelModel {
@@ -70,6 +76,12 @@ public final class PanelModel {
     public var welcome: String?
     /// La dictée telle que la vue la montre ; mise à jour par le contrôleur de dictée.
     public var dictation = DictationViewState()
+    /// L'entretien tel que la vue le montre, `nil` hors entretien ; mis à jour par le contrôleur de l'entretien (`setInterview`). Tant
+    /// qu'il n'est pas `nil`, la vue de l'entretien prend la place de celle de la dictée.
+    public private(set) var interview: InterviewViewState?
+    /// « Conclure » a été demandé pendant cet entretien : un second clic n'appelle plus `onConclude`. Remis à zéro quand l'entretien
+    /// commence ou finit (pas à chaque mise à jour de l'état : le niveau du micro arrive à chaque tranche).
+    public private(set) var concludeRequested = false
     /// Ce qu'a donné le dernier clic sur « Copier » ; oublié à la fermeture du panneau, à l'ouverture, quand le dernier texte
     /// de la dictée change et au début d'une nouvelle dictée.
     public private(set) var copyState = CopyState.idle
@@ -109,8 +121,31 @@ public final class PanelModel {
     /// « Version précédente » et son contraire.
     @ObservationIgnored public var onPreviousVersion: (@MainActor () -> Void)?
     @ObservationIgnored public var onNextVersion: (@MainActor () -> Void)?
+    /// Ce que fait « Conclure » : le contrôleur de l'entretien demande la conclusion au moteur.
+    @ObservationIgnored public var onConclude: (@MainActor () -> Void)?
+    /// Ce que VoiceOver doit annoncer (le titre de l'entretien quand il change) ; le contrôleur du panneau y pose l'annonce du système.
+    @ObservationIgnored public var onAnnounce: (@MainActor (String) -> Void)?
+    /// Ce que fait « Historique… » du menu « … » : `AppController.openSettings(tab: .history)`. `nil` sans dossier d'historique :
+    /// l'entrée n'est alors pas montrée. Posé une fois à l'assemblage, avant que le panneau s'affiche.
+    @ObservationIgnored public var onOpenHistory: (@MainActor () -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
+    /// Chaque clic sur une pastille (`chipTapped`), après `onModeChanged` s'il y a eu changement.
+    @ObservationIgnored public var onChipTapped: (@MainActor (String) -> Void)?
+
+    /// L'entrée « Historique… » existe : un dossier d'historique est branché.
+    public var canOpenHistory: Bool { onOpenHistory != nil }
+
+    /// L'entrée « Historique… » est active : un historique est branché, et rien ne tient le panneau. Ouvrir la fenêtre de réglages
+    /// annule l'entretien en cours et ferme le panneau (une relecture en attente y est perdue) : une consultation ne doit pas le
+    /// faire sans rien demander. « Réglages… » garde son comportement (choix de la tâche 10).
+    public var isHistoryEntryEnabled: Bool { canOpenHistory && !holdsPanel }
+
+    /// Ce que fait un clic sur « Historique… » ; sans effet quand l'entrée est grisée, même invoquée.
+    public func openHistory() {
+        guard isHistoryEntryEnabled else { return }
+        onOpenHistory?()
+    }
 
     /// `lastModeID` vient des réglages ; un identifiant inconnu retombe sur la dictée brute. `modes` : les pastilles des
     /// réglages ; sans elles, les quatre modes de base.
@@ -135,6 +170,35 @@ public final class PanelModel {
         // Hors relecture le champ n'est plus là : une saisie en attente ne reste pas comptée.
         if state.stage != .review { fieldIsComposing = false }
         if textChanged || state.stage.isActive { copyState = .idle }
+    }
+
+    /// L'état de l'entretien ; `nil` le retire (la vue de la dictée revient). Un nouveau titre, un nouvel avis, est annoncé à VoiceOver
+    /// (`onAnnounce`) ; le niveau du micro, qui change à chaque tranche, ne l'est jamais.
+    public func setInterview(_ state: InterviewViewState?) {
+        let announcements = InterviewViewState.announcements(from: interview, to: state)
+        if (interview == nil) != (state == nil) { concludeRequested = false }
+        interview = state
+        for announcement in announcements { onAnnounce?(announcement) }
+    }
+
+    /// Le panneau ne doit pas se fermer de lui-même : une dictée est en cours (ou son texte attend d'être relu ou collé), ou un
+    /// entretien est ouvert, à toute phase.
+    public var holdsPanel: Bool { dictation.stage.holdsPanel || interview != nil }
+
+    /// Ce que le panneau montre au centre : l'entretien ou la dictée, jamais les deux. `PanelView` choisit par un `switch` exhaustif.
+    public var content: PanelContent {
+        if let interview { .interview(interview) } else { .dictation }
+    }
+
+    /// Les pastilles sont inactives pendant l'entretien : changer de mode le quitterait sans le dire.
+    public var modesLocked: Bool { interview != nil }
+
+    /// « Conclure » : sans effet en préparation et en conclusion (le bouton y est grisé), hors entretien, et une fois la demande faite
+    /// (la phase ne passe à « conclusion » que quand le moteur le dit : un second clic arriverait avant).
+    public func concludeInterview() {
+        guard interview?.canConclude == true, !concludeRequested else { return }
+        concludeRequested = true
+        onConclude?()
     }
 
     /// Le bouton « Copier » : le texte entier, pas la fin que la carte montre. En relecture, c'est le brouillon que l'on est en
@@ -218,10 +282,24 @@ public final class PanelModel {
         DictationDisplay(state: dictation, copy: copyState, panelHasKeyboard: panelHasKeyboard)
     }
 
-    /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement.
-    public func select(_ id: String) {
-        guard id != selectedModeID, modes.contains(where: { $0.id == id }) else { return }
+    /// Un clic sur une pastille : elle est choisie si elle ne l'est pas (`select`), puis `onChipTapped` est appelé, même quand elle
+    /// l'était déjà. La pastille Entretien déjà choisie lance donc l'entretien au repos ; c'est la dictée qui décide si c'est le
+    /// moment. Pendant l'entretien (`modesLocked`), ou pour un identifiant inconnu, rien n'est appelé.
+    public func chipTapped(_ id: String) {
+        guard !modesLocked, modes.contains(where: { $0.id == id }) else { return }
+        select(id)
+        onChipTapped?(id)
+    }
+
+    /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement ; pendant l'entretien (`modesLocked`) aucun
+    /// changement n'est pris, quel qu'en soit le chemin (pastille, raccourci d'un mode). Rend vrai seulement si le mode a changé
+    /// (et `onModeChanged` a été appelé) : un refus n'a aucun effet de bord. Ne lance rien : seul un clic (`chipTapped`) appelle
+    /// `onChipTapped`.
+    @discardableResult
+    public func select(_ id: String) -> Bool {
+        guard !modesLocked, id != selectedModeID, modes.contains(where: { $0.id == id }) else { return false }
         selectedModeID = id
         onModeChanged?(id)
+        return true
     }
 }
