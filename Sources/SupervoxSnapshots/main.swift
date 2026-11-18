@@ -292,6 +292,104 @@ let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
     return settings
 }
 
+/// L'historique d'exemple : un VRAI `InterviewHistory` dans un dossier temporaire (supprimé à la fin), horloge fixe, textes inventés
+/// et neutres. Les réglages sont en mémoire et la copie répond selon `copyAccepts` : aucun fichier de réglages, aucun
+/// presse-papiers.
+@MainActor final class ExampleHistory {
+    /// 2026-11-17 12:00:00 UTC, fixe.
+    nonisolated static let now = Date(timeIntervalSince1970: 1_794_916_800)
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("supervox-snapshots-history-\(UUID().uuidString)", isDirectory: true)
+    var settings = AppSettings.defaults
+    var copyAccepts = true
+    var root: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+    lazy var history = InterviewHistory(root: root, retentionDays: { 365 }, now: { ExampleHistory.now })
+
+    func seed(withExamples: Bool = true, unreadable: Bool = false, older: Bool = false) async throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if withExamples {
+            func conversation(_ turns: [(ConversationTurn.Speaker, String)]) -> Conversation {
+                var conversation = Conversation()
+                for (speaker, text) in turns {
+                    if speaker == .user { conversation.appendUser(text) } else { conversation.appendInterviewer(text) }
+                }
+                return conversation
+            }
+            try await history.save(
+                InterviewRecord(
+                    id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+                    date: ExampleHistory.now.addingTimeInterval(-3_600),
+                    prompt:
+                        "Rédige un résumé en trois points d'un courriel d'exemple, dans un ton neutre.\nPrécise la date limite en dernière ligne.",
+                    conversation: conversation([
+                        (.interviewer, "Quel est le but du prompt ?"),
+                        (.user, "Résumer des courriels longs en trois points."),
+                        (.interviewer, "Pour quel public ?"),
+                        (.user, "Une équipe d'exemple, sans vocabulaire technique."),
+                    ])))
+            try await history.save(
+                InterviewRecord(
+                    id: UUID(uuidString: "00000000-0000-4000-8000-000000000002")!,
+                    date: ExampleHistory.now.addingTimeInterval(-3 * 86_400), prompt: nil,
+                    conversation: conversation([
+                        (.interviewer, "Que voulez-vous construire ?"),
+                        (.user, "Un petit outil d'exemple pour trier des notes."),
+                    ])))
+        }
+        if older {
+            // Deux entretiens de plus de 7 jours : une durée de 7 jours en supprimerait deux.
+            for (number, days) in [(3, 45.0), (4, 60.0)] {
+                var conversation = Conversation()
+                conversation.appendInterviewer("Que voulez-vous construire ?")
+                conversation.appendUser("Une idée d\'exemple numéro \(number).")
+                try await history.save(
+                    InterviewRecord(
+                        id: UUID(uuidString: "00000000-0000-4000-8000-00000000000\(number)")!,
+                        date: ExampleHistory.now.addingTimeInterval(-days * 86_400), prompt: "Un prompt d\'exemple numéro \(number).",
+                        conversation: conversation))
+            }
+        }
+        if unreadable {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data("pas du json".utf8).write(to: root.appendingPathComponent("2026-01-01-000000-exemple.json"))
+        }
+    }
+
+    func makeModel() async -> HistoryModel {
+        let model = HistoryModel(
+            history: history, read: { self.settings }, update: { change in change(&self.settings) },
+            copy: { _ in self.copyAccepts }, now: { ExampleHistory.now }, locale: Locale(identifier: "fr_FR"),
+            timeZone: TimeZone(identifier: "Europe/Paris")!)
+        await model.reload()
+        return model
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+}
+
+/// L'aperçu du menu « … » : la liste des entrées de `PanelMenuEntry` (la même source que le panneau). Le vrai menu du système ne
+/// se rend pas par cet outil (il s'ouvre dans sa propre fenêtre) : ceci en est un dessin, pas une capture.
+struct PanelMenuPreview: View {
+    let entries: [PanelMenuEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Aperçu du menu « … » (dessin de l'outil)").font(.caption2).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(entries, id: \.self) { entry in
+                    if entry == .quit { Divider().padding(.vertical, 2) }
+                    Text(entry.title).padding(.horizontal, 12).padding(.vertical, 3)
+                }
+            }
+            .padding(6)
+            .frame(width: 190, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
+        }
+        .padding(12)
+    }
+}
+
 /// Les quatre modes de base et deux modes personnels : l'un avec son modèle, son moteur et son raccourci, l'autre dont le
 /// fournisseur a été supprimé.
 @MainActor func exampleModesSettings() -> AppSettings {
@@ -807,6 +905,66 @@ for dark in [false, true] {
             permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .interview,
             interview: interviewRefused),
         name: "reglages-entretien-erreur", dark: dark, background: window, size: settingsSize)
+
+    // Onglet Historique : à la taille RÉELLE de la fenêtre. Un VRAI historique dans un dossier temporaire, deux entretiens d'exemple
+    // (l'un sans prompt), puis vide, puis un illisible et une copie refusée, puis « Copié. », puis les deux confirmations.
+    func historyTab(_ model: HistoryModel) async -> SettingsView {
+        SettingsView(
+            providers: await providersModel([]), hotKey: hotKeyModel(),
+            transcription: await transcriptionModel(UnavailableModelCatalog()), modes: modesModel(),
+            permissions: PermissionsModel(probe: granted), openSystemSettings: { _ in }, initialTab: .history,
+            interview: ExampleInterview().makeModel(), history: model)
+    }
+    let historyExample = ExampleHistory()
+    defer { historyExample.remove() }
+    try await historyExample.seed()
+    try await render(
+        historyTab(await historyExample.makeModel()), name: "reglages-historique", dark: dark, background: window,
+        size: settingsSize)
+    let historyCopied = await historyExample.makeModel()
+    historyCopied.copyPrompt()
+    try await render(
+        historyTab(historyCopied), name: "reglages-historique-copie", dark: dark, background: window, size: settingsSize)
+    let historyEmptyExample = ExampleHistory()
+    try await historyEmptyExample.seed(withExamples: false)
+    try await render(
+        historyTab(await historyEmptyExample.makeModel()), name: "reglages-historique-vide", dark: dark, background: window,
+        size: settingsSize)
+    historyEmptyExample.remove()
+    let historyWorstExample = ExampleHistory()
+    try await historyWorstExample.seed(unreadable: true)
+    historyWorstExample.copyAccepts = false
+    let historyWorst = await historyWorstExample.makeModel()
+    historyWorst.copyPrompt()
+    try await render(
+        historyTab(historyWorst), name: "reglages-historique-erreur", dark: dark, background: window, size: settingsSize)
+    historyWorstExample.remove()
+    // Les deux confirmations : la durée la plus courte qui supprime (le compte annoncé vient de la règle d'âge de `purge`), puis « Tout
+    // supprimer ».
+    let historyOldExample = ExampleHistory()
+    try await historyOldExample.seed(older: true)
+    defer { historyOldExample.remove() }
+    let historyAsking = await historyOldExample.makeModel()
+    historyAsking.requestRetention(7)
+    try render(
+        HistoryConfirmationSheet(
+            text: historyAsking.retentionConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle, cancel: {}, confirm: {}),
+        name: "historique-confirmation-duree", dark: dark, background: window)
+    await historyAsking.requestDeleteAll()
+    try render(
+        HistoryConfirmationSheet(
+            text: historyAsking.deleteAllConfirmation ?? "", confirmTitle: "Tout supprimer", cancel: {}, confirm: {}),
+        name: "historique-confirmation-tout", dark: dark, background: window)
+
+    // Le panneau avec « Historique… » branché : le menu « … » ne s'ouvre pas dans cet outil, son aperçu est dessiné à côté du panneau.
+    let withHistory = panelModel(mode: ModeChip.rawID)
+    withHistory.onOpenHistory = {}
+    try render(
+        HStack(alignment: .bottom, spacing: 0) {
+            PanelView(model: withHistory, permissions: PermissionsModel(probe: granted), openSettings: {}, quit: {})
+            PanelMenuPreview(entries: PanelMenuEntry.entries(hasHistory: withHistory.canOpenHistory))
+        },
+        name: "panneau-menu", dark: dark, background: panelBackground)
 
     // Toute la liste, avec deux modes personnels (modèle, moteur, raccourci ; fournisseur supprimé) : la vraie fenêtre la fait
     // défiler.

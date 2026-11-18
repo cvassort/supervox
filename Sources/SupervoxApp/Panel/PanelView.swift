@@ -141,11 +141,11 @@ struct ModeChipButton: View {
     }
 }
 
-/// Une entrée du menu « … » du panneau.
-enum PanelMenuEntry: Hashable {
+/// Une entrée du menu « … » du panneau (publique : l'outil de rendu en dessine un aperçu à partir de la même source).
+public enum PanelMenuEntry: Hashable, Sendable {
     case settings, history, quit
 
-    var title: String {
+    public var title: String {
         switch self {
         case .settings: "Réglages…"
         case .history: "Historique…"
@@ -154,7 +154,7 @@ enum PanelMenuEntry: Hashable {
     }
 
     /// Réglages, puis Historique (seulement si un historique est branché), puis Quitter après un séparateur.
-    static func entries(hasHistory: Bool) -> [PanelMenuEntry] {
+    public static func entries(hasHistory: Bool) -> [PanelMenuEntry] {
         hasHistory ? [.settings, .history, .quit] : [.settings, .quit]
     }
 }
