@@ -1857,8 +1857,8 @@ annonce comme de la voix **n'est pas établi** (« Jamais exécuté… »).
    - Attendu : les lignes « Supervox : » ne contiennent que ce qui a été dit : une phrase coupée après au moins la moitié de sa
      durée y est **en entier** ; une phrase coupée avant la moitié n'y est pas. Cette moitié est un choix non mesuré
      (`ConversationChain+Reply.swift`).
-5. Laissez Supervox finir sa réplique sans l'interrompre, puis répondez tout de suite : commencez à parler à son dernier mot, ou
-   un peu avant la fin.
+5. Laissez Supervox finir sa réplique sans l'interrompre, puis répondez tout de suite : commencez à parler à son dernier mot
+   (pas avant : parler plus tôt, c'est lui couper la parole, points 1 à 4).
    - Attendu : votre réponse est transcrite et Supervox y répond. **Coût accepté** : une réponse commencée dans le dernier quart
      de seconde de la réplique peut perdre sa première syllabe (Supervox ne doit pas s'entendre lui-même : ce qui est capté tant
      qu'il parle ne compte que s'il passe la porte ; `ConversationChain+Reply.swift`, `finishReply`). Notez si vous l'entendez.
