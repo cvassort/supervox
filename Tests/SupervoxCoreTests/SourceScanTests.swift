@@ -511,4 +511,92 @@ import Testing
             .map { String($0.path.dropFirst(base.path.count + 1)) }
         #expect(offending.isEmpty, "\(offending)")
     }
+
+    // MARK: - Historique des entretiens (tâche 11)
+
+    /// Règle 6 : le code de l'historique (stockage, modèle, vue) ne journalise rien et ne montre jamais le texte brut d'une erreur : un
+    /// chemin ou un texte d'entretien n'y passe donc jamais. Le balayage doit voir le stockage, le format et les deux fichiers de
+    /// l'onglet, sans quoi il ne vérifierait rien.
+    @Test func theHistoryCodeLogsNothingAndShowsNoRawErrorText() throws {
+        let storage = try Self.sources(under: "Sources/SupervoxApp/History")
+        #expect(storage.contains { $0.place == "InterviewHistory.swift" }, "le balayage doit voir le stockage")
+        #expect(storage.contains { $0.place == "InterviewRecord.swift" }, "le balayage doit voir le format")
+        let tab = try Self.sources(under: "Sources/SupervoxApp/SettingsUI").filter {
+            ["HistoryModel.swift", "HistoryPane.swift"].contains($0.place)
+        }
+        #expect(tab.count == 2, "le balayage doit voir le modèle et la vue de l'onglet")
+        let all = storage + tab
+        let logging = try Regex(Self.forbiddenLogging)
+        let rawError = try Regex(Self.forbiddenErrorText)
+        #expect(all.filter { $0.code.contains("localizedDescription") }.isEmpty)
+        #expect(all.filter { $0.code.contains(logging) }.map(\.place).isEmpty)
+        #expect(all.filter { $0.code.contains(rawError) }.map(\.place).isEmpty)
+    }
+
+    /// Le dossier réel de l'historique (`Supervox/Historique`, à côté de `settings.json`) n'est nommé que par le programme `Supervox`
+    /// (`main.swift`, qui le donne à `AppController(historyRoot:)`). Nulle part ailleurs sous `Sources`, et aucun test : un test, la
+    /// purge au lancement ou l'outil de rendu toucheraient le vrai disque. Les deux faces : le programme le donne bien (sinon la
+    /// fonction serait morte en production), et personne d'autre ne le fait. La valeur par défaut de `historyRoot` reste `nil`.
+    static let realHistoryFolder = #"Supervox\s*/\s*Historique"#
+    /// Construire un chemin qui finit par « Historique » avec `appending` ou `appendingPathComponent`.
+    static let historyFolderBuilding = #"appending(?:PathComponent)?\s*\(\s*(?:path\s*:\s*)?"[^"]*Historique"#
+    /// Une valeur par défaut de `historyRoot` qui n'est pas `nil`.
+    static let historyRootDefault = #"historyRoot\s*:\s*URL\s*\?\s*=(?!\s*nil\b)"#
+
+    @Test func onlyTheSupervoxProgramNamesTheRealHistoryFolder() throws {
+        let chain = try Regex(Self.realHistoryFolder)
+        let building = try Regex(Self.historyFolderBuilding)
+        let sources = try Self.sources(under: "Sources")
+        let main = try #require(sources.first { $0.place == "Supervox/main.swift" }, "le balayage doit voir le programme")
+        #expect(main.code.contains(chain), "le programme doit nommer le vrai dossier")
+        #expect(main.code.contains("historyRoot:"), "et le donner à AppController")
+        let elsewhere = sources.filter { !$0.place.hasPrefix("Supervox/") && ($0.code.contains(chain) || $0.code.contains(building)) }
+        #expect(elsewhere.map(\.place).isEmpty, "\(elsewhere.map(\.place))")
+
+        let tests = try Self.sources(under: "Tests").filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(chain) }
+        #expect(tests.map(\.place).isEmpty, "\(tests.map(\.place))")
+
+        let controller = try #require(sources.first { $0.place == "SupervoxApp/AppController.swift" })
+        let nilDefaults = controller.code.matches(of: try Regex(#"historyRoot\s*:\s*URL\s*\?\s*=\s*nil\b"#)).count
+        #expect(nilDefaults == 3, "les trois constructeurs d'AppController ont historyRoot à nil par défaut : \(nilDefaults)")
+        let anyDefault = try Regex(Self.historyRootDefault)
+        let otherDefaults = sources.filter { $0.code.contains(anyDefault) }.map(\.place)
+        #expect(otherDefaults.isEmpty, "\(otherDefaults)")
+    }
+
+    @Test(arguments: [
+        #"let root = URL.applicationSupportDirectory.appending(path: "Supervox/Historique")"#,
+        #"URL.applicationSupportDirectory.appending(path: "Supervox / Historique")"#,
+    ])
+    func theRealFolderPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realHistoryFolder)))
+    }
+
+    @Test(arguments: [
+        #"base.appending(path: "Historique", directoryHint: .isDirectory)"#,
+        #"support.appendingPathComponent("Supervox/Historique", isDirectory: true)"#,
+        #"x.appending ( path : "Autre/Historique" )"#,
+    ])
+    func theFolderBuildingPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.historyFolderBuilding)))
+    }
+
+    @Test(arguments: [
+        #"historyRoot: URL? = URL.applicationSupportDirectory"#, #"historyRoot : URL ? = defaultRoot"#,
+    ])
+    func theRootDefaultPatternSeesAnyDefaultButNil(code: String) throws {
+        #expect(code.contains(try Regex(Self.historyRootDefault)))
+    }
+
+    @Test func theRealFolderPatternsLeaveOrdinaryUsesAlone() throws {
+        let chain = try Regex(Self.realHistoryFolder)
+        let building = try Regex(Self.historyFolderBuilding)
+        let rootDefault = try Regex(Self.historyRootDefault)
+        for code in [#"Button("Historique…") { openHistory() }"#, #"case .history: "Historique""#, #"let title = "Historique""#] {
+            #expect(!code.contains(chain) && !code.contains(building), "\(code)")
+        }
+        for code in ["historyRoot: URL? = nil,", "historyRoot: URL?, ", "historyRoot: root"] {
+            #expect(!code.contains(rootDefault), "\(code)")
+        }
+    }
 }

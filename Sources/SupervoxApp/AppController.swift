@@ -35,6 +35,11 @@ public final class AppController {
     public let dictation: DictationController
     /// L'entretien du mode Entretien : la dictée le lance, le conclut et l'annule ; « Conclure » du panneau y mène.
     public let interview: InterviewController
+    /// L'historique local des entretiens : `nil` sans dossier donné (`historyRoot`), et alors ni onglet Historique, ni entrée
+    /// « Historique… » du panneau, ni purge, et l'entretien ne garde rien (`DiscardingInterviewHistory`).
+    public let history: InterviewHistory?
+    /// Met un texte dans le presse-papiers par l'insertion, qui le tient (un seul accès) : la copie de l'onglet Historique.
+    let copyText: @MainActor (String) -> Bool
     /// Les raccourcis de macOS activés, lus quand on en a besoin (jamais gardés : l'utilisateur peut les changer).
     public let systemHotKeys: any SystemHotKeys
     /// Nomme les touches des raccourcis (libellés, avis) et reconnaît ⌘Q, ⌘W, ⌘H et ⌘M.
@@ -63,6 +68,8 @@ public final class AppController {
     private var terminationTask: Task<Void, Never>?
     /// Le préchargement des moteurs lancé au lancement (les tests l'attendent).
     private(set) var preloadTask: Task<Void, Never>?
+    /// La purge de l'historique lancée au lancement (les tests l'attendent).
+    private(set) var historyPurgeTask: Task<Void, Never>?
     private var statusItem: NSStatusItem?
     private var statusMenuRefresher: MenuRefresher?
     private var settingsWindow: (any SettingsWindowSurface)?
@@ -100,7 +107,8 @@ public final class AppController {
         reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
         interview interviewEnvironment: InterviewEnvironment = .unavailable,
         resolveInterview: (@MainActor (AppSettings, TranscriptionEngine?) async throws -> InterviewSetup)? = nil,
-        interviewHistory: any InterviewHistoryStoring = DiscardingInterviewHistory(),
+        interviewHistory: (any InterviewHistoryStoring)? = nil,
+        historyRoot: URL? = nil,
         announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         self.terminationWait = terminationWait
@@ -136,12 +144,20 @@ public final class AppController {
             model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
             surface: makePanelSurface(AnyView(content)), announcer: announcer)
         self.panel = panel
+        // L'historique réel n'existe que si une racine est donnée : `nil` veut dire « pas d'historique », jamais « le vrai dossier »
+        // (seul le programme `Supervox` donne la vraie racine). La durée est relue à chaque appel dans les réglages en vigueur.
+        let retention = RetentionSource()
+        let realHistory = historyRoot.map { root in
+            InterviewHistory(root: root, retentionDays: { await retention.days() })
+        }
+        history = realHistory
+        copyText = { [inserter] in inserter.copy($0) }
         // Sans résolution fournie (tests de l'assemblage qui ne portent pas sur l'entretien), l'entretien ne démarre pas et le dit.
         let interviewController = InterviewController(
             environment: interviewEnvironment, settings: { relay.settings?() ?? .defaults },
             behavior: { relay.settings?()?.hotKeyBehavior ?? .toggle },
             resolve: resolveInterview ?? { _, _ in throw InterviewEnvironment.Unavailable() },
-            history: interviewHistory, panel: panelModel)
+            history: interviewHistory ?? realHistory ?? DiscardingInterviewHistory(), panel: panelModel)
         self.interview = interviewController
         let dictationController = DictationController(
             environment: dictation, inserter: inserter,
@@ -198,6 +214,9 @@ public final class AppController {
         relay.settings = { [weak self] in self?.settings }
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
+        retention.read = { [weak self] in Self.retentionDays(of: self) }
+        // « Historique… » du menu « … » n'existe que si un historique est branché.
+        if realHistory != nil { panelModel.onOpenHistory = { [weak self] in self?.openSettings(tab: .history) } }
 
         panelModel.onOpen = { [permissions] in permissions.refresh() }
         panelModel.onModeChanged = { [weak self] id in self?.saveLastMode(id) }
@@ -234,7 +253,8 @@ public final class AppController {
         terminationWait: @escaping @Sendable (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
         reviewHandoverWait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
         interview: InterviewEnvironment = .unavailable,
-        interviewHistory: any InterviewHistoryStoring = DiscardingInterviewHistory(),
+        interviewHistory: (any InterviewHistoryStoring)? = nil,
+        historyRoot: URL? = nil,
         announcer: any AccessibilityAnnouncing = SystemAccessibilityAnnouncer()
     ) {
         let current = ActionRelay()
@@ -255,19 +275,20 @@ public final class AppController {
                 try await InterviewSetup.resolve(
                     settings: settings, engine: engine, secrets: access, makeModel: makeModel, makeVoice: interview.makeVoice)
             },
-            interviewHistory: interviewHistory, announcer: announcer)
+            interviewHistory: interviewHistory, historyRoot: historyRoot, announcer: announcer)
         current.settings = { [weak self] in self?.settings }
     }
 
     /// Les réalisations du système : fichier de réglages de l'utilisateur, trousseau, Carbon,
     /// AVFoundation et Accessibilité. `dictation` : les moteurs de la dictée, `interview` : ceux de l'entretien (son réel, voix),
-    /// que la cible `Supervox` construit (`SupervoxApp` ne dépend pas d'eux). L'historique des entretiens n'écrit rien en
-    /// attendant son stockage. Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
+    /// que la cible `Supervox` construit (`SupervoxApp` ne dépend pas d'eux). `historyRoot` : le dossier de l'historique des
+    /// entretiens, donné par la cible `Supervox` seule ; `nil` (le défaut) : pas d'historique. Tout le reste de l'assemblage (dont la mise en forme) est celui de l'init
     /// ci-dessus, que les tests exécutent.
     public convenience init(
         settingsView: @escaping SettingsViewProvider = SettingsView.provider,
         dictation: DictationEnvironment = .unavailable,
         interview: InterviewEnvironment = .unavailable,
+        historyRoot: URL? = nil,
         inserter: TextInserter
     ) {
         let file = (try? SettingsStore.defaultFile())
@@ -287,7 +308,7 @@ public final class AppController {
             makeSettingsWindow: { SettingsWindow(content: $0, onLeave: $1) },
             terminate: { NSApp.terminate(nil) },
             dictation: dictation, makeModel: LiveRewriter.client, frontApplication: FrontApplication.system,
-            inserter: inserter, interview: interview, interviewHistory: DiscardingInterviewHistory(),
+            inserter: inserter, interview: interview, historyRoot: historyRoot,
             announcer: SystemAccessibilityAnnouncer())
     }
 
@@ -324,6 +345,27 @@ public final class AppController {
         }
         if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
         preloadEngines()
+        purgeHistory()
+    }
+
+    /// La purge de l'historique au lancement : les entretiens plus vieux que la durée en vigueur sont supprimés, en tâche de fond.
+    ///
+    /// Seulement quand la durée est CELLE DE LA PERSONNE : au premier lancement (aucun réglage encore choisi) ou quand le fichier de
+    /// réglages n'a pas été lu (illisible, mis de côté, d'une version plus récente), la durée en vigueur est le défaut de 30 jours,
+    /// pas un choix : purger avec elle supprimerait des entretiens qu'elle voulait garder plus longtemps.
+    private func purgeHistory() {
+        guard let history else { return }
+        guard !isFirstLaunch, !hasLoadNotice, saveRefusal == nil else {
+            log.notice("historique : purge au lancement ignorée, durée de conservation non lue")
+            return
+        }
+        historyPurgeTask = Task { _ = await history.purge() }
+    }
+
+    /// La durée de conservation en jours : celle des réglages en vigueur, bornée ; sans contrôleur (il a disparu), le défaut de 30
+    /// jours. JAMAIS 0 : 0 veut dire « ne rien garder », et la purge effacerait tout.
+    static func retentionDays(of controller: AppController?) -> Int {
+        controller?.settings.history.normalized.retentionDays ?? HistorySettings.defaults.retentionDays
     }
 
     /// Prépare les moteurs des réglages courants en tâche de fond, hors du fil principal et à basse priorité : rien n'est
@@ -640,7 +682,8 @@ public final class AppController {
     /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`. `tab` : l'onglet à montrer ;
     /// sans lui, la fenêtre garde l'onglet courant (Fournisseurs à la première ouverture).
     func openSettings(tab: SettingsTab? = nil) {
-        if let tab { settingsNavigation.tab = tab }
+        // Un onglet Historique n'est jamais choisi sans historique : la barre ne l'a pas.
+        if let tab, tab != .history || history != nil { settingsNavigation.tab = tab }
         // L'entretien s'annule aussi quand le panneau est déjà fermé (la fermeture l'annule sinon) : rien n'est gardé.
         interview.cancel()
         panel.close()
@@ -705,6 +748,15 @@ public final class AppController {
         }
         return .afterInsertion
     }
+}
+
+/// La durée de conservation de l'historique, lue à chaque appel dans les réglages en vigueur du contrôleur. Posée avant que le
+/// contrôleur soit entièrement construit (l'historique est fabriqué avant lui) : tant que `read` n'est pas posée, et si le contrôleur
+/// a disparu, c'est le défaut des réglages, jamais 0.
+@MainActor
+final class RetentionSource {
+    var read: @MainActor () -> Int = { HistorySettings.defaults.retentionDays }
+    func days() -> Int { read() }
 }
 
 /// Relais d'actions, posé avant que le contrôleur soit entièrement construit.

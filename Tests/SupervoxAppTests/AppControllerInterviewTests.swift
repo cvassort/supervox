@@ -49,7 +49,8 @@ import Testing
         return settings
     }
 
-    func makeController(settings: AppSettings? = nil) throws -> AppController {
+    /// `historyRoot` : le VRAI historique dans ce dossier (temporaire) au lieu du double ; `nil` : le double `history`.
+    func makeController(settings: AppSettings? = nil, historyRoot: URL? = nil) throws -> AppController {
         try store.save(settings ?? self.settings())
         let fake = environment
         let access = SecretAccess(secrets, queue: DispatchQueue(label: "test.app.interview.\(UUID())"))
@@ -68,7 +69,7 @@ import Testing
                     settings: settings, engine: engine, secrets: access, makeModel: { _, _ in ScriptedModel(.never) },
                     makeVoice: fake.environment.makeVoice)
             },
-            interviewHistory: history, announcer: announcer)
+            interviewHistory: historyRoot == nil ? history : nil, historyRoot: historyRoot, announcer: announcer)
         controller.launch()
         return controller
     }
@@ -290,5 +291,63 @@ import Testing
         #expect(!controller.panelModel.modesLocked, "\(ending)")
         #expect(controller.panelModel.interview == nil)
         #expect(controller.panelModel.select(ModeChip.rawID), "les pastilles répondent de nouveau")
+    }
+
+    // MARK: - Règle 5 de la tâche 11 : le vrai historique, bout en bout
+
+    /// Le dossier du vrai historique de ces tests : dans le dossier temporaire du test, jamais celui de l'application.
+    var realRoot: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+
+    @Test(
+        "règle 5 : avec le VRAI historique (dossier temporaire), un entretien conclu écrit UN fichier (témoin positif), et aucune autre fin n'écrit quoi que ce soit",
+        arguments: Ending.allCases)
+    func onlyAConcludedInterviewWritesToTheRealHistory(ending: Ending) async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController(historyRoot: realRoot)
+        hotKeys.press()
+        let driver = try await listening(controller)
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+
+        switch ending {
+        case .prompt: driver.finish(.prompt("Le prompt d'exemple.", DictationInterviewTests.exchange))
+        case .failure: driver.finish(.failed(.microphone("silent"), Conversation()))
+        case .escape: escape.press()
+        case .closeFromMenu: controller.togglePanelFromMenu()
+        case .settings: controller.openSettings()
+        case .quit: controller.quit()
+        }
+        #expect(await until { controller.panelModel.interview == nil }, "\(ending)")
+        if ending != .prompt { #expect(await until { driver.isFinished }, "la conversation est arrêtée : \(ending)") }
+        await settle()
+
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: realRoot.path)) ?? []
+        if ending == .prompt {
+            #expect(await until { (try? FileManager.default.contentsOfDirectory(atPath: realRoot.path))?.count == 1 })
+            let records = await controller.history?.list() ?? []
+            let record = try #require(records.first)
+            #expect(records.count == 1)
+            #expect(record.prompt == "Le prompt d'exemple.")
+            #expect(record.conversation == DictationInterviewTests.exchange, "la conversation entière est gardée")
+            #expect(try FileManager.default.attributesOfItem(atPath: realRoot.path)[.posixPermissions] as? Int == 0o700)
+        } else {
+            #expect(names.isEmpty, "\(ending) n'écrit rien : \(names.count) fichier(s)")
+            #expect(!FileManager.default.fileExists(atPath: realRoot.path), "même pas le dossier")
+        }
+    }
+
+    @Test("règle 5 : un entretien dont la rédaction a échoué est gardé sans prompt, avec sa conversation")
+    func aFailedConclusionIsKeptWithoutAPromptInTheRealHistory() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController(historyRoot: realRoot)
+        hotKeys.press()
+        let driver = try await listening(controller)
+
+        driver.finish(.conclusionFailed(.server(503), DictationInterviewTests.exchange))
+
+        #expect(await until { (try? FileManager.default.contentsOfDirectory(atPath: realRoot.path))?.count == 1 })
+        let record = try #require(await controller.history?.list().first)
+        #expect(record.prompt == nil)
+        #expect(record.conversation == DictationInterviewTests.exchange)
     }
 }

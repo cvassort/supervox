@@ -111,7 +111,8 @@ public struct SettingsView: View {
                 transcription: makeTranscriptionModel(controller, catalog: catalog, promptTokenLimit: promptTokenLimit),
                 modes: makeModesModel(controller, keyMonitor: LocalKeyDownMonitor()),
                 permissions: controller.permissions, openSystemSettings: { NSWorkspace.shared.open($0.url) },
-                interview: makeInterviewModel(controller), navigation: controller.settingsNavigation)
+                interview: makeInterviewModel(controller), history: makeHistoryModel(controller),
+                navigation: controller.settingsNavigation)
         }
     }
 
@@ -184,6 +185,16 @@ public struct SettingsView: View {
             read: { [weak controller] in controller?.settings ?? .defaults },
             update: { [weak controller] change in try controller?.updateSettings(change) },
             effectiveTurnSilence: controller.interviewEnvironment.effectiveTurnSilence)
+    }
+
+    /// L'onglet Historique : `nil` sans historique (le contrôleur n'a pas reçu de dossier). Il lit les réglages en vigueur, écrit la
+    /// durée par `AppController.updateSettings`, et copie par l'insertion du contrôleur (jamais un accès direct au presse-papiers).
+    static func makeHistoryModel(_ controller: AppController) -> HistoryModel? {
+        guard let history = controller.history else { return nil }
+        return HistoryModel(
+            history: history, read: { [weak controller] in controller?.settings ?? .defaults },
+            update: { [weak controller] change in try controller?.updateSettings(change) },
+            copy: { [weak controller] in controller?.copyText($0) ?? false })
     }
 
     /// Construit sans appeler le magasin de secrets.

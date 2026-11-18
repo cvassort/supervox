@@ -21,6 +21,9 @@ let controller = AppController(
         catalog: engines.catalog, promptTokenLimit: WhisperKitTranscriber.promptTokenLimit),
     dictation: engines.environment,
     interview: interview.environment,
+    // L'historique des entretiens : le seul endroit qui nomme le vrai dossier, à côté de `settings.json`. Sans cette racine
+    // (tests, outil de rendu), l'application n'a pas d'historique et n'en touche aucun.
+    historyRoot: URL.applicationSupportDirectory.appending(path: "Supervox/Historique", directoryHint: .isDirectory),
     // L'insertion du système (presse-papiers général, ⌘V réel) n'est construite que par le programme.
     inserter: .system())
 // `NSApplication.delegate` est faible : la constante globale le garde jusqu'à la fin du processus.
