@@ -549,6 +549,11 @@ import Testing
         #expect(rig.history.attempts == 0)
         #expect(rig.panel.interview == nil)
         if driver == nil {
+            if stage == .making {
+                // La fabrication reprend après la porte et rend une conversation : sans elle, le contrôle porterait sur une liste vide.
+                try #require(await until { rig.environment.drivers.count == 1 }, "la fabrication retenue a rendu sa conversation")
+                await settle()
+            }
             #expect(rig.environment.drivers.allSatisfy { $0.starts == 0 }, "aucune conversation démarrée après l'annulation")
         }
     }
