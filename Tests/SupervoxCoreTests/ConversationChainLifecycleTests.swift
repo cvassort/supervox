@@ -191,7 +191,9 @@ struct ConversationConcludeTests {
         _ = await waitUntil { await h.chain.cancelIsRequested }
 
         latch.open()
-        await cancelling.value
+        // Rend la main à la limite de temps de la suite (revue finale, I-B) : `cancelling` est une tâche non structurée, que
+        // l'annulation du test n'atteint pas seule. Annulée ici, son `h.cancel()` rend la main, et le test échoue au lieu de pendre.
+        await withTaskCancellationHandler { await cancelling.value } onCancel: { cancelling.cancel() }
 
         await log.waitForEnd()
         #expect(log.end == .cancelled)
