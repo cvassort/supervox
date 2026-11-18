@@ -148,15 +148,22 @@ open build/Supervox.app
     ci-dessous). Les entretiens plus vieux que la durée sont supprimés **au lancement**, sans confirmation, et à chaque
     raccourcissement de la durée, **sur confirmation** qui dit combien partent. Une horloge du Mac avancée fait donc purger selon
     la durée choisie.
-  - *Durée confirmée.* Le dossier garde aussi la durée choisie dans l'onglet : un fichier `conservation` (0600,
-    `{"version": 1, "retentionDays": N}`), écrit à chaque choix d'une durée, « Ne rien garder » compris. Ce n'est pas un
-    entretien : il n'est ni compté, ni listé comme illisible, ni supprimé par « Tout supprimer… » ou par la purge. **La purge du
-    lancement n'a lieu que si** ce n'est pas le premier lancement, si le fichier de réglages a été lu sans avis, **et** si la
-    durée confirmée est absente (durée jamais choisie : les 30 jours par défaut s'appliquent) ou égale à celle des réglages.
-    Réglages remis à zéro, mis de côté ou édités à la main (une durée de la mauvaise forme est lue 30 jours) alors que le dossier
-    a confirmé une autre durée : rien n'est supprimé, aux lancements suivants non plus, et l'onglet le dit (« La durée de
-    conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas choisie de nouveau
-    ci-dessous. ») jusqu'à ce que la durée soit choisie de nouveau. Un essai sûr est à `docs/essai-final.md` (essai 87).
+  - *Durée confirmée.* La durée choisie dans l'onglet est d'abord gardée dans le dossier de l'historique (fichier
+    `conservation`, 0600, `{"version": 1, "retentionDays": N}`, « Ne rien garder » compris), puis dans les réglages. Si les deux ne
+    s'accordent pas (réglages remis à zéro, mis de côté ou édités à la main : une durée de la mauvaise forme est lue 30 jours),
+    rien n'est supprimé automatiquement ; et avec « Ne rien garder » confirmé, aucun entretien n'est écrit, quelle que soit la durée
+    que disent ensuite les réglages, jusqu'à ce que la personne confirme la durée dans l'onglet. Le fichier n'est pas un entretien :
+    il n'est ni compté, ni listé comme illisible, ni supprimé par « Tout supprimer… » ou par la purge (il reste donc dans un
+    dossier sans entretien). **La purge du lancement n'a lieu que si** ce n'est pas le premier lancement, si le fichier de réglages
+    a été lu sans avis, **et** si la durée confirmée est absente (durée jamais choisie : les 30 jours par défaut s'appliquent) ou
+    égale à celle des réglages. Dans les autres cas l'onglet le dit, dans son bas, au-dessus du sélecteur, avec un bouton qui
+    confirme la durée affichée (« Confirmer « 30 jours » » : même chemin que le sélecteur, avec la feuille de confirmation s'il y a
+    des entretiens plus vieux) : « La durée de conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement
+    tant que vous ne l'aurez pas choisie de nouveau ci-dessous. », ou, pour « Ne rien garder » oublié, « Vous aviez choisi
+    « Ne rien garder » : rien n'est gardé tant que vous n'aurez pas choisi une durée de nouveau ci-dessous. » (la ligne d'en-tête
+    « Avec « Ne rien garder »… » n'est alors pas affichée). Si l'écriture de la durée confirmée réussit mais pas celle des réglages,
+    le dossier est en avance : plus aucune purge automatique tant que la durée n'est pas choisie de nouveau. Un essai sûr est à
+    `docs/essai-final.md` (essai 87).
   - *Sauvegardes et réseau.* « Envoyés nulle part » vaut pour le réseau : le dossier est un dossier ordinaire du disque et fait
     partie des sauvegardes locales de l'ordinateur.
   - *Ce que l'onglet permet.* Copier le prompt ou la conversation (« Copié. » et les messages d'échec s'affichent dans une bande
@@ -545,6 +552,10 @@ ou « mesuré »).
   ne compte pas, et ce que vous dites alors s'ajoute à votre tour précédent. Couper pendant « Réflexion… » annule la requête.
   Ce que vous dites en coupant est transcrit **depuis son début**.
 - Le délai entre le début de votre voix et l'arrêt de Supervox n'est ni calculé ni mesuré.
+- **Une réponse commencée dans le dernier quart de seconde de la réplique** de Supervox peut perdre sa première syllabe : coût
+  accepté, Supervox ne doit pas s'entendre lui-même (ce qui est capté pendant qu'il parle ne compte que s'il passe la porte). À
+  l'inverse, le dernier quart de seconde d'un tour d'écoute, que le détecteur n'avait pas encore examiné, n'est pas perdu : il est
+  reporté au début de l'écoute suivante.
 
 ### Conclure
 
