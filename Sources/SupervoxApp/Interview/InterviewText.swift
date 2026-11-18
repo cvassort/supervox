@@ -221,6 +221,10 @@ public enum InterviewText {
     public static let conclusionFailedReview = fr(
         "Le prompt n'a pas pu être rédigé : le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.")
 
+    /// La même, quand l'entretien a aussi signalé que les derniers mots n'ont pas pu être transcrits (`.lastWordsLost`).
+    public static let conclusionFailedReviewWithoutLastWords = fr(
+        "Le prompt n'a pas pu être rédigé, et vos derniers mots n'ont pas pu être transcrits : le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.")
+
     /// Le micro s'est arrêté après au moins un tour : la relecture porte la conversation jusque-là.
     public static let microphoneStoppedReview = fr(
         "Le micro s'est arrêté pendant l'entretien : le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.")
@@ -273,7 +277,8 @@ public enum InterviewText {
         sentences += knownFailureCodes.flatMap { code in [failure(.microphone(code)), failure(.engine(code))] }
         sentences.append(failure(.engine("code-inconnu")))
         sentences += [
-            couldNotStart, promptReview, promptReviewWithoutLastWords, conclusionFailedReview, microphoneStoppedReview,
+            couldNotStart, promptReview, promptReviewWithoutLastWords, conclusionFailedReview,
+            conclusionFailedReviewWithoutLastWords, microphoneStoppedReview,
             transcriptionStoppedReview, nothingSaid, microphoneSentNothing, transcriptionDidNotStart,
         ]
         sentences += ([.noFastModel, .noStrongModel] + failures.map(InterviewSetupFailure.provider)).map(setupFailure)

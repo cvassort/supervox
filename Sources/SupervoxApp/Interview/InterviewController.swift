@@ -327,7 +327,9 @@ public final class InterviewController: InterviewRunning {
             self.end(attempt, .review(text: prompt, notice: notice))
         case .conclusionFailed(_, let conversation):
             save(InterviewRecord(id: UUID(), date: now(), prompt: nil, conversation: conversation))
-            self.end(attempt, .review(text: conversation.transcript, notice: InterviewText.conclusionFailedReview))
+            let notice =
+                attempt.lastWordsLost ? InterviewText.conclusionFailedReviewWithoutLastWords : InterviewText.conclusionFailedReview
+            self.end(attempt, .review(text: conversation.transcript, notice: notice))
         case .failed(let failure, let conversation):
             // Rien n'est enregistré, mais rien n'est perdu : la conversation va en relecture dès qu'elle a un tour de la personne.
             if conversation.hasUserTurn {

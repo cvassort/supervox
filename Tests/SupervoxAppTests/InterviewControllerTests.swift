@@ -402,6 +402,17 @@ import Testing
         #expect(rig.history.saved.first?.conversation == Self.exchange)
     }
 
+    @Test("M-3 : les derniers mots perdus, puis la conclusion en échec : la phrase de la relecture dit les deux")
+    func lastWordsLostThenAFailedConclusion() async throws {
+        let rig = InterviewRig()
+        let driver = try await rig.listening()
+        try await emit(.notice(.lastWordsLost), driver, rig) { $0.notice == InterviewText.notice(.lastWordsLost) }
+        driver.finish(.conclusionFailed(.server(503), Self.exchange))
+        #expect(
+            try await outcome(rig)
+                == .review(text: Self.exchange.transcript, notice: InterviewText.conclusionFailedReviewWithoutLastWords))
+    }
+
     static let failures: [(ConversationEnd, InterviewOutcome)] = [
         (.failed(.microphone("silent"), exchange),
          .review(text: exchange.transcript, notice: InterviewText.microphoneStoppedReview)),

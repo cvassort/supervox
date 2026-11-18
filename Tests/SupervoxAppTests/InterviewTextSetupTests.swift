@@ -95,6 +95,9 @@ import Testing
             InterviewText.conclusionFailedReview
                 == "Le prompt n'a pas pu être rédigé\u{00A0}: le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.")
         #expect(
+            InterviewText.conclusionFailedReviewWithoutLastWords
+                == "Le prompt n'a pas pu être rédigé, et vos derniers mots n'ont pas pu être transcrits\u{00A0}: le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.")
+        #expect(
             InterviewText.microphoneStoppedReview
                 == "Le micro s'est arrêté pendant l'entretien\u{00A0}: le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.")
         #expect(
@@ -125,6 +128,7 @@ import Testing
             "Prompt rédigé à partir de l'entretien\u{00A0}: relisez-le, puis collez-le ou copiez-le.",
             "Prompt rédigé à partir de l'entretien, sans vos derniers mots, qui n'ont pas pu être transcrits\u{00A0}: relisez-le, puis collez-le ou copiez-le.",
             "Le prompt n'a pas pu être rédigé\u{00A0}: le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.",
+            "Le prompt n'a pas pu être rédigé, et vos derniers mots n'ont pas pu être transcrits\u{00A0}: le texte ci-dessus est la conversation de l'entretien. Corrigez-la, collez-la ou copiez-la.",
             "Le micro s'est arrêté pendant l'entretien\u{00A0}: le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.",
             "La transcription s'est arrêtée pendant l'entretien\u{00A0}: le texte ci-dessus est la conversation jusque-là. Corrigez-la, collez-la ou copiez-la.",
             "Rien n'a été dit\u{00A0}: il n'y a pas de prompt à rédiger. Relancez l'entretien pour recommencer.",
