@@ -190,4 +190,43 @@ import Testing
         #expect(abs(try #require(metrics[.footer]).maxY - Self.paneHeight) < 0.5)
         #expect(try #require(metrics[.mainArea]).height >= 150, "zone du milieu de \(metrics[.mainArea]?.height ?? -1) points")
     }
+
+    /// Section 3 du lot : la ligne de durée et son bouton ne déplacent AUCUN autre bouton. Ils vivent dans le pied, au-dessus de la ligne du
+    /// sélecteur (le pied est collé au bas de la fenêtre et grandit vers le haut) : en disparaissant après un clic, rien d'autre ne passe
+    /// sous le pointeur ; ni les boutons du détail (en haut), ni la ligne du sélecteur et de « Tout supprimer… » (en bas) ne bougent.
+    @Test("la ligne de durée changée (ou « Ne rien garder » oublié) et son bouton ne déplacent ni les boutons du détail ni la ligne du sélecteur, et tiennent dans la fenêtre")
+    func theRetentionNoteAndItsButtonMoveNothingElse() async throws {
+        let probes: [HistoryPane.Probe] = [.deleteButton, .copyPromptButton, .copyConversationButton, .retentionRow]
+        let baseRig = try HistoryModelTests.Rig(retention: 30)
+        defer { baseRig.cleanUp() }
+        let base = try await loadedModel(baseRig, count: 2, longTexts: false, withExtras: false)
+        #expect(base.retentionNote == nil)
+        let baseline = try measure(base)
+        for probe in probes { _ = try #require(baseline[probe], "\(probe) n'est pas mesuré") }
+
+        for (name, confirmed) in [("durée changée", 365), ("« Ne rien garder » oublié", 0)] {
+            let rig = try HistoryModelTests.Rig(retention: 30)
+            defer { rig.cleanUp() }
+            let model = try await loadedModel(rig, count: 2, longTexts: false, withExtras: false)
+            try await rig.history.confirmRetention(confirmed)
+            await model.reload()
+            #expect(model.retentionNote != nil, "\(name)")
+            #expect(model.confirmRetentionButtonTitle != nil, "\(name)")
+
+            let metrics = try measure(model)
+
+            for probe in probes {
+                let expected = try #require(baseline[probe])
+                let actual = try #require(metrics[probe])
+                #expect(
+                    abs(actual.minY - expected.minY) < 0.5 && abs(actual.maxY - expected.maxY) < 0.5
+                        && abs(actual.minX - expected.minX) < 0.5,
+                    "\(probe) bouge avec « \(name) » : \(actual) au lieu de \(expected)")
+            }
+            let button = try #require(metrics[.confirmRetentionButton], "le bouton n'est pas mesuré (\(name))")
+            #expect(button.maxY <= Self.paneHeight && button.minX >= 0 && button.maxX <= SettingsView.windowSize.width, "\(button)")
+            let area = try #require(metrics[.mainArea])
+            #expect(button.minY >= area.maxY - 0.5, "le bouton est dans le pied, sous la zone du milieu")
+        }
+    }
 }

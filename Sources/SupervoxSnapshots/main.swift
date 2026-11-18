@@ -948,6 +948,14 @@ for dark in [false, true] {
     try await render(
         historyTab(await historyChangedExample.makeModel()), name: "reglages-historique-duree-changee", dark: dark,
         background: window, size: settingsSize)
+    // m-9 : « Ne rien garder » confirmé dans le dossier, réglages remis à 30 jours : rien n'est gardé, la ligne le dit, le bouton nomme 30 jours.
+    let historyForgottenExample = ExampleHistory()
+    defer { historyForgottenExample.remove() }  // retiré même si un rendu lève
+    try await historyForgottenExample.seed()
+    try await historyForgottenExample.history.confirmRetention(0)
+    try await render(
+        historyTab(await historyForgottenExample.makeModel()), name: "reglages-historique-rien-garder-oublie", dark: dark,
+        background: window, size: settingsSize)
     let historyNoneExample = ExampleHistory()
     defer { historyNoneExample.remove() }  // retiré même si un rendu lève
     historyNoneExample.settings.history.retentionDays = 0

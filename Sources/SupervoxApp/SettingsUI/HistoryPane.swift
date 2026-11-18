@@ -15,7 +15,8 @@ public struct HistoryPane: View {
 
     /// Les éléments dont la position est mesurée.
     public enum Probe: Hashable, Sendable {
-        case mainArea, messageSlot, footer, deleteButton, copyPromptButton, copyConversationButton
+        case mainArea, messageSlot, footer, deleteButton, copyPromptButton, copyConversationButton, retentionRow,
+            confirmRetentionButton
     }
 
     /// Ce que la mesure rapporte : le cadre de chaque repère présent.
@@ -39,7 +40,6 @@ public struct HistoryPane: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(HistoryModel.header)
                 if let note = model.headerNote { Text(note) }
-                if let note = model.retentionNote { Text(note) }
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -192,6 +192,23 @@ public struct HistoryPane: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // La ligne de durée (changée hors de l'onglet, ou « Ne rien garder » oublié) et son bouton : dans le pied, AU-DESSUS de la ligne du
+            // sélecteur. Le pied est collé au bas et grandit vers le haut : en apparaissant ou en disparaissant (un clic sur le bouton),
+            // elle ne déplace ni les boutons du détail, ni la ligne du sélecteur et de « Tout supprimer… ».
+            if let note = model.retentionNote {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    if let title = model.confirmRetentionButtonTitle {
+                        Button(title) { Task { await model.confirmShownRetention() } }
+                            .controlSize(.small)
+                            .background(frameProbe(.confirmRetentionButton))
+                    }
+                }
+            }
             HStack(spacing: 8) {
                 Text(HistoryModel.retentionTitle)
                 Picker(
@@ -208,6 +225,7 @@ public struct HistoryPane: View {
                 Button(HistoryModel.deleteAllTitle) { Task { await model.requestDeleteAll() } }
                     .disabled(model.fileCount == 0)
             }
+            .background(frameProbe(.retentionRow))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)

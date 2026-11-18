@@ -1113,6 +1113,84 @@ import Testing
         }
     }
 
+    // MARK: - Le bouton qui confirme la durée affichée
+
+    @Test("le bouton nomme la durée affichée (« Confirmer « 30 jours » ») quand une ligne de durée est là, et n'existe pas sinon")
+    func theConfirmButtonNamesTheShownDuration() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.confirmRetentionButtonTitle == nil, "aucune ligne : aucun bouton")
+
+        try await rig.history.confirmRetention(365)
+        await model.reload()
+        #expect(model.confirmRetentionButtonTitle == "Confirmer «\u{00A0}30 jours\u{00A0}»")
+
+        // « Ne rien garder » confirmé, réglages à 30 : la durée affichée est celle des réglages, le bouton la nomme.
+        try await rig.history.confirmRetention(0)
+        await model.reload()
+        #expect(model.retentionNote == Self.keptNothingNote)
+        #expect(model.confirmRetentionButtonTitle == "Confirmer «\u{00A0}30 jours\u{00A0}»")
+
+        // Réglages à 0 et dossier à 365 : le bouton nomme « Ne rien garder ».
+        rig.settings.history.retentionDays = 0
+        try await rig.history.confirmRetention(365)
+        await model.reload()
+        #expect(model.confirmRetentionButtonTitle == "Confirmer «\u{00A0}Ne rien garder\u{00A0}»")
+    }
+
+    @Test("le bouton confirme la durée affichée par le MÊME chemin que le sélecteur : sans entretien échu, il écrit la durée confirmée et la ligne disparaît")
+    func theConfirmButtonWritesTheConfirmationAndTheNoteDisappears() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(365)
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.retentionNote != nil)
+
+        try await finish(await model.confirmShownRetention())
+
+        #expect(await rig.history.confirmedRetention() == .days(30))
+        #expect(model.retentionNote == nil)
+        #expect(model.confirmRetentionButtonTitle == nil)
+        #expect(rig.updates == 0, "les réglages valaient déjà 30")
+    }
+
+    @Test("le bouton passe par la feuille de confirmation quand des entretiens seraient supprimés, comme le sélecteur")
+    func theConfirmButtonAsksWhenItWouldDelete() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 100)])
+        try await rig.history.confirmRetention(365)
+        let model = rig.makeModel()
+        await model.reload()
+
+        let task = await model.confirmShownRetention()
+
+        #expect(task == nil)
+        #expect(model.pendingRetention == 30)
+        #expect(model.retentionConfirmation == "1 entretien plus ancien sera supprimé maintenant.")
+        #expect(await rig.history.confirmedRetention() == .days(365), "rien n'est confirmé avant la feuille")
+    }
+
+    @Test("le « Ne rien garder » confirmé puis oublié : le bouton choisit la durée des réglages et l'entretien suivant est gardé de nouveau")
+    func theConfirmButtonEndsAForgottenKeepNothing() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(0)
+        let model = rig.makeModel()
+        await model.reload()
+        try await rig.history.save(Self.record(1))
+        #expect(((try? rig.names()) ?? []).isEmpty, "rien n'est gardé tant que le dossier dit 0")
+
+        try await finish(await model.confirmShownRetention())
+        try await rig.history.save(Self.record(2))
+
+        #expect(try rig.names().count == 1, "la durée a été choisie de nouveau : l'entretien est gardé")
+        #expect(model.retentionNote == nil)
+    }
+
     // MARK: - Relecture
 
     @Test("reload relit les réglages et le disque : une durée changée ailleurs et un entretien ajouté ailleurs s'y voient")

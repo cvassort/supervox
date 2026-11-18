@@ -212,6 +212,20 @@ public final class HistoryModel {
     /// Garde-t-on quelque chose ? La même réponse que `save` (`InterviewHistory.keepsNothing`).
     public var keepsNothing: Bool { InterviewHistory.keepsNothing(settingsDays: retentionDays, confirmed: confirmedRetention) }
 
+    /// Le libellé du bouton, à côté de la ligne de durée : « Confirmer « 30 jours » » (il nomme la durée des réglages, celle que le
+    /// sélecteur montre). `nil` sans ligne de durée. Ne pas compter sur le sélecteur pour rechoisir la valeur déjà affichée : on ne sait
+    /// pas si SwiftUI appelle alors son setter ; ce bouton passe par le même chemin, sans dépendre de lui.
+    public var confirmRetentionButtonTitle: String? {
+        retentionNote == nil ? nil : InterviewText.fr("Confirmer « \(Self.label(forDays: retentionDays)) »")
+    }
+
+    /// Confirme la durée des réglages par le MÊME chemin que le sélecteur (`requestRetention`) : la feuille de confirmation s'il y a des
+    /// entretiens échus, sinon l'écriture de la durée confirmée.
+    @discardableResult
+    public func confirmShownRetention() async -> Task<Void, Never>? {
+        await requestRetention(retentionDays)
+    }
+
     /// La durée confirmée du dossier à la dernière lecture.
     public private(set) var confirmedRetention: InterviewHistory.ConfirmedRetention = .absent
 
