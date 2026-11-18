@@ -1485,12 +1485,16 @@ ce qui suit n'a été vu tourner sur du matériel réel pendant la construction 
   sur le code de la bibliothèque (refait à la main ici : 0,3 à 0,5 s donnent 0,768 s, 0,6 s donne 1,024 s), jamais d'une
   mesure. Le gain du défaut de 0,5 s sur 0,6 s (environ 0,26 s) n'a pas été remesuré, et le risque de couper quelqu'un qui
   marque une pause n'a pas été évalué.
-- **La vraie fenêtre** : sept onglets dans 600 points, la hauteur de l'onglet Entretien, les feuilles de confirmation de
-  l'Historique, un panneau d'entretien qui n'a pas la frappe, le défilement d'une longue réplique et son fondu : jamais vus
+- **La vraie fenêtre** : sept onglets dans 600 points, la hauteur de l'onglet Entretien, la feuille unique des trois
+  confirmations de l'Historique, la bande fixe de ses messages (sa tenue est testée sur la mise en page, pas par un clic
+  réel), le menu « … » du panneau avec « Historique… » grisée (l'image est un dessin de l'outil, non une capture du vrai
+  menu), un panneau d'entretien qui n'a pas la frappe, le défilement d'une longue réplique et son fondu : jamais vus
   (les images sont rendues hors écran, sans barre d'onglets). Les tests de fenêtre n'ont pas été relancés depuis la tâche 8
   (écran verrouillé).
 - **VoiceOver** : jamais écouté. **Casque Bluetooth en mode appel** avec un entretien : jamais essayé. **macOS 26** : le
   montage n'a été vérifié que sous macOS 27.
+- **L'avis d'historique non écrit** (« Cet entretien n'a pas pu être gardé dans l'historique… ») et l'attente de 2 s au plus de
+  la relecture : couverts par les tests seulement ; aucune manière sûre de les provoquer à la main (essai 87, point 11).
 - **Le modèle** : la qualité des questions et du prompt, le respect du marqueur de conclusion, une proposition de conclure
   faite au bon moment, jamais vus avec un vrai modèle. Les avis « derniers mots non transcrits » et ceux du vocabulaire
   (petit modèle absent, liste trop longue) n'ont jamais été vus : ils demandent une panne difficile à provoquer.
@@ -1507,9 +1511,10 @@ ce qui suit n'a été vu tourner sur du matériel réel pendant la construction 
 3. Réduisez la fenêtre dans le Dock (⌘M), puis menu de l'icône, « Réglages… ».
    - Attendu : la fenêtre revient. **Comportement à confirmer** : le code la fait passer devant (`makeKeyAndOrderFront`) sans
      la sortir explicitement du Dock ; on ne sait pas si cela suffit.
-4. Ouvrez le panneau, puis le menu « … » en bas à droite.
-   - Attendu : « Réglages… », « Historique… », un séparateur, « Quitter Supervox ». « Historique… » ferme le panneau et ouvre
-     la fenêtre sur l'onglet Historique, même si elle était ouverte sur un autre onglet.
+4. Ouvrez le panneau, au repos (ni dictée, ni relecture, ni entretien), puis le menu « … » en bas à droite.
+   - Attendu : « Réglages… », « Historique… », un séparateur, « Quitter Supervox ». « Historique… » est active, ferme le panneau
+     et ouvre la fenêtre sur l'onglet Historique, même si elle était ouverte sur un autre onglet. (Elle est grisée tant qu'une
+     dictée, une relecture ou un entretien tient le panneau : essai 72.)
    - Si ce n'est pas le cas, noter : l'onglet absent ou coupé, ce qu'affiche la barre, l'entrée de menu qui manque.
 
 ### 64. Onglet Modes : modèles fort et rapide, ligne Entretien (sans micro, sans son)
@@ -1627,10 +1632,14 @@ deux à la fois. **Ne dictez rien et ne lancez aucun entretien dans l'ancienne a
    - Attendu : en tête, « Chaque entretien conclu est gardé ici en texte : le prompt rédigé et la conversation. Ils restent sur
      cet ordinateur, ne sont envoyés nulle part, et l'audio n'est jamais gardé. Un entretien annulé par Échap n'est pas
      gardé. » ; au milieu, « Aucun entretien gardé pour l'instant. » ; en bas, « Garder les entretiens » sur « 30 jours » et
-     « Tout supprimer… » grisé.
+     « Tout supprimer… » grisé. Entre le milieu et le pied, une bande réservée aux messages, vide (hauteur fixe de 44 points,
+     choix non mesuré).
 2. Ouvrez le menu « Garder les entretiens ».
-   - Attendu : « Ne rien garder », « 7 jours », « 30 jours », « 90 jours », « 1 an ». Un changement sans entretien à supprimer
-     s'enregistre tout de suite, sans confirmation. Remettez « 30 jours ».
+   - Attendu : « Ne rien garder », « 7 jours », « 30 jours », « 90 jours », « 1 an ». Un changement qui ne supprime aucun
+     entretien s'enregistre tout de suite, sans confirmation.
+3. Choisissez « Ne rien garder ».
+   - Attendu : sous l'en-tête, une ligne s'ajoute : « Avec « Ne rien garder », aucun entretien n'est gardé. ». Remettez
+     « 30 jours » : la ligne disparaît.
    - Si ce n'est pas le cas, noter : le choix manquant ou la confirmation inattendue.
 
 ### 68. Premier entretien : voix du système, trois questions, conclusion à la voix (ouvre le micro, joue un son)
@@ -1671,7 +1680,10 @@ automatiquement les fichiers d'un dossier par date. »
    - Attendu : le titre « À relire », un prompt en français en cinq parties (Objectif, Contexte, Contraintes, Résultat attendu,
      Critères de réussite ; « Non précisé. » pour ce que vous n'avez pas dit) et la phrase « Prompt rédigé à partir de
      l'entretien : relisez-le, puis collez-le ou copiez-le. ». Rien n'est collé. Pas de « Version précédente » (il n'y a pas de
-     version antérieure). Le panneau a la frappe, comme pour toute relecture.
+     version antérieure). Le panneau a la frappe, comme pour toute relecture. Si l'historique n'avait pas pu garder cet
+     entretien, la phrase se terminerait par « Cet entretien n'a pas pu être gardé dans l'historique : copiez le texte si vous
+     voulez le conserver. » (essai 87, point 11 ; non vu). Tant que la relecture est ouverte, « Historique… » du menu « … » est
+     grisée.
 6. Curseur dans l'application de notes, cliquez sur « Coller ».
    - Attendu : le prompt est collé, une fois ; il reste dans le presse-papiers (comme à l'essai 35).
    - Si ce n'est pas le cas, noter : à quelle étape l'entretien s'est arrêté, la phrase affichée, le délai de préparation, le
@@ -1769,8 +1781,14 @@ d'enregistrement s'éteint, **et rien n'est gardé dans l'Historique** (essai 87
    dictée.
    - Attendu : le code ne fait pas attendre la dictée l'entretien annulé avant son micro. **Comportement à confirmer** : que le
      téléchargement lui-même s'arrête à l'annulation n'est pas établi. Notez le temps passé en préparation.
+6. Pendant un entretien (à n'importe quelle phase), ouvrez le menu « … » du panneau.
+   - Attendu : « Historique… » est **grisée** ; cliquer dessus ne fait rien et n'annule pas l'entretien. « Réglages… » et
+     « Quitter Supervox » restent actives, et « Réglages… » annule l'entretien (point 2). L'entrée est aussi grisée pendant une
+     dictée (préparation, enregistrement, mise en forme, correction, collage) et pendant une relecture, et redevient active
+     quand le panneau est au repos. **Comportement à confirmer** : le dessin grisé du vrai menu (l'image est un dessin de
+     l'outil, pas une capture).
    - Si ce n'est pas le cas, noter : un micro resté allumé, un texte arrivé après l'annulation, une relecture inattendue, une
-     entrée d'Historique, l'état où cela s'est produit.
+     entrée d'Historique, un « Historique… » actif pendant l'entretien, l'état où cela s'est produit.
 
 ### 73. Écho sur haut-parleurs : Supervox ne se coupe jamais seul (ouvre le micro, joue un son fort)
 
@@ -2019,42 +2037,65 @@ Un micro que vous pouvez débrancher (casque USB ou filaire). Rien n'est gardé 
 Après les essais 68 à 86 : un entretien conclu, un entretien annulé (72), un entretien en panne de micro (83), un entretien
 dont le modèle fort a échoué (81).
 
-1. Réglages, onglet Historique.
+1. Réglages, onglet Historique (première ouverture depuis le lancement).
    - Attendu : la liste montre les entretiens conclus et celui de l'essai 81, du plus récent au plus ancien (date, début du
      prompt ou « Conversation sans prompt (la rédaction avait échoué) »). L'entretien annulé et celui en panne de micro **n'y
-     sont pas**.
+     sont pas**. Le plus récent est choisi d'office, à cette première ouverture seulement.
 2. Choisissez un entretien.
    - Attendu : à droite, la date, « Supprimer », la section « Prompt » avec « Copier le prompt », la section « Conversation »
-     avec « Copier la conversation ». Cliquez sur « Copier le prompt » : « Copié. » ; collez ailleurs : le texte est exact. Même
-     chose avec la conversation : des paragraphes « Vous : » et « Supervox : ».
-3. Dans le Terminal : `ls -ld ~/Library/Application\ Support/Supervox/Historique` puis
+     avec « Copier la conversation ».
+3. Cliquez sur « Copier le prompt », puis collez ailleurs.
+   - Attendu : « Copié. » apparaît dans la bande fixe, au bas de l'onglet, au-dessus de « Garder les entretiens » ; le texte
+     collé est exact. **Aucun bouton ne bouge** : « Supprimer », « Copier le prompt » et « Copier la conversation » restent
+     exactement où ils étaient (c'est la mesure de mise en page qui est testée, pas un clic réel : regardez). Cliquez deux fois
+     de suite au même endroit sur « Copier le prompt » : la seconde fois, c'est toujours « Copier le prompt » sous le pointeur,
+     jamais « Supprimer ». Même chose avec « Copier la conversation » : des paragraphes « Vous : » et « Supervox : ».
+4. Dans le Terminal : `ls -ld ~/Library/Application\ Support/Supervox/Historique` puis
    `ls -l ~/Library/Application\ Support/Supervox/Historique`.
    - Attendu : le dossier en `drwx------` (0700), un fichier `.json` par entretien en `-rw-------` (0600), nommés
      `aaaa-mm-jj-hhmmss-<identifiant>.json` (date en UTC). Un `@` ou un `+` à la fin des droits (attributs étendus du
      système) est possible : notez-le.
-4. « Supprimer » sur un entretien.
-   - Attendu : il disparaît de la liste et du dossier, **sans confirmation** (un seul clic). C'est un choix du constructeur à
-     rediscuter : un prompt et sa conversation partent sans retour. Dites si vous voulez une confirmation.
-5. « Garder les entretiens » sur « 7 jours », avec au moins un entretien plus vieux que 7 jours (si vous n'en avez pas, sautez
+5. Cliquez sur « Supprimer », dans le détail d'un entretien.
+   - Attendu : une feuille « Supprimer cet entretien ? C'est définitif. » avec « Annuler » et « Supprimer ». « Annuler » ne
+     change rien. « Supprimer » supprime l'entretien de la liste et du dossier. **Ensuite, aucun entretien n'est choisi** : la
+     date du détail est vide et « Supprimer » est grisé, jusqu'à un clic sur une ligne (l'entretien voisin n'est plus choisi
+     d'office). Faites un double clic rapide sur « Supprimer » avec plusieurs entretiens d'essai : une seule feuille, un seul
+     entretien part. **Comportement à confirmer** : que la feuille reste ouverte dans la vraie fenêtre (jamais vu ; il n'y a
+     plus qu'une feuille pour les trois confirmations).
+6. « Garder les entretiens » sur « 7 jours », avec au moins un entretien plus vieux que 7 jours (si vous n'en avez pas, sautez
    ce point).
    - Attendu : une confirmation « n entretiens plus anciens seront supprimés maintenant. » (« 1 entretien plus ancien sera
-     supprimé maintenant. »), avec « Annuler » et « Supprimer ». « Annuler » ne change rien ; « Supprimer » supprime ces
-     entretiens et garde la durée. **Comportement à confirmer** : que la feuille reste ouverte dans la vraie fenêtre.
-6. « Ne rien garder ».
-   - Attendu : « Les n entretiens gardés seront supprimés maintenant. » (« L'entretien gardé sera supprimé maintenant. »).
-     Confirmez : la liste est vide. Faites un entretien et concluez : rien n'est écrit dans le dossier. Remettez « 30 jours ».
-7. Placez dans le dossier un fichier `essai.json` qui contient n'importe quel texte.
+     supprimé maintenant. »), avec « Annuler » et « Supprimer ». Le nombre est relu sur le disque au moment du choix, pas celui
+     de l'affichage. « Annuler » ne change rien ; « Supprimer » supprime ces entretiens et garde la durée. Ce relevé du disque
+     avant le compte n'est pas essayable simplement à la main (il faudrait faire changer le dossier entre l'affichage et le
+     choix) ; il est couvert par les tests (`aStaleSnapshotIsRefreshedBeforeCounting`).
+7. « Ne rien garder ».
+   - Attendu : la ligne « Avec « Ne rien garder », aucun entretien n'est gardé. » apparaît sous l'en-tête. S'il y a des
+     entretiens : « Les n entretiens gardés seront supprimés maintenant. » (« L'entretien gardé sera supprimé maintenant. »),
+     avec leur nombre exact, **même si vous choisissez cette durée dès l'ouverture de la fenêtre**. Confirmez : la liste est
+     vide. Faites un entretien et concluez : rien n'est écrit dans le dossier, et la relecture **ne dit rien** de l'historique
+     (ce n'est pas un échec). Remettez « 30 jours ».
+8. Placez dans le dossier un fichier `essai.json` qui contient n'importe quel texte.
    - Attendu : il n'apparaît pas dans la liste, et une note dit « 1 fichier de l'historique n'a pas pu être lu : il
      n'apparaît pas dans la liste, et « Tout supprimer… » le supprime aussi. ».
-8. « Tout supprimer… ».
+9. « Tout supprimer… ».
    - Attendu : « Supprimer les n entretiens gardés ? C'est définitif. » (« Supprimer l'entretien gardé ? C'est définitif. »),
      « Annuler », « Tout supprimer ». « Annuler » ne supprime rien ; confirmer vide la liste et le dossier, y compris
      `essai.json`.
-9. Choisissez une durée courte (7 jours), quittez et relancez Supervox.
-   - Attendu : seuls les entretiens plus vieux que la durée ont disparu au lancement. Avec un fichier de réglages abîmé ou plus
-     récent, aucune suppression ce jour-là (code lu). Si vous n'avez rien d'assez vieux, ne testez pas. Rétablissez 30 jours.
-   - Si ce n'est pas le cas, noter : un entretien qui manque (annulé ou en panne : voulu ; conclu : pas voulu), un texte
-     différent de ce que vous avez vu, des droits de fichier plus larges, une purge inattendue.
+10. Choisissez une durée courte (7 jours), quittez et relancez Supervox.
+    - Attendu : seuls les entretiens plus vieux que la durée ont disparu au lancement. Avec un fichier de réglages abîmé ou plus
+      récent, aucune suppression ce jour-là (code lu). Si vous n'avez rien d'assez vieux, ne testez pas. Rétablissez 30 jours.
+11. **Entretien conclu que l'historique n'a pas pu garder** (disque plein, dossier refusé, droits impossibles).
+    - Attendu : la relecture porte, après son avis habituel, « Cet entretien n'a pas pu être gardé dans l'historique : copiez le
+      texte si vous voulez le conserver. ». La relecture attend l'écriture au plus 2 s avant de s'ouvrir (choix non mesuré :
+      quelques millisecondes en pratique, non vues) ; au-delà, elle s'ouvre sans cet avis. **Non essayable simplement** : il
+      faudrait rendre le vrai dossier de l'historique inécrivable (le remplacer par un fichier, changer ses droits), ce qui
+      risque vos entretiens ; **je n'ai pas trouvé de manière sûre**. Couvert par les tests (`aFailedSaveIsSaidInTheReview`,
+      `aRefusedRootIsSaidInTheReview`, `theReviewWaitsForTheHistoryOnlyForABoundedTime`). Si cet avis apparaît un jour, notez
+      la cause probable.
+    - Si ce n'est pas le cas, noter : un entretien qui manque (annulé ou en panne : voulu ; conclu : pas voulu), un texte
+      différent de ce que vous avez vu, des droits de fichier plus larges, une purge inattendue, un bouton qui bouge quand
+      « Copié. » ou un message apparaît, une suppression sans feuille, un entretien choisi d'office après une suppression.
 
 ### 88. Vie privée : ce qui part, et vers où, pendant un entretien (ouvre le micro, joue un son)
 
@@ -2242,7 +2283,7 @@ d'invites du trousseau ; le délai entre la fin de votre phrase et la voix de Su
 pièce, matériel) ou, au contraire, n'a pas voulu s'arrêter, et les réglages avancés qui ont marché ; l'écho, selon les
 haut-parleurs, le casque filaire et le casque Bluetooth (le modèle du casque dans vos notes personnelles seulement, jamais dans
 ce dépôt) ; si les questions et le prompt étaient utiles, et si le modèle a respecté la conclusion à la voix ; si les phrases
-des pannes disent bien quoi faire ; si l'Historique contient exactement ce qu'il devait contenir ; si la suppression d'un
-entretien sans confirmation pose problème ; si l'onglet Entretien tient dans la fenêtre ; ce que les tests matériels
+des pannes disent bien quoi faire ; si l'Historique contient exactement ce qu'il devait contenir ; si la confirmation de
+suppression d'un entretien et l'absence de sélection ensuite vous conviennent ; si l'onglet Entretien tient dans la fenêtre ; ce que les tests matériels
 (essais 90 à 93) et le banc (essai 94) ont montré ; et, pour chaque ligne de « Jamais exécuté pendant la construction », ce
 que vous avez fini par voir.
