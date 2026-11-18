@@ -138,8 +138,9 @@ public final class InterviewController: InterviewRunning {
         }
         guard isLive(attempt) else { return }
         update(attempt) { $0.privacy = setup.privacy }
+        let prepared: InterviewPreparation
         do {
-            try await environment.prepare(setup)
+            prepared = try await environment.prepare(setup)
         } catch {
             guard isLive(attempt) else { return }
             log.notice("entretien : préparation échouée")
@@ -147,9 +148,11 @@ public final class InterviewController: InterviewRunning {
             return
         }
         guard isLive(attempt) else { return }
+        // Le vocabulaire qui ne sert pas (petit modèle absent, liste trop longue) : l'avis le dit dès la préparation.
+        if let notice = prepared.notice { update(attempt) { $0.notice = notice } }
         let conversation: any ConversationEngine
         do {
-            conversation = try await environment.makeConversation(setup)
+            conversation = try await environment.makeConversation(prepared.setup)
         } catch {
             guard isLive(attempt) else { return }
             log.notice("entretien : conversation non construite")

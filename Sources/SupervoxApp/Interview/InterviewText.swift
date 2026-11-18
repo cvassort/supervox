@@ -94,6 +94,16 @@ public enum InterviewText {
         }
     }
 
+    // MARK: Vocabulaire
+
+    /// Les avis du vocabulaire, montrés dès la préparation : la règle et les phrases sont celles de la dictée
+    /// (`EffectiveVocabulary`), qui nomment ici l'entretien.
+    public static let vocabularyModelUnavailable = EffectiveVocabulary.modelUnavailableNotice(.interview)
+    public static let vocabularyUncountable = EffectiveVocabulary.uncountableNotice(.interview)
+    public static func vocabularyTrimmed(kept: Int, of total: Int) -> String {
+        EffectiveVocabulary.trimmedNotice(kept: kept, of: total, .interview)
+    }
+
     // MARK: Vie privée
 
     /// Le pied de la vue (D11) : où part le texte, et que l'audio reste sur l'ordinateur. `provider` reçoit les réponses à chaque tour
@@ -258,6 +268,8 @@ public enum InterviewText {
             privacy(provider: forty, strongProvider: other, voiceProvider: forty),
         ]
         sentences += notices.map(notice) + failures.map(turnFailure) + failures.map { notice(.modelFailed($0)) }
+        sentences += [vocabularyModelUnavailable, vocabularyUncountable]
+        sentences += [(0, 9999), (1, 9999), (9998, 9999)].map { vocabularyTrimmed(kept: $0.0, of: $0.1) }
         sentences += knownFailureCodes.flatMap { code in [failure(.microphone(code)), failure(.engine(code))] }
         sentences.append(failure(.engine("code-inconnu")))
         sentences += [

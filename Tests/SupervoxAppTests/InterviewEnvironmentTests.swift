@@ -17,11 +17,12 @@ import Testing
     @Test func theInitializerKeepsTheGivenFunctionAndDefaultsToTheIdentity() {
         let voice = InterviewEnvironment.unavailable.makeVoice
         let plain = InterviewEnvironment(
-            prepare: { _ in }, makeConversation: { _ in throw InterviewEnvironment.Unavailable() }, makeVoice: voice)
+            prepare: { InterviewPreparation(setup: $0) }, makeConversation: { _ in throw InterviewEnvironment.Unavailable() },
+            makeVoice: voice)
         #expect(plain.effectiveTurnSilence(0.7) == 0.7)
         let doubled = InterviewEnvironment(
-            prepare: { _ in }, makeConversation: { _ in throw InterviewEnvironment.Unavailable() }, makeVoice: voice,
-            effectiveTurnSilence: { $0 * 2 })
+            prepare: { InterviewPreparation(setup: $0) }, makeConversation: { _ in throw InterviewEnvironment.Unavailable() },
+            makeVoice: voice, effectiveTurnSilence: { $0 * 2 })
         #expect(doubled.effectiveTurnSilence(0.7) == 1.4)
     }
 }

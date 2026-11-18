@@ -33,6 +33,8 @@ import Testing
             /// Retient chaque `ensureDownloaded` tant que la porte n'est pas ouverte (aucun appel d'un modèle suivant ne passe avant).
             var ensureGate: Gate?
             var deleteError: (any Error)?
+            /// Le compte de jetons d'amorce que rend `promptTokenCount` ; `nil` : longueur impossible à compter (le défaut).
+            var tokenCount: (@Sendable ([String]) -> Int?)?
         }
 
         let state: Mutex<State>
@@ -51,6 +53,7 @@ import Testing
         func failEnsure(_ id: String, _ error: any Error) { state.withLock { $0.ensureErrors[id] = error } }
         func holdEnsure(_ gate: Gate) { state.withLock { $0.ensureGate = gate } }
         func failDelete(_ error: (any Error)?) { state.withLock { $0.deleteError = error } }
+        func countTokens(_ count: @escaping @Sendable ([String]) -> Int?) { state.withLock { $0.tokenCount = count } }
 
         func models() async -> [LocalModel] {
             // Le petit modèle de vocabulaire n'est pas une ligne de la liste.
@@ -77,7 +80,9 @@ import Testing
                 state.deleted.append(id)
             }
         }
-        func promptTokenCount(_ vocabulary: [String], whisperModel: String) async -> Int? { nil }
+        func promptTokenCount(_ vocabulary: [String], whisperModel: String) async -> Int? {
+            state.withLock { $0.tokenCount }?(vocabulary)
+        }
     }
 
     struct Refused: Error {}

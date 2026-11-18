@@ -55,6 +55,29 @@ import Testing
         #expect(setup.turnSilence == InterviewSettings.turnSilenceRange.upperBound)
     }
 
+    @Test("I-1 : la conversation est fabriquée avec la configuration que la préparation rend (vocabulaire ajusté), et son avis est montré")
+    func theConversationGetsThePreparedSetupAndItsNotice() async throws {
+        let rig = InterviewRig()
+        rig.settings.transcription.vocabulary = ["terme-un", "terme-deux"]
+        rig.environment.configure { knobs in
+            knobs.preparation = { setup in
+                var adjusted = setup
+                adjusted.config.vocabulary = ["terme-un"]
+                adjusted.transcription.vocabulary = ["terme-un"]
+                return InterviewPreparation(setup: adjusted, notice: "Avis de la préparation.")
+            }
+        }
+        rig.start()
+        _ = try await rig.driver()
+        let resolved = try #require(rig.environment.preparedSetups.first)
+        #expect(resolved.config.vocabulary == ["terme-un", "terme-deux"], "la préparation reçoit la liste des réglages")
+        let made = try #require(rig.environment.madeSetups.first)
+        #expect(made.config.vocabulary == ["terme-un"], "la conversation reçoit celle que la préparation a rendue")
+        #expect(made.transcription.vocabulary == ["terme-un"])
+        #expect(rig.panel.interview?.notice == "Avis de la préparation.")
+        rig.controller.cancel()
+    }
+
     @Test("un second lancement pendant un entretien est sans effet")
     func aSecondStartIsIgnored() async throws {
         let rig = InterviewRig()

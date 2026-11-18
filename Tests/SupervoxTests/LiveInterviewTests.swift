@@ -19,6 +19,7 @@ import Testing
             var systemVoices: [String] = []
             var providerVoices: [(provider: String, voice: ProviderVoice)] = []
             var parts: [LiveInterview.Parts] = []
+            var conversations: [HeldConversation] = []
         }
         private let state = Mutex(State())
 
@@ -26,6 +27,7 @@ import Testing
         var systemVoices: [String] { state.withLock { $0.systemVoices } }
         var providerVoices: [(provider: String, voice: ProviderVoice)] { state.withLock { $0.providerVoices } }
         var parts: [LiveInterview.Parts] { state.withLock { $0.parts } }
+        var conversations: [HeldConversation] { state.withLock { $0.conversations } }
 
         func audio() -> any AudioIO {
             let audio = ScriptedAudioIO()
@@ -44,8 +46,12 @@ import Testing
         }
 
         func assemble(_ parts: LiveInterview.Parts) -> any ConversationEngine {
-            state.withLock { $0.parts.append(parts) }
-            return IdleConversation()
+            let conversation = HeldConversation()
+            state.withLock {
+                $0.parts.append(parts)
+                $0.conversations.append(conversation)
+            }
+            return conversation
         }
     }
 
@@ -63,11 +69,38 @@ import Testing
         }
     }
 
-    /// Une conversation qui ne fait rien : l'assemblage double la rend, personne ne la démarre.
-    final class IdleConversation: ConversationEngine {
-        func start() async -> AsyncStream<ConversationEvent> { AsyncStream { $0.finish() } }
+    /// La conversation que l'assemblage double rend : elle compte ses démarrages et garde son flux ouvert jusqu'à `cancel()`, qui
+    /// rend `.finished(.cancelled)` comme le moteur. Aucun son, aucun modèle.
+    final class HeldConversation: ConversationEngine, Sendable {
+        private struct State {
+            var starts = 0
+            var sink: AsyncStream<ConversationEvent>.Continuation?
+        }
+        private let state = Mutex(State())
+
+        var starts: Int { state.withLock { $0.starts } }
+
+        func start() async -> AsyncStream<ConversationEvent> {
+            let (stream, sink) = AsyncStream.makeStream(of: ConversationEvent.self)
+            state.withLock {
+                $0.starts += 1
+                $0.sink = sink
+            }
+            return stream
+        }
         func conclude() async {}
-        func cancel() async {}
+        func cancel() async {
+            let sink = state.withLock { $0.sink }
+            sink?.yield(.finished(.cancelled))
+            sink?.finish()
+        }
+    }
+
+    /// Les issues d'un entretien.
+    final class Outcomes: Sendable {
+        private let state = Mutex<[InterviewOutcome]>([])
+        var list: [InterviewOutcome] { state.withLock { $0 } }
+        func append(_ outcome: InterviewOutcome) { state.withLock { $0.append(outcome) } }
     }
 
     struct Rig {
@@ -96,14 +129,16 @@ import Testing
         return Rig(live: live, engines: engines, doubles: doubles, ledger: ledger, catalog: catalog, made: made)
     }
 
-    static func setup(engine: TranscriptionEngine = .parakeet, turnSilence: Double = 0.9) -> InterviewSetup {
+    static func setup(
+        engine: TranscriptionEngine = .parakeet, turnSilence: Double = 0.9, vocabulary: [String] = []
+    ) -> InterviewSetup {
         let config = ConversationConfig(
             fastModel: "modele-exemple-rapide", strongModel: "modele-exemple-fort", maxQuestions: 6, template: "Gabarit.",
-            language: "fr", vocabulary: [], interruptMinDuration: 0.3, interruptLevel: 0.1)
+            language: "fr", vocabulary: vocabulary, interruptMinDuration: 0.3, interruptLevel: 0.1)
         return InterviewSetup(
             engine: engine, fastModel: SilentModel(), strongModel: SilentModel(), voice: NamedVoice("voix de la préparation"),
             config: config, turnSilence: turnSilence,
-            transcription: TranscriptionSettings(engine: .parakeet, whisperModel: "small", language: "fr", vocabulary: []),
+            transcription: TranscriptionSettings(engine: .parakeet, whisperModel: "small", language: "fr", vocabulary: vocabulary),
             providerName: "Fournisseur d'exemple", strongProviderName: "Fournisseur d'exemple", voiceProviderName: nil)
     }
 
@@ -116,7 +151,8 @@ import Testing
         }
     }
 
-    private func until(_ condition: () -> Bool) async -> Bool {
+    /// Sur l'isolation de l'appelant : un test du fil principal y lit l'état du contrôleur.
+    nonisolated(nonsending) private func until(_ condition: () -> Bool) async -> Bool {
         for round in 0..<20000 {
             if condition() { return true }
             if round % 50 == 49 { try? await Task.sleep(for: .milliseconds(1)) } else { await Task.yield() }
@@ -140,7 +176,7 @@ import Testing
     func thePreparedEnginesAreTheOnesTheConversationGets() async throws {
         let rig = Self.rig()
         let setup = Self.setup(turnSilence: 0.9)
-        try await rig.live.environment.prepare(setup)
+        _ = try await rig.live.environment.prepare(setup)
 
         let interviewDetector = rig.engines.cache.detector(minSilence: 0.9)
         #expect(await interviewDetector.isPrepared, "le détecteur de l'entretien est préparé")
@@ -168,7 +204,7 @@ import Testing
         let rig = Self.rig(states: states)
         let setup = Self.setup(engine: .whisperKit)
         #expect(setup.transcription.engine == .whisperKit)
-        try await rig.live.environment.prepare(setup)
+        _ = try await rig.live.environment.prepare(setup)
         #expect(rig.catalog.ensured == [LocalModelID.whisper("small")])
         #expect(rig.doubles.whisper("small").prepares == 1)
         #expect(rig.doubles.parakeet.prepares == 0)
@@ -191,7 +227,7 @@ import Testing
         let environment = rig.live.environment
         let setup = Self.setup()
         let made = Task { _ = try await environment.makeConversation(setup) }
-        let prepared = Task { try await environment.prepare(setup) }
+        let prepared = Task { _ = try await environment.prepare(setup) }
         await settle()
         #expect(rig.made.parts.isEmpty, "aucune conversation tant que la porte est fermée")
         #expect(rig.made.audios.isEmpty, "aucun son fabriqué")
@@ -224,6 +260,72 @@ import Testing
         await preload.value
         if case .success = await made.result { Issue.record("l'annulation n'est pas rendue") }
         #expect(rig.made.parts.isEmpty && rig.made.audios.isEmpty)
+    }
+
+    // MARK: - Le vocabulaire (I-1) : la règle de la dictée
+
+    @MainActor
+    @Test("I-1 : petit modèle de vocabulaire absent : l'entretien démarre, la conversation reçoit une configuration sans vocabulaire, l'avis le dit")
+    func withoutTheVocabularyModelTheInterviewStartsWithoutVocabulary() async throws {
+        var states = Stub.allReady
+        states[LocalModelID.parakeetVocabulary] = .absent
+        let rig = Self.rig(states: states)
+        rig.catalog.failEnsure(LocalModelID.parakeetVocabulary, LiveDictationTests.Refused())
+        let panel = PanelModel(lastModeID: ModeChip.interviewID)
+        let setup = Self.setup(vocabulary: ["terme-un", "terme-deux"])
+        let controller = InterviewController(
+            environment: rig.live.environment, settings: { .defaults }, behavior: { .toggle }, resolve: { _, _ in setup },
+            history: DiscardingInterviewHistory(), panel: panel)
+        let outcomes = Outcomes()
+        controller.start(engine: nil) { outcomes.append($0) }
+
+        #expect(await until { rig.made.conversations.first?.starts == 1 }, "l'entretien démarre")
+        let parts = try #require(rig.made.parts.first)
+        #expect(parts.setup.config.vocabulary.isEmpty, "le moteur de conversation ne reçoit aucun terme")
+        #expect(parts.setup.transcription.vocabulary.isEmpty)
+        #expect(rig.catalog.ensured == [LocalModelID.parakeetVocabulary], "le petit modèle a été demandé au catalogue, rien d'autre")
+        #expect(panel.interview?.notice == InterviewText.vocabularyModelUnavailable)
+        #expect(outcomes.list.isEmpty)
+
+        controller.cancel()
+        #expect(await until { outcomes.list == [.cancelled] })
+    }
+
+    @Test("I-1 (témoin) : petit modèle prêt, Parakeet : la liste part entière, sans avis")
+    func withTheVocabularyModelTheListIsKept() async throws {
+        let rig = Self.rig()
+        let prepared = try await rig.live.environment.prepare(Self.setup(vocabulary: ["terme-un", "terme-deux"]))
+        #expect(prepared.notice == nil)
+        #expect(prepared.setup.config.vocabulary == ["terme-un", "terme-deux"])
+        #expect(prepared.setup.transcription.vocabulary == ["terme-un", "terme-deux"])
+        #expect(rig.catalog.ensured.isEmpty)
+        _ = try await rig.live.environment.makeConversation(prepared.setup)
+        #expect(try #require(rig.made.parts.first).setup.config.vocabulary == ["terme-un", "terme-deux"])
+    }
+
+    @Test("I-1 : WhisperKit, liste trop longue pour l'amorce : les premiers termes qui tiennent, comme la dictée, et l'avis le dit")
+    func withWhisperKitATooLongListIsTrimmed() async throws {
+        let rig = Self.rig()
+        // Chaque terme vaut la moitié de la limite : deux tiennent, trois non.
+        let perTerm = rig.engines.environment.promptTokenLimit / 2
+        rig.catalog.countTokens { $0.count * perTerm }
+        let prepared = try await rig.live.environment.prepare(
+            Self.setup(engine: .whisperKit, vocabulary: ["terme-un", "terme-deux", "terme-trois"]))
+        #expect(prepared.setup.config.vocabulary == ["terme-un", "terme-deux"])
+        #expect(prepared.setup.transcription.vocabulary == ["terme-un", "terme-deux"])
+        #expect(prepared.notice == InterviewText.vocabularyTrimmed(kept: 2, of: 3))
+        _ = try await rig.live.environment.makeConversation(prepared.setup)
+        #expect(try #require(rig.made.parts.first).setup.config.vocabulary == ["terme-un", "terme-deux"])
+    }
+
+    @Test("I-1 : WhisperKit, longueur impossible à compter : aucun terme, comme la dictée, et l'avis le dit")
+    func withWhisperKitAnUncountableListIsDropped() async throws {
+        let rig = Self.rig()
+        let prepared = try await rig.live.environment.prepare(
+            Self.setup(engine: .whisperKit, vocabulary: ["terme-un", "terme-deux"]))
+        #expect(prepared.setup.config.vocabulary.isEmpty)
+        #expect(prepared.setup.transcription.vocabulary.isEmpty)
+        #expect(prepared.notice == InterviewText.vocabularyUncountable)
     }
 
     // MARK: - La voix (amendement I)

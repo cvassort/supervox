@@ -147,6 +147,19 @@ public struct InterviewSetup: Sendable {
     }
 }
 
+/// Ce que la préparation rend : la configuration avec laquelle la conversation est fabriquée (le vocabulaire effectif, selon la règle
+/// de la dictée, `EffectiveVocabulary`), et l'avis à montrer quand une partie du vocabulaire ne sert pas.
+public struct InterviewPreparation: Sendable {
+    public var setup: InterviewSetup
+    /// Une phrase de `InterviewText` (vocabulaire), `nil` quand il n'y a rien à dire.
+    public var notice: String?
+
+    public init(setup: InterviewSetup, notice: String? = nil) {
+        self.setup = setup
+        self.notice = notice
+    }
+}
+
 /// Ce que le contrôleur de l'entretien demande au monde extérieur : préparer le moteur de transcription, construire la conversation.
 /// La cible `Supervox` le construit avec les vrais moteurs (et le son réel) ; tout le reste (tests, outil de rendu, constructeurs
 /// par défaut) reçoit `unavailable`. `SupervoxApp` ne dépend pas des moteurs.
@@ -154,8 +167,10 @@ public struct InterviewEnvironment: Sendable {
     /// Télécharge, si besoin, les modèles de `setup.transcription`, puis charge le moteur de transcription (`setup.engine`, variante
     /// WhisperKit de `setup.transcription`) et le détecteur de voix de l'entretien, au silence de fin de tour `setup.turnSilence`
     /// (un exemplaire distinct de celui de la dictée, que le préchargement du lancement ne prépare pas). Sans cela, le premier tour
-    /// paierait le chargement. Lève si un modèle ne peut pas être obtenu ; une tâche annulée s'arrête. N'ouvre ni micro ni son.
-    public var prepare: @Sendable (InterviewSetup) async throws -> Void
+    /// paierait le chargement. Applique au vocabulaire la règle de la dictée (`EffectiveVocabulary`) et rend la configuration avec
+    /// laquelle fabriquer la conversation. Lève si un modèle ne peut pas être obtenu ; une tâche annulée s'arrête. N'ouvre ni micro
+    /// ni son.
+    public var prepare: @Sendable (InterviewSetup) async throws -> InterviewPreparation
     /// Construit la conversation, une fois la porte de préchargement passée. Ne démarre ni micro ni son : c'est `start()`.
     public var makeConversation: @Sendable (InterviewSetup) async throws -> any ConversationEngine
     /// Fabrique une voix pour `InterviewSetup.resolve`. Contrat : avec `nil`, la voix **du système** pour ce choix ; avec un
@@ -167,7 +182,7 @@ public struct InterviewEnvironment: Sendable {
     public var effectiveTurnSilence: @Sendable (Double) -> Double
 
     public init(
-        prepare: @escaping @Sendable (InterviewSetup) async throws -> Void,
+        prepare: @escaping @Sendable (InterviewSetup) async throws -> InterviewPreparation,
         makeConversation: @escaping @Sendable (InterviewSetup) async throws -> any ConversationEngine,
         makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer,
         effectiveTurnSilence: @escaping @Sendable (Double) -> Double = { $0 }

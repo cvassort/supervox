@@ -42,16 +42,30 @@ struct LiveInterview: Sendable {
     }
 
     /// Télécharge ce qui manque aux réglages de transcription de l'entretien (par le catalogue, après la porte de préchargement),
-    /// puis charge le détecteur de l'entretien, à son silence de fin de tour, et le moteur de transcription. Le préchargement du
-    /// lancement ne prépare que le détecteur de la dictée : sans ceci, le premier tour paierait le chargement. N'ouvre aucun son.
-    func prepare(_ setup: InterviewSetup) async throws {
-        _ = try await engines.downloadModels(for: setup.transcription)
+    /// applique au vocabulaire la règle de la dictée (`EffectiveVocabulary`, avec le même compte de jetons), puis charge le
+    /// détecteur de l'entretien, à son silence de fin de tour, et le moteur de transcription. Le préchargement du lancement ne
+    /// prépare que le détecteur de la dictée : sans ceci, le premier tour paierait le chargement. N'ouvre aucun son.
+    func prepare(_ setup: InterviewSetup) async throws -> InterviewPreparation {
+        let downloaded = try await engines.downloadModels(for: setup.transcription)
+        var prepared = InterviewPreparation(setup: setup)
+        let dictation = engines.environment
+        if let vocabulary = await EffectiveVocabulary.resolve(
+            for: setup.transcription, vocabularyModelUnavailable: downloaded.vocabularyModelUnavailable, activity: .interview,
+            limit: dictation.promptTokenLimit, count: dictation.promptTokenCount)
+        {
+            // Le moteur de conversation transcrit avec `config.vocabulary` : sans terme, Parakeet ne va rien chercher hors du
+            // catalogue, et WhisperKit ne reçoit jamais une amorce qu'il refuserait.
+            prepared.setup.config.vocabulary = vocabulary.terms
+            prepared.setup.transcription.vocabulary = vocabulary.terms
+            prepared.notice = vocabulary.notice
+        }
         // Le réseau de FluidAudio est rétabli : aucun préchargement ne tourne plus quand la porte s'ouvre.
         await engines.gate.waitUntilFinished()
         try Task.checkCancellation()
         try await engines.cache.detector(minSilence: setup.turnSilence).prepare()
         try Task.checkCancellation()
-        try await engines.cache.engines(for: setup.transcription).final.prepare()
+        try await engines.cache.engines(for: prepared.setup.transcription).final.prepare()
+        return prepared
     }
 
     /// Attend la porte de préchargement (comme une session de dictée), puis assemble la conversation avec le détecteur de

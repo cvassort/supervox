@@ -176,6 +176,8 @@ final class FakeInterviewEnvironment: Sendable {
         var startGate: TestGate?
         /// La tâche qui fabriquait la conversation était annulée quand la fabrication a repris.
         var makeSawCancellation = false
+        /// Ce que la préparation rend (vocabulaire ajusté, avis) ; `nil` : la configuration reçue, sans avis.
+        var preparation: (@Sendable (InterviewSetup) -> InterviewPreparation)?
     }
 
     let journal: Journal
@@ -186,6 +188,7 @@ final class FakeInterviewEnvironment: Sendable {
     var prepareCount: Int { state.withLock { $0.prepared.count } }
     var makeCount: Int { state.withLock { $0.made.count } }
     var preparedSetups: [InterviewSetup] { state.withLock { $0.prepared } }
+    var madeSetups: [InterviewSetup] { state.withLock { $0.made } }
     var drivers: [ConversationDriver] { state.withLock { $0.drivers } }
     var makeSawCancellation: Bool { state.withLock { $0.makeSawCancellation } }
 
@@ -198,8 +201,9 @@ final class FakeInterviewEnvironment: Sendable {
         state.withLock { state in
             var knobs = PrepareKnobs(
                 prepareGate: state.prepareGate, makeGate: state.makeGate, prepareError: state.prepareError,
-                makeError: state.makeError, startGate: state.startGate)
+                makeError: state.makeError, startGate: state.startGate, preparation: state.preparation)
             change(&knobs)
+            state.preparation = knobs.preparation
             state.startGate = knobs.startGate
             state.prepareGate = knobs.prepareGate
             state.makeGate = knobs.makeGate
@@ -214,18 +218,21 @@ final class FakeInterviewEnvironment: Sendable {
         var prepareError: (any Error)?
         var makeError: (any Error)?
         var startGate: TestGate?
+        var preparation: (@Sendable (InterviewSetup) -> InterviewPreparation)?
     }
 
     var environment: InterviewEnvironment {
         InterviewEnvironment(
             prepare: { [self] setup in
-                let (gate, error) = state.withLock { state -> (TestGate?, (any Error)?) in
+                let (gate, error, preparation) = state.withLock {
+                    state -> (TestGate?, (any Error)?, (@Sendable (InterviewSetup) -> InterviewPreparation)?) in
                     state.prepared.append(setup)
-                    return (state.prepareGate, state.prepareError)
+                    return (state.prepareGate, state.prepareError, state.preparation)
                 }
                 journal.append("préparation")
                 await gate?.wait()
                 if let error { throw error }
+                return preparation?(setup) ?? InterviewPreparation(setup: setup)
             },
             makeConversation: { [self] setup in
                 let (gate, error, startGate) = state.withLock { state -> (TestGate?, (any Error)?, TestGate?) in

@@ -43,10 +43,9 @@ public final class DictationController {
     /// Pendant que les moteurs se chargent en mémoire (après le téléchargement, ou au premier appui qui suit le lancement).
     public static let loadingNotice = "Chargement du modèle…"
     public static let interruptedNotice = "La dictée a été interrompue."
-    public static let uncountableNotice =
-        "Le vocabulaire n'a pas servi à cette dictée : sa longueur n'a pas pu être vérifiée avec ce modèle."
-    public static let vocabularyModelNotice =
-        "Le vocabulaire n'a pas servi à cette dictée : le petit modèle qui le reconnaît n'a pas pu être téléchargé. Il sera retenté à la prochaine dictée."
+    /// Les avis du vocabulaire viennent de la règle partagée avec l'entretien (`EffectiveVocabulary`).
+    nonisolated public static let uncountableNotice = EffectiveVocabulary.uncountableNotice(.dictation)
+    nonisolated public static let vocabularyModelNotice = EffectiveVocabulary.modelUnavailableNotice(.dictation)
     public static let preparationFailedNotice =
         "La transcription n'a pas pu être préparée. Ouvrez les Réglages, onglet Transcription : vérifiez le moteur et le modèle choisis ; si le modèle manque, téléchargez-le ; s'il est indiqué « Prêt », vous pouvez le supprimer puis le télécharger de nouveau (cela demande une connexion à Internet)."
 
@@ -516,33 +515,17 @@ public final class DictationController {
         run.loadingNotice = loaded ? nil : Self.loadingNotice
         refreshNotice(run)
 
+        // La règle du vocabulaire, la même que celle de l'entretien (`EffectiveVocabulary`) : petit modèle absent, aucun terme ;
+        // sous WhisperKit, les premiers termes qui tiennent dans l'amorce, aucun si la longueur ne se compte pas. La dictée ne doit
+        // jamais échouer à cause du vocabulaire ; la notice dit ce qui n'a pas servi.
         var effective = settings
-        if vocabularyModelUnavailable {
-            // Le petit modèle de vocabulaire ne s'est pas téléchargé alors que le reste est là : la dictée a lieu sans
-            // vocabulaire, et la notice le dit. Plus rien à compter.
-            effective.vocabulary = []
-            run.vocabularyNotice = Self.vocabularyModelNotice
-            refreshNotice(run)
-        } else if settings.engine == .whisperKit, !settings.vocabulary.isEmpty {
-            let model = settings.whisperModel
-            let environment = self.environment
-            let outcome = await VocabularyFit.fit(settings.vocabulary, limit: environment.promptTokenLimit) {
-                await environment.promptTokenCount($0, model)
-            }
+        if let vocabulary = await EffectiveVocabulary.resolve(
+            for: settings, vocabularyModelUnavailable: vocabularyModelUnavailable, activity: .dictation,
+            limit: environment.promptTokenLimit, count: environment.promptTokenCount)
+        {
             guard isLive(run) else { return }
-            switch outcome {
-            case .fits:
-                break
-            case .trimmed(let kept, let total):
-                effective.vocabulary = kept
-                run.vocabularyNotice = Self.trimmedNotice(kept: kept.count, of: total)
-            case .unknown:
-                // Longueur impossible à compter (tokenizer introuvable) : le moteur refuserait une liste trop longue après
-                // que l'utilisateur a parlé, et la dictée ne doit jamais échouer à cause du vocabulaire. La liste ne part pas
-                // pour cette dictée, et la notice le dit.
-                effective.vocabulary = []
-                run.vocabularyNotice = Self.uncountableNotice
-            }
+            effective.vocabulary = vocabulary.terms
+            run.vocabularyNotice = vocabulary.notice
             refreshNotice(run)
         }
 
@@ -1155,15 +1138,6 @@ public final class DictationController {
         }
     }
 
-    private static func trimmedNotice(kept: Int, of total: Int) -> String {
-        let used =
-            switch kept {
-            case 0: "aucun terme n'a pu servir"
-            case 1: "seul le premier terme sur \(total) sert"
-            default: "seuls les \(kept) premiers termes sur \(total) servent"
-            }
-        return "Vocabulaire trop long pour ce modèle : \(used) à cette dictée. Raccourcissez la liste dans Réglages, onglet Transcription."
-    }
 }
 
 /// Reprend la continuation une seule fois, par le premier qui arrive.
