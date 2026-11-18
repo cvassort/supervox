@@ -355,6 +355,24 @@ import Testing
         #expect(stopped < made)
     }
 
+    @Test("M-1 : Échap pendant la résolution (invite du trousseau tenue) : aucun micro n'est à rendre, une dictée démarre aussitôt")
+    func aDictationAfterEscapeDuringTheResolutionDoesNotWait() async throws {
+        let rig = InterviewDictationRig()
+        let resolution = TestGate()
+        defer { resolution.open() }
+        rig.interview.resolveGate = resolution
+        rig.controller.hotKeyPressed()
+        #expect(await until { rig.interview.resolveCount == 1 })
+        rig.controller.escapePressed()
+        #expect(rig.view == nil && !rig.controller.isBusy)
+
+        rig.dictation.knobs.modeID = ModeChip.rawID
+        rig.controller.hotKeyPressed()
+        _ = await rig.dictation.session()
+        #expect(rig.dictation.engines.sessions.count == 1, "la dictée n'attend pas une résolution qui n'a ouvert aucun micro")
+        #expect(rig.interview.environment.makeCount == 0, "l'entretien annulé n'a rien fabriqué")
+    }
+
     // MARK: - Règle 7, T9-2 : Échap et fermeture
 
     enum Moment: String, CaseIterable, Sendable { case preparing, listening, thinking, speaking, concluding }

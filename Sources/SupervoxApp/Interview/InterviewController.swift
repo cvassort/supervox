@@ -54,8 +54,9 @@ public final class InterviewController: InterviewRunning {
 
     /// L'entretien en cours, `nil` hors entretien.
     private var current: Attempt?
-    /// Les lectures de flux pas encore terminées (conversation finie ou annulée qui s'arrête), et ceux qui attendent leur fin.
-    private var stopping: [ObjectIdentifier: Task<Void, Never>] = [:]
+    /// Les tâches de chaque entretien pas encore terminées (résolution, préparation, lecture du flux d'une conversation finie ou
+    /// annulée qui s'arrête), et ceux qui attendent leur fin.
+    private var stopping: [ObjectIdentifier: (attempt: Attempt, reader: Task<Void, Never>)] = [:]
     private var stopWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     /// - Parameters:
@@ -99,7 +100,7 @@ public final class InterviewController: InterviewRunning {
         log.notice("entretien lancé")
         let task = Task { [weak self] in _ = await self?.run(attempt, settings: settings, engine: engine) }
         attempt.reader = task
-        stopping[ObjectIdentifier(attempt)] = task
+        stopping[ObjectIdentifier(attempt)] = (attempt, task)
         Task { [weak self] in
             await task.value
             self?.readerFinished(attempt)
@@ -163,6 +164,7 @@ public final class InterviewController: InterviewRunning {
         // Annulé pendant la fabrication : la conversation n'est jamais démarrée (aucun micro) et se libère ici.
         guard isLive(attempt) else { return }
         attempt.conversation = conversation
+        attempt.holdsConversation = true
         let events = await conversation.start()
         attempt.started = true
         // Annulé pendant `start()` : la demande d'arrêt partie de `cancel()` a pu arriver avant le démarrage (le moteur ignore un
@@ -199,14 +201,17 @@ public final class InterviewController: InterviewRunning {
     }
 
     /// Une conversation d'un entretien fini (annulé, le plus souvent) n'a pas encore rendu son micro. Celle de l'entretien en cours
-    /// ne compte pas : elle n'a rien à rendre tant qu'il dure.
+    /// ne compte pas : elle n'a rien à rendre tant qu'il dure. Un entretien annulé avant d'avoir une conversation (résolution,
+    /// préparation, fabrication) ne compte pas non plus : il n'a ouvert aucun micro, une dictée n'attend pas son trousseau ni son
+    /// téléchargement.
     private var isStoppingFinishedAttempts: Bool {
-        let live = current.map(ObjectIdentifier.init)
-        return stopping.keys.contains { $0 != live }
+        stopping.values.contains { !isLive($0.attempt) && $0.attempt.holdsConversation }
     }
 
+    /// Un entretien qui commence attend la fin de toutes les tâches des précédents, y compris leur préparation : deux préparations
+    /// des mêmes moteurs ne se croisent pas.
     private func waitForOthers(than attempt: Attempt) async {
-        let others = stopping.filter { $0.key != ObjectIdentifier(attempt) }.map(\.value)
+        let others = stopping.filter { $0.key != ObjectIdentifier(attempt) }.map(\.value.reader)
         for other in others { await other.value }
     }
 
@@ -427,6 +432,8 @@ private final class Attempt {
     var reader: Task<Void, Never>?
     /// La conversation, de sa fabrication à sa fin.
     var conversation: (any ConversationEngine)?
+    /// Une conversation lui a été confiée (elle peut ouvrir le micro) : ce qui attend le micro attend la fin de sa lecture.
+    var holdsConversation = false
     var concludeSent = false
     /// `start()` de la conversation a rendu la main : le moteur prend désormais une conclusion.
     var started = false
