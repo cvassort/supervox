@@ -302,7 +302,7 @@ let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
         .appendingPathComponent("supervox-snapshots-history-\(UUID().uuidString)", isDirectory: true)
     var settings = AppSettings.defaults
     var copyAccepts = true
-    var root: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+    var root: URL { directory.appendingPathComponent("entretiens-exemple", isDirectory: true) }
     lazy var history = InterviewHistory(root: root, retentionDays: { 365 }, now: { ExampleHistory.now })
 
     func seed(withExamples: Bool = true, unreadable: Bool = false, older: Bool = false) async throws {
