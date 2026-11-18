@@ -792,14 +792,15 @@ import Testing
     }
 
     @Test("I3 : « Historique… » est grisée tant qu'une dictée tient le panneau, active quand elle ne le tient plus")
-    func theHistoryEntryIsDisabledWhileADictationHoldsThePanel() {
+    func theHistoryEntryIsDisabledWhileADictationHoldsThePanel() throws {
         for stage in [DictationStage.preparing, .recording, .finalizing, .formatting, .review, .pasting] {
             let model = PanelModel(lastModeID: "dictee-brute")
             model.onOpenHistory = {}
             model.setDictation(DictationViewState(stage: stage))
             #expect(model.holdsPanel)
             #expect(!model.isHistoryEntryEnabled, "\(stage)")
-            #expect(!view(model).menuItems.first { $0.entry == .history }!.isEnabled, "\(stage)")
+            let entry = try #require(view(model).menuItems.first { $0.entry == .history }, "entrée Historique absente du menu")
+            #expect(!entry.isEnabled, "\(stage)")
         }
         let idle = PanelModel(lastModeID: "dictee-brute")
         idle.onOpenHistory = {}
