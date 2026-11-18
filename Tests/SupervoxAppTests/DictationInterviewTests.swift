@@ -44,7 +44,8 @@ import Testing
 
     /// Rien n'a été collé ni copié, et rien n'est parti à l'historique.
     func nothingKept() async {
-        await settle()
+        // La fin observée (lecture du flux finie, écritures finies), pas une durée : après elle, « rien » est un fait.
+        #expect(await interview.controller.drained(), "la lecture et les écritures de l'entretien finissent")
         #expect(dictation.pasted.isEmpty)
         #expect(dictation.writtenTexts == 0)
         #expect(interview.history.attempts == 0)
