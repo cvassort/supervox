@@ -25,7 +25,8 @@ public struct SystemVoiceInfo: Equatable, Sendable {
 }
 
 /// Les voix installées sur la machine. `installed` est le seul endroit du dépôt qui demande la liste au système (garde de
-/// `SourceScanTests`) ; seul le programme l'appelle, et la voix du système par son constructeur public.
+/// `SourceScanTests`). Hors de ce fichier (où le constructeur public de la voix du système le prend), seul le programme
+/// (`main.swift`) a le droit de le nommer.
 public enum SystemVoices {
     public static let installed: @Sendable () -> [SystemVoiceInfo] = {
         AVSpeechSynthesisVoice.speechVoices().map {
