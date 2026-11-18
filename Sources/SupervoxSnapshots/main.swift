@@ -1,12 +1,14 @@
 import AppKit
 import SupervoxApp
 import SupervoxCore
+import SupervoxEngines
 import SwiftUI
 
 // supervox-snapshots <dossier> : rend chaque écran de l'application en PNG, en clair et en sombre.
 //
 // Données d'exemple seulement (adresses `example.com`), doubles partout : aucun accès au trousseau, au réseau, aux
-// réglages réels, au clavier ni aux permissions du système. Chaque vue est posée dans une fenêtre placée hors de
+// réglages réels, au clavier ni aux permissions du système. Seule écriture hors du dossier de sortie : les historiques d'exemple
+// (`ExampleHistory`), sous `FileManager.default.temporaryDirectory`, à un nom unique, retirés par `defer` (jamais le dossier de l'application). Chaque vue est posée dans une fenêtre placée hors de
 // l'écran, puis la vue d'hébergement SwiftUI (le contenu de la fenêtre, sans cadre, barre de titre ni barre d'onglets)
 // est copiée par `cacheDisplay` ; le fond est peint explicitement, sans quoi il serait transparent. Voir `render`.
 
@@ -253,12 +255,9 @@ let modesFast = ModelChoice(providerID: modesProvider.id, model: "modele-exemple
     return model
 }
 
-/// Le silence que le détecteur de voix applique en pratique : la formule de `FluidStreamingVoiceDetector.effectiveSilence`, copiée ici
-/// pour l'image (l'outil de rendu ne dépend pas des moteurs). `1 + ⌈Int(s × 16 000) / 4 096⌉` blocs de 4 096 échantillons à 16 kHz.
-let examplePracticalSilence: @Sendable (Double) -> Double = { requested in
-    let blocks = 1 + (Int(requested * 16_000) + 4_095) / 4_096
-    return Double(blocks * 4_096) / 16_000
-}
+/// Le silence que le détecteur de voix applique en pratique : la VRAIE formule (`FluidStreamingVoiceDetector.effectiveSilence`, fonction
+/// pure : elle ne charge aucun modèle), pas une copie qui pourrait diverger de l'application.
+let examplePracticalSilence: @Sendable (Double) -> Double = { FluidStreamingVoiceDetector.effectiveSilence($0) }
 
 /// Les réglages en mémoire de l'onglet Entretien : `read` les donne, `update` les modifie, ou lève si `failure` est posé. Aucun
 /// fichier : l'application réelle est remplacée par des doubles.
@@ -926,7 +925,7 @@ for dark in [false, true] {
             interview: ExampleInterview().makeModel(), history: model)
     }
     let historyExample = ExampleHistory()
-    defer { historyExample.remove() }
+    defer { historyExample.remove() }  // retiré même si un rendu lève
     try await historyExample.seed()
     try await render(
         historyTab(await historyExample.makeModel()), name: "reglages-historique", dark: dark, background: window,
@@ -936,36 +935,37 @@ for dark in [false, true] {
     try await render(
         historyTab(historyCopied), name: "reglages-historique-copie", dark: dark, background: window, size: settingsSize)
     let historyEmptyExample = ExampleHistory()
+    defer { historyEmptyExample.remove() }  // retiré même si un rendu lève
     try await historyEmptyExample.seed(withExamples: false)
     try await render(
         historyTab(await historyEmptyExample.makeModel()), name: "reglages-historique-vide", dark: dark, background: window,
         size: settingsSize)
-    historyEmptyExample.remove()
     // C-1 : le dossier a confirmé 365 jours, les réglages disent 30 (remis à zéro hors de l'onglet) : une ligne le dit.
     let historyChangedExample = ExampleHistory()
+    defer { historyChangedExample.remove() }  // retiré même si un rendu lève
     try await historyChangedExample.seed()
     try await historyChangedExample.history.confirmRetention(365)
     try await render(
         historyTab(await historyChangedExample.makeModel()), name: "reglages-historique-duree-changee", dark: dark,
         background: window, size: settingsSize)
-    historyChangedExample.remove()
     let historyNoneExample = ExampleHistory()
+    defer { historyNoneExample.remove() }  // retiré même si un rendu lève
     historyNoneExample.settings.history.retentionDays = 0
     try await historyNoneExample.seed(withExamples: false)
     try await render(
         historyTab(await historyNoneExample.makeModel()), name: "reglages-historique-rien-garder", dark: dark,
         background: window, size: settingsSize)
-    historyNoneExample.remove()
     let historyWorstExample = ExampleHistory()
+    defer { historyWorstExample.remove() }  // retiré même si un rendu lève
     try await historyWorstExample.seed(unreadable: true)
     historyWorstExample.copyAccepts = false
     let historyWorst = await historyWorstExample.makeModel()
     historyWorst.copyPrompt()
     try await render(
         historyTab(historyWorst), name: "reglages-historique-erreur", dark: dark, background: window, size: settingsSize)
-    historyWorstExample.remove()
     // Le refus de réglages le plus long (version plus récente) : deux lignes dans l'emplacement du message, sans coupure.
     let historyRefusingExample = ExampleHistory()
+    defer { historyRefusingExample.remove() }  // retiré même si un rendu lève
     try await historyRefusingExample.seed()
     historyRefusingExample.settingsFailure = SettingsError.newerVersionKept(fileName: "settings.json", version: 9)
     let historyRefusing = await historyRefusingExample.makeModel()
@@ -973,10 +973,10 @@ for dark in [false, true] {
     try await render(
         historyTab(historyRefusing), name: "reglages-historique-refus-reglages", dark: dark, background: window,
         size: settingsSize)
-    historyRefusingExample.remove()
     // La phrase la plus longue de l'onglet (échec d'écriture), pour voir qu'elle tient dans l'emplacement du message : « Tout
     // supprimer » sur un dossier sans droit d'écriture (dossier temporaire de l'outil, droits rendus ensuite).
     let historyFailingExample = ExampleHistory()
+    defer { historyFailingExample.remove() }  // retiré même si un rendu lève
     try await historyFailingExample.seed()
     let historyFailing = await historyFailingExample.makeModel()
     await historyFailing.requestDeleteAll()
@@ -986,12 +986,11 @@ for dark in [false, true] {
     try await render(
         historyTab(historyFailing), name: "reglages-historique-echec-ecriture", dark: dark, background: window,
         size: settingsSize)
-    historyFailingExample.remove()
     // Les deux confirmations : la durée la plus courte qui supprime (le compte annoncé vient de la règle d'âge de `purge`), puis « Tout
     // supprimer ».
     let historyOldExample = ExampleHistory()
+    defer { historyOldExample.remove() }  // retiré même si un rendu lève
     try await historyOldExample.seed(older: true)
-    defer { historyOldExample.remove() }
     let historyAsking = await historyOldExample.makeModel()
     await historyAsking.requestRetention(7)
     try render(
