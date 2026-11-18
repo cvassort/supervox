@@ -144,16 +144,31 @@ open build/Supervox.app
   chaque fichier en 0600, écrit de façon atomique (un fichier temporaire, puis renommé) et forcé sur le disque par `fsync` (pas
   `F_FULLFSYNC` : durabilité non mesurée). Une racine qui est un lien symbolique ou un fichier est refusée.
   - *Durée.* 30 jours par défaut (choix non mesuré), réglable dans l'onglet Historique : « Ne rien garder », 7 jours, 30 jours,
-    90 jours, 1 an. Avec « Ne rien garder », rien n'est écrit, pas même le dossier. Les entretiens plus vieux que la durée sont
-    supprimés **au lancement** (jamais au premier lancement, ni quand le fichier de réglages n'a pas pu être lu : la durée n'est
-    alors pas un choix de la personne) et à chaque raccourcissement de la durée, **sur confirmation** qui dit combien partent.
+    90 jours, 1 an. Avec « Ne rien garder », aucun entretien n'est écrit (choisir la durée écrit pourtant le fichier `conservation`, voir
+    ci-dessous). Les entretiens plus vieux que la durée sont supprimés **au lancement**, sans confirmation, et à chaque
+    raccourcissement de la durée, **sur confirmation** qui dit combien partent. Une horloge du Mac avancée fait donc purger selon
+    la durée choisie.
+  - *Durée confirmée.* Le dossier garde aussi la durée choisie dans l'onglet : un fichier `conservation` (0600,
+    `{"version": 1, "retentionDays": N}`), écrit à chaque choix d'une durée, « Ne rien garder » compris. Ce n'est pas un
+    entretien : il n'est ni compté, ni listé comme illisible, ni supprimé par « Tout supprimer… » ou par la purge. **La purge du
+    lancement n'a lieu que si** ce n'est pas le premier lancement, si le fichier de réglages a été lu sans avis, **et** si la
+    durée confirmée est absente (durée jamais choisie : les 30 jours par défaut s'appliquent) ou égale à celle des réglages.
+    Réglages remis à zéro, mis de côté ou édités à la main (une durée de la mauvaise forme est lue 30 jours) alors que le dossier
+    a confirmé une autre durée : rien n'est supprimé, aux lancements suivants non plus, et l'onglet le dit (« La durée de
+    conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas choisie de nouveau
+    ci-dessous. ») jusqu'à ce que la durée soit choisie de nouveau. Un essai sûr est à `docs/essai-final.md` (essai 87).
+  - *Sauvegardes et réseau.* « Envoyés nulle part » vaut pour le réseau : le dossier est un dossier ordinaire du disque et fait
+    partie des sauvegardes locales de l'ordinateur.
   - *Ce que l'onglet permet.* Copier le prompt ou la conversation (« Copié. » et les messages d'échec s'affichent dans une bande
     fixe au bas de l'onglet : aucun bouton ne bouge), supprimer un entretien (sur confirmation « Supprimer cet entretien ? C'est
     définitif. » ; ensuite aucun entretien n'est choisi), tout supprimer (sur confirmation). Avec « Ne rien garder », une ligne
     sous l'en-tête le dit. Une seule feuille sert aux trois confirmations. Choisir une durée relit le disque avant de compter :
-    toute durée qui supprimerait des entretiens demande confirmation, avec leur nombre exact. Un fichier illisible ou d'une version inconnue n'apparaît pas dans la liste,
-    n'est jamais supprimé par la purge, et une note le dit ; seul « Tout supprimer… » le supprime.
-  - *Ce qui n'est jamais gardé.* L'audio. Un entretien annulé (Échap, fermeture du panneau, « Réglages… », « Quitter »). Un
+    toute durée qui supprimerait des entretiens demande confirmation, avec leur nombre exact. Un fichier illisible ou d'une
+    version inconnue n'apparaît pas dans la liste, n'est jamais supprimé par la purge, et une note le dit ; seul « Tout
+    supprimer… » le supprime.
+  - *Ce qui n'est jamais gardé.* L'audio. Un entretien annulé (Échap, fermeture du panneau, « Réglages… », « Quitter ») **avant** l'arrivée du prompt. Après, dans
+    les deux secondes au plus où la relecture attend l'écriture, l'annuler ne défait pas l'écriture, déjà lancée : l'entretien peut
+    être gardé alors que le panneau se ferme. Un
     entretien arrêté par une panne (micro, transcription) : sa conversation passe en relecture, mais n'est pas écrite. Un
     entretien où rien n'a été dit. La conversation d'une conclusion dont la rédaction a échoué, elle, est gardée, sans prompt. Le
     prompt gardé est celui que l'entretien a rédigé : le corriger ensuite à la voix ne change pas l'historique (lu dans le code,
@@ -161,7 +176,7 @@ open build/Supervox.app
   - *Écriture qui échoue.* Si un entretien conclu n'a pas pu être écrit (disque plein, dossier refusé), la relecture le dit,
     après son avis habituel : « Cet entretien n'a pas pu être gardé dans l'historique : copiez le texte si vous voulez le
     conserver. ». La relecture attend l'écriture au plus 2 s (choix non mesuré) avant de s'ouvrir ; au-delà, elle s'ouvre sans
-    cet avis. Avec « Ne rien garder », rien n'est écrit et aucun avis ne s'affiche. Couvert par les tests, jamais provoqué à la main.
+    cet avis. Avec « Ne rien garder », aucun entretien n'est écrit et aucun avis ne s'affiche. Couvert par les tests, jamais provoqué à la main.
   - *Où c'est écrit.* `AppController` ne reçoit un dossier d'historique que de `Sources/Supervox/main.swift` : les tests et l'outil
     d'images n'en ont pas et n'en touchent aucun (un balayage des sources le vérifie).
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
@@ -301,7 +316,8 @@ est à essayer à la main (étapes 4 et 5 de `docs/essai-final.md`).
   relecture elle-même n'utilise aucun modèle de transcription : supprimer un modèle reste possible, sauf pendant qu'une
   consigne de correction est écoutée ou transcrite.
 - **Le texte n'est gardé qu'en mémoire.** Quitter Supervox pendant une relecture le perd, sans demander confirmation (le
-  prompt d'un entretien conclu, lui, est déjà dans l'historique tel que l'entretien l'a rédigé, sans vos corrections).
+  prompt d'un entretien conclu est, lui, dans l'historique tel que l'entretien l'a rédigé, sans vos corrections, sauf avec
+  « Ne rien garder » ou si l'écriture a échoué).
   Quitter pendant le collage attend, trois secondes au plus, la fin du collage.
 - **Pas encore là** : l'annulation après fermeture du panneau. (L'historique sur disque ne garde que les entretiens conclus :
   voir « Ce qui est stocké, et où ». La relecture sert aussi à l'entretien : voir « Entretien ».)
@@ -469,7 +485,7 @@ Le mode Entretien mène un entretien oral : Supervox (le modèle rapide) vous po
 vous répondez à voix haute ; à la conclusion, le modèle fort rédige un prompt, qui s'ouvre en relecture. **État de la preuve** :
 tout est écrit et testé sur des doubles (micro, son et voix scriptés, serveur local de test). **Rien n'a été essayé sur le
 matériel**, à la demande de l'utilisateur : ni le micro, ni les haut-parleurs, ni l'écho, ni l'interruption, ni la voix du
-système, ni la vraie fenêtre, ni VoiceOver. Les essais à faire à la main (63 à 94) et la liste de ce qui n'a jamais tourné sont
+système, ni la vraie fenêtre, ni VoiceOver. Les essais à faire à la main (63 à 95) et la liste de ce qui n'a jamais tourné sont
 dans `docs/essai-final.md`, étape 6. Toute valeur chiffrée ci-dessous est un **choix non mesuré**, sauf mention (« code lu »
 ou « mesuré »).
 
@@ -549,7 +565,8 @@ ou « mesuré »).
 ### Annuler, relire, pannes
 
 - **Échap, « Fermer le panneau », « Réglages… » et « Quitter Supervox »** annulent l'entretien à n'importe quel état, rédaction
-  comprise : rien n'est collé, rien n'est gardé (ni historique, ni relecture), le micro est fermé. Un clic dans une autre
+  comprise : rien n'est collé, rien n'est gardé (ni historique, ni relecture), le micro est fermé ; une seule exception, dite
+  dans « Ce qui n'est jamais gardé » : l'annulation dans les deux secondes au plus qui suivent l'arrivée du prompt. Un clic dans une autre
   application ne ferme pas le panneau. Une dictée lancée juste après attend que le micro de l'entretien soit rendu.
   « Historique… » du menu « … » est grisée tant qu'un entretien, une dictée ou une relecture tient le panneau : elle ne peut
   plus annuler un entretien sans rien demander (« Réglages… », elle, l'annule toujours).
@@ -592,7 +609,8 @@ différents), puis, avec une voix de fournisseur, « Le texte que dit Supervox p
   Avec la voix d'un fournisseur, chaque phrase de Supervox part chez lui (`POST <adresse>/v1/audio/speech`).
 - **L'audio ne part jamais** : la transcription est locale (Parakeet ou WhisperKit).
 - Les clés restent dans le trousseau ; aucune clé ni aucun texte dit n'est écrit dans un journal ou un message d'erreur.
-- **Ce qui reste sur ce Mac** : l'historique des entretiens conclus, en clair (voir « Ce qui est stocké, et où »).
+- **Ce qui reste sur ce Mac** : l'historique des entretiens conclus, en clair, dans un dossier qui fait partie des sauvegardes
+  locales de l'ordinateur (voir « Ce qui est stocké, et où »).
 
 ### Ce qui n'a jamais été essayé
 
@@ -645,7 +663,9 @@ swift run supervox-bench <commande> --help
   ne sont écrits dans le rapport ni sur la sortie. Code de sortie non nul si l'entretien ne rend pas de prompt (le rapport est
   écrit avant). Elle charge le détecteur de voix et Parakeet (téléchargés au premier lancement). Les durées du rapport ne
   contiennent pas le silence de fin de tour et ne sont **pas comparables** à celles de `latency` (la forme des requêtes
-  diffère). Le rapport n'est écrit qu'à la fin (pas de rapport partiel). **Le lancement réel n'a jamais été exécuté**
+  diffère). Le rapport dit lui-même les secondes de silence réellement poussées après chaque tour (au moins 2 s, davantage au-delà
+  de 0,5 s environ de `--turn-silence`) et le délai d'un tour « aucune réaction » (la limite de transcription du moteur, 120 s,
+  plus 30 s de marge : 150 s). Le rapport n'est écrit qu'à la fin (pas de rapport partiel). **Le lancement réel n'a jamais été exécuté**
   (à la demande de l'utilisateur : il appelle un service et fait travailler la voix du système) :
 
   ```sh
@@ -660,8 +680,8 @@ swift run supervox-bench <commande> --help
 
 Pannes et interruptions :
 
-- chaque requête à l'endpoint est abandonnée après `--request-timeout` secondes (30 par défaut) sans aucune donnée
-  reçue : c'est un délai d'inactivité, pas une durée totale. La phrase (ou l'essai) est alors en échec.
+- chaque requête à l'endpoint est abandonnée après `--request-timeout` secondes (30 par défaut ; option de `transcribe` et de
+  `latency`, absente de `live` et de `interview`) sans aucune donnée reçue : c'est un délai d'inactivité, pas une durée totale. La phrase (ou l'essai) est alors en échec.
 - dans `transcribe`, un moteur est arrêté après 3 échecs de transport consécutifs (endpoint injoignable ou muet) :
   ses phrases restantes, et sa passe avec vocabulaire, sont en échec avec cette raison ; les moteurs suivants passent.
 - les rapports sont réécrits au fil de l'eau, après chaque passe de moteur (`transcribe`), chaque essai
