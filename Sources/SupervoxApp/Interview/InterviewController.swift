@@ -340,10 +340,8 @@ public final class InterviewController: InterviewRunning {
                 }
                 self.end(attempt, .review(text: conversation.transcript, notice: notice))
             } else {
-                switch failure {
-                case .microphone: self.end(attempt, .notice(InterviewText.microphoneSentNothing))
-                case .engine: self.end(attempt, .notice(InterviewText.transcriptionDidNotStart))
-                }
+                // Sans tour, rien à relire : la phrase du code dit la cause et quoi faire (vocabulaire, micro refusé…).
+                self.end(attempt, .notice(InterviewText.failureWithoutTurn(failure)))
             }
         case .nothingSaid:
             self.end(attempt, .notice(InterviewText.nothingSaid))

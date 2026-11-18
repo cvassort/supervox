@@ -260,7 +260,7 @@ import Testing
             escape.press()
         case .failure:
             driver.finish(.failed(.microphone("silent"), Conversation()))
-            #expect(await until { controller.panelModel.dictation.notice == InterviewText.microphoneSentNothing })
+            #expect(await until { controller.panelModel.dictation.notice == InterviewText.failure(.microphone("silent")) })
             controller.togglePanelFromMenu()
         case .escape:
             escape.press()

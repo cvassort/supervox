@@ -418,9 +418,10 @@ import Testing
          .review(text: exchange.transcript, notice: InterviewText.microphoneStoppedReview)),
         (.failed(.engine("transcriptionFailed"), exchange),
          .review(text: exchange.transcript, notice: InterviewText.transcriptionStoppedReview)),
-        (.failed(.microphone("silent"), InterviewRig.conversation([(.interviewer, "Bonjour.")])),
+        // Un code que cette version ne connaît pas, sans tour de la personne : la phrase générale de la nature de la panne (M-4).
+        (.failed(.microphone("code-inconnu"), InterviewRig.conversation([(.interviewer, "Bonjour.")])),
          .notice(InterviewText.microphoneSentNothing)),
-        (.failed(.engine("transcriptionFailed"), Conversation()), .notice(InterviewText.transcriptionDidNotStart)),
+        (.failed(.engine("code-inconnu"), Conversation()), .notice(InterviewText.transcriptionDidNotStart)),
         (.nothingSaid, .notice(InterviewText.nothingSaid)),
         (.cancelled, .cancelled),
     ]
@@ -435,6 +436,18 @@ import Testing
         await settle()
         #expect(rig.history.attempts == 0)
         #expect(rig.panel.interview == nil)
+    }
+
+    @Test("M-4 : une panne sans tour, d'un code connu, dit la phrase de ce code, pas la phrase générale", arguments: InterviewText.knownFailureCodes)
+    func aFailureWithoutATurnSaysItsCodesSentence(code: String) async throws {
+        for failure in [ConversationFailure.microphone(code), .engine(code)] {
+            let rig = InterviewRig()
+            let driver = try await rig.listening()
+            driver.finish(.failed(failure, InterviewRig.conversation([(.interviewer, "Bonjour.")])))
+            let sentence = InterviewText.failure(failure)
+            #expect(try await outcome(rig) == .notice(sentence))
+            #expect(sentence != InterviewText.microphoneSentNothing && sentence != InterviewText.transcriptionDidNotStart)
+        }
     }
 
     @Test("règle 8 : la relecture n'attend pas l'historique, et une panne de l'historique ne l'empêche pas")

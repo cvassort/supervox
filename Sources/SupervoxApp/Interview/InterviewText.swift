@@ -175,6 +175,15 @@ public enum InterviewText {
         }
     }
 
+    /// Une panne qui a arrêté l'entretien avant le premier tour de la personne : la phrase de son code ; pour un code sans phrase
+    /// propre, la phrase générale de sa nature (`microphoneSentNothing`, `transcriptionDidNotStart`).
+    public static func failureWithoutTurn(_ failure: ConversationFailure) -> String {
+        switch failure {
+        case .microphone(let code): failureSentences[code] ?? microphoneSentNothing
+        case .engine(let code): failureSentences[code] ?? transcriptionDidNotStart
+        }
+    }
+
     // MARK: Le départ
 
     /// Ce que dit le panneau quand l'entretien ne peut pas démarrer : aucun environnement branché (`InterviewEnvironment.unavailable`),
@@ -276,6 +285,8 @@ public enum InterviewText {
         sentences += [(0, 9999), (1, 9999), (9998, 9999)].map { vocabularyTrimmed(kept: $0.0, of: $0.1) }
         sentences += knownFailureCodes.flatMap { code in [failure(.microphone(code)), failure(.engine(code))] }
         sentences.append(failure(.engine("code-inconnu")))
+        // Sans tour : la phrase du code (déjà comptée ci-dessus), ou la phrase générale de sa nature.
+        sentences += [failureWithoutTurn(.microphone("code-inconnu")), failureWithoutTurn(.engine("code-inconnu"))]
         sentences += [
             couldNotStart, promptReview, promptReviewWithoutLastWords, conclusionFailedReview,
             conclusionFailedReviewWithoutLastWords, microphoneStoppedReview,
