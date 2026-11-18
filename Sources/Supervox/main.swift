@@ -14,7 +14,7 @@ let engines = LiveDictationEngines()
 // Le son réel et la voix du système ne sont construits qu'ici : tests, outil de rendu et constructeurs par défaut n'ont pas
 // d'entretien (`InterviewEnvironment.unavailable`).
 let interview = LiveInterview(
-    engines: engines, makeAudio: { LiveAudioIO() }, makeSystemVoice: { SystemSpeechSynthesizer(language: $0) },
+    engines: engines, makeAudio: { LiveAudioIO() }, makeSystemVoice: { SystemSpeechSynthesizer(language: $0, identifier: $1) },
     makeProviderVoice: LiveInterview.providerVoice, assemble: LiveInterview.session)
 let controller = AppController(
     settingsView: SettingsView.provider(

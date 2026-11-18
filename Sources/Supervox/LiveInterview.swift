@@ -18,8 +18,9 @@ struct LiveInterview: Sendable {
     let engines: LiveDictationEngines
     /// Le son d'un entretien (micro et haut-parleur) : un neuf par conversation. Fabriquer n'ouvre rien : c'est `start()`.
     let makeAudio: @Sendable () -> any AudioIO
-    /// La voix du système pour cette langue. Fabriquer ne dit rien.
-    let makeSystemVoice: @Sendable (_ language: String) -> any SpeechSynthesizer
+    /// La voix du système pour cette langue, désignée par `identifier` (`nil` : la meilleure voix de la langue). Fabriquer ne dit
+    /// rien.
+    let makeSystemVoice: @Sendable (_ language: String, _ identifier: String?) -> any SpeechSynthesizer
     /// La voix d'un fournisseur résolu (adresse et clé) pour ce modèle et cet identifiant. Fabriquer n'envoie rien.
     let makeProviderVoice: @Sendable (ResolvedProvider, ProviderVoice) -> any SpeechSynthesizer
     /// Assemble la conversation (en production : `LiveInterview.session`). Injecté pour que les tests voient les pièces reçues.
@@ -79,11 +80,16 @@ struct LiveInterview: Sendable {
         return assemble(parts)
     }
 
-    /// Contrat de `InterviewEnvironment.makeVoice` : sans fournisseur, la voix **du système** dans la langue du choix ; avec un
-    /// fournisseur résolu, la voix **de ce fournisseur** (modèle, identifiant et paramètres du choix). Un fournisseur au format
-    /// Anthropic n'a pas de synthèse (`InterviewSetup.resolve` ne le donne jamais) : la voix du système, plutôt qu'une voix muette.
+    /// Contrat de `InterviewEnvironment.makeVoice` : sans fournisseur, la voix **du système** dans la langue du choix, désignée par
+    /// son identifiant quand le choix est une voix du système ; avec un fournisseur résolu, la voix **de ce fournisseur** (modèle,
+    /// identifiant et paramètres du choix). Un fournisseur au format Anthropic n'a pas de synthèse (`InterviewSetup.resolve` ne le
+    /// donne jamais) : la voix du système, plutôt qu'une voix muette. Tout repli d'une voix de fournisseur prend la meilleure voix de
+    /// la langue : l'identifiant d'un fournisseur ne désigne pas une voix du système.
     func makeVoice(_ choice: VoiceChoice, _ provider: ResolvedProvider?) -> any SpeechSynthesizer {
-        guard let provider, provider.kind == .openAICompatible else { return makeSystemVoice(choice.language) }
+        guard let provider, provider.kind == .openAICompatible else {
+            let isSystemVoice = provider == nil && choice.providerID == nil
+            return makeSystemVoice(choice.language, isSystemVoice ? choice.identifier : nil)
+        }
         return makeProviderVoice(
             provider, ProviderVoice(model: choice.model ?? "", identifier: choice.identifier ?? "", extra: choice.extra))
     }
