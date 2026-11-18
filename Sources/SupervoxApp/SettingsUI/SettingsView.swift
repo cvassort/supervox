@@ -132,6 +132,8 @@ public struct SettingsView: View {
             onLeave: {
                 hotKey.cancelRecording()
                 modes.cancelRecording()
+                // Fenêtre fermée ou quittée, ou fin de l'application : le gabarit tapé est enregistré.
+                interview?.commitTemplate()
             })
     }
 
@@ -211,6 +213,8 @@ public struct SettingsView: View {
         .onChange(of: navigation.tab) {
             hotKey.cancelRecording()
             modes.cancelRecording()
+            // Un autre onglet : le gabarit tapé dans celui-ci est enregistré.
+            interview?.commitTemplate()
         }
         .frame(width: 600, height: 460)
     }

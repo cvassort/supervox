@@ -7,6 +7,8 @@ public struct InterviewPane: View {
     @Bindable var model: InterviewSettingsModel
     /// Le groupe « Réglages avancés » est-il ouvert ? Replié par défaut ; `advancedExpanded` ne sert qu'à rendre l'état ouvert.
     @State private var advancedExpanded: Bool
+    /// Le champ du gabarit a la main : quand il la perd, le gabarit tapé est enregistré.
+    @FocusState private var templateFocused: Bool
 
     public init(model: InterviewSettingsModel, advancedExpanded: Bool = false) {
         self.model = model
@@ -54,6 +56,7 @@ public struct InterviewPane: View {
                         .font(.body)
                         .frame(minHeight: Self.templateMinHeight, maxHeight: Self.templateMaxHeight)
                         .accessibilityLabel(InterviewSettingsModel.templateTitle)
+                        .focused($templateFocused)
                         .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
                     HStack(alignment: .firstTextBaseline) {
                         note(InterviewSettingsModel.templateNote)
@@ -75,6 +78,9 @@ public struct InterviewPane: View {
         }
         // Un réglage ajouté ailleurs pendant que la fenêtre était gardée s'y voit à chaque affichage de l'onglet.
         .onAppear { model.reload() }
+        // Le champ perd la main, ou l'onglet disparaît : le gabarit tapé est enregistré (une seule écriture).
+        .onChange(of: templateFocused) { if !templateFocused { model.commitTemplate() } }
+        .onDisappear { model.commitTemplate() }
     }
 
     @ViewBuilder

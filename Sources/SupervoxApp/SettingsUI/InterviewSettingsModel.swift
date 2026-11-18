@@ -8,7 +8,8 @@ import SupervoxCore
 /// vigueur, `update` les modifie et les enregistre (en production, `AppController.updateSettings`). Chaque geste écrit **son champ
 /// seulement**, sur les réglages en vigueur au moment de l'écriture : un autre champ changé ailleurs entre-temps (le panneau, un
 /// autre onglet, le fichier) reste. Après chaque geste, réussi ou non, l'affichage est ce que `read` donne ; un enregistrement refusé
-/// le dit dans `message`, par une phrase fixe (jamais par le texte de l'erreur, qui peut porter une adresse).
+/// le dit dans `message`, par une phrase fixe (jamais par le texte de l'erreur, qui peut porter une adresse). Seule exception : le
+/// gabarit que la personne tape, qui reste un brouillon à l'écran jusqu'à `commitTemplate()` et n'est jamais effacé par un refus.
 ///
 /// Les bornes sont celles de `InterviewSettings` : ni ce fichier ni la vue n'en recopient une. Toute valeur écrite passe par
 /// `InterviewSettings.normalized`, comme au décodage.
@@ -69,9 +70,9 @@ public final class InterviewSettingsModel {
 
     /// Les réglages tels que `read` les a donnés la dernière fois : tout ce que l'onglet montre en est dérivé.
     private var settings: AppSettings
-    /// Le gabarit tel que la personne le tape, tant qu'il diffère de ce que les réglages en disent : un champ vidé reste vide
-    /// (l'enregistré est alors `nil`, le gabarit d'origine) au lieu de se remplir sous les doigts. Effacé par `reload`, par un
-    /// retour au gabarit d'origine et par un enregistrement refusé.
+    /// Le gabarit tel que la personne le tape, pas encore enregistré : `nil` quand elle n'a rien tapé depuis le dernier
+    /// enregistrement. Un champ vidé reste vide au lieu de se remplir sous les doigts. Il n'est écrit que par `commitTemplate()`, et
+    /// n'est jamais jeté par un refus d'enregistrement, par un autre geste ni par `reload()` : le texte de la personne ne se perd pas.
     private var templateDraft: String?
     public private(set) var message: String?
 
@@ -91,9 +92,13 @@ public final class InterviewSettingsModel {
 
     /// Relit les réglages : à chaque présentation de la fenêtre et à chaque affichage de l'onglet, une écriture faite ailleurs s'y
     /// voit. Le message reste (il dit ce qui vient de se passer) ; `clearMessage()` l'efface.
+    ///
+    /// Un gabarit tapé et pas encore enregistré n'est pas remplacé : en cas de conflit avec un gabarit écrit ailleurs entre-temps, le
+    /// texte de la personne reste à l'écran et sera celui qu'`commitTemplate()` enregistre. Un brouillon devenu identique à
+    /// l'enregistré est lâché (la suite suit les écritures d'ailleurs).
     public func reload() {
         settings = read()
-        templateDraft = nil
+        if let draft = templateDraft, Self.stored(draft) == settings.interview.template { templateDraft = nil }
     }
 
     public func clearMessage() {
@@ -116,30 +121,46 @@ public final class InterviewSettingsModel {
         }
     }
 
-    /// Le gabarit montré : celui des réglages, ou le gabarit d'origine quand il n'y en a pas ; ce que la personne tape tant qu'elle
-    /// tape. Écrire enregistre `nil` quand le texte est vide ou égal, mot pour mot, au gabarit d'origine.
+    /// Le gabarit montré : ce que la personne a tapé et pas encore enregistré, sinon celui des réglages, ou le gabarit d'origine
+    /// quand il n'y en a pas. Écrire ne change que le brouillon : rien n'est enregistré avant `commitTemplate()`.
     public var template: String {
         get { templateDraft ?? settings.interview.template ?? InterviewPrompt.defaultTemplate }
-        set {
-            templateDraft = newValue
-            let isOriginal = newValue == InterviewPrompt.defaultTemplate
-            if !commit({
-                var written = $0.interview
-                written.template = isOriginal ? nil : newValue
-                $0.interview.template = written.normalized.template
-            }) {
-                templateDraft = nil
-            }
+        set { templateDraft = newValue }
+    }
+
+    /// Un texte vide ou égal, mot pour mot, au gabarit d'origine s'enregistre `nil` ; un autre tel quel.
+    private static func stored(_ text: String) -> String? {
+        text == InterviewPrompt.defaultTemplate || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
+    }
+
+    /// Enregistre le brouillon du gabarit, une seule fois. Appelée quand le champ perd la main, quand l'onglet disparaît, à la
+    /// fermeture de la fenêtre et à Quitter. Sans brouillon, ou avec un brouillon qui dit déjà ce que les réglages en vigueur disent,
+    /// n'écrit rien. Refusé : le brouillon reste, la phrase d'échec est posée, et un nouvel appel réessaie.
+    public func commitTemplate() {
+        guard let draft = templateDraft else { return }
+        let value = Self.stored(draft)
+        if value == read().interview.template {
+            settings = read()
+            templateDraft = nil
+            return
+        }
+        if commit({
+            var written = $0.interview
+            written.template = value
+            $0.interview.template = written.normalized.template
+        }) {
+            templateDraft = nil
         }
     }
 
     /// Le gabarit montré est le gabarit d'origine (le bouton « Revenir au gabarit d'origine » est alors grisé).
     public var isDefaultTemplate: Bool { template == InterviewPrompt.defaultTemplate }
 
-    /// Enregistre `nil` : le gabarit d'origine revient.
+    /// Enregistre `nil` : le gabarit d'origine revient, et le brouillon avec lui. Refusé : le texte de la personne reste à l'écran.
     public func restoreTemplate() {
+        let previous = templateDraft
         templateDraft = nil
-        commit { $0.interview.template = nil }
+        if !commit({ $0.interview.template = nil }) { templateDraft = previous }
     }
 
     /// Silence de fin de tour, en secondes.
@@ -244,7 +265,6 @@ public final class InterviewSettingsModel {
         } catch {
             message = (error as? SettingsError)?.errorDescription ?? Self.saveFailure
             settings = read()
-            templateDraft = nil
             return false
         }
     }

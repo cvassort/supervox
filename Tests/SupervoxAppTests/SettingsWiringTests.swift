@@ -163,11 +163,11 @@ import Testing
         #expect(secrets.calls.isEmpty)
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(secrets.calls.map(\.name) == ["contains"])
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(secrets.calls.map(\.name) == ["contains"])
         #expect(secrets.readCount == 0)
     }
@@ -413,7 +413,7 @@ import Testing
         let controller = makeController(settingsView: testProvider(built))
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         let modes = try #require(built.modes)
         #expect(modes.rows.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"])
 
@@ -426,7 +426,7 @@ import Testing
         #expect(modes.rows.map(\.title) == ["Dictée brute", "Dictée nettoyée", "Prompt", "Entretien"], "pas encore relu")
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(built.modes === modes, "la fenêtre et son modèle sont gardés")
         #expect(modes.rows.map(\.title) == ["Dictée brute", "Écrit ailleurs", "Prompt", "Entretien", "Autre mode"])
         #expect(modes.modelOptions.map(\.providerName) == ["Ajouté ailleurs"])
@@ -480,7 +480,7 @@ import Testing
         #expect(catalog.listCount == 0)
 
         controller.openSettings()
-        await controller.settingsPresentation?.value
+        await finished(controller.settingsPresentation)
         #expect(catalog.listCount == 1)
     }
 
@@ -617,6 +617,7 @@ import Testing
         #expect(interview.maxQuestions == InterviewSettings.defaults.maxQuestions)
         #expect(controller.settings.interview.maxQuestions == InterviewSettings.defaults.maxQuestions)
         #expect(interview.message?.contains("settings.json") == true)
+        #expect(try Data(contentsOf: store.file) == Data("pas du json".utf8), "le fichier n'a pas été touché")
     }
 
     /// La présentation de la fenêtre relit l'onglet Entretien : un réglage écrit ailleurs s'y voit.
@@ -638,6 +639,76 @@ import Testing
 
         #expect(built.interview === interview, "la fenêtre et son modèle sont gardés")
         #expect(interview.maxQuestions == 12)
+    }
+
+    /// Ce que la personne a tapé dans le gabarit est enregistré quand elle quitte la fenêtre (fermée, plus au premier plan, application
+    /// passée en arrière-plan) : `SettingsContent.onLeave`, ici par la fenêtre double.
+    @Test func leavingTheWindowSavesTheTypedTemplate() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+        let window = try #require(presenter.windows.first)
+
+        interview.template = "Mon gabarit, tapé."
+        #expect(store.load().settings.interview.template == nil, "rien n'est écrit pendant la frappe")
+        window.leave()
+
+        #expect(store.load().settings.interview.template == "Mon gabarit, tapé.")
+        #expect(controller.settings.interview.template == "Mon gabarit, tapé.")
+    }
+
+    /// Quitter (menu, panneau) enregistre le gabarit tapé avant la fin de l'application, et la fin a bien lieu.
+    @Test func quittingSavesTheTypedTemplateBeforeTerminating() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+
+        interview.template = "Tapé juste avant Quitter."
+        controller.quit()
+
+        #expect(store.load().settings.interview.template == "Tapé juste avant Quitter.")
+        #expect(presenter.terminations == 1)
+    }
+
+    /// Une fin demandée par le système (déconnexion, arrêt) enregistre aussi le gabarit tapé.
+    @Test func aSystemTerminationRequestSavesTheTypedTemplate() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built))
+        controller.openSettings(tab: .interview)
+        await finished(controller.settingsPresentation)
+        let interview = try #require(built.interview)
+
+        interview.template = "Tapé avant l'arrêt du système."
+        let decision = controller.requestTermination(reply: { _ in })
+
+        #expect(decision == .now)
+        #expect(store.load().settings.interview.template == "Tapé avant l'arrêt du système.")
+    }
+
+    /// Fenêtre jamais ouverte : quitter ne plante pas et n'écrit rien.
+    @Test func quittingWithoutAnOpenSettingsWindowWritesNothing() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let before = try Data(contentsOf: store.file)
+        controller.quit()
+        #expect(presenter.terminations == 1)
+        #expect(try Data(contentsOf: store.file) == before)
     }
 
     /// Changement de mode dans le panneau, puis ajout d'un fournisseur dans la fenêtre : les deux restent.

@@ -663,6 +663,8 @@ public final class AppController {
     }
 
     func quit() {
+        // Ce que la personne a tapé dans la fenêtre des réglages (le gabarit de l'entretien) est enregistré avant la fin.
+        settingsContent?.onLeave()
         interview.cancel()
         panel.close()
         log.notice("quitter")
@@ -689,6 +691,8 @@ public final class AppController {
     /// perdrait celui de l'utilisateur : la fin attend la restauration (bornée), puis appelle `reply(true)`. Une seconde demande
     /// pendant l'attente ne lance pas une seconde attente.
     public func requestTermination(reply: @escaping @MainActor (Bool) -> Void) -> TerminationDecision {
+        // Fin demandée par le système (déconnexion, arrêt) : le gabarit tapé est enregistré aussi.
+        settingsContent?.onLeave()
         guard dictation.isInserting else { return .now }
         if terminationTask == nil {
             let dictation = dictation

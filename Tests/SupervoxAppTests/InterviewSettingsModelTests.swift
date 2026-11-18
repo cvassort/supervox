@@ -114,6 +114,7 @@ import Testing
         model.interruptLevel = -25
         #expect(rig.settings.interview.interruptLevel == -25)
         model.template = "Un gabarit à moi."
+        model.commitTemplate()
         #expect(rig.settings.interview.template == "Un gabarit à moi.")
         #expect(rig.updates == 5, "un seul `update` par geste")
         #expect(model.maxQuestions == 5 && model.turnSilence == 0.9 && model.interruptLevel == -25)
@@ -173,6 +174,8 @@ import Testing
         #expect(rig.settings.hotKeyBehavior == .hold)
 
         model.template = "Mon gabarit."
+        model.commitTemplate()
+        #expect(rig.settings.interview.template == "Mon gabarit.")
         #expect(rig.settings.interview.maxQuestions == 5 && rig.settings.interview.turnSilence == 1.2)
     }
 
@@ -204,9 +207,6 @@ import Testing
         #expect(model.maxQuestions == InterviewSettings.defaults.maxQuestions, "le chiffre refusé n'est pas montré")
         #expect(model.interruptLevel == -20, "l'écran est relu : ce qui s'est écrit ailleurs s'y voit")
 
-        model.template = "Refusé."
-        #expect(model.template == InterviewPrompt.defaultTemplate, "le brouillon d'un gabarit refusé n'est pas gardé")
-        #expect(model.isDefaultTemplate)
     }
 
     /// Un refus que le fichier de réglages explique (illisible, d'une version plus récente) garde sa phrase fixe, qui nomme le
@@ -240,19 +240,20 @@ import Testing
     @Test func theOriginalOrBlankTemplateIsSavedAsNil() {
         let rig = Rig()
         let model = rig.makeModel()
-        model.template = "Mon gabarit."
-        #expect(rig.settings.interview.template == "Mon gabarit.")
-        model.template = InterviewPrompt.defaultTemplate
-        #expect(rig.settings.interview.template == nil, "le gabarit d'origine ne s'enregistre pas en clair")
-        model.template = "Mon gabarit."
-        model.template = ""
-        #expect(rig.settings.interview.template == nil)
-        model.template = "Mon gabarit."
-        model.template = "  \n\t "
-        #expect(rig.settings.interview.template == nil)
-        // Le gabarit d'origine à une espace près n'est plus le gabarit d'origine : mot pour mot.
-        model.template = InterviewPrompt.defaultTemplate + " Et une phrase de plus."
-        #expect(rig.settings.interview.template == InterviewPrompt.defaultTemplate + " Et une phrase de plus.")
+        func saved(_ text: String) -> String? {
+            model.template = text
+            model.commitTemplate()
+            return rig.settings.interview.template
+        }
+        #expect(saved("Mon gabarit.") == "Mon gabarit.")
+        #expect(saved(InterviewPrompt.defaultTemplate) == nil, "le gabarit d'origine ne s'enregistre pas en clair")
+        #expect(saved("Mon gabarit.") == "Mon gabarit.")
+        #expect(saved("") == nil)
+        #expect(saved("Mon gabarit.") == "Mon gabarit.")
+        #expect(saved("  \n\t ") == nil)
+        // Le gabarit d'origine suivi d'une phrase n'est plus le gabarit d'origine : mot pour mot.
+        let extended = InterviewPrompt.defaultTemplate + " Et une phrase de plus."
+        #expect(saved(extended) == extended)
     }
 
     /// « Revenir au gabarit d'origine » enregistre `nil`, montre le gabarit d'origine, et grise le bouton (`isDefaultTemplate`).
@@ -260,6 +261,7 @@ import Testing
         let rig = Rig()
         let model = rig.makeModel()
         model.template = "Mon gabarit."
+        model.commitTemplate()
         #expect(!model.isDefaultTemplate, "personnalisé : le bouton est actif")
         model.restoreTemplate()
         #expect(rig.settings.interview.template == nil)
@@ -267,23 +269,144 @@ import Testing
         #expect(model.isDefaultTemplate, "le bouton est grisé")
     }
 
-    /// Le champ vidé reste vide pendant la frappe (le texte d'origine ne revient pas sous les doigts), alors que le réglage enregistré
-    /// est `nil` ; le bouton « Revenir… » est alors actif, et `reload` ramène le gabarit d'origine.
-    @Test func aClearedFieldStaysEmptyWhileTypingEvenThoughNilIsSaved() {
+    /// « Revenir… » remet aussi le brouillon : un texte tapé et pas encore enregistré est remplacé par le gabarit d'origine, et
+    /// l'enregistré (un autre gabarit) passe à `nil`.
+    @Test func restoringTheTemplateAlsoReplacesTheDraft() {
+        let rig = Rig()
+        rig.settings.interview.template = "Enregistré."
+        let model = rig.makeModel()
+        model.template = "Tapé, pas enregistré."
+        model.restoreTemplate()
+        #expect(model.template == InterviewPrompt.defaultTemplate)
+        #expect(rig.settings.interview.template == nil)
+        model.commitTemplate()
+        #expect(rig.settings.interview.template == nil, "plus aucun brouillon à enregistrer")
+    }
+
+    /// Un « Revenir… » refusé ne fait pas perdre le texte de la personne : le brouillon reste, avec la phrase d'échec ; un nouvel
+    /// essai est possible.
+    @Test func aRefusedRestoreKeepsTheDraftAndCanBeRetried() {
+        let rig = Rig()
+        rig.settings.interview.template = "Enregistré."
+        let model = rig.makeModel()
+        model.template = "Tapé, pas enregistré."
+        rig.failure = ForeignError()
+        model.restoreTemplate()
+        #expect(model.message == InterviewSettingsModel.saveFailure)
+        #expect(model.template == "Tapé, pas enregistré.", "le texte de la personne n'est pas effacé")
+        rig.failure = nil
+        model.restoreTemplate()
+        #expect(model.template == InterviewPrompt.defaultTemplate)
+        #expect(rig.settings.interview.template == nil)
+        #expect(model.message == nil)
+    }
+
+    // MARK: - Brouillon du gabarit : l'écriture se fait par `commitTemplate()`
+
+    /// Des frappes successives n'écrivent rien : zéro appel à `update` (ni lecture pour écrire) avant `commitTemplate()` ; un seul
+    /// `commitTemplate()` écrit une fois. Le champ montre ce qui est tapé entre-temps, vide compris.
+    @Test func keystrokesWriteNothingUntilTheTemplateIsCommitted() {
         let rig = Rig()
         let model = rig.makeModel()
-        model.template = "Mon gabarit."
-        model.template = ""
+        for typed in ["R", "Ré", "Réd", "Rédige.", "", "Rédige un prompt."] {
+            model.template = typed
+            #expect(model.template == typed, "le champ montre la frappe, même vide")
+        }
+        #expect(rig.updates == 0, "aucune écriture pendant la frappe")
         #expect(rig.settings.interview.template == nil)
-        #expect(model.template == "")
-        #expect(!model.isDefaultTemplate, "le champ est vide : on peut revenir au gabarit d'origine")
-        model.template = "Un"
-        #expect(model.template == "Un")
-        model.reload()
-        #expect(model.template == "Un", "relu : le gabarit enregistré")
+        model.commitTemplate()
+        #expect(rig.updates == 1, "un seul enregistrement")
+        #expect(rig.settings.interview.template == "Rédige un prompt.")
+        #expect(model.template == "Rédige un prompt.")
+        model.commitTemplate()
+        #expect(rig.updates == 1, "plus de brouillon : rien de plus")
+    }
+
+    /// Un brouillon inchangé n'écrit rien : égal au gabarit enregistré, égal à l'origine quand rien n'est enregistré, vide quand rien
+    /// n'est enregistré, ou absent. Le fichier n'est pas réécrit pour rien.
+    @Test func anUnchangedDraftWritesNothing() {
+        let rig = Rig()
+        let model = rig.makeModel()
+        model.commitTemplate()
+        #expect(rig.updates == 0, "aucun brouillon")
+        model.template = InterviewPrompt.defaultTemplate
+        model.commitTemplate()
+        #expect(rig.updates == 0, "égal à l'origine, rien d'enregistré")
         model.template = ""
+        model.commitTemplate()
+        #expect(rig.updates == 0, "vide, rien d'enregistré")
+        model.template = "Mon gabarit."
+        model.commitTemplate()
+        #expect(rig.updates == 1)
+        model.template = "Mon gabarit."
+        model.commitTemplate()
+        #expect(rig.updates == 1, "égal à l'enregistré")
+        #expect(model.template == "Mon gabarit.")
+    }
+
+    /// Un refus d'enregistrement garde le brouillon à l'écran, intact, avec la phrase d'échec (le texte de l'erreur n'est jamais
+    /// repris), même quand un autre gabarit est déjà enregistré ; le champ reste utilisable et un nouvel essai écrit. L'écran n'est
+    /// pas relu pour ce champ.
+    @Test func aRefusedCommitKeepsTheDraftSaysItAndCanBeRetried() {
+        let rig = Rig()
+        rig.settings.interview.template = "Déjà enregistré."
+        let model = rig.makeModel()
+        rig.failure = ForeignError()
+        model.template = "Un long texte collé, perdu si on le jetait."
+        model.commitTemplate()
+        #expect(model.message == InterviewSettingsModel.saveFailure)
+        #expect(model.message?.contains("example.com") == false)
+        #expect(model.template == "Un long texte collé, perdu si on le jetait.", "le brouillon reste, ni l'enregistré ni l'origine")
+        #expect(rig.settings.interview.template == "Déjà enregistré.")
+
+        model.template = "Un long texte collé, perdu si on le jetait. Et la suite."
+        #expect(model.template.hasSuffix("Et la suite."), "le champ reste utilisable")
+        model.commitTemplate()
+        #expect(model.message == InterviewSettingsModel.saveFailure, "second essai refusé aussi")
+        #expect(model.template.hasSuffix("Et la suite."))
+
+        rig.failure = nil
+        model.commitTemplate()
+        #expect(model.message == nil)
+        #expect(rig.settings.interview.template == "Un long texte collé, perdu si on le jetait. Et la suite.")
+        #expect(model.template == "Un long texte collé, perdu si on le jetait. Et la suite.")
+    }
+
+    /// Un autre geste de l'onglet, réussi ou refusé, ne fait pas perdre le brouillon du gabarit.
+    @Test func anotherGestureNeverDropsTheDraft() {
+        let rig = Rig()
+        let model = rig.makeModel()
+        model.template = "Brouillon."
+        model.maxQuestions = 4
+        #expect(model.template == "Brouillon.")
+        rig.failure = ForeignError()
+        model.turnSilence = 1.1
+        #expect(model.message == InterviewSettingsModel.saveFailure)
+        #expect(model.template == "Brouillon.", "un refus d'un autre champ ne jette pas le brouillon")
+        model.restoreAdvanced()
+        #expect(model.template == "Brouillon.")
+    }
+
+    /// `reload()` (présentation de la fenêtre, apparition de l'onglet) ne remplace pas un brouillon non enregistré : en cas de
+    /// conflit avec un gabarit écrit ailleurs entre-temps, le texte de la personne reste à l'écran, et c'est lui qui sera
+    /// enregistré (dernier écrivain : elle). Un brouillon devenu identique à l'enregistré est lâché, pour suivre les écritures
+    /// d'ailleurs ensuite.
+    @Test func reloadNeverOverwritesAnUnsavedDraft() {
+        let rig = Rig()
+        let model = rig.makeModel()
+        model.template = "Mon texte, pas enregistré."
+        rig.settings.interview.template = "Écrit ailleurs."
         model.reload()
-        #expect(model.template == InterviewPrompt.defaultTemplate, "vide enregistré nil : relu, l'origine")
+        #expect(model.template == "Mon texte, pas enregistré.", "le brouillon prime")
+        model.commitTemplate()
+        #expect(rig.settings.interview.template == "Mon texte, pas enregistré.", "la personne a le dernier mot")
+
+        // Brouillon identique à l'enregistré : lâché, la suite suit les écritures d'ailleurs.
+        model.template = "Mon texte, pas enregistré."
+        model.reload()
+        rig.settings.interview.template = "Écrit encore ailleurs."
+        model.reload()
+        #expect(model.template == "Écrit encore ailleurs.")
     }
 
     // MARK: - Réglages avancés
@@ -295,6 +418,7 @@ import Testing
         let model = rig.makeModel()
         model.maxQuestions = 5
         model.template = "Mon gabarit."
+        model.commitTemplate()
         model.turnSilence = 1.5
         model.interruptMinDuration = 0.8
         model.interruptLevel = -15
