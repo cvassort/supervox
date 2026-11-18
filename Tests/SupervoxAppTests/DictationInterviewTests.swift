@@ -309,18 +309,27 @@ import Testing
         await rig.nothingKept()
     }
 
-    @Test("règle 6 : « Corriger à la voix » ne démarre qu'une fois la conversation finie (micro rendu)")
+    /// M-6 : la relecture s'ouvre sur `.finished`, mais le flux de la conversation n'est pas encore fini (porte tenue par le double) ;
+    /// la correction, qui ouvre le micro, attend sa fin.
+    @Test("règle 6 : « Corriger à la voix » ne démarre qu'une fois la conversation finie (son flux terminé)")
     func theCorrectionStartsAfterTheConversationFinished() async throws {
         let rig = InterviewDictationRig()
         let driver = try await rig.listening()
+        let streamEnd = TestGate()
+        defer { streamEnd.open() }
+        driver.configure(streamEndGate: streamEnd)
         driver.finish(.prompt("Le prompt rédigé.", Self.exchange))
         #expect(await until { rig.controller.view.stage == .review })
         rig.controller.startCorrection()
+        await settle()
+        #expect(rig.dictation.engines.sessions.isEmpty, "le flux de la conversation n'est pas fini : aucune session")
+
+        streamEnd.open()
         _ = await rig.dictation.session()
         let entries = rig.interview.journal.entries
-        let stopped = try #require(entries.firstIndex(of: "audio arrêté"))
+        let ended = try #require(entries.firstIndex(of: "flux terminé"))
         let made = try #require(entries.firstIndex(of: "session de dictée fabriquée"))
-        #expect(stopped < made)
+        #expect(ended < made)
     }
 
     @Test("règle 6 : une dictée lancée juste après Échap attend que la conversation annulée ait rendu le micro")

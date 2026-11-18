@@ -35,9 +35,10 @@ public protocol InterviewRunning: AnyObject {
 /// Règles de conception :
 /// - Un lancement est une `Attempt`, relue après chaque `await` (comme une `Run` de la dictée) : une conversation fabriquée après
 ///   une annulation n'est jamais démarrée, et ce qui arrive d'un entretien annulé ne touche plus ni le panneau ni l'historique.
-/// - La conversation est tenue fortement de sa fabrication à son `.finished` (la façade annule l'entretien quand elle est libérée),
-///   par la tâche qui lit son flux : une tâche du contrôleur, pas de la vue. Cette tâche ne s'arrête qu'à `.finished` ; `cancel()`
-///   demande l'arrêt au moteur et la laisse lire jusque-là, ce qui garde le micro sous contrôle jusqu'à son arrêt réel.
+/// - La conversation est tenue fortement de sa fabrication à la fin de son flux (la façade annule l'entretien quand elle est
+///   libérée), par la tâche qui lit ce flux : une tâche du contrôleur, pas de la vue. Cette tâche ne s'arrête qu'à la fin du flux,
+///   que le moteur ne termine qu'après `.finished`, son micro arrêté ; `cancel()` demande l'arrêt au moteur et la laisse lire
+///   jusque-là, ce qui garde le micro sous contrôle jusqu'à son arrêt réel.
 /// - La phase montrée ne revient jamais en arrière : jamais à la préparation une fois quittée, jamais hors de la conclusion.
 /// - Aucune phrase montrée ne vient d'une erreur : `InterviewText` seulement. Le journal ne porte que la nature d'un fait.
 @MainActor
@@ -53,7 +54,7 @@ public final class InterviewController: InterviewRunning {
 
     /// L'entretien en cours, `nil` hors entretien.
     private var current: Attempt?
-    /// Les lectures de flux qui n'ont pas encore vu `.finished` (conversation annulée qui s'arrête), et ceux qui attendent leur fin.
+    /// Les lectures de flux pas encore terminées (conversation finie ou annulée qui s'arrête), et ceux qui attendent leur fin.
     private var stopping: [ObjectIdentifier: Task<Void, Never>] = [:]
     private var stopWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
@@ -169,11 +170,12 @@ public final class InterviewController: InterviewRunning {
         if !isLive(attempt) { await conversation.cancel() }
         // Conclure demandé pendant `start()` : gardé jusqu'ici (le moteur l'aurait ignoré), envoyé maintenant, une seule fois.
         if isLive(attempt), attempt.concludePending { Task { await conversation.conclude() } }
-        // Lu jusqu'à `.finished`, même après une annulation : la conversation reste tenue jusqu'à l'arrêt réel de son micro.
+        // Lu jusqu'à la fin du flux, même après `.finished` ou une annulation : le moteur ne le termine qu'une fois son micro arrêté.
+        // La conversation reste tenue jusque-là, et ce qui attend le micro (`waitUntilStopped`) aussi.
         for await event in events {
             if case .finished(let end) = event {
                 finished(end, attempt)
-                break
+                continue
             }
             guard isLive(attempt) else { continue }
             handle(event, attempt)

@@ -30,6 +30,8 @@ final class ConversationDriver: Sendable {
         var startGate: TestGate?
         var cancelGate: TestGate?
         var finishOnCancel = true
+        /// Retient la fin du flux (après `.finished`) tant que la porte n'est pas ouverte.
+        var streamEndGate: TestGate?
     }
 
     let journal: Journal
@@ -53,27 +55,39 @@ final class ConversationDriver: Sendable {
     var ignoredCancels: Int { state.withLock { $0.ignoredCancels } }
     var isFinished: Bool { state.withLock { $0.finished } }
 
-    func configure(startGate: TestGate? = nil, cancelGate: TestGate? = nil, finishOnCancel: Bool = true) {
+    func configure(
+        startGate: TestGate? = nil, cancelGate: TestGate? = nil, finishOnCancel: Bool = true, streamEndGate: TestGate? = nil
+    ) {
         state.withLock {
             $0.startGate = startGate
             $0.cancelGate = cancelGate
             $0.finishOnCancel = finishOnCancel
+            $0.streamEndGate = streamEndGate
         }
     }
 
     func emit(_ event: ConversationEvent) { sink.yield(event) }
 
     /// La fin, comme le vrai moteur : le micro est rendu (« audio arrêté » au journal), puis `.state(.finished)`, puis `.finished`,
-    /// puis le flux se termine. Une seule fois.
+    /// puis le flux se termine (« flux terminé » ; retenu par `streamEndGate` s'il y en a une). Une seule fois.
     func finish(_ end: ConversationEnd) {
-        let first = state.withLock { state -> Bool in
+        let (first, gate) = state.withLock { state -> (Bool, TestGate?) in
             defer { state.finished = true }
-            return !state.finished
+            return (!state.finished, state.streamEndGate)
         }
         guard first else { return }
         journal.append("audio arrêté")
         sink.yield(.state(.finished))
         sink.yield(.finished(end))
+        guard let gate else { return endStream() }
+        Task {
+            await gate.wait()
+            self.endStream()
+        }
+    }
+
+    private func endStream() {
+        journal.append("flux terminé")
         sink.finish()
     }
 
