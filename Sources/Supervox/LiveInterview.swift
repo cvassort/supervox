@@ -1,6 +1,7 @@
 import Foundation
 import SupervoxApp
 import SupervoxCore
+import SupervoxEngines
 
 /// L'environnement réel de l'entretien : les moteurs de la dictée (un seul cache, une seule porte de préchargement), le son et les
 /// voix reçus en fabriques. Aucune fabrique n'a de défaut : seul `main.swift` construit le son réel (`LiveAudioIO`) et la voix du
@@ -35,7 +36,9 @@ struct LiveInterview: Sendable {
         InterviewEnvironment(
             prepare: { [self] setup in try await prepare(setup) },
             makeConversation: { [self] setup in try await makeConversation(setup) },
-            makeVoice: { [self] choice, provider in makeVoice(choice, provider) })
+            makeVoice: { [self] choice, provider in makeVoice(choice, provider) },
+            // La formule du détecteur de voix réel : l'onglet Entretien montre ce que le réglage donne en pratique.
+            effectiveTurnSilence: { FluidStreamingVoiceDetector.effectiveSilence($0) })
     }
 
     /// Télécharge ce qui manque aux réglages de transcription de l'entretien (par le catalogue, après la porte de préchargement),

@@ -161,15 +161,21 @@ public struct InterviewEnvironment: Sendable {
     /// Fabrique une voix pour `InterviewSetup.resolve`. Contrat : avec `nil`, la voix **du système** pour ce choix ; avec un
     /// fournisseur résolu, la voix **de ce fournisseur**. Fabriquer ne synthétise rien.
     public var makeVoice: @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
+    /// Le silence de fin de tour que le détecteur de voix applique en pratique (secondes) quand on lui demande celui-ci : il ne
+    /// décide qu'à la fin d'un bloc de 0,256 s. L'onglet Entretien l'affiche à côté de la valeur réglée. Le détecteur n'est pas
+    /// connu de `SupervoxApp` : la cible `Supervox` donne la vraie formule ; tout le reste garde l'identité.
+    public var effectiveTurnSilence: @Sendable (Double) -> Double
 
     public init(
         prepare: @escaping @Sendable (InterviewSetup) async throws -> Void,
         makeConversation: @escaping @Sendable (InterviewSetup) async throws -> any ConversationEngine,
-        makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
+        makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer,
+        effectiveTurnSilence: @escaping @Sendable (Double) -> Double = { $0 }
     ) {
         self.prepare = prepare
         self.makeConversation = makeConversation
         self.makeVoice = makeVoice
+        self.effectiveTurnSilence = effectiveTurnSilence
     }
 
     /// Ce que lèvent les fermetures de `unavailable` : aucun entretien n'est branché dans ce processus.

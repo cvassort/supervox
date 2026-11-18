@@ -126,6 +126,16 @@ import Testing
 
     // MARK: - Préparation et construction (règle 11, amendement I)
 
+    /// Le câblage réel donne à l'onglet Entretien la formule du détecteur (et non l'identité du repli) : 0,6 et 0,7 s demandées
+    /// donnent 1,024 s en pratique, 0,5 s (le défaut) 0,768 s.
+    @Test("l'environnement réel donne le silence en pratique du détecteur, pas l'identité")
+    func theRealEnvironmentGivesTheDetectorsEffectiveSilence() {
+        let environment = Self.rig().live.environment
+        #expect(environment.effectiveTurnSilence(0.6) == 1.024)
+        #expect(environment.effectiveTurnSilence(0.7) == 1.024)
+        #expect(environment.effectiveTurnSilence(0.5) == 0.768)
+    }
+
     @Test("I : prepare charge le détecteur de l'entretien (à son silence) et le moteur final ; la conversation reçoit ces mêmes exemplaires")
     func thePreparedEnginesAreTheOnesTheConversationGets() async throws {
         let rig = Self.rig()
