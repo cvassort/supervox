@@ -780,4 +780,56 @@ import Testing
             #expect(!code.contains(installed), "\(code)")
         }
     }
+
+    // MARK: - Onglet Voix et écoute d'une voix (réglage des voix, tâche 3)
+
+    /// Les fichiers de l'onglet Voix et de l'écoute, par motif de nom et non par liste : `Voices*.swift` et `VoicePreview.swift` sous
+    /// `SupervoxApp` (la vue de la tâche 4, `VoicesPane.swift`, est couverte dès qu'elle existe).
+    static func isVoicesTabFile(_ place: String) -> Bool {
+        guard place.hasPrefix("SupervoxApp/"), let name = place.split(separator: "/").last.map(String.init) else { return false }
+        return (name.hasPrefix("Voices") && name.hasSuffix(".swift")) || name == "VoicePreview.swift"
+    }
+
+    /// Règles 7 et 11 : ni le texte brut d'une erreur, ni le repli sur la voix du système, dans l'onglet Voix et l'écoute. Le balayage
+    /// prouve qu'il voit au moins les fichiers de la tâche 3.
+    @Test func theVoicesTabAndThePreviewShowNoRawErrorTextAndNeverFallBack() throws {
+        let files = try Self.sources(under: "Sources").filter { Self.isVoicesTabFile($0.place) }
+        let seen = Set(files.map(\.place))
+        for expected in [
+            "SupervoxApp/SettingsUI/VoicesModel.swift", "SupervoxApp/SettingsUI/VoicesText.swift",
+            "SupervoxApp/Interview/VoicePreview.swift",
+        ] {
+            #expect(seen.contains(expected), "le balayage doit voir \(expected)")
+        }
+        let raw = files.filter { $0.code.contains("localizedDescription") }.map(\.place)
+        #expect(raw.isEmpty, "localizedDescription : \(raw)")
+        let fallback = files.filter { $0.code.contains("FallbackSpeechSynthesizer") }.map(\.place)
+        #expect(fallback.isEmpty, "FallbackSpeechSynthesizer : \(fallback)")
+    }
+
+    /// Amendement de la tâche 3 : l'écoute décide qui parle par la résolution unique (`resolve(in:secrets:)`, injectée) et par rien
+    /// d'autre : ni la route suivie d'un `ProviderResolver` à la main, ni une `ProviderVoice` construite sur place.
+    @Test func thePreviewDecidesWhoSpeaksOnlyThroughTheSingleResolution() throws {
+        let preview = try #require(
+            try Self.sources(under: "Sources").first { $0.place == "SupervoxApp/Interview/VoicePreview.swift" })
+        for forbidden in ["ProviderResolver", "ProviderVoice(", ".route(in", ".providerVoice"] {
+            #expect(!preview.code.contains(forbidden), "\(forbidden) dans VoicePreview.swift")
+        }
+    }
+
+    @Test(arguments: [
+        "SupervoxApp/SettingsUI/VoicesModel.swift", "SupervoxApp/SettingsUI/VoicesPane.swift",
+        "SupervoxApp/SettingsUI/VoicesText.swift", "SupervoxApp/Interview/VoicePreview.swift",
+    ])
+    func theVoicesTabPatternSeesItsFiles(place: String) {
+        #expect(Self.isVoicesTabFile(place))
+    }
+
+    @Test(arguments: [
+        "SupervoxApp/Settings/VoiceRoute.swift", "SupervoxApp/Settings/SavedVoice.swift", "SupervoxCore/Speech/VoicesHelper.swift",
+        "SupervoxApp/SettingsUI/InterviewPane.swift", "SupervoxApp/SettingsUI/MyVoices.swift",
+    ])
+    func theVoicesTabPatternLeavesOtherFilesAlone(place: String) {
+        #expect(!Self.isVoicesTabFile(place))
+    }
 }

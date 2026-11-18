@@ -9,6 +9,10 @@ import Testing
 /// ordre ; la liste des voix installées est inventée ; l'écoute est la vraie (`VoicePreview`) sur une voix double, un lecteur double
 /// (`ScriptedClipPlayer`) et un trousseau en mémoire. Aucun son, aucune vraie voix, aucune vraie liste, aucun disque.
 @MainActor @Suite(.timeLimit(.minutes(1))) struct VoicesModelTests {
+    /// Écrit en toutes lettres à l'affectation : `= .system(` se lirait comme la construction de l'insertion du système
+    /// (`SourceScanTests.noTestBuildsTheSystemInserter`).
+    typealias RowID = VoicesModel.Row.ID
+
     struct ForeignError: LocalizedError {
         var errorDescription: String? { "échec vers https://api.example.com/v1/cle" }
     }
@@ -398,7 +402,7 @@ import Testing
         model.language = nil
         var expected = rig.settings
 
-        model.selection = .system(identifier: "voix.exemple.b")
+        model.selection = RowID.system(identifier: "voix.exemple.b")
         model.use()
         expected.voice = VoiceChoice(identifier: "voix.exemple.b", language: "fr-FR", gender: .male)
         #expect(rig.settings == expected)
@@ -476,7 +480,7 @@ import Testing
         #expect(model.previewMessage == VoicesText.failure(.notInstalled))
 
         // Listée à l'ouverture, désinstallée avant l'écoute : la liste est relue.
-        model.selection = .system(identifier: "voix.exemple.a")
+        model.selection = RowID.system(identifier: "voix.exemple.a")
         rig.setInstalled([Self.voiceB, Self.voiceC])
         model.listen()
         #expect(model.previewState == .failed(.notInstalled))
@@ -489,7 +493,7 @@ import Testing
     @Test func listeningFollowsThePreviewAndStopListeningStopsIt() async {
         let rig = Rig(Self.settings())
         let model = rig.model
-        model.selection = .system(identifier: "voix.exemple.a")
+        model.selection = RowID.system(identifier: "voix.exemple.a")
         model.listen()
         #expect(await until { rig.player.clips.count == 1 })
         #expect(await until { model.previewState == .idle })
@@ -507,7 +511,7 @@ import Testing
         let rig = Rig(Self.settings(voices: [good, mute]))
         let model = rig.model
         #expect(model.privacyText == nil, "aucune ligne choisie")
-        model.selection = .system(identifier: "voix.exemple.a")
+        model.selection = RowID.system(identifier: "voix.exemple.a")
         #expect(model.privacyText == VoicesText.privacyNothingSent)
         model.selection = .saved(good.id)
         #expect(model.privacyText == VoicesText.privacyProvider("Fournisseur d'exemple"))
@@ -522,7 +526,7 @@ import Testing
     @Test func aRefusedWriteSaysTheSettingsSentenceOrTheFixedOneAndRereads() {
         let rig = Rig(Self.settings())
         let model = rig.model
-        model.selection = .system(identifier: "voix.exemple.a")
+        model.selection = RowID.system(identifier: "voix.exemple.a")
         let refusal = SettingsError.unreadableFileKept(fileName: "settings.json")
         rig.failure = refusal
         model.use()
