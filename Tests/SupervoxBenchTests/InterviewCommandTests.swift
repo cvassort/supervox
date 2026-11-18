@@ -403,7 +403,12 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6), .voice(turn: 1, seconds: 0.6)], in: folder)
         let before = try Data(contentsOf: URL(fileURLWithPath: wavs[1]))
 
-        for spelling in [wavs[1], folder.path + "/./tour2.wav", folder.path + "/sous/../tour2.wav"] {
+        var spellings = [wavs[1], folder.path + "/./tour2.wav", folder.path + "/sous/../tour2.wav"]
+        // Une autre casse n'est le même fichier que sur un volume qui l'ignore (le réglage par défaut de macOS) ; ailleurs, c'est un
+        // autre nom, sans risque pour l'entrée.
+        let otherCase = folder.path + "/TOUR2.WAV"
+        if FileManager.default.fileExists(atPath: otherCase) { spellings.append(otherCase) }
+        for spelling in spellings {
             let session = InterviewRig(fast: [])
             let command = try parse(wavs + models + ["--output", spelling, "--overwrite"])
             let error = await refusal { try await command.run(runtime: session.runtime()) }
@@ -411,6 +416,52 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
             #expect(session.builtSetups.isEmpty)
         }
         #expect(try Data(contentsOf: URL(fileURLWithPath: wavs[1])) == before, "le fichier d'entrée a été touché")
+    }
+
+    /// Deux noms, un seul fichier (lien physique) : la comparaison des chemins ne les rapproche pas, seule l'identité du fichier le fait.
+    /// Dans les deux sens : la sortie est le lien de l'entrée, ou l'entrée est le lien de la sortie.
+    @Test func overwriteNeverReplacesAnInputWavThroughAHardLink() async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6), .voice(turn: 1, seconds: 0.6)], in: folder)
+        let original = URL(fileURLWithPath: wavs[1])
+        let link = folder.appendingPathComponent("lien-vers-tour2.md")
+        try FileManager.default.linkItem(at: original, to: link)
+        // Précondition lue par un autre chemin que le code testé : les deux noms désignent bien le même fichier (même numéro d'inode).
+        var (first, second) = (stat(), stat())
+        try #require(stat(original.path, &first) == 0 && stat(link.path, &second) == 0)
+        try #require(first.st_ino == second.st_ino && first.st_nlink == 2, "le lien physique n'a pas été créé")
+        let before = try Data(contentsOf: original)
+
+        // La sortie est un autre nom du fichier d'entrée.
+        let outputIsTheLink = InterviewRig(fast: [])
+        let first1 = try parse(wavs + models + ["--output", link.path, "--overwrite"])
+        let refused = await refusal { try await first1.run(runtime: outputIsTheLink.runtime()) }
+        #expect(refused == .outputIsAnInput("tour2.wav"))
+        #expect(outputIsTheLink.builtSetups.isEmpty)
+
+        // L'entrée est donnée sous le nom du lien, la sortie sous le nom d'origine.
+        let inputIsTheLink = InterviewRig(fast: [])
+        let second1 = try parse([wavs[0], link.path] + models + ["--output", original.path, "--overwrite"])
+        let refusedAgain = await refusal { try await second1.run(runtime: inputIsTheLink.runtime()) }
+        #expect(refusedAgain == .outputIsAnInput("lien-vers-tour2.md"))
+        #expect(inputIsTheLink.builtSetups.isEmpty)
+
+        #expect(try Data(contentsOf: original) == before, "le fichier d'entrée a été touché")
+        #expect(try Data(contentsOf: link) == before)
+    }
+
+    /// Sans fichier à comparer (ni l'entrée ni la sortie n'existent), ce sont les chemins résolus qui le sont : la commande refuse
+    /// comme pour un fichier qui existe, au lieu de laisser la lecture de l'entrée absente se plaindre à sa place.
+    @Test func anOutputThatDoesNotExistYetIsComparedByItsResolvedPathWithAnInputThatDoesNotExistEither() async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let absent = folder.appendingPathComponent("absent.wav").path
+        let session = InterviewRig(fast: [])
+        let command = try parse([absent] + models + ["--output", folder.path + "/sous/../absent.wav", "--overwrite"])
+
+        let refused = await refusal { try await command.run(runtime: session.runtime()) }
+
+        #expect(refused == .outputIsAnInput("absent.wav"))
+        #expect(session.builtSetups.isEmpty)
     }
 
     @Test func overwriteNeverReplacesAFileGitTracksEvenInAFolderAPatternIgnores() async throws {

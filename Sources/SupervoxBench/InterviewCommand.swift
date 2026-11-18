@@ -272,13 +272,16 @@ struct InterviewCommand: AsyncParsableCommand {
         guard !wavs.isEmpty else { throw InterviewError.noWav }
         if voice != nil, voiceModel == nil { throw InterviewError.voiceNeedsVoiceModel }
         if voiceModel != nil, voice == nil { throw InterviewError.voiceModelNeedsVoice }
-        // Jamais le rapport sur un fichier d'entrée, `--overwrite` ou non : il serait lu au départ, puis écrasé à la fin. Les chemins
-        // sont comparés sans `.`, `..` ni lien symbolique (`/var` et `/private/var` désignent le même fichier).
+        // Jamais le rapport sur un fichier d'entrée, `--overwrite` ou non : il serait lu au départ, puis écrasé à la fin. Ce sont les
+        // fichiers qui sont comparés, pas leurs chemins (`OutputGuard.isSameFile`) : un lien physique, une autre casse sur un volume qui
+        // l'ignore, `/var` et `/private/var` désignent le même fichier sous des chemins différents.
         if let output {
-            let target = URL(fileURLWithPath: output).standardizedFileURL.resolvingSymlinksInPath()
+            let target = URL(fileURLWithPath: output)
             for path in wavs {
-                let input = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
-                if input == target { throw InterviewError.outputIsAnInput(input.lastPathComponent) }
+                let input = URL(fileURLWithPath: path)
+                if OutputGuard.isSameFile(input, target) {
+                    throw InterviewError.outputIsAnInput(input.standardizedFileURL.resolvingSymlinksInPath().lastPathComponent)
+                }
             }
         }
         guard maxQuestions >= 1 else { throw InterviewError.invalidOption("--max-questions doit être au moins 1.") }
