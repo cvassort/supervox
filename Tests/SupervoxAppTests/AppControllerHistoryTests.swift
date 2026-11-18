@@ -300,6 +300,87 @@ import Testing
         #expect(await controller.history?.confirmedRetention() == .days(365))
     }
 
+    // MARK: - I-R1 : la durée confirmée s'écrit AVANT les réglages
+
+    func settingsRetentionOnDisk() -> Int { store.load().settings.history.retentionDays }
+
+    @Test("I-R1 (scénario A) : durée confirmée jamais écrite et écriture refusée : les réglages restent à l'ancienne durée, ils ne disent pas 365")
+    func aFailedConfirmationLeavesTheSettingsAtTheirOldDuration() async throws {
+        defer {
+            chflags(root.path, 0)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try saveSettings(retention: 30)
+        try await seed([Self.record(1, daysAgo: 100)])
+        let controller = makeController(historyRoot: root)
+        let model = try #require(SettingsView.makeHistoryModel(controller))
+        await model.reload()
+        #expect(chflags(root.path, UInt32(UF_IMMUTABLE)) == 0)
+
+        let task = await model.requestRetention(365)
+        #expect(await bounded(try #require(task)) != nil)
+
+        #expect(model.message == HistoryModel.writeFailure)
+        #expect(settingsRetentionOnDisk() == 30, "sans la durée confirmée, les réglages ne disent pas 365 : une remise à zéro ne purgerait rien de plus que ce que la personne a")
+        #expect(controller.settings.history.retentionDays == 30)
+        #expect(chflags(root.path, 0) == 0)
+        #expect(await controller.history?.confirmedRetention() == .absent)
+        #expect(entretiens().count == 1, "aucune purge")
+    }
+
+    @Test("I-R1 (scénario B) : ancien fichier confirmé à 30 jours, 365 choisi et l'écriture refusée : le fichier ET les réglages restent à 30")
+    func aFailedConfirmationOverAnOldFileLeavesBothAtThirty() async throws {
+        defer {
+            chflags(root.path, 0)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try saveSettings(retention: 30)
+        try await seed([Self.record(1, daysAgo: 20)])
+        try await confirm(30)
+        let controller = makeController(historyRoot: root)
+        let model = try #require(SettingsView.makeHistoryModel(controller))
+        await model.reload()
+        #expect(chflags(root.path, UInt32(UF_IMMUTABLE)) == 0)
+
+        let task = await model.requestRetention(365)
+        #expect(await bounded(try #require(task)) != nil)
+        #expect(chflags(root.path, 0) == 0)
+
+        #expect(model.message == HistoryModel.writeFailure)
+        #expect(settingsRetentionOnDisk() == 30)
+        #expect(await controller.history?.confirmedRetention() == .days(30))
+    }
+
+    @Test("I-R1 (scénario C) : réglages refusés APRÈS la durée confirmée : au lancement suivant, aucune purge, et la ligne de l'onglet est là")
+    func aSettingsRefusalAfterTheConfirmationDoesNotPurgeAtTheNextLaunch() async throws {
+        defer {
+            chmod(directory.path, 0o700)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try saveSettings(retention: 30)
+        try await seed([Self.record(1, daysAgo: 100)])
+        let controller = makeController(historyRoot: root)
+        let model = try #require(SettingsView.makeHistoryModel(controller))
+        await model.reload()
+        // Le dossier des réglages refuse toute écriture ; le dossier de l'historique (un sous-dossier déjà créé) l'accepte.
+        #expect(chmod(directory.path, 0o500) == 0)
+
+        let task = await model.requestRetention(365)
+        #expect(await bounded(try #require(task)) != nil)
+        #expect(chmod(directory.path, 0o700) == 0)
+
+        #expect(model.message != nil && model.messageIsFailure, "l'échec des réglages est dit")
+        #expect(await controller.history?.confirmedRetention() == .days(365), "le dossier est en avance")
+        #expect(settingsRetentionOnDisk() == 30)
+
+        let next = makeController(historyRoot: root)
+        await launched(next)
+        #expect(entretiens().count == 1, "30 jours ne s'applique pas : le dossier a confirmé 365")
+        let nextModel = try #require(SettingsView.makeHistoryModel(next))
+        await nextModel.reload()
+        #expect(nextModel.retentionNote == HistoryModel.retentionChangedNote)
+    }
+
     // MARK: - Durée relue
 
     @Test("règle 3 : la durée est relue dans les réglages en vigueur à chaque purge : la changer s'applique sans relancer")

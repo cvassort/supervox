@@ -196,7 +196,7 @@ public struct HistoryPane: View {
                 Text(HistoryModel.retentionTitle)
                 Picker(
                     HistoryModel.retentionTitle,
-                    selection: Binding(get: { model.retentionDays }, set: { value in Task { await model.requestRetention(value) } })
+                    selection: Binding(get: { model.shownRetention }, set: { value in Task { await model.requestRetention(value) } })
                 ) {
                     ForEach(model.retentionChoices, id: \.days) { choice in
                         Text(choice.label).tag(choice.days)

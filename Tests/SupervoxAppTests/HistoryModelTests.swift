@@ -22,6 +22,8 @@ import Testing
         var failure: (any Error)?
         var copied: [String] = []
         var copyAccepts = true
+        /// Le fichier de durée confirmée existait-il au moment de l'écriture des réglages (`nil` : pas encore écrits) ?
+        var confirmedFileSeenByUpdate: Bool?
 
         init(retention: Int = 30) throws {
             directory = FileManager.default.temporaryDirectory
@@ -55,6 +57,9 @@ import Testing
                 history: history, read: { self.settings },
                 update: { change in
                     self.updates += 1
+                    // Ce que le dossier savait QUAND les réglages se sont écrits : la durée confirmée vient AVANT.
+                    self.confirmedFileSeenByUpdate = FileManager.default.fileExists(
+                        atPath: self.root.appendingPathComponent("conservation").path)
                     if let failure = self.failure { throw failure }
                     change(&self.settings)
                 },
@@ -622,15 +627,16 @@ import Testing
         await model.reload()
         await model.requestRetention(30)
         rig.failure = ForeignError()
+        rig.retentionReads = []
 
-        let task = model.confirmRetention()
+        try await finish(model.confirmRetention())
 
-        #expect(task == nil, "pas de purge")
         #expect(rig.updates == 1)
         #expect(model.message == HistoryModel.retentionSaveFailure)
         #expect(model.messageIsFailure)
         #expect(model.retentionDays == 365)
         #expect(model.pendingRetention == nil)
+        #expect(rig.retentionReads.isEmpty, "pas de purge")
         #expect(try rig.names().count == 2, "rien n'est supprimé")
         #expect(!(model.message ?? "").contains("example.com"), "le texte d'une erreur d'ailleurs n'arrive jamais à l'écran")
         #expect(!(model.message ?? "").contains("/tmp"))
@@ -644,7 +650,7 @@ import Testing
         await model.reload()
         rig.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
 
-        await model.requestRetention(90)
+        try await finish(await model.requestRetention(90))
 
         #expect(model.message?.contains("settings.json") == true)
         #expect(model.retentionDays == 30)
@@ -718,8 +724,7 @@ import Testing
         #expect(thirty.makeModel().headerNote == nil)
 
         // La ligne suit le réglage quand il change.
-        let task = await thirty.makeModel().requestRetention(0)
-        _ = task
+        try await finish(await thirty.makeModel().requestRetention(0))
         #expect(thirty.makeModel().headerNote != nil)
     }
 
@@ -866,7 +871,75 @@ import Testing
         #expect(model.message == HistoryModel.writeFailure)
         #expect(model.messageIsFailure)
         #expect(rig.retentionReads.isEmpty, "la purge n'a pas été lancée : elle aurait lu la durée")
-        #expect(rig.settings.history.retentionDays == 30, "les réglages, eux, étaient déjà écrits")
+        #expect(rig.updates == 0, "I-R1 : les réglages ne sont PAS touchés quand la durée confirmée n'a pas pu être écrite")
+        #expect(rig.settings.history.retentionDays == 365)
+        #expect(model.retentionDays == 365)
+        #expect(await rig.history.confirmedRetention() == .absent)
+    }
+
+    // MARK: - I-R1 : la durée confirmée s'écrit AVANT les réglages
+
+    @Test("I-R1 : l'ordre est durée confirmée, puis réglages, puis purge : le fichier existe quand les réglages s'écrivent")
+    func theConfirmationIsWrittenBeforeTheSettings() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        let model = rig.makeModel()
+        await model.reload()
+        rig.retentionReads = []
+
+        try await finish(await model.requestRetention(90))
+
+        #expect(rig.confirmedFileSeenByUpdate == true, "les réglages se sont écrits alors que la durée confirmée était déjà sur le disque")
+        #expect(rig.settings.history.retentionDays == 90)
+        #expect(rig.retentionReads == [.days(90)], "la purge est venue après les deux")
+    }
+
+    @Test("I-R1 : les réglages refusés APRÈS la durée confirmée : la phrase des réglages, aucune purge, le dossier est en avance et la ligne de l'onglet le dit")
+    func aSettingsRefusalAfterTheConfirmationLeavesTheDirectoryAhead() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 100)])
+        let model = rig.makeModel()
+        await model.reload()
+        rig.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
+        rig.retentionReads = []
+
+        try await finish(await model.requestRetention(365))
+
+        #expect(model.message?.contains("settings.json") == true, "la phrase de l'échec des réglages")
+        #expect(model.messageIsFailure)
+        #expect(rig.retentionReads.isEmpty, "aucune purge")
+        #expect(await rig.history.confirmedRetention() == .days(365), "le dossier est en avance sur les réglages")
+        #expect(model.retentionDays == 30)
+        #expect(model.retentionNote == Self.changedNote, "la ligne dit que la durée a changé hors de l'onglet")
+        #expect(try rig.names().count == 1)
+    }
+
+    @Test("I-R1 : le sélecteur ne revient pas à l'ancienne durée pendant l'écriture, et revient à elle si l'écriture échoue")
+    func theSelectorDoesNotFlickerBackWhileTheWriteIsInProgress() async throws {
+        let rig = try Rig(retention: 30)
+        defer {
+            chflags(rig.root.path, 0)
+            rig.cleanUp()
+        }
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.shownRetention == 30)
+
+        let task = await model.requestRetention(90)
+        #expect(model.shownRetention == 90, "pendant l'écriture : la durée choisie, pas l'ancienne")
+        #expect(model.retentionChoices.contains { $0.days == 90 })
+        try await finish(task)
+        #expect(model.shownRetention == 90)
+        #expect(model.retentionDays == 90)
+
+        // Une écriture qui échoue : la durée affichée redevient celle des réglages.
+        try FileManager.default.createDirectory(at: rig.root, withIntermediateDirectories: true)
+        #expect(chflags(rig.root.path, UInt32(UF_IMMUTABLE)) == 0)
+        let failing = await model.requestRetention(7)
+        #expect(model.shownRetention == 7)
+        try await finish(failing)
+        #expect(model.shownRetention == 90, "échec : la durée des réglages")
     }
 
     @Test("C-1 : la ligne de l'onglet apparaît quand la durée confirmée diffère des réglages (ou est illisible), disparaît quand elles s'accordent ou quand rien n'est confirmé")

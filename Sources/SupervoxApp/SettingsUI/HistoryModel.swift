@@ -384,10 +384,17 @@ public final class HistoryModel {
     /// La durée en vigueur, en jours, telle que les réglages la bornent.
     public var retentionDays: Int { settings.history.normalized.retentionDays }
 
+    /// La durée que le sélecteur montre : celle qu'on est en train d'appliquer (elle ne revient pas à l'ancienne le temps de l'écriture :
+    /// le sélecteur ne clignote pas), sinon celle des réglages. Si l'écriture échoue, elle redevient celle des réglages.
+    public var shownRetention: Int { inFlightRetention ?? retentionDays }
+
+    /// La durée en cours d'application (`applyRetention` jusqu'à sa fin), `nil` sinon.
+    private var inFlightRetention: Int?
+
     /// Les durées proposées, dans l'ordre : celles du brief, plus la durée en vigueur si elle n'en fait pas partie (un réglage écrit à
     /// la main), pour que la sélection s'affiche.
     public var retentionChoices: [(days: Int, label: String)] {
-        let days = Set(HistorySettings.choices + [retentionDays]).sorted()
+        let days = Set(HistorySettings.choices + [shownRetention]).sorted()
         return days.map { (days: $0, label: Self.label(forDays: $0)) }
     }
 
@@ -443,7 +450,7 @@ public final class HistoryModel {
         pendingRetention = nil
     }
 
-    /// Confirme la durée en attente : écrit le réglage D'ABORD (refusé : la phrase, aucune purge), puis supprime ce qui est échu.
+    /// Confirme la durée en attente : la durée confirmée du dossier d'abord, puis les réglages, puis la purge (voir `applyRetention`).
     /// Sans demande en attente, ne fait rien.
     @discardableResult
     public func confirmRetention() -> Task<Void, Never>? {
@@ -452,32 +459,62 @@ public final class HistoryModel {
         return applyRetention(days)
     }
 
-    /// Écrit les réglages (sauf s'ils disent déjà cette durée), puis, dans la tâche rendue, la durée CONFIRMÉE du dossier, puis purge.
-    /// Si la durée confirmée ne peut pas être écrite : la phrase d'échec d'écriture, et pas de purge (la durée des réglages n'est
-    /// alors pas celle du dossier : la purge au lancement ne partira pas non plus).
-    private func applyRetention(_ days: Int) -> Task<Void, Never>? {
-        do {
-            if days != retentionDays { try update { $0.history.retentionDays = days } }
-            clearMessage()
-            settings = read()
-        } catch {
-            say((error as? SettingsError)?.errorDescription ?? Self.retentionSaveFailure, failure: true)
-            settings = read()
-            return nil
-        }
-        // La purge lit la durée en vigueur à l'instant où elle s'exécute : celle qui vient d'être écrite.
+    /// Applique une durée, dans la tâche rendue, en TROIS écritures dans cet ordre :
+    /// 1. la durée CONFIRMÉE du dossier (`conservation`) ;
+    /// 2. les réglages (sauf s'ils disent déjà cette durée) ;
+    /// 3. la purge, qui lit la durée des réglages à l'instant où elle s'exécute : celle qui vient d'être écrite.
+    ///
+    /// Pourquoi cet ordre : la purge du lancement ne part que si le dossier ne contredit pas les réglages. Écrire les réglages d'abord
+    /// laissait, si le fichier n'était pas écrit (échec, arrêt entre les deux), des réglages à 365 jours SANS la durée confirmée : une
+    /// remise à zéro des réglages faisait ensuite purger à 30 jours, sans que le dossier s'y oppose. Dans l'ordre retenu :
+    /// - (1) échoue : la phrase d'échec d'écriture ; les réglages ne sont PAS touchés, rien n'est purgé ; rien n'a changé ;
+    /// - (2) échoue après (1) : la phrase de l'échec des réglages, rien n'est purgé. Le dossier est EN AVANCE sur les réglages : les
+    ///   lancements suivants ne purgent pas (la durée confirmée diffère de celle des réglages) et la ligne « a changé hors de cet
+    ///   onglet » s'affiche. C'est l'état prudent voulu ; son coût : jusqu'à ce que la personne choisisse la durée de nouveau, plus
+    ///   aucune purge automatique, même à la durée qu'elle veut ;
+    /// - un arrêt de l'application entre (1) et (2) donne le même état, sans message.
+    ///
+    /// Le fichier absent (jamais confirmé) fait purger à la durée des réglages au lancement : c'est la durée par défaut annoncée.
+    @discardableResult
+    private func applyRetention(_ days: Int) -> Task<Void, Never> {
+        inFlightRetention = days
         let history = history
-        return Task { [weak self] in
+        // La tâche tient le modèle (fini : elle ne dure que le temps des écritures) : fermer la fenêtre en pleine écriture n'abandonne pas
+        // les trois étapes à mi-chemin.
+        return Task {
+            // (1) La durée confirmée du dossier.
             do {
                 try await history.confirmRetention(days)
             } catch {
-                await self?.reload()
-                self?.say(Self.writeFailure, failure: true)
+                await abandonRetention(saying: Self.writeFailure)
                 return
             }
+            // (2) Les réglages, sauf s'ils disent déjà cette durée.
+            if read().history.normalized.retentionDays != days {
+                do {
+                    try update { $0.history.retentionDays = days }
+                } catch {
+                    await abandonRetention(
+                        saying: (error as? SettingsError)?.errorDescription ?? Self.retentionSaveFailure)
+                    return
+                }
+            }
+            clearMessage()
+            settings = read()
+            inFlightRetention = nil
+            // (3) La purge lit la durée des réglages à l'instant où elle s'exécute.
             _ = await history.purge()
-            await self?.reload()
+            await reload()
         }
+    }
+
+    /// Une écriture de la durée a échoué : la durée affichée redevient celle des réglages, le disque est relu, PUIS la phrase est posée
+    /// (la relecture peut changer la sélection, ce qui efface un message posé avant).
+    private func abandonRetention(saying sentence: String) async {
+        inFlightRetention = nil
+        settings = read()
+        await reload()
+        say(sentence, failure: true)
     }
 }
 
