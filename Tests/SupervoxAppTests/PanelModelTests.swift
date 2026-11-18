@@ -766,4 +766,59 @@ import Testing
         with.onOpenHistory = {}
         #expect(view(with).menuEntries.map(\.title) == ["Réglages…", "Historique…", "Quitter Supervox"])
     }
+
+    // MARK: - I3 : « Historique… » ne peut pas annuler un entretien ou une dictée sans rien demander
+
+    private func view(_ model: PanelModel) -> PanelView {
+        PanelView(
+            model: model, permissions: PermissionsModel(probe: FakePermissionsProbe(microphone: .granted, accessibility: .granted)),
+            openSettings: {}, quit: {})
+    }
+
+    @Test("I3 : l'entrée « Historique… » est grisée pendant l'entretien, quelle que soit la phase ; les autres entrées restent actives",
+        arguments: InterviewTextTests.phases)
+    func theHistoryEntryIsDisabledDuringTheInterview(phase: InterviewPhase) {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        model.onOpenHistory = {}
+        let panel = view(model)
+        #expect(panel.menuItems.map(\.isEnabled) == [true, true, true], "au repos : tout est actif")
+
+        model.setInterview(Self.interview(phase))
+
+        #expect(panel.menuItems.map(\.entry.title) == ["Réglages…", "Historique…", "Quitter Supervox"])
+        #expect(panel.menuItems.map(\.isEnabled) == [true, false, true], "seule « Historique… » est grisée")
+        model.setInterview(nil)
+        #expect(panel.menuItems.map(\.isEnabled) == [true, true, true], "l'entretien fini, elle revient")
+    }
+
+    @Test("I3 : « Historique… » est grisée tant qu'une dictée tient le panneau, active quand elle ne le tient plus")
+    func theHistoryEntryIsDisabledWhileADictationHoldsThePanel() {
+        for stage in [DictationStage.preparing, .recording, .finalizing, .formatting, .review, .pasting] {
+            let model = PanelModel(lastModeID: "dictee-brute")
+            model.onOpenHistory = {}
+            model.setDictation(DictationViewState(stage: stage))
+            #expect(model.holdsPanel)
+            #expect(!model.isHistoryEntryEnabled, "\(stage)")
+            #expect(!view(model).menuItems.first { $0.entry == .history }!.isEnabled, "\(stage)")
+        }
+        let idle = PanelModel(lastModeID: "dictee-brute")
+        idle.onOpenHistory = {}
+        idle.setDictation(DictationViewState(stage: .copied))
+        #expect(idle.isHistoryEntryEnabled)
+    }
+
+    @Test("I3 : invoquée alors que le panneau est tenu, l'ouverture de l'historique n'appelle pas son rappel")
+    func openingTheHistoryWhileHeldDoesNotCallTheHandler() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var opened = 0
+        model.onOpenHistory = { opened += 1 }
+        model.setInterview(Self.interview())
+
+        model.openHistory()
+        #expect(opened == 0, "l'entretien tient le panneau : le rappel n'est pas appelé")
+
+        model.setInterview(nil)
+        model.openHistory()
+        #expect(opened == 1)
+    }
 }

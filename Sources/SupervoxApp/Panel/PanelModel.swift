@@ -136,8 +136,16 @@ public final class PanelModel {
     /// L'entrée « Historique… » existe : un dossier d'historique est branché.
     public var canOpenHistory: Bool { onOpenHistory != nil }
 
-    /// Ce que fait un clic sur « Historique… ».
-    public func openHistory() { onOpenHistory?() }
+    /// L'entrée « Historique… » est active : un historique est branché, et rien ne tient le panneau. Ouvrir la fenêtre de réglages
+    /// annule l'entretien en cours et ferme le panneau (une relecture en attente y est perdue) : une consultation ne doit pas le
+    /// faire sans rien demander. « Réglages… » garde son comportement (choix de la tâche 10).
+    public var isHistoryEntryEnabled: Bool { canOpenHistory && !holdsPanel }
+
+    /// Ce que fait un clic sur « Historique… » ; sans effet quand l'entrée est grisée, même invoquée.
+    public func openHistory() {
+        guard isHistoryEntryEnabled else { return }
+        onOpenHistory?()
+    }
 
     /// `lastModeID` vient des réglages ; un identifiant inconnu retombe sur la dictée brute. `modes` : les pastilles des
     /// réglages ; sans elles, les quatre modes de base.

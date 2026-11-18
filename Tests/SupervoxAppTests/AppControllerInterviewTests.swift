@@ -293,6 +293,27 @@ import Testing
         #expect(controller.panelModel.select(ModeChip.rawID), "les pastilles répondent de nouveau")
     }
 
+    @Test("I3 : « Historique… » invoquée pendant un entretien ne l'annule pas et n'ouvre pas la fenêtre ; « Réglages… » garde son comportement")
+    func theHistoryEntryDoesNotCancelARunningInterview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController(historyRoot: realRoot)
+        hotKeys.press()
+        let driver = try await listening(controller)
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+
+        controller.panelModel.openHistory()
+        await settle()
+
+        #expect(controller.panelModel.interview?.phase == .listening, "l'entretien continue")
+        #expect(driver.cancels == 0)
+        #expect(presenter.windows.isEmpty, "la fenêtre des réglages ne s'ouvre pas")
+        #expect(controller.panelModel.isOpen)
+
+        controller.openSettings()
+        #expect(await until { controller.panelModel.interview == nil }, "« Réglages… » annule toujours l'entretien")
+    }
+
     // MARK: - Règle 5 de la tâche 11 : le vrai historique, bout en bout
 
     /// Le dossier du vrai historique de ces tests : dans le dossier temporaire du test, jamais celui de l'application.

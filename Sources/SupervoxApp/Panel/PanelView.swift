@@ -40,6 +40,12 @@ public struct PanelView: View {
     /// Les entrées du menu « … », dans l'ordre (UNE source : la vue les montre, les tests les lisent).
     var menuEntries: [PanelMenuEntry] { PanelMenuEntry.entries(hasHistory: model.canOpenHistory) }
 
+    /// Les entrées avec leur état : « Historique… » est grisée tant qu'un entretien ou une dictée tient le panneau (l'ouvrir
+    /// l'annulerait sans rien demander). L'état vient du modèle, pas de la vue.
+    var menuItems: [(entry: PanelMenuEntry, isEnabled: Bool)] {
+        menuEntries.map { ($0, $0 == .history ? model.isHistoryEntryEnabled : true) }
+    }
+
     private func run(_ entry: PanelMenuEntry) {
         switch entry {
         case .settings: openSettings()
@@ -103,9 +109,10 @@ public struct PanelView: View {
             }
             Spacer(minLength: 0)
             Menu {
-                ForEach(menuEntries, id: \.self) { entry in
-                    if entry == .quit { Divider() }
-                    Button(entry.title) { run(entry) }
+                ForEach(menuItems, id: \.entry) { item in
+                    if item.entry == .quit { Divider() }
+                    Button(item.entry.title) { run(item.entry) }
+                        .disabled(!item.isEnabled)
                 }
             } label: {
                 Image(systemName: "ellipsis")
