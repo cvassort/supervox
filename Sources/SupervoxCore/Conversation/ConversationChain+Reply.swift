@@ -243,8 +243,13 @@ extension ConversationChain {
             for index in reply.queue.takeAllPending() { show(index) }
         } else if let index = reply.queue.nextToSynthesize() {
             // Garde d'indice : la garde de génération écarte déjà toute entrée d'une réplique abandonnée ; un glissement futur doit
-            // échouer sans planter le processus (revue de la tâche 6, m-1).
-            guard reply.sentences.indices.contains(index) else { return }
+            // échouer sans planter le processus (revue de la tâche 6, m-1). La phrase est sautée et la file libérée : sans cela,
+            // elle resterait « en synthèse » et la réplique ne finirait jamais (revue finale, m-C).
+            guard reply.sentences.indices.contains(index) else {
+                reply.queue.synthesisFinished()
+                reply.outcomes[index] = .skipped
+                return
+            }
             let text = reply.sentences[index]
             let voice = voice
             let inputs = inputSink

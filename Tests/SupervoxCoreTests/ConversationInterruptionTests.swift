@@ -51,6 +51,19 @@ private func pushFirstTurnInChunksOf1500(_ h: ConversationHarness, _ log: EventL
     for k in 0..<5 { h.audio.inner.push(rampChunk((k * 1500)..<((k + 1) * 1500))) }
 }
 
+extension ConversationChain {
+    /// Pour le test de m-C (revue finale) : sur une réplique vierge, une phrase enregistrée dans la file sans texte, puis `advance()`.
+    /// Rend l'état de la file, le sort de la phrase et si la file est libre ; la réplique est remise à neuf ensuite.
+    func advanceOverASentenceWithoutText() -> (snapshot: ReplySnapshot, outcome: SentenceOutcome?, idle: Bool) {
+        reply = ReplyState()
+        let index = reply.queue.register()
+        advance()
+        let result = (replySnapshot(), reply.outcomes[index], reply.queue.isIdle)
+        reply = ReplyState()
+        return result
+    }
+}
+
 /// Termine les clips en file un à un (mode `.manual`), jusqu'au `upTo`-ième accepté par `play`.
 private func playAll(_ h: ConversationHarness, upTo plays: Int) async {
     for played in stride(from: 1, through: plays, by: 1) {   // vide pour 0 ou moins, jamais fatal
@@ -648,6 +661,22 @@ struct ConversationInterruptionTests {
         #expect(await h.chain.questionsAsked == 0)
         await finish(h)
         #expect(!log.items.contains(.notice(.voiceUnavailable)) && !log.items.contains(.state(.speaking)))
+    }
+
+    /// Revue finale, m-C : une phrase enregistrée dans la file sans texte (le glissement que couvre la garde d'`advance`) est sautée,
+    /// et la file reste libre : rien en synthèse, rien en attente, la réplique peut finir. Sans cela, la file restait « en synthèse »
+    /// pour toujours et la réplique ne finissait jamais.
+    @Test func aSentenceQueuedWithoutTextIsSkippedAndDoesNotFreezeTheQueue() async {
+        let h = ConversationHarness()
+        let log = await h.start()
+        await log.wait(.state(.listening))
+
+        let after = await h.chain.advanceOverASentenceWithoutText()
+
+        #expect(after.snapshot == ReplySnapshot(queuedClips: 0, synthesizing: nil, pending: []))
+        #expect(after.idle && after.outcome == .skipped)
+        #expect(h.speech.texts.isEmpty)
+        await finish(h)
     }
 
     // MARK: Ce qui attend dans le flux est abandonné (I-3)
