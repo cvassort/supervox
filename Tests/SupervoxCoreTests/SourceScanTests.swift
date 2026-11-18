@@ -2,6 +2,10 @@ import Foundation
 import Testing
 
 /// Contrôles par recherche dans les sources du dépôt, lancés avec la suite.
+///
+/// Ces gardes sont des filets contre la maladresse (une écriture naturelle ou voisine qui échappe à la relecture), pas contre une
+/// écriture délibérée : un alias de type, une chaîne composée ou une variable intermédiaire passent. Chaque motif est épinglé par
+/// des tests de forme (ce qu'il attrape, et une forme innocente proche qu'il laisse).
 @Suite(.timeLimit(.minutes(1))) struct SourceScanTests {
     /// Racine du dépôt, retrouvée depuis ce fichier (`Tests/SupervoxCoreTests/`).
     private static let root = URL(fileURLWithPath: #filePath)
@@ -52,7 +56,9 @@ import Testing
     /// leur fichier de définition. Tests, outil de rendu et constructeurs par défaut n'en ont pas (`InterviewEnvironment.unavailable`).
     /// Les tests du cœur (`Tests/SupervoxCoreTests`) en ont le droit : leurs essais sur le matériel sont gardés par une variable
     /// d'environnement (`SUPERVOX_MIC`, `SUPERVOX_SPEAKER`, `SUPERVOX_SPEECH`), et `LiveAudioIO(device:)` y reçoit un double.
-    static let realAudioOrSystemVoice = #"\b(?:LiveAudioIO|SystemSpeechSynthesizer)\s*(?:\(|\.\s*init\b)"#
+    static let realAudioOrSystemVoice = #"\b(?:LiveAudioIO|SystemSpeechSynthesizer)"# + construction
+    /// Ce qui suit le nom du type quand on le construit : `(`, `.init`, `.self.init`, ou `= .init` (`let io: LiveAudioIO = .init()`).
+    static let construction = #"\s*(?:\(|\.\s*init\b|\.\s*self\s*\.\s*init\b|=\s*\.\s*init\b)"#
 
     @Test func theRealSoundAndTheSystemVoiceAreBuiltOnlyByTheProgram() throws {
         let pattern = try Regex(Self.realAudioOrSystemVoice)
@@ -66,7 +72,7 @@ import Testing
         // (`InterviewEngines.real`), jamais le son réel : son seul `AudioIO` est `WavTurnFeed`, qui simule la lecture. Les tests du banc
         // ne font que construire cette fabrique (le constructeur de la voix range deux fermetures, code lu) ; ils ne la font pas parler.
         let benchVoice = "SupervoxBench/InterviewCommand.swift"
-        let realAudio = try Regex(#"\bLiveAudioIO\s*(?:\(|\.\s*init\b)"#)
+        let realAudio = try Regex(#"\bLiveAudioIO"# + Self.construction)
         let offending = sources
             .filter { !allowed.contains($0.place) && $0.code.contains(pattern) }
             .filter { $0.place != benchVoice || $0.code.contains(realAudio) }
@@ -83,6 +89,9 @@ import Testing
     @Test(arguments: [
         "LiveAudioIO()", "LiveAudioIO ( )", "LiveAudioIO.init()", "SystemSpeechSynthesizer(language: \"fr-FR\")",
         "SystemSpeechSynthesizer . init(language: x)", "{ LiveAudioIO() }",
+        // m-F : les formes par le type déclaré et par `.self`.
+        "let io: LiveAudioIO = .init()", "let v: SystemSpeechSynthesizer = .init(language: l)", "LiveAudioIO.self.init()",
+        "SystemSpeechSynthesizer.self.init(language: l)",
     ])
     func theRealSoundPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.realAudioOrSystemVoice)))
@@ -93,6 +102,8 @@ import Testing
         for code in [
             "let io: LiveAudioIO", "ScriptedAudioIO()", "public final class LiveAudioIO: AudioIO {", "MyLiveAudioIO()",
             "makeSystemVoice: { made.systemVoice($0) }", "x is SystemSpeechSynthesizer",
+            // m-F : formes proches et innocentes (une référence au type, une valeur qui n'est pas construite ici).
+            "let io: LiveAudioIO = makeAudio()", "ObjectIdentifier(LiveAudioIO.self)", "let v: SystemSpeechSynthesizer = voice",
         ] {
             #expect(!code.contains(pattern), "\(code)")
         }
@@ -103,6 +114,7 @@ import Testing
     /// (`URLSession(`), qui pourrait recevoir une configuration avec cache.
     static let forbiddenSession =
         #"URLSession\s*\.\s*shared|session\s*:\s*\.shared\b|URLSession\s*=\s*\.shared\b|URLSession\s*\("#
+        + #"|URLSession\s*\.\s*init\b|URLSession\s*=\s*\.\s*init\b"#
 
     /// C1 : la session partagée garde les réponses dans le cache disque. Toute requête vers un point d'accès passe
     /// par `EndpointSession`, seul fichier autorisé à construire une session.
@@ -117,6 +129,8 @@ import Testing
     @Test(arguments: [
         "let s = URLSession.shared", "let s = URLSession\n    .shared", "call(session: .shared)",
         "init(session: URLSession = .shared)", "URLSession(configuration: .default)", "URLSession (configuration: c)",
+        // m-F : la construction par `.init`, directe ou par le type déclaré.
+        "URLSession.init(configuration: c)", "let s: URLSession = .init(configuration: c)",
     ])
     func theForbiddenPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenSession)))
@@ -124,7 +138,11 @@ import Testing
 
     @Test func theForbiddenPatternLeavesOrdinaryUsesAlone() throws {
         let pattern = try Regex(Self.forbiddenSession)
-        for code in ["let session: URLSession", "session: URLSession = EndpointSession.shared", "URLSessionTaskMetrics"] {
+        for code in [
+            "let session: URLSession", "session: URLSession = EndpointSession.shared", "URLSessionTaskMetrics",
+            // m-F : formes proches et innocentes.
+            "URLSessionConfiguration.init()", "let s: URLSession = EndpointSession.make()",
+        ] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }
