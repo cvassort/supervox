@@ -360,6 +360,52 @@ import Testing
         #expect(model.selection == .saved(saved.id))
     }
 
+    /// Ce qui cache la voix neuve (filtre de langue, de genre, ou les deux) ; `none` : rien ne la cache (témoin).
+    enum HidingFilters: CaseIterable, Sendable {
+        case language, gender, both, none
+
+        var language: String? { self == .language || self == .both ? "en-US" : "fr-FR" }
+        var gender: VoicesModel.GenderFilter { self == .gender || self == .both ? .male : .female }
+    }
+
+    /// Décision 11 (tâche 4) : une voix qu'on vient d'enregistrer se voit. Cachée par les filtres en cours (la voix est en
+    /// `fr-FR`, féminine), les deux filtres reviennent à « tous » ; elle est alors choisie ET montrée (`selectedRow`). Rien ne la
+    /// cache : les filtres ne bougent pas.
+    @Test(arguments: HidingFilters.allCases)
+    func aJustSavedVoiceIsShownAndChosen(_ hiding: HidingFilters) throws {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.language = hiding.language
+        model.gender = hiding.gender
+        model.beginAdding()
+        model.draft = Self.validDraft()
+        model.save()
+        let saved = try #require(rig.settings.voices.first)
+        #expect(model.selection == .saved(saved.id))
+        #expect(model.selectedRow?.id == .saved(saved.id), "la ligne neuve est montrée (\(hiding))")
+        #expect(model.rows.contains { $0.id == .saved(saved.id) })
+        if hiding == .none {
+            #expect(model.language == "fr-FR" && model.gender == .female, "rien ne la cachait : les filtres restent")
+        } else {
+            #expect(model.language == nil && model.gender == .all, "les deux filtres reviennent à « tous » (\(hiding))")
+        }
+    }
+
+    /// Décision 11 : une voix modifiée dont la nouvelle langue est hors du filtre reste choisie et montrée.
+    @Test func anEditedVoiceMovedOutOfTheFilterIsStillShown() throws {
+        let saved = Self.saved("Voix d'exemple A", id: 1, gender: .female)
+        let rig = Rig(Self.settings(voices: [saved]))
+        let model = rig.model
+        #expect(model.language == "fr-FR")
+        model.selection = .saved(saved.id)
+        model.beginEditing()
+        model.draft?.language = "en-US"
+        model.save()
+        #expect(rig.settings.voices.first?.voice.language == "en-US")
+        #expect(model.selectedRow?.id == .saved(saved.id))
+        #expect(model.language == nil && model.gender == .all)
+    }
+
     /// Modifier la voix en vigueur (la ligne cochée) met à jour la liste ET `settings.voice`, dans la même écriture. Modifier la
     /// seconde de deux voix identiques (non cochée) ne touche pas `settings.voice`.
     @Test func savingTheActiveVoiceUpdatesBoth() throws {

@@ -474,6 +474,12 @@ public final class VoicesModel {
         }
         guard written else { return }
         self.draft = nil
+        // Une voix qu'on vient d'enregistrer se voit : cachée par les filtres en cours, les deux reviennent à « tous ». AVANT de la
+        // choisir : chaque `didSet` des filtres lâche une sélection encore cachée par l'autre filtre.
+        if !rows.contains(where: { $0.id == .saved(id) }) {
+            language = nil
+            gender = .all
+        }
         selection = .saved(id)
     }
 
