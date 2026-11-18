@@ -8,14 +8,20 @@ import SwiftUI
 /// Toute la logique est dans `HistoryModel`, dont viennent aussi les phrases et les confirmations ; cette vue n'en recopie aucune.
 public struct HistoryPane: View {
     @Bindable var model: HistoryModel
-    /// Mesure : reçoit la hauteur de la zone du milieu et le bas du pied, en points depuis le haut du volet. Sert aux tests qui exigent
-    /// que le pied tienne dans la fenêtre et que la liste garde de la place ; `nil` en production.
+    /// Mesure : reçoit le cadre de chaque repère (`Probe`), en points dans le repère du volet, défilement à zéro. Sert aux tests qui
+    /// exigent que le pied tienne dans la fenêtre, que la liste garde de la place et qu'aucun bouton ne bouge quand un message
+    /// apparaît ; `nil` en production.
     private let onMeasure: (@MainActor (Metrics) -> Void)?
 
-    /// Ce que la mesure rapporte.
+    /// Les éléments dont la position est mesurée.
+    public enum Probe: Hashable, Sendable {
+        case mainArea, messageSlot, footer, deleteButton, copyPromptButton, copyConversationButton
+    }
+
+    /// Ce que la mesure rapporte : le cadre de chaque repère présent.
     public struct Metrics: Equatable, Sendable {
-        public var mainAreaHeight: CGFloat
-        public var footerMaxY: CGFloat
+        public var frames: [Probe: CGRect]
+        public subscript(probe: Probe) -> CGRect? { frames[probe] }
     }
 
     public init(model: HistoryModel, onMeasure: (@MainActor (Metrics) -> Void)? = nil) {
@@ -30,14 +36,6 @@ public struct HistoryPane: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Le message (échec ou « Copié. ») est une rangée au-dessus du contenu, comme dans les autres onglets.
-            if let message = model.message {
-                HistoryMessageLine(text: message, isFailure: model.messageIsFailure)
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.bar)
-            }
             Text(HistoryModel.header)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -48,14 +46,19 @@ public struct HistoryPane: View {
             Divider()
             mainArea
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(mainProbe)
+                .background(frameProbe(.mainArea))
             Divider()
+            // Le message (échec ou « Copié. ») vit dans un emplacement de hauteur FIXE, toujours là, vide ou non : il ne décale jamais
+            // rien. Inséré dans le flux au-dessus du contenu, il descendait le détail d'une rangée, et un double clic sur « Copier le
+            // prompt » tombait sur « Supprimer ».
+            messageSlot
+                .background(frameProbe(.messageSlot))
             footer
-                .background(footerProbe)
+                .background(frameProbe(.footer))
         }
         .coordinateSpace(name: Self.coordinateSpaceName)
-        .onPreferenceChange(MetricsKey.self) { metrics in
-            if let metrics { onMeasure?(metrics) }
+        .onPreferenceChange(MetricsKey.self) { frames in
+            if onMeasure != nil, !frames.isEmpty { onMeasure?(Metrics(frames: frames)) }
         }
         // Un entretien conclu pendant que la fenêtre était gardée s'y voit à chaque affichage de l'onglet.
         .onAppear { Task { await model.reload() } }
@@ -121,17 +124,21 @@ public struct HistoryPane: View {
                 Button(HistoryModel.deleteTitle, role: .destructive) { Task { await model.deleteSelected() } }
                     .controlSize(.small)
                     .disabled(model.selectedRecord == nil)
+                    .background(frameProbe(.deleteButton))
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if let prompt = model.promptText {
-                        section(HistoryModel.promptTitle, copy: HistoryModel.copyPromptTitle, action: { model.copyPrompt() }) {
+                        section(
+                            HistoryModel.promptTitle, copy: HistoryModel.copyPromptTitle, probe: .copyPromptButton,
+                            action: { model.copyPrompt() }
+                        ) {
                             Text(prompt)
                         }
                     }
                     section(
                         HistoryModel.conversationTitle, copy: HistoryModel.copyConversationTitle,
-                        action: { model.copyConversation() }
+                        probe: .copyConversationButton, action: { model.copyConversation() }
                     ) {
                         Text(model.conversationText)
                     }
@@ -145,19 +152,39 @@ public struct HistoryPane: View {
 
     /// Une section du détail : son titre et son bouton de copie sur une ligne, le texte dessous (sélectionnable).
     private func section(
-        _ title: String, copy: String, action: @escaping () -> Void, @ViewBuilder text: () -> some View
+        _ title: String, copy: String, probe: Probe, action: @escaping () -> Void, @ViewBuilder text: () -> some View
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(title).font(.headline)
                 Spacer(minLength: 8)
-                Button(copy, action: action).controlSize(.small)
+                Button(copy, action: action).controlSize(.small).background(frameProbe(probe))
             }
             text()
                 .font(.callout)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    // MARK: - Emplacement du message
+
+    /// Hauteur de l'emplacement du message, en points : deux lignes de texte courant (la phrase la plus longue de l'onglet tient sur
+    /// deux lignes à 600 points de large : vu en image) et ses marges. Choix non mesuré. Un message plus long est coupé en fin de
+    /// ligne ; son texte entier reste dans l'infobulle et pour VoiceOver.
+    static let messageSlotHeight: CGFloat = 44
+
+    private var messageSlot: some View {
+        ZStack(alignment: .leading) {
+            Color.clear
+            if let message = model.message {
+                HistoryMessageLine(text: message, isFailure: model.messageIsFailure)
+                    .padding(.horizontal, 20)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: Self.messageSlotHeight)
+        .background(.bar)
     }
 
     // MARK: - Pied
@@ -195,54 +222,43 @@ public struct HistoryPane: View {
 
     // MARK: - Mesure
 
-    private var mainProbe: some View {
+    /// Rapporte le cadre de cet élément (seulement quand quelqu'un mesure).
+    private func frameProbe(_ probe: Probe) -> some View {
         GeometryReader { geometry in
             Color.clear.preference(
                 key: MetricsKey.self,
-                value: onMeasure == nil ? nil : Metrics(mainAreaHeight: geometry.size.height, footerMaxY: -1))
-        }
-    }
-
-    private var footerProbe: some View {
-        GeometryReader { geometry in
-            Color.clear.preference(
-                key: MetricsKey.self,
-                value: onMeasure == nil
-                    ? nil : Metrics(mainAreaHeight: -1, footerMaxY: geometry.frame(in: .named(Self.coordinateSpaceName)).maxY))
+                value: onMeasure == nil ? [:] : [probe: geometry.frame(in: .named(Self.coordinateSpaceName))])
         }
     }
 }
 
-/// Les deux mesures arrivent séparément ; la clé les réunit.
+/// Les cadres mesurés arrivent séparément ; la clé les réunit.
 private struct MetricsKey: PreferenceKey {
-    static let defaultValue: HistoryPane.Metrics? = nil
-    static func reduce(value: inout HistoryPane.Metrics?, nextValue: () -> HistoryPane.Metrics?) {
-        guard let next = nextValue() else { return }
-        guard var merged = value else {
-            value = next
-            return
-        }
-        if next.mainAreaHeight >= 0 { merged.mainAreaHeight = next.mainAreaHeight }
-        if next.footerMaxY >= 0 { merged.footerMaxY = next.footerMaxY }
-        value = merged
+    static let defaultValue: [HistoryPane.Probe: CGRect] = [:]
+    static func reduce(value: inout [HistoryPane.Probe: CGRect], nextValue: () -> [HistoryPane.Probe: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 
-/// Un message de l'onglet : un échec (icône d'erreur rouge) ou « Copié. » (coche verte). Le texte garde la couleur du texte courant.
+/// Un message de l'onglet : un échec (icône d'erreur rouge) ou « Copié. » (coche verte). Le texte garde la couleur du texte courant ;
+/// deux lignes au plus (l'emplacement a une hauteur fixe).
 struct HistoryMessageLine: View {
     let text: String
     let isFailure: Bool
 
     var body: some View {
-        if isFailure {
-            ModesMessageLine(text: text)
-        } else {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if isFailure {
+                Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+            } else {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                Text(text).fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
             }
+            Text(text)
+                .lineLimit(2)
+                .help(text)
+            Spacer(minLength: 0)
         }
+        .accessibilityElement(children: .combine)
     }
 }
 

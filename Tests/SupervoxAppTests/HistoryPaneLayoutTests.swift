@@ -75,7 +75,7 @@ import Testing
 
         let metrics = try measure(model)
 
-        #expect(abs(metrics.footerMaxY - Self.paneHeight) < 0.5, "pied à \(metrics.footerMaxY) points, volet de \(Self.paneHeight)")
+        #expect(abs(try #require(metrics[.footer]).maxY - Self.paneHeight) < 0.5, "pied à \(metrics[.footer]?.maxY ?? -1) points, volet de \(Self.paneHeight)")
     }
 
     @Test("même pied, même place, avec un seul entretien court, sans entretien, et avant la première lecture")
@@ -83,15 +83,15 @@ import Testing
         let rig = try HistoryModelTests.Rig()
         defer { rig.cleanUp() }
         let one = try await loadedModel(rig, count: 1, longTexts: false, withExtras: false)
-        #expect(abs(try measure(one).footerMaxY - Self.paneHeight) < 0.5)
+        #expect(abs(try #require(try measure(one)[.footer]).maxY - Self.paneHeight) < 0.5)
 
         let emptyRig = try HistoryModelTests.Rig()
         defer { emptyRig.cleanUp() }
         let empty = emptyRig.makeModel()
-        #expect(abs(try measure(empty).footerMaxY - Self.paneHeight) < 0.5, "avant la première lecture")
+        #expect(abs(try #require(try measure(empty)[.footer]).maxY - Self.paneHeight) < 0.5, "avant la première lecture")
         await empty.reload()
         #expect(empty.records.isEmpty && empty.isLoaded)
-        #expect(abs(try measure(empty).footerMaxY - Self.paneHeight) < 0.5, "sans entretien")
+        #expect(abs(try #require(try measure(empty)[.footer]).maxY - Self.paneHeight) < 0.5, "sans entretien")
     }
 
     /// La liste et le détail gardent de la place : même avec l'en-tête, le message et la note des fichiers illisibles, la zone du
@@ -104,7 +104,7 @@ import Testing
 
         let metrics = try measure(model)
 
-        #expect(metrics.mainAreaHeight >= 150, "zone du milieu de \(metrics.mainAreaHeight) points")
+        #expect(try #require(metrics[.mainArea]).height >= 150, "zone du milieu de \(metrics[.mainArea]?.height ?? -1) points")
     }
 
     @Test("la mesure est vivante : un volet plus étroit passe l'en-tête à la ligne et la zone du milieu rétrécit")
@@ -116,6 +116,60 @@ import Testing
         let wide = try measure(model)
         let narrow = try measure(model, width: 360)
 
-        #expect(narrow.mainAreaHeight < wide.mainAreaHeight, "étroit : \(narrow.mainAreaHeight), large : \(wide.mainAreaHeight)")
+        #expect(try #require(narrow[.mainArea]).height < (try #require(wide[.mainArea])).height, "étroit : \(narrow[.mainArea]?.height ?? -1), large : \(wide[.mainArea]?.height ?? -1)")
+    }
+
+    /// C1 (revue) : un message (« Copié. », un refus de copie, un échec d'écriture long) ne décale AUCUN bouton du détail : un double
+    /// clic sur « Copier le prompt » ne peut pas tomber sur « Supprimer » parce que le premier clic a fait apparaître « Copié. ».
+    /// Mesure : les cadres de mise en page SwiftUI dans le repère du volet, défilement à zéro, volet hébergé sans fenêtre. Limite :
+    /// c'est la géométrie de la mise en page, pas un clic réel ; une animation ou un défilement non mesurés ne sont pas couverts.
+    @Test("C1 : la position de « Supprimer », des deux « Copier », du pied et de la zone du milieu est la même avec et sans message")
+    func aMessageNeverMovesTheDetailButtons() async throws {
+        let probes: [HistoryPane.Probe] = [.deleteButton, .copyPromptButton, .copyConversationButton, .footer, .mainArea]
+
+        let baseRig = try HistoryModelTests.Rig()
+        defer { baseRig.cleanUp() }
+        let base = try await loadedModel(baseRig, count: 2, longTexts: false, withExtras: false)
+        #expect(base.message == nil)
+        let baseline = try measure(base)
+        for probe in probes { _ = try #require(baseline[probe], "\(probe) n'est pas mesuré") }
+
+        // « Copié. »
+        let copiedRig = try HistoryModelTests.Rig()
+        defer { copiedRig.cleanUp() }
+        let copied = try await loadedModel(copiedRig, count: 2, longTexts: false, withExtras: false)
+        copied.copyPrompt()
+        #expect(copied.message == "Copié.")
+
+        // Refus de copie.
+        let refusedRig = try HistoryModelTests.Rig()
+        defer { refusedRig.cleanUp() }
+        let refused = try await loadedModel(refusedRig, count: 2, longTexts: false, withExtras: false)
+        refusedRig.copyAccepts = false
+        refused.copyPrompt()
+        #expect(refused.message == HistoryModel.copyFailure)
+
+        // Échec d'écriture : la phrase la plus longue de l'onglet.
+        let failedRig = try HistoryModelTests.Rig()
+        defer { failedRig.cleanUp() }
+        let failed = try await loadedModel(failedRig, count: 2, longTexts: false, withExtras: false)
+        await failed.requestDeleteAll()
+        #expect(chmod(failedRig.root.path, 0o500) == 0)
+        await failed.deleteAll()
+        #expect(failed.message == HistoryModel.writeFailure)
+        // La liste reste la même (deux entretiens) : l'échec n'a rien supprimé.
+        #expect(failed.records.count == 2)
+
+        for (name, model) in [("Copié.", copied), ("refus de copie", refused), ("échec d'écriture", failed)] {
+            let metrics = try measure(model)
+            for probe in probes {
+                let expected = try #require(baseline[probe])
+                let actual = try #require(metrics[probe], "\(probe) n'est pas mesuré avec « \(name) »")
+                #expect(
+                    abs(actual.minY - expected.minY) < 0.5 && abs(actual.maxY - expected.maxY) < 0.5
+                        && abs(actual.minX - expected.minX) < 0.5,
+                    "\(probe) bouge avec « \(name) » : \(actual) au lieu de \(expected)")
+            }
+        }
     }
 }
