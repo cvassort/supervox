@@ -101,7 +101,12 @@ public final class InterviewController: InterviewRunning {
         attempt.view = view
         panel.setInterview(view)
         log.notice("entretien lancé")
-        let task = Task { [weak self] in _ = await self?.run(attempt, settings: settings, engine: engine) }
+        // Les prédécesseurs sont figés ici, avant l'inscription de celui-ci : chacun n'attend que ceux d'avant lui, jamais un
+        // suivant (lancé, annulé, relancé dans le même tour, deux lectures s'attendraient l'une l'autre sans fin).
+        let predecessors = stopping.values.map(\.reader)
+        let task = Task { [weak self] in
+            _ = await self?.run(attempt, after: predecessors, settings: settings, engine: engine)
+        }
         attempt.reader = task
         stopping[ObjectIdentifier(attempt)] = (attempt, task)
         Task { [weak self] in
@@ -123,9 +128,11 @@ public final class InterviewController: InterviewRunning {
             provider: name(settings.fastModel), strongProvider: name(settings.strongModel), voiceProvider: nil)
     }
 
-    private func run(_ attempt: Attempt, settings: AppSettings, engine: TranscriptionEngine?) async {
+    private func run(
+        _ attempt: Attempt, after predecessors: [Task<Void, Never>], settings: AppSettings, engine: TranscriptionEngine?
+    ) async {
         // Un entretien précédent annulé rend d'abord son micro.
-        await waitForOthers(than: attempt)
+        await waitFor(predecessors)
         guard isLive(attempt) else { return }
         let setup: InterviewSetup
         do {
@@ -211,11 +218,10 @@ public final class InterviewController: InterviewRunning {
         stopping.values.contains { !isLive($0.attempt) && $0.attempt.holdsConversation }
     }
 
-    /// Un entretien qui commence attend la fin de toutes les tâches des précédents, y compris leur préparation : deux préparations
-    /// des mêmes moteurs ne se croisent pas.
-    private func waitForOthers(than attempt: Attempt) async {
-        let others = stopping.filter { $0.key != ObjectIdentifier(attempt) }.map(\.value.reader)
-        for other in others { await other.value }
+    /// Un entretien qui commence attend la fin de toutes les tâches des précédents (figées à son lancement), y compris leur
+    /// préparation : deux préparations des mêmes moteurs ne se croisent pas.
+    private func waitFor(_ predecessors: [Task<Void, Never>]) async {
+        for predecessor in predecessors { await predecessor.value }
     }
 
     public func waitUntilStopped() async {

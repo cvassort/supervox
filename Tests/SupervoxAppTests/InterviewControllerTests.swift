@@ -678,6 +678,21 @@ import Testing
         #expect(rig.controller.isActive)
     }
 
+    /// m-1 : lancer, annuler et relancer dans le même tour du fil principal, avant qu'aucune lecture n'ait commencé. Si chaque
+    /// lecture prenait la liste des « autres » en démarrant, chacune attendrait l'autre sans fin.
+    @Test("m-1 : lancé, annulé puis relancé avant que la première lecture ne tourne : le second entretien démarre")
+    func aRestartInTheSameTurnDoesNotWaitForItself() async throws {
+        let rig = InterviewRig()
+        rig.start()
+        rig.controller.cancel()
+        rig.start()
+        let driver = try await rig.driver(0)
+        driver.emit(.state(.listening))
+        #expect(await until { rig.panel.interview?.phase == .listening })
+        #expect(rig.outcomes == [.cancelled])
+        #expect(rig.resolveCount == 1, "le premier, annulé avant de tourner, n'a rien résolu")
+    }
+
     @Test("le micro d'abord : après une annulation, la suite attend que la conversation ait rendu la main")
     func theNextStartWaitsForTheCancelledConversation() async throws {
         let rig = InterviewRig()
