@@ -17,7 +17,7 @@ private final class RecordingEndpoint: SpeechEndpoint, @unchecked Sendable {
     }
 }
 
-private let exampleVoice = ProviderVoice(model: "modele-exemple", identifier: "voix-exemple", extra: ["lang_code": "f", "vitesse": "1.1"])
+private let exampleVoice = ProviderVoice(model: "modele-exemple", identifier: "voix-exemple", extra: ["cle_exemple": "f", "vitesse": "1.1"])
 
 private func wav(_ samples: [Float], rate: Double = 24000) throws -> Data {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
@@ -33,7 +33,7 @@ private func wav(_ samples: [Float], rate: Double = 24000) throws -> Data {
         let endpoint = RecordingEndpoint { data }
         _ = try await ProviderSpeechSynthesizer(endpoint: endpoint, voice: exampleVoice).synthesize("Bonjour à tous")
         #expect(endpoint.requests == [.init(model: "modele-exemple", input: "Bonjour à tous", voice: "voix-exemple", format: "wav",
-                                            extra: ["lang_code": "f", "vitesse": "1.1"])])
+                                            extra: ["cle_exemple": "f", "vitesse": "1.1"])])
     }
 
     @Test func aWavReplyIsDecodedIntoTheClipAndIsNotAFallback() async throws {
@@ -182,6 +182,6 @@ struct ProviderSpeechClientTests {
         #expect(speech.clip.sampleRate == 24000 && speech.clip.samples.count == 106_200)
         let json = try #require(try JSONSerialization.jsonObject(with: StubURLProtocol.lastBody(of: client)) as? [String: String])
         #expect(json == ["model": "modele-exemple", "input": "Bonjour", "voice": "voix-exemple", "response_format": "wav",
-                         "lang_code": "f", "vitesse": "1.1"])
+                         "cle_exemple": "f", "vitesse": "1.1"])
     }
 }
