@@ -147,14 +147,21 @@ open build/Supervox.app
     90 jours, 1 an. Avec « Ne rien garder », rien n'est écrit, pas même le dossier. Les entretiens plus vieux que la durée sont
     supprimés **au lancement** (jamais au premier lancement, ni quand le fichier de réglages n'a pas pu être lu : la durée n'est
     alors pas un choix de la personne) et à chaque raccourcissement de la durée, **sur confirmation** qui dit combien partent.
-  - *Ce que l'onglet permet.* Copier le prompt ou la conversation, supprimer un entretien (un clic, sans confirmation : un choix à
-    rediscuter), tout supprimer (sur confirmation). Un fichier illisible ou d'une version inconnue n'apparaît pas dans la liste,
+  - *Ce que l'onglet permet.* Copier le prompt ou la conversation (« Copié. » et les messages d'échec s'affichent dans une bande
+    fixe au bas de l'onglet : aucun bouton ne bouge), supprimer un entretien (sur confirmation « Supprimer cet entretien ? C'est
+    définitif. » ; ensuite aucun entretien n'est choisi), tout supprimer (sur confirmation). Avec « Ne rien garder », une ligne
+    sous l'en-tête le dit. Une seule feuille sert aux trois confirmations. Choisir une durée relit le disque avant de compter :
+    toute durée qui supprimerait des entretiens demande confirmation, avec leur nombre exact. Un fichier illisible ou d'une version inconnue n'apparaît pas dans la liste,
     n'est jamais supprimé par la purge, et une note le dit ; seul « Tout supprimer… » le supprime.
   - *Ce qui n'est jamais gardé.* L'audio. Un entretien annulé (Échap, fermeture du panneau, « Réglages… », « Quitter »). Un
     entretien arrêté par une panne (micro, transcription) : sa conversation passe en relecture, mais n'est pas écrite. Un
     entretien où rien n'a été dit. La conversation d'une conclusion dont la rédaction a échoué, elle, est gardée, sans prompt. Le
     prompt gardé est celui que l'entretien a rédigé : le corriger ensuite à la voix ne change pas l'historique (lu dans le code,
     non vu).
+  - *Écriture qui échoue.* Si un entretien conclu n'a pas pu être écrit (disque plein, dossier refusé), la relecture le dit,
+    après son avis habituel : « Cet entretien n'a pas pu être gardé dans l'historique : copiez le texte si vous voulez le
+    conserver. ». La relecture attend l'écriture au plus 2 s (choix non mesuré) avant de s'ouvrir ; au-delà, elle s'ouvre sans
+    cet avis. Avec « Ne rien garder », rien n'est écrit et aucun avis ne s'affiche. Couvert par les tests, jamais provoqué à la main.
   - *Où c'est écrit.* `AppController` ne reçoit un dossier d'historique que de `Sources/Supervox/main.swift` : les tests et l'outil
     d'images n'en ont pas et n'en touchent aucun (un balayage des sources le vérifie).
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
@@ -185,9 +192,10 @@ défaut, avec un enregistrement refusé, toute la liste, au premier lancement, l
 feuille d'un mode (consigne modifiée, Prompt d'origine, sans fournisseur, Entretien, mode personnel, sans liste de modèles,
 raccourci refusé, consigne longue) ; l'onglet Entretien (`reglages-entretien*` : d'origine, réglages avancés ouverts,
 complet, réglé à la main, enregistrement refusé) et l'onglet Historique (`reglages-historique*` : deux entretiens, vide,
-« Copié. », copie refusée avec un fichier illisible, et les deux confirmations `historique-confirmation-*`) ; le panneau avec
-un dessin du menu « … » (`panneau-menu` : un dessin de l'outil, **pas** une capture du vrai menu ouvert, que l'outil ne peut
-pas copier). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
+« Copié. », « Ne rien garder », copie refusée avec un fichier illisible, échec d'écriture, refus de réglages, et les trois
+confirmations `historique-confirmation-*` : durée, un entretien, tout) ; le panneau avec un dessin du menu « … » (`panneau-menu`,
+et `panneau-menu-grise` pendant un entretien, « Historique… » grisée : des dessins de l'outil, **pas** des captures du vrai menu
+ouvert, que l'outil ne peut pas copier). Il n'y a pas d'image pour « Dictée interrompue » ni « Micro indisponible ». Les données sont
 d'exemple (`example.com`, textes inventés, noms de fournisseur d'exemple) : aucun accès au trousseau, au réseau, au
 presse-papiers ni aux réglages réels ; les images de l'Historique lisent un vrai magasin d'entretiens d'exemple, dans un
 dossier temporaire supprimé à la fin, jamais le vrai dossier. Les onglets des réglages sont rendus sans la barre d'onglets, que
@@ -543,6 +551,8 @@ ou « mesuré »).
 - **Échap, « Fermer le panneau », « Réglages… » et « Quitter Supervox »** annulent l'entretien à n'importe quel état, rédaction
   comprise : rien n'est collé, rien n'est gardé (ni historique, ni relecture), le micro est fermé. Un clic dans une autre
   application ne ferme pas le panneau. Une dictée lancée juste après attend que le micro de l'entretien soit rendu.
+  « Historique… » du menu « … » est grisée tant qu'un entretien, une dictée ou une relecture tient le panneau : elle ne peut
+  plus annuler un entretien sans rien demander (« Réglages… », elle, l'annule toujours).
 - **La relecture** (« À relire ») est celle de la dictée : « Coller », « Copier », « Corriger à la voix » (modèle fort), sans
   « Version précédente » avant la première correction. Rien n'est collé sans geste.
 - **Ne rien perdre** : toute panne après au moins un tour ouvre la relecture sur la conversation (« Vous : » et « Supervox : »),
