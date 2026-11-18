@@ -304,28 +304,27 @@ import Testing
 
     func settingsRetentionOnDisk() -> Int { store.load().settings.history.retentionDays }
 
-    @Test("I-R1 (scénario A) : durée confirmée jamais écrite et écriture refusée : les réglages restent à l'ancienne durée, ils ne disent pas 365")
+    @Test("I-R1 (scénario A) : la durée confirmée ne peut pas être écrite (un dossier occupe son nom) : les réglages restent à l'ancienne durée et AUCUNE purge n'a lieu")
     func aFailedConfirmationLeavesTheSettingsAtTheirOldDuration() async throws {
-        defer {
-            chflags(root.path, 0)
-            try? FileManager.default.removeItem(at: directory)
-        }
+        defer { try? FileManager.default.removeItem(at: directory) }
         try saveSettings(retention: 30)
         try await seed([Self.record(1, daysAgo: 100)])
+        // Un dossier au nom du fichier de durée : le renommage échoue, MAIS la racine reste inscriptible : une purge lancée à tort à 30
+        // jours supprimerait l'entretien de 100 jours (l'assertion « aucune purge » a donc du pouvoir ; avec une racine immuable aucune
+        // suppression n'aboutirait, purge ou non).
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("conservation"), withIntermediateDirectories: false)
         let controller = makeController(historyRoot: root)
         let model = try #require(SettingsView.makeHistoryModel(controller))
         await model.reload()
-        #expect(chflags(root.path, UInt32(UF_IMMUTABLE)) == 0)
 
         let task = await model.requestRetention(365)
         #expect(await bounded(try #require(task)) != nil)
 
         #expect(model.message == HistoryModel.writeFailure)
-        #expect(settingsRetentionOnDisk() == 30, "sans la durée confirmée, les réglages ne disent pas 365 : une remise à zéro ne purgerait rien de plus que ce que la personne a")
+        #expect(settingsRetentionOnDisk() == 30, "sans la durée confirmée, les réglages ne disent pas 365")
         #expect(controller.settings.history.retentionDays == 30)
-        #expect(chflags(root.path, 0) == 0)
-        #expect(await controller.history?.confirmedRetention() == .absent)
-        #expect(entretiens().count == 1, "aucune purge")
+        #expect(await controller.history?.confirmedRetention() == .unreadable, "le dossier au nom du fichier est toujours là")
+        #expect(entretiens().count == 1, "aucune purge : à 30 jours elle aurait supprimé l'entretien de 100 jours")
     }
 
     @Test("I-R1 (scénario B) : ancien fichier confirmé à 30 jours, 365 choisi et l'écriture refusée : le fichier ET les réglages restent à 30")
