@@ -159,9 +159,8 @@ public struct VoicesPane: View {
     private func rowView(_ row: VoicesModel.Row) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             // La coche garde sa place sur chaque ligne : les titres restent alignés.
-            Image(systemName: "checkmark")
+            VoicesRowMark(systemName: "checkmark")
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(.tint)
                 .opacity(row.isActive ? 1 : 0)
                 .frame(width: 14)
                 .accessibilityHidden(!row.isActive)
@@ -196,10 +195,14 @@ public struct VoicesPane: View {
         if model.previewState == .preparing {
             ProgressView().controlSize(.small).accessibilityLabel(VoicesText.listeningMark)
         } else {
-            Image(systemName: "speaker.wave.2.fill")
-                .foregroundStyle(.tint)
+            VoicesRowMark(systemName: "speaker.wave.2.fill")
                 .accessibilityLabel(VoicesText.listeningMark)
         }
+    }
+
+    /// Une marque de ligne est à la couleur d'accent, sauf sur la ligne surlignée, dont le fond l'est déjà : elle y suit le texte.
+    static func marksUseAccent(_ prominence: BackgroundProminence) -> Bool {
+        prominence != .increased
     }
 
     // MARK: - Bande de message
@@ -333,6 +336,18 @@ private struct VoicesMetricsKey: PreferenceKey {
     static let defaultValue: [VoicesPane.Probe: CGRect] = [:]
     static func reduce(value: inout [VoicesPane.Probe: CGRect], nextValue: () -> [VoicesPane.Probe: CGRect]) {
         value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// La coche de la voix en vigueur et le haut-parleur de la ligne écoutée (`VoicesPane.marksUseAccent`) : la liste pose
+/// `backgroundProminence` à `.increased` sur la ligne surlignée.
+private struct VoicesRowMark: View {
+    let systemName: String
+    @Environment(\.backgroundProminence) private var prominence
+
+    var body: some View {
+        Image(systemName: systemName)
+            .foregroundStyle(VoicesPane.marksUseAccent(prominence) ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
     }
 }
 

@@ -89,6 +89,25 @@ import Testing
         }!
     }
 
+    /// Toute phrase que l'éditeur peut montrer pendant un brouillon (refus, échec d'enregistrement des réglages) tient dans sa bande
+    /// de refus, à la largeur de la feuille (marges de 20 points, icône et espace de 24, comme la bande de l'onglet).
+    @Test func everyEditorSentenceFitsTheRefusalSlot() throws {
+        let editorTextWidth = VoiceEditor.size.width - 40 - 24
+        let sentences = Self.bandSentences().filter {
+            $0.name.hasPrefix("refusal") || ["newerVersionKept", "unreadableFileKept", "autre erreur"].contains($0.name)
+        }
+        #expect(sentences.count == 11, "\(sentences.count) phrases")
+        let tallest = try #require(sentences.max { Self.bandHeight($0.text, width: editorTextWidth) < Self.bandHeight($1.text, width: editorTextWidth) })
+        let height = Self.bandHeight(tallest.text, width: editorTextWidth)
+        print("Bande de l'éditeur : phrase la plus haute « \(tallest.name) », \(height) points ; bande : \(VoiceEditor.refusalSlotHeight)")
+        #expect(height > Self.bandHeight("Une ligne.", width: editorTextWidth), "la mesure est vivante")
+        for sentence in sentences {
+            #expect(
+                Self.bandHeight(sentence.text, width: editorTextWidth) + 4 <= VoiceEditor.refusalSlotHeight,
+                "\(sentence.name) : \(Self.bandHeight(sentence.text, width: editorTextWidth)) points")
+        }
+    }
+
     /// Un modèle dont l'écoute d'une voix de fournisseur échoue par cette `RewriteFailure` (la résolution la lève : c'est le
     /// chemin de `VoicePreview` pour `.provider`). Aucune voix n'est fabriquée.
     static func failingModel(_ failure: RewriteFailure, settings: AppSettings) -> VoicesModel {
@@ -257,6 +276,14 @@ import Testing
     }
 
     // MARK: - Décisions 3 à 5 : ce que la vue montre
+
+    /// La coche et le haut-parleur sont à la couleur d'accent, sauf sur la ligne surlignée (fond déjà à la couleur d'accent : vu
+    /// dans l'image `reglages-voix-ecoute`, la marque y disparaissait) ; là, ils suivent le texte surligné. Ce test tient la règle
+    /// de choix ; que la liste pose bien `backgroundProminence` à `.increased` sur la ligne choisie se voit dans les images.
+    @Test func theRowMarksStayVisibleOnTheHighlightedRow() {
+        #expect(VoicesPane.marksUseAccent(.standard))
+        #expect(!VoicesPane.marksUseAccent(.increased))
+    }
 
     /// Décision 3 : « Arrêter » dès qu'une ligne s'écoute, quelle que soit la ligne choisie, avec l'indicateur en préparation ;
     /// sinon « Écouter », actif selon `canListen`.
