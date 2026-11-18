@@ -386,13 +386,38 @@ struct VoicesMessageLine: View {
 /// les paramètres sont nombreux. Le refus d'un enregistrement s'affiche dans une bande de hauteur fixe au-dessus des boutons.
 public struct VoiceEditor: View {
     @Bindable var model: VoicesModel
+    /// Mesure : reçoit le cadre de chaque repère (`Probe`), en points dans le repère de la feuille. Sert aux tests de disposition ;
+    /// `nil` dans l'application.
+    private let onMeasure: (@MainActor (Metrics) -> Void)?
 
-    public init(model: VoicesModel) {
-        self.model = model
+    /// Les repères mesurés de la feuille.
+    public enum Probe: Hashable, Sendable {
+        case title, fields, parametersViewport, parameterRow(Int), addParameter, refusalSlot, cancelButton, saveButton
     }
 
-    /// La taille de la feuille, en points (brief : 520×420). Choix non mesuré, vu en image.
-    public static let size = CGSize(width: 520, height: 420)
+    public struct Metrics: Equatable, Sendable {
+        public var frames: [Probe: CGRect]
+        public subscript(probe: Probe) -> CGRect? { frames[probe] }
+    }
+
+    public init(model: VoicesModel, onMeasure: (@MainActor (Metrics) -> Void)? = nil) {
+        self.model = model
+        self.onMeasure = onMeasure
+    }
+
+    static let coordinateSpaceName = "voiceEditor"
+
+    private func frameProbe(_ probe: Probe) -> some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: VoiceEditorMetricsKey.self,
+                value: onMeasure == nil ? [:] : [probe: geometry.frame(in: .named(Self.coordinateSpaceName))])
+        }
+    }
+
+    /// La taille de la feuille, en points : 520×540 (décision du contrôleur, tour 1 : les six champs, deux paramètres et
+    /// « Ajouter un paramètre » se voient sans défiler). Choix non mesuré, vu en image.
+    public static let size = CGSize(width: 520, height: 540)
 
     /// Les fournisseurs proposés : ceux qui savent parler ; le fournisseur du brouillon s'il n'y est pas (supprimé, ou qui ne sait
     /// pas parler : le modèle ne donne que les fournisseurs qui parlent, la vue ne peut pas dire lequel des deux), sous un libellé
@@ -416,6 +441,129 @@ public struct VoiceEditor: View {
         return options
     }
 
+    /// Paramètres visibles sans défiler : au-delà, seule la zone des paramètres défile (décision du contrôleur, tour 1).
+    static let visibleParameterRows = 3
+    /// Hauteur d'une ligne de paramètre et écart entre deux lignes, en points : un champ arrondi et sa marge. Choix non mesuré, vu
+    /// en image.
+    static let parameterRowHeight: CGFloat = 24
+    static let parameterSpacing: CGFloat = 6
+
+    /// La hauteur de la zone visible des paramètres : jusqu'à `visibleParameterRows` lignes, puis elle défile.
+    static func parametersViewportHeight(count: Int) -> CGFloat {
+        let shown = min(max(count, 0), visibleParameterRows)
+        return CGFloat(shown) * parameterRowHeight + CGFloat(max(shown - 1, 0)) * parameterSpacing
+    }
+
+    /// Les six champs, sur une grille : ils ne défilent jamais.
+    private func fields(_ draft: Binding<VoicesModel.VoiceDraft>) -> some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 10) {
+            GridRow {
+                fieldLabel(VoicesText.nameField)
+                TextField(VoicesText.nameField, text: draft.name).labelsHidden()
+            }
+            GridRow {
+                fieldLabel(VoicesText.providerField)
+                Picker(VoicesText.providerField, selection: draft.providerID) {
+                    ForEach(
+                        Self.providerOptions(speaking: model.speakingProviders, current: draft.wrappedValue.providerID),
+                        id: \.id
+                    ) { option in
+                        Text(option.title).tag(option.id)
+                    }
+                }
+                .labelsHidden()
+            }
+            GridRow {
+                fieldLabel(VoicesText.modelField)
+                HStack(spacing: 6) {
+                    TextField(VoicesText.modelField, text: draft.model).labelsHidden()
+                    let models = model.models(for: draft.wrappedValue.providerID)
+                    if !models.isEmpty {
+                        Menu {
+                            ForEach(models, id: \.self) { name in
+                                Button(name) { model.draft?.model = name }
+                            }
+                        } label: {
+                            Image(systemName: "list.bullet")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help(VoicesText.modelMenu)
+                        .accessibilityLabel(VoicesText.modelMenu)
+                    }
+                }
+            }
+            GridRow {
+                fieldLabel(VoicesText.identifierField)
+                TextField(VoicesText.identifierField, text: draft.identifier).labelsHidden()
+            }
+            GridRow {
+                fieldLabel(VoicesText.languageField)
+                TextField(VoicesText.languageField, text: draft.language).labelsHidden()
+            }
+            GridRow {
+                fieldLabel(VoicesText.genderField)
+                Picker(
+                    VoicesText.genderField,
+                    selection: Binding(
+                        get: { Self.genderOptions(current: draft.wrappedValue.gender).firstIndex(of: draft.wrappedValue.gender) ?? 0 },
+                        set: { index in
+                            let options = Self.genderOptions(current: draft.wrappedValue.gender)
+                            if options.indices.contains(index) { model.draft?.gender = options[index] }
+                        })
+                ) {
+                    ForEach(Array(Self.genderOptions(current: draft.wrappedValue.gender).enumerated()), id: \.offset) { index, gender in
+                        Text(VoicesText.editorGenderTitle(gender)).tag(index)
+                    }
+                }
+                .labelsHidden()
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+    }
+
+    private func fieldLabel(_ title: String) -> some View {
+        Text(title).gridColumnAlignment(.trailing)
+    }
+
+    /// Les paramètres : leur titre, leur zone (qui défile seule au-delà de `visibleParameterRows` lignes), le bouton d'ajout.
+    private func parameters(_ draft: Binding<VoicesModel.VoiceDraft>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(VoicesText.parametersTitle).font(.subheadline.weight(.semibold))
+            let count = draft.wrappedValue.parameters.count
+            if count > 0 {
+                ScrollView(.vertical) {
+                    VStack(spacing: Self.parameterSpacing) {
+                        ForEach(Array(draft.parameters.enumerated()), id: \.element.id) { index, $parameter in
+                            HStack(spacing: 8) {
+                                TextField(VoicesText.keyField, text: $parameter.key)
+                                TextField(VoicesText.valueField, text: $parameter.value)
+                                Button {
+                                    model.draft?.parameters.removeAll { $0.id == parameter.id }
+                                } label: {
+                                    Image(systemName: "minus.circle")
+                                }
+                                .buttonStyle(.borderless)
+                                .help(VoicesText.removeParameterTitle)
+                                .accessibilityLabel(VoicesText.removeParameterTitle)
+                            }
+                            .frame(height: Self.parameterRowHeight)
+                            .background(frameProbe(.parameterRow(index)))
+                        }
+                    }
+                    .textFieldStyle(.roundedBorder)
+                }
+                .frame(height: Self.parametersViewportHeight(count: count))
+                .background(frameProbe(.parametersViewport))
+            }
+            Button(VoicesText.addParameterTitle) {
+                model.draft?.parameters.append(VoicesModel.VoiceDraft.Parameter(key: "", value: ""))
+            }
+            .background(frameProbe(.addParameter))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// Hauteur de la bande du refus, en points : deux lignes de texte `callout` et leurs marges. Choix non mesuré, vu en image.
     static let refusalSlotHeight: CGFloat = 44
 
@@ -427,74 +575,15 @@ public struct VoiceEditor: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
-            Form {
-                Section {
-                    TextField(VoicesText.nameField, text: draft.name)
-                    Picker(VoicesText.providerField, selection: draft.providerID) {
-                        ForEach(
-                            Self.providerOptions(
-                                speaking: model.speakingProviders, current: draft.wrappedValue.providerID),
-                            id: \.id
-                        ) { option in
-                            Text(option.title).tag(option.id)
-                        }
-                    }
-                    LabeledContent(VoicesText.modelField) {
-                        HStack(spacing: 6) {
-                            TextField(VoicesText.modelField, text: draft.model).labelsHidden()
-                            let models = model.models(for: draft.wrappedValue.providerID)
-                            if !models.isEmpty {
-                                Menu {
-                                    ForEach(models, id: \.self) { name in
-                                        Button(name) { model.draft?.model = name }
-                                    }
-                                } label: {
-                                    Image(systemName: "list.bullet")
-                                }
-                                .menuStyle(.borderlessButton)
-                                .fixedSize()
-                                .help(VoicesText.modelMenu)
-                                .accessibilityLabel(VoicesText.modelMenu)
-                            }
-                        }
-                    }
-                    TextField(VoicesText.identifierField, text: draft.identifier)
-                    TextField(VoicesText.languageField, text: draft.language)
-                    Picker(
-                        VoicesText.genderField,
-                        selection: Binding(
-                            get: { Self.genderOptions(current: draft.wrappedValue.gender).firstIndex(of: draft.wrappedValue.gender) ?? 0 },
-                            set: { index in
-                                let options = Self.genderOptions(current: draft.wrappedValue.gender)
-                                if options.indices.contains(index) { model.draft?.gender = options[index] }
-                            })
-                    ) {
-                        ForEach(Array(Self.genderOptions(current: draft.wrappedValue.gender).enumerated()), id: \.offset) { index, gender in
-                            Text(VoicesText.editorGenderTitle(gender)).tag(index)
-                        }
-                    }
-                }
-                Section(VoicesText.parametersTitle) {
-                    ForEach(draft.parameters) { $parameter in
-                        HStack(spacing: 8) {
-                            TextField(VoicesText.keyField, text: $parameter.key)
-                            TextField(VoicesText.valueField, text: $parameter.value)
-                            Button {
-                                model.draft?.parameters.removeAll { $0.id == parameter.id }
-                            } label: {
-                                Image(systemName: "minus.circle")
-                            }
-                            .buttonStyle(.borderless)
-                            .help(VoicesText.removeParameterTitle)
-                            .accessibilityLabel(VoicesText.removeParameterTitle)
-                        }
-                    }
-                    Button(VoicesText.addParameterTitle) {
-                        model.draft?.parameters.append(VoicesModel.VoiceDraft.Parameter(key: "", value: ""))
-                    }
-                }
-            }
-            .formStyle(.grouped)
+                .background(frameProbe(.title))
+            fields(draft)
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
+                .background(frameProbe(.fields))
+            parameters(draft)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+            Spacer(minLength: 0)
             ZStack(alignment: .leading) {
                 Color.clear
                 if let message = model.message {
@@ -503,15 +592,30 @@ public struct VoiceEditor: View {
                 }
             }
             .frame(height: Self.refusalSlotHeight)
+            .background(frameProbe(.refusalSlot))
             HStack {
                 Spacer()
                 Button(VoicesText.cancelTitle, role: .cancel) { model.cancel() }
                     .keyboardShortcut(.cancelAction)
+                    .background(frameProbe(.cancelButton))
                 Button(VoicesText.saveTitle) { model.save() }
                     .keyboardShortcut(.defaultAction)
+                    .background(frameProbe(.saveButton))
             }
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: Self.size.width, height: Self.size.height)
+        .coordinateSpace(name: Self.coordinateSpaceName)
+        .onPreferenceChange(VoiceEditorMetricsKey.self) { frames in
+            if onMeasure != nil, !frames.isEmpty { onMeasure?(Metrics(frames: frames)) }
+        }
+    }
+}
+
+/// Les cadres mesurés de l'éditeur arrivent séparément ; la clé les réunit.
+private struct VoiceEditorMetricsKey: PreferenceKey {
+    static let defaultValue: [VoiceEditor.Probe: CGRect] = [:]
+    static func reduce(value: inout [VoiceEditor.Probe: CGRect], nextValue: () -> [VoiceEditor.Probe: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }

@@ -260,19 +260,107 @@ import Testing
         }
     }
 
-    /// L'éditeur tient dans 520×420 et son formulaire défile : avec le plus grand nombre de paramètres permis, sa taille ne bouge
-    /// pas.
-    @Test func theEditorKeepsItsSizeWithManyParameters() {
-        let rig = Rig(VoicesModelTests.settings())
-        let model = rig.model
+    // MARK: - B : l'éditeur (520×540, seule la zone des paramètres défile)
+
+    /// Mesure l'éditeur à sa taille de feuille, posé dans une fenêtre jamais affichée (sans fenêtre, AppKit ne dimensionne pas le
+    /// contenu d'une vue de défilement), passages bornés. Rend aussi l'hôte, pour y chercher les vues de défilement, et la fenêtre,
+    /// que l'appelant garde en vie.
+    private func measureEditor(_ model: VoicesModel) throws -> (metrics: VoiceEditor.Metrics, host: NSView, window: NSWindow) {
+        var measured: VoiceEditor.Metrics?
+        let host = NSHostingView(rootView: VoiceEditor(model: model, onMeasure: { measured = $0 }))
+        host.frame = NSRect(origin: .zero, size: VoiceEditor.size)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        for _ in 0..<300 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        return (try #require(measured, "l'éditeur n'a rien mesuré"), host, window)
+    }
+
+    /// Un brouillon de voix à `count` paramètres d'exemple.
+    private func editing(_ count: Int) -> VoicesModel {
+        let model = Rig(VoicesModelTests.settings()).model
         model.beginAdding()
-        model.draft?.parameters = (0..<VoiceChoice.maxExtraEntries).map {
+        model.draft?.name = "Voix d'exemple A"
+        model.draft?.parameters = (0..<count).map {
             VoicesModel.VoiceDraft.Parameter(key: "cle-exemple-\($0)", value: "valeur-exemple")
         }
-        let host = NSHostingView(rootView: VoiceEditor(model: model))
-        host.layoutSubtreeIfNeeded()
-        #expect(abs(host.fittingSize.width - VoiceEditor.size.width) < 1 && abs(host.fittingSize.height - VoiceEditor.size.height) < 1, "\(host.fittingSize)")
-        #expect(VoiceEditor.size == CGSize(width: 520, height: 420))
+        return model
+    }
+
+    /// Les vues de défilement d'AppKit sous `view` qui ont plus à montrer que leur fenêtre visible (on peut y faire défiler).
+    static func scrollable(in view: NSView) -> [NSScrollView] {
+        var found: [NSScrollView] = []
+        if let scroll = view as? NSScrollView, let document = scroll.documentView,
+            document.frame.height > scroll.contentView.bounds.height + 1
+        {
+            found.append(scroll)
+        }
+        for subview in view.subviews { found += scrollable(in: subview) }
+        return found
+    }
+
+    static func inside(_ inner: CGRect?, _ outer: CGRect) -> Bool {
+        guard let inner else { return false }
+        return inner.minX >= outer.minX - 0.5 && inner.maxX <= outer.maxX + 0.5 && inner.minY >= outer.minY - 0.5
+            && inner.maxY <= outer.maxY + 0.5
+    }
+
+    /// B1 : deux paramètres et le bouton « Ajouter un paramètre » se voient sans défiler : leurs cadres sont dans la feuille et dans
+    /// la zone visible des paramètres ; rien ne défile.
+    @Test func twoParametersAndTheAddButtonShowWithoutScrolling() throws {
+        #expect(VoiceEditor.size == CGSize(width: 520, height: 540))
+        let (metrics, host, window) = try measureEditor(editing(2))
+        defer { withExtendedLifetime(window) {} }
+        let sheet = CGRect(origin: .zero, size: VoiceEditor.size)
+        let viewport = try #require(metrics[.parametersViewport])
+        for probe in [VoiceEditor.Probe.parameterRow(0), .parameterRow(1)] {
+            #expect(Self.inside(metrics[probe], sheet), "\(probe) : \(String(describing: metrics[probe]))")
+            #expect(Self.inside(metrics[probe], viewport), "\(probe) dans la zone visible \(viewport)")
+        }
+        #expect(Self.inside(metrics[.addParameter], sheet), "\(String(describing: metrics[.addParameter]))")
+        #expect(Self.inside(metrics[.saveButton], sheet))
+        #expect(Self.scrollable(in: host).isEmpty, "rien ne défile avec deux paramètres")
+    }
+
+    /// B1 : avec douze paramètres, la zone des paramètres défile (une vue de défilement a plus à montrer que sa zone visible, et
+    /// le douzième paramètre est au-delà), et elle seule : le titre, les six champs, « Ajouter un paramètre », « Annuler » et
+    /// « Enregistrer » sont au même endroit qu'avec deux paramètres, à un point près ; la feuille garde sa taille.
+    @Test func manyParametersScrollOnlyTheParameterZone() throws {
+        let (few, _, fewWindow) = try measureEditor(editing(2))
+        let (many, host, window) = try measureEditor(editing(12))
+        defer { withExtendedLifetime((fewWindow, window)) {} }
+        let viewport = try #require(many[.parametersViewport])
+        let last = try #require(many[.parameterRow(11)])
+        #expect(last.maxY > viewport.maxY + 1, "le douzième paramètre est au-delà de la zone visible : \(last) / \(viewport)")
+        if let scroll = Self.scrollable(in: host).first, let document = scroll.documentView {
+            print("Paramètres : zone visible \(scroll.contentView.bounds.height) points, contenu \(document.frame.height) points")
+        }
+        #expect(Self.scrollable(in: host).count == 1, "une seule zone défile : \(Self.scrollable(in: host).count)")
+        for probe in [VoiceEditor.Probe.title, .fields, .cancelButton, .saveButton] {
+            let a = try #require(few[probe]), b = try #require(many[probe])
+            #expect(abs(a.minY - b.minY) < 1 && abs(a.maxY - b.maxY) < 1, "\(probe) a bougé : \(a) puis \(b)")
+        }
+        #expect(Self.inside(many[.addParameter], CGRect(origin: .zero, size: VoiceEditor.size)))
+        #expect(abs(host.fittingSize.height - VoiceEditor.size.height) < 1, "\(host.fittingSize)")
+    }
+
+    /// B2 : la bande du refus garde sa hauteur fixe et ne recouvre ni la zone des paramètres, ni « Ajouter un paramètre », ni les
+    /// boutons, avec trois paramètres (la zone visible à son plus haut).
+    @Test func theRefusalBandCoversNothing() throws {
+        let model = editing(3)
+        model.draft?.name = ""
+        model.save()
+        #expect(model.message == VoicesText.refusalEmptyName)
+        let (metrics, _, window) = try measureEditor(model)
+        defer { withExtendedLifetime(window) {} }
+        let band = try #require(metrics[.refusalSlot])
+        #expect(abs(band.height - VoiceEditor.refusalSlotHeight) < 1, "\(band)")
+        for probe in [VoiceEditor.Probe.parametersViewport, .addParameter, .cancelButton, .saveButton, .parameterRow(2)] {
+            let frame = try #require(metrics[probe])
+            #expect(!frame.insetBy(dx: 0.5, dy: 0.5).intersects(band), "\(probe) \(frame) sous la bande \(band)")
+        }
     }
 
     // MARK: - Décisions 3 à 5 : ce que la vue montre
