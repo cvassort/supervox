@@ -41,6 +41,16 @@ func isTurnEnded(_ event: ConversationEvent) -> Bool {
     return false
 }
 
+/// Revue finale, I-A : le premier tour en 5 tranches de 1 500 échantillons (rampe 0..<7 500). Le détecteur reçoit les blocs 0 à 6 ;
+/// la voix s'ouvre au bloc 1 (échantillon 1 000) et se ferme au bloc 6 (échantillon 6 000), rendu par la 5e tranche : un rang
+/// impair, donc il reste 1 500 × 5 mod 1 000 = 500 échantillons (7 000..<7 500) qui ne remplissent pas encore un bloc.
+private let firstTurnInChunksOf1500: [Int: VoiceEvent] = [1: .speechStart(sample: 1000), 6: .speechEnd(sample: 6000)]
+
+private func pushFirstTurnInChunksOf1500(_ h: ConversationHarness, _ log: EventLog) async {
+    await log.wait(.state(.listening))
+    for k in 0..<5 { h.audio.inner.push(rampChunk((k * 1500)..<((k + 1) * 1500))) }
+}
+
 /// Termine les clips en file un à un (mode `.manual`), jusqu'au `upTo`-ième accepté par `play`.
 private func playAll(_ h: ConversationHarness, upTo plays: Int) async {
     for played in stride(from: 1, through: plays, by: 1) {   // vide pour 0 ou moins, jamais fatal
@@ -536,6 +546,59 @@ struct ConversationInterruptionTests {
         let call = try #require(h.transcriber.calls.dropFirst().first)
         #expect(call.clip == AudioClip(samples: loudSamples(0..<7000), sampleRate: 16000))
         #expect(h.fast.requests.map(\.input) == ["t1", "t1 t2"])
+    }
+
+    // MARK: Remise à neuf de la ligne de temps avec un reste non découpé (revue finale, I-A)
+
+    /// Le passage du premier tour se ferme alors que 500 échantillons (7 000..<7 500) ne remplissent pas encore un bloc. La ligne de
+    /// temps est remise à neuf trois fois avant le tour suivant, toutes au bloc 7 : à la fin de `hear`, avant la réplique (`proceed`)
+    /// et après elle (`finishReply`). Le reste traverse les trois : le détecteur annonce le passage suivant à l'échantillon 0 de la
+    /// ligne neuve, et son clip commence par ces 500 échantillons, suivis du tour dit ensuite.
+    @Test func audioNotYetInABlockWhenTheTimelineIsRenewedStartsTheNextTurn() async throws {
+        let h = ConversationHarness(
+            transcripts: texts("t1", "t2"), fast: [question("Une question ?"), modelReply("[CONCLURE]\nMerci.")],
+            events: firstTurnInChunksOf1500.merging([7: .speechStart(sample: 0), 10: .speechEnd(sample: 4000)]) { _, added in added })
+        let log = await h.start()
+        await pushFirstTurnInChunksOf1500(h, log)
+        await log.wait(.state(.listening), count: 2)
+        #expect(h.detector.resetMarks == [0, 7, 7, 7])   // les trois sites, le reste en attente devant le bloc 7
+
+        for k in 0..<4 { h.audio.inner.push(rampChunk((1_000_000 + k * 1000)..<(1_000_000 + (k + 1) * 1000))) }
+        await log.waitForEnd()
+
+        #expect(h.transcriber.calls.first?.clip == AudioClip(samples: rampSamples(1000..<6000), sampleRate: 16000))
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: rampSamples(7000..<7500) + rampSamples(1_000_000..<1_003_500), sampleRate: 16000))
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Une question ?", "t2", "Merci.")))
+    }
+
+    /// La porte et la ligne de temps restent alignées après une remise à neuf qui reporte un reste de 500 échantillons : le passage
+    /// s'ouvre à l'échantillon 500 de la ligne neuve pendant la parole, la porte compte les trames qui commencent à 500 ou après
+    /// (trames 2 et suivantes) et coupe au 5e bloc fort (17 trames reçues, 15 au niveau), pas avant. Une porte sans le reste aurait
+    /// ses indices décalés de 500 et ne couperait qu'au 6e. Puis « conclure » : le passage encore ouvert est transcrit jusqu'au
+    /// dernier échantillon reçu (le compte des échantillons de la ligne neuve inclut le reste).
+    @Test func afterARenewalThatCarriesAudioNotYetInABlockTheGateCutsAtTheRightBlock() async throws {
+        let h = ConversationHarness(
+            transcripts: texts("t1", "t2"), fast: [question("Un. Deux.")], completion: .manual,
+            events: firstTurnInChunksOf1500.merging([7: .speechStart(sample: 500)]) { _, added in added })
+        let log = await h.start()
+        await pushFirstTurnInChunksOf1500(h, log)
+        await h.audio.plays.wait(atLeast: 1)
+        #expect(h.detector.resetMarks == [0, 7, 7])
+
+        pushLoud(h, from: 0, count: 4)
+        await log.wait(5 + 4, where: isLevel)
+        #expect(!log.items.contains(where: isInterrupted))
+        pushLoud(h, from: 4000, count: 1)
+        await log.wait(5 + 5, where: isLevel)   // le niveau d'une tranche est émis après la consultation de la porte
+        #expect(log.items.filter(isInterrupted) == [.interrupted(heard: "")])
+        #expect(h.detector.blocks.count == 12)
+
+        await h.chain.conclude()
+        await log.waitForEnd()
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: loudSamples(0..<5000), sampleRate: 16000))
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2")))
     }
 
     // MARK: Une phrase qui n'existe pas (revue de la tâche 6, m-1)

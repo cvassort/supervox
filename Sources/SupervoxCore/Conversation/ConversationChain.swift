@@ -432,12 +432,25 @@ public actor ConversationChain: ConversationEngine {
         if previewTask == nil { startPreview() }
     }
 
-    /// Ligne de temps, porte et détecteur neufs : la prochaine écoute ne voit rien de la précédente. Jamais pendant un passage ouvert
-    /// (le détecteur perdrait la voix en cours, et le passage son début) : l'appelant le vérifie.
+    /// Ligne de temps, porte et détecteur neufs : la prochaine écoute ne voit rien de la précédente, sauf l'audio reçu qui ne
+    /// remplit pas encore un bloc. Jamais pendant un passage ouvert (le détecteur perdrait la voix en cours, et le passage son
+    /// début) : l'appelant le vérifie.
+    ///
+    /// Ce reste (moins d'un bloc : jusqu'à 4 095 échantillons, 0,256 s en production ; code lu, revue finale) n'a jamais été vu du
+    /// détecteur : c'est peut-être le début d'une reprise de parole. Il est reporté au début de la ligne neuve **et** de la porte,
+    /// pour que leurs indices désignent toujours le même échantillon (revue finale, I-A).
+    ///
+    /// Non fait, et son coût : le remplissage d'avant le reste n'est pas reporté. Un passage qui commence dans les `padding`
+    /// premières secondes de la ligne neuve perd la part de son remplissage qui tombait avant elle (jusqu'à `padding`, 0,3 s par
+    /// défaut) : de l'audio d'avant le début annoncé par le détecteur, pas les mots du passage. Le reporter garderait en plus jusqu'à
+    /// `padding` secondes déjà vues du détecteur, qu'il faudrait exclure des blocs de la ligne neuve.
     func renew() async {
+        let tail = timeline.unblockedTail
         timeline = SpeechTimeline(blockSize: detector.blockSize, sampleRate: transcriberSampleRate)
+        _ = timeline.append(tail)   // moins d'un bloc : aucun n'est rendu, le détecteur le verra avec la tranche suivante
         gate.reset()
-        timelineSamples = 0
+        gate.append(tail)
+        timelineSamples = tail.count
         handledSegments = 0
         passageOrigin = .listening
         await detector.reset()
