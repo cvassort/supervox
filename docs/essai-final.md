@@ -1626,7 +1626,8 @@ deux à la fois. **Ne dictez rien et ne lancez aucun entretien dans l'ancienne a
 
 ### 67. Onglet Historique vide (sans micro, sans son)
 
-À faire avant tout entretien, ou avec un historique vidé (essai 87), dossier `Historique` absent ou vide.
+À faire avant tout entretien, ou avec un historique vidé (essai 87) : aucun entretien dans le dossier `Historique`, qui est
+absent ou ne contient que le fichier `conservation` (la durée choisie : essai 87, point 10).
 
 1. Onglet Historique.
    - Attendu : en tête, « Chaque entretien conclu est gardé ici en texte : le prompt rédigé et la conversation. Ils restent sur
@@ -1856,6 +1857,14 @@ annonce comme de la voix **n'est pas établi** (« Jamais exécuté… »).
    - Attendu : les lignes « Supervox : » ne contiennent que ce qui a été dit : une phrase coupée après au moins la moitié de sa
      durée y est **en entier** ; une phrase coupée avant la moitié n'y est pas. Cette moitié est un choix non mesuré
      (`ConversationChain+Reply.swift`).
+5. Laissez Supervox finir sa réplique sans l'interrompre, puis répondez tout de suite : commencez à parler à son dernier mot, ou
+   un peu avant la fin.
+   - Attendu : votre réponse est transcrite et Supervox y répond. **Coût accepté** : une réponse commencée dans le dernier quart
+     de seconde de la réplique peut perdre sa première syllabe (Supervox ne doit pas s'entendre lui-même : ce qui est capté tant
+     qu'il parle ne compte que s'il passe la porte ; `ConversationChain+Reply.swift`, `finishReply`). Notez si vous l'entendez.
+   - À l'inverse, rien n'est perdu à l'intérieur d'un tour d'écoute : le dernier quart de seconde d'audio d'un tour, que le
+     détecteur n'a pas encore examiné, est reporté au début de l'écoute suivante, de sorte qu'un début de reprise de parole n'est
+     pas coupé (`ConversationChain.swift`, `renew(carryingTail:)`). Notez un mot d'un tour qui manque au tour suivant.
    - Si ce n'est pas le cas, noter : le délai ressenti entre votre voix et le silence ; une coupure que vous n'avez pas
      provoquée ; une phrase que vous avez entendue en entier et qui manque, ou l'inverse.
 
@@ -2091,30 +2100,43 @@ dont le modèle fort a échoué (81).
      n'apparaît pas dans la liste, et « Tout supprimer… » le supprime aussi. ».
 9. « Tout supprimer… ».
    - Attendu : « Supprimer les n entretiens gardés ? C'est définitif. » (« Supprimer l'entretien gardé ? C'est définitif. »),
-     « Annuler », « Tout supprimer ». « Annuler » ne supprime rien ; confirmer vide la liste et le dossier, y compris
-     `essai.json`.
+     « Annuler », « Tout supprimer ». « Annuler » ne supprime rien ; confirmer vide la liste et supprime tous les entretiens du
+     dossier, `essai.json` compris. **Le fichier `conservation` reste** (point 10) : le voir dans `ls` n'est pas un défaut.
 10. **Durée confirmée du dossier.** Le dossier de l'historique garde aussi la durée que vous avez choisie dans l'onglet : un
     fichier `conservation` (0600 ; ce n'est pas un entretien : il n'est ni compté, ni listé comme illisible, ni supprimé par
-    « Tout supprimer… » ni par la purge). Règle de la purge du lancement : elle n'a lieu que si ce n'est pas le premier
-    lancement, si le fichier de réglages a été lu sans avis, **et** si la durée confirmée du dossier est absente (jamais choisie :
-    la durée par défaut de 30 jours s'applique) ou égale à celle des réglages. Réglages remis à zéro, mis de côté ou édités à la
-    main (une durée de la mauvaise forme est lue 30 jours) alors que le dossier a confirmé une autre durée : **aucune
-    suppression, à ce lancement ni aux suivants, tant que vous n'avez pas choisi la durée de nouveau dans l'onglet.**
-    En fonctionnement normal, la purge du lancement supprime ce qui dépasse la durée choisie, sans confirmation.
+    « Tout supprimer… » ni par la purge). Choisir une durée écrit d'abord ce fichier, puis les réglages, puis purge. Règle de la
+    purge du lancement : elle n'a lieu que si ce n'est pas le premier lancement, si le fichier de réglages a été lu sans avis,
+    **et** si la durée confirmée du dossier est absente (jamais choisie : la durée par défaut de 30 jours s'applique) ou égale à
+    celle des réglages. Réglages remis à zéro, mis de côté ou édités à la main (une durée de la mauvaise forme est lue 30 jours)
+    alors que le dossier a confirmé une autre durée : **aucune suppression, à ce lancement ni aux suivants, tant que vous n'avez
+    pas confirmé la durée dans l'onglet.** Avec « Ne rien garder » confirmé, rien n'est écrit non plus, quelle que soit la durée
+    que disent ensuite les réglages. En fonctionnement normal, la purge du lancement supprime ce qui dépasse la durée choisie,
+    sans confirmation.
     Essai sûr, sans risque pour des entretiens à garder :
     - Copiez le dossier `Historique` et `settings.json` ailleurs (c'est la sauvegarde : si la règle était cassée, la purge du
       lancement pourrait supprimer des entretiens de plus de 30 jours).
     - Choisissez « 1 an » dans « Garder les entretiens », puis quittez Supervox.
     - Dans `settings.json`, entrée « history », remplacez `"retentionDays" : 365` par `"retentionDays" : 30`. Relancez deux fois.
-    - Attendu : aucun entretien n'est supprimé, même plus vieux que 30 jours. Sous l'en-tête de l'onglet, la ligne « La durée de
-      conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas choisie de
-      nouveau ci-dessous. » apparaît.
-    - Choisissez « 1 an » de nouveau : la ligne disparaît, et la purge du lancement suivant reprend avec 1 an. Rétablissez la
-      durée de votre choix (30 jours par défaut).
+    - Attendu : aucun entretien n'est supprimé, même plus vieux que 30 jours. Dans le **bas** de l'onglet, juste au-dessus de
+      « Garder les entretiens », la ligne « La durée de conservation a changé hors de cet onglet : rien ne sera supprimé
+      automatiquement tant que vous ne l'aurez pas choisie de nouveau ci-dessous. » apparaît, avec un bouton « Confirmer
+      « 30 jours » » (il nomme la durée que le sélecteur montre). L'en-tête, lui, ne change pas, et le détail ne bouge pas.
+    - Cliquez sur « Confirmer « 30 jours » ». S'il y a des entretiens plus vieux que 30 jours, la feuille « n entretiens plus
+      anciens seront supprimés maintenant. » s'ouvre : « Annuler » ne change rien (la ligne reste) ; « Supprimer » les supprime.
+      Sans entretien de plus de 30 jours, la durée est confirmée tout de suite : la ligne et le bouton disparaissent. Vous n'avez
+      pas à rechoisir la valeur déjà affichée. Rétablissez ensuite la durée de votre choix (30 jours par défaut).
+    - **« Ne rien garder » confirmé, puis réglages remis à zéro.** Avec la sauvegarde ci-dessus et l'historique vidé (point 9),
+      choisissez « Ne rien garder », quittez Supervox, remplacez dans `settings.json` `"retentionDays" : 0` par
+      `"retentionDays" : 30`, relancez. Attendu : dans le bas de l'onglet, la ligne « Vous aviez choisi « Ne rien garder » : rien
+      n'est gardé tant que vous n'aurez pas choisi une durée de nouveau ci-dessous. » et le bouton « Confirmer « 30 jours » » ;
+      la ligne d'en-tête « Avec « Ne rien garder », aucun entretien n'est gardé. » n'est **pas** affichée dans cet état. Un
+      entretien conclu n'écrirait rien (non essayé : il ouvre le micro, essai 88) ; le bouton confirme 30 jours, et la ligne
+      disparaît. Rétablissez la durée de votre choix.
     - Sans entretien de plus de 30 jours, seule la ligne est observable. **Le cas du fichier abîmé ou plus récent, le cas
-      « durée jamais choisie » et le cas d'un fichier `conservation` illisible ne se provoquent pas sûrement à la main : couverts
-      par les tests** (`AppControllerHistoryTests`). Ne reculez pas l'horloge du Mac pour « vieillir » des entretiens : une
-      horloge avancée fait purger selon la durée choisie, sans confirmation.
+      « durée jamais choisie », le cas d'un fichier `conservation` illisible et l'ordre des écritures (durée confirmée, réglages,
+      purge) ne se provoquent pas sûrement à la main : couverts par les tests** (`AppControllerHistoryTests`,
+      `HistoryModelTests`). N'avancez pas l'horloge du Mac pour « vieillir » des entretiens : une horloge avancée fait purger au
+      lancement selon la durée choisie, sans confirmation.
 11. **Entretien conclu que l'historique n'a pas pu garder** (disque plein, dossier refusé, droits impossibles).
     - Attendu : la relecture porte, après son avis habituel, « Cet entretien n'a pas pu être gardé dans l'historique : copiez le
       texte si vous voulez le conserver. ». La relecture attend l'écriture au plus 2 s avant de s'ouvrir (choix non mesuré :
