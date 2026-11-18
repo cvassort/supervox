@@ -77,7 +77,9 @@ extension ConversationChain {
         // Une ligne de temps par passage : le passage fermé est traité, aucun n'est ouvert, l'écoute repart d'une ligne neuve (la
         // mémoire reste bornée à ce qui a été reçu depuis le dernier passage ou la dernière réplique).
         if timeline.openSegmentStart == nil, handledSegments > 0, handledSegments == timeline.closedSegments.count {
-            await renew()
+            // Le reste est reporté : il suit la fin du passage, capté pendant l'écoute ; ce peut être le début d'une reprise
+            // (revue finale, I-A).
+            await renew(carryingTail: true)
         }
     }
 

@@ -62,6 +62,12 @@ extension ConversationChain {
         reply = ReplyState()
         return result
     }
+
+    /// Pour le test de la décision du contrôleur sur I-A : l'état de la ligne d'écoute (échantillons comptés, durée de la ligne de
+    /// temps, et si la porte passe depuis l'échantillon 0 sur ce qu'elle a reçu).
+    func listeningLineState() -> (samples: Int, duration: Double, gatePassesFromZero: Bool) {
+        (timelineSamples, timeline.duration, gate.passes(from: 0, to: .max))
+    }
 }
 
 /// Termine les clips en file un à un (mode `.manual`), jusqu'au `upTo`-ième accepté par `play`.
@@ -636,26 +642,64 @@ struct ConversationInterruptionTests {
 
     // MARK: Remise à neuf de la ligne de temps avec un reste non découpé (revue finale, I-A)
 
-    /// Le passage du premier tour se ferme alors que 500 échantillons (7 000..<7 500) ne remplissent pas encore un bloc. La ligne de
-    /// temps est remise à neuf trois fois avant le tour suivant, toutes au bloc 7 : à la fin de `hear`, avant la réplique (`proceed`)
-    /// et après elle (`finishReply`). Le reste traverse les trois : le détecteur annonce le passage suivant à l'échantillon 0 de la
-    /// ligne neuve, et son clip commence par ces 500 échantillons, suivis du tour dit ensuite.
+    /// Site de la fin de `hear` : le passage du premier tour se ferme alors que 500 échantillons (7 000..<7 500) ne remplissent pas
+    /// encore un bloc ; la ligne de temps est remise à neuf (bloc 7) avec ce reste. La personne reprend pendant que son tour est
+    /// transcrit : le détecteur annonce le passage à l'échantillon 0 de la ligne neuve, la porte passe, et le passage, fusionné au
+    /// tour, est transcrit depuis ces 500 échantillons.
     @Test func audioNotYetInABlockWhenTheTimelineIsRenewedStartsTheNextTurn() async throws {
         let h = ConversationHarness(
-            transcripts: texts("t1", "t2"), fast: [question("Une question ?"), modelReply("[CONCLURE]\nMerci.")],
-            events: firstTurnInChunksOf1500.merging([7: .speechStart(sample: 0), 10: .speechEnd(sample: 4000)]) { _, added in added })
+            transcripts: { $0 == 0 ? .hold : .text("t2") }, fast: [modelReply("[CONCLURE]\nMerci.")],
+            events: firstTurnInChunksOf1500.merging([7: .speechStart(sample: 0), 13: .speechEnd(sample: 7000)]) { _, added in added })
         let log = await h.start()
         await pushFirstTurnInChunksOf1500(h, log)
-        await log.wait(.state(.listening), count: 2)
-        #expect(h.detector.resetMarks == [0, 7, 7, 7])   // les trois sites, le reste en attente devant le bloc 7
+        await h.transcriber.waitForCalls(1)
+        #expect(h.detector.resetMarks == [0, 7])   // la fin de `hear` seule, le reste en attente devant le bloc 7
 
-        for k in 0..<4 { h.audio.inner.push(rampChunk((1_000_000 + k * 1000)..<(1_000_000 + (k + 1) * 1000))) }
+        pushLoud(h, from: 0, count: 7)
+        await log.wait(5 + 7, where: isLevel)
+        h.transcriber.release(call: 0, text: "t1")
         await log.waitForEnd()
 
         #expect(h.transcriber.calls.first?.clip == AudioClip(samples: rampSamples(1000..<6000), sampleRate: 16000))
         let call = try #require(h.transcriber.calls.dropFirst().first)
-        #expect(call.clip == AudioClip(samples: rampSamples(7000..<7500) + rampSamples(1_000_000..<1_003_500), sampleRate: 16000))
-        #expect(log.end == .prompt("Prompt final", conversation("t1", "Une question ?", "t2", "Merci.")))
+        #expect(call.clip == AudioClip(samples: rampSamples(7000..<7500) + loudSamples(0..<6500), sampleRate: 16000))
+        #expect(log.end == .prompt("Prompt final", conversation("t1 t2", "Merci.")))
+    }
+
+    /// Décision du contrôleur sur I-A : à la fin d'une réplique (`finishReply`), le reste n'est PAS reporté. Il a été capté pendant
+    /// que l'outil parlait : il relève de la porte, et l'outil ne doit pas s'entendre lui-même. Ici 1 500 échantillons forts sont
+    /// captés pendant la parole (un bloc, plus un reste de 500), puis la réplique finit. La ligne de temps, son compte et la porte
+    /// repartent de zéro, alignés (porte réglée à une trame : un reste reporté la ferait passer). Le tour suivant, annoncé à
+    /// l'échantillon `start` de la ligne neuve avec 1 000 échantillons de remplissage, commence par son propre premier échantillon :
+    /// le reste n'est ni dans le passage (`start` 0) ni dans le remplissage (`start` 500).
+    @Test(arguments: [0, 500])
+    func audioCapturedWhileTheReplyIsSpokenIsNotCarriedIntoTheNextTurn(start: Int) async throws {
+        let h = ConversationHarness(
+            turns: firstTurn, transcripts: texts("t1", "t2"), fast: [question("Un."), modelReply("[CONCLURE]\nMerci.")],
+            completion: .manual, config: makeConversationConfig(padding: 0.0625, interruptMinDuration: 0.02),
+            events: [7: .speechStart(sample: start), 11: .speechEnd(sample: 4000)])
+        let log = await h.start()
+        await h.say(0)
+        await h.audio.plays.wait(atLeast: 1)
+
+        h.audio.inner.push(loudChunk(0..<1500))   // pendant la parole : le bloc 6, et un reste de 500
+        await log.wait(6 + 1, where: isLevel)
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.wait(.state(.listening), count: 2)
+        #expect(h.detector.resetMarks == [0, 6, 6, 7])   // talk, fin de `hear`, `proceed`, `finishReply`
+        let renewed = await h.chain.listeningLineState()
+        #expect(renewed.samples == 0 && renewed.duration == 0 && !renewed.gatePassesFromZero)
+
+        for k in 0..<5 { h.audio.inner.push(rampChunk((1_000_000 + k * 1000)..<(1_000_000 + (k + 1) * 1000))) }
+        await h.audio.plays.wait(atLeast: 2)   // « Merci. »
+        h.audio.inner.finishPlayback(.played)
+        h.audio.inner.flushEnds()
+        await log.waitForEnd()
+
+        let call = try #require(h.transcriber.calls.dropFirst().first)
+        #expect(call.clip == AudioClip(samples: rampSamples(1_000_000..<1_005_000), sampleRate: 16000))
+        #expect(log.end == .prompt("Prompt final", conversation("t1", "Un.", "t2", "Merci.")))
     }
 
     /// La porte et la ligne de temps restent alignées après une remise à neuf qui reporte un reste de 500 échantillons : le passage

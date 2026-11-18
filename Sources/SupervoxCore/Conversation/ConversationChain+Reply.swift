@@ -120,7 +120,11 @@ extension ConversationChain {
         if let stop = interruption() { return stop }
         if result.signal == .conclude { return .concluding }
         if let failure = result.failure { emit(.notice(.modelFailed(failure))) }
-        if timeline.openSegmentStart == nil { await renew() }   // une ligne de temps neuve, sauf si la personne parle déjà
+        // Une ligne de temps neuve, sauf si la personne parle déjà. Le reste n'est PAS reporté (décision du contrôleur sur I-A) : il a
+        // été capté pendant que l'outil parlait encore, et un son capté pendant la parole ne compte que s'il a passé la porte ;
+        // l'outil ne doit pas s'entendre lui-même. Coût accepté : une réponse qui commence dans le dernier quart de seconde de la
+        // parole de l'outil peut perdre sa première syllabe.
+        if timeline.openSegmentStart == nil { await renew(carryingTail: false) }
         if let stop = interruption() { return stop }
         becomeIdle()
         return nil

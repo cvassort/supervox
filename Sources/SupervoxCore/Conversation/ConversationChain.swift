@@ -317,7 +317,7 @@ public actor ConversationChain: ConversationEngine {
         } catch {
             return interruption() ?? .failed(.engine(Self.transcriptionCode(of: error)))
         }
-        await renew()
+        await renew(carryingTail: false)   // avant l'ouverture du micro : la ligne de temps est vide, il n'y a rien à reporter
         if let stop = interruption() { return stop }
         guard let inputs = pendingInputs else { return .cancelled }
         pendingInputs = nil
@@ -377,7 +377,9 @@ public actor ConversationChain: ConversationEngine {
         guard questionsAsked < config.maxQuestions else { return .concluding }
         awaitingReply = false
         await stopPreview()
-        if timeline.openSegmentStart == nil { await renew() }   // une ligne de temps neuve, sauf si la personne parle déjà
+        // Une ligne de temps neuve, sauf si la personne parle déjà. Le reste est reporté : il a été capté pendant l'écoute ou la
+        // transcription du tour, avant que l'outil parle ; ce peut être le début d'une reprise (revue finale, I-A).
+        if timeline.openSegmentStart == nil { await renew(carryingTail: true) }
         if let stop = interruption() { return stop }
         startReply(remaining: config.maxQuestions - questionsAsked)
         return nil
@@ -434,21 +436,22 @@ public actor ConversationChain: ConversationEngine {
         if previewTask == nil { startPreview() }
     }
 
-    /// Ligne de temps, porte et détecteur neufs : la prochaine écoute ne voit rien de la précédente, sauf l'audio reçu qui ne
-    /// remplit pas encore un bloc. Jamais pendant un passage ouvert (le détecteur perdrait la voix en cours, et le passage son
-    /// début) : l'appelant le vérifie.
+    /// Ligne de temps, porte et détecteur neufs : la prochaine écoute ne voit rien de la précédente, sauf, avec `carryingTail`,
+    /// l'audio reçu qui ne remplit pas encore un bloc. Jamais pendant un passage ouvert (le détecteur perdrait la voix en cours, et le
+    /// passage son début) : l'appelant le vérifie.
     ///
     /// Ce reste (moins d'un bloc : jusqu'à `blockSize − 1` échantillons, soit 0,256 s pour des blocs de 4 096 ; taille déduite par
     /// la revue finale des commentaires et de l'arithmétique de `effectiveSilence`, non lue dans la bibliothèque) n'a jamais été vu du
-    /// détecteur : c'est peut-être le début d'une reprise de parole. Il est reporté au début de la ligne neuve **et** de la porte,
-    /// pour que leurs indices désignent toujours le même échantillon (revue finale, I-A).
+    /// détecteur : c'est peut-être le début d'une reprise de parole. Reporté, il l'est au début de la ligne neuve **et** de la porte,
+    /// pour que leurs indices désignent toujours le même échantillon (revue finale, I-A). Chaque appelant dit en clair s'il le
+    /// reporte : oui pour de l'audio d'écoute, non pour de l'audio capté pendant la parole de l'outil (décision du contrôleur).
     ///
     /// Non fait, et son coût : le remplissage d'avant le reste n'est pas reporté. Un passage qui commence dans les `padding`
     /// premières secondes de la ligne neuve perd la part de son remplissage qui tombait avant elle (jusqu'à `padding`, 0,3 s par
     /// défaut) : de l'audio d'avant le début annoncé par le détecteur, pas les mots du passage. Le reporter garderait en plus jusqu'à
     /// `padding` secondes déjà vues du détecteur, qu'il faudrait exclure des blocs de la ligne neuve.
-    func renew() async {
-        let tail = timeline.unblockedTail
+    func renew(carryingTail: Bool) async {
+        let tail = carryingTail ? timeline.unblockedTail : []
         timeline = SpeechTimeline(blockSize: detector.blockSize, sampleRate: transcriberSampleRate)
         _ = timeline.append(tail)   // moins d'un bloc : aucun n'est rendu, le détecteur le verra avec la tranche suivante
         gate.reset()
