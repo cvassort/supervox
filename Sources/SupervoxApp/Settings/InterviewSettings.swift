@@ -180,6 +180,47 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
     /// La voix vient d'un fournisseur (sinon, du système).
     public var usesProvider: Bool { providerID != nil }
 
+    /// Les clés que la requête de synthèse pose elle-même (`OpenAICompatibleClient.speech`, code lu) : un paramètre libre ne les
+    /// porte jamais.
+    public static let reservedExtraKeys: Set<String> = ["model", "input", "voice", "response_format"]
+    /// Nombre maximal de paramètres libres envoyés au fournisseur : 16, choix non mesuré.
+    public static let maxExtraEntries = 16
+
+    /// La forme sous laquelle la voix sert : modèle et identifiant rognés (vides : `nil`) ; langue vide ou blanche : `fr-FR` ; clés
+    /// d'`extra` rognées, les clés vides et les clés réservées (`reservedExtraKeys`, comparées après rognage, casse comprise)
+    /// retirées, puis au plus `maxExtraEntries` entrées, les premières dans l'ordre des clés. Deux clés qui se rejoignent une fois
+    /// rognées : celle qui l'était déjà l'emporte, sinon la première dans l'ordre des clés d'origine. Les valeurs ne sont pas
+    /// touchées ; le fournisseur, le genre et les champs inconnus restent. Idempotente. C'est la seule forme qui part chez un
+    /// fournisseur (`InterviewSetup.resolve`, `route(in:)`).
+    public var normalized: VoiceChoice {
+        func trimmed(_ text: String?) -> String? {
+            guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            return text
+        }
+        var result = self
+        result.model = trimmed(model)
+        result.identifier = trimmed(identifier)
+        if trimmed(language) == nil { result.language = Self.system.language }
+        // Tri par (clé rognée, clé déjà propre d'abord, clé d'origine) : l'ordre ne dépend pas du parcours du dictionnaire.
+        let entries = extra
+            .map { (key: $0.key.trimmingCharacters(in: .whitespacesAndNewlines), original: $0.key, value: $0.value) }
+            .filter { !$0.key.isEmpty && !Self.reservedExtraKeys.contains($0.key) }
+            .sorted { lhs, rhs in
+                if lhs.key != rhs.key { return lhs.key < rhs.key }
+                let lhsClean = lhs.key == lhs.original
+                let rhsClean = rhs.key == rhs.original
+                if lhsClean != rhsClean { return lhsClean }
+                return lhs.original < rhs.original
+            }
+        var kept: [String: String] = [:]
+        for entry in entries where kept[entry.key] == nil {
+            guard kept.count < Self.maxExtraEntries else { break }
+            kept[entry.key] = entry.value
+        }
+        result.extra = kept
+        return result
+    }
+
     /// Les champs connus seulement : un champ inconnu ne change pas l'égalité.
     public static func == (lhs: VoiceChoice, rhs: VoiceChoice) -> Bool {
         lhs.providerID == rhs.providerID && lhs.model == rhs.model && lhs.identifier == rhs.identifier

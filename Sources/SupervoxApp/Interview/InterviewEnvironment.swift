@@ -68,9 +68,9 @@ public struct InterviewSetup: Sendable {
     /// - Parameters:
     ///   - engine: le moteur du mode Entretien ; `nil` : `TranscriptionEngine.interviewDefault`.
     ///   - makeModel: fabrique le client d'un modèle (injectée : les tests n'ouvrent aucune connexion).
-    ///   - makeVoice: fabrique une voix. Avec `nil`, la voix du système, pour le choix donné (`providerID`, `model` et `identifier`
-    ///     à `nil` quand c'est un repli : l'identifiant d'une voix de fournisseur ne veut rien dire pour le système). Avec un
-    ///     fournisseur résolu, la voix de ce fournisseur pour le choix donné.
+    ///   - makeVoice: fabrique une voix, toujours pour un choix normalisé (`VoiceChoice.normalized`). Avec `nil`, la voix du système,
+    ///     pour le choix donné (`providerID`, `model` et `identifier` à `nil` quand c'est un repli : l'identifiant d'une voix de
+    ///     fournisseur ne veut rien dire pour le système). Avec un fournisseur résolu, la voix de ce fournisseur pour le choix donné.
     /// - Throws: `InterviewSetupFailure`, ou `CancellationError`. Une voix de fournisseur qui ne se résout pas n'est pas une panne :
     ///   voix du système.
     @MainActor
@@ -110,37 +110,41 @@ public struct InterviewSetup: Sendable {
         }
     }
 
-    /// La voix et le nom de son fournisseur. Un fournisseur au format Anthropic n'a pas de synthèse : il est écarté avant toute lecture
-    /// de sa clé (aucune invite du trousseau pour rien). Une voix de fournisseur sans modèle ou sans identifiant ne dit pas quoi
-    /// demander : écartée aussi. Seule une `RewriteFailure` de la résolution retombe sur le système ; l'annulation remonte.
+    /// La voix et le nom de son fournisseur. Qui parle se décide par `VoiceChoice.route(in:)`, sur la forme normalisée (seule forme
+    /// donnée à la fabrique : aucune clé réservée ne part chez un fournisseur). Un repli (fournisseur supprimé, sans synthèse, voix
+    /// incomplète) est décidé avant toute lecture de clé : aucune invite du trousseau pour rien. Seule une `RewriteFailure` de la
+    /// résolution retombe sur le système ; l'annulation remonte. Le repli garde langue et genre, sans identifiant.
     @MainActor
     private static func resolveVoice(
         _ choice: VoiceChoice, settings: AppSettings, secrets: SecretAccess,
         makeVoice: @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
     ) async throws -> (voice: any SpeechSynthesizer, providerName: String?) {
-        guard let providerID = choice.providerID else { return (makeVoice(choice, nil), nil) }
+        let choice = choice.normalized
         let systemChoice = VoiceChoice(
             providerID: nil, model: nil, identifier: nil, language: choice.language, gender: choice.gender, extra: [:])
-        guard let resolved = try await resolveVoiceProvider(providerID, choice: choice, settings: settings, secrets: secrets)
-        else { return (makeVoice(systemChoice, nil), nil) }
-        let voice = FallbackSpeechSynthesizer(
-            primary: makeVoice(choice, resolved), fallback: makeVoice(systemChoice, nil))
-        return (voice, resolved.name)
+        switch choice.route(in: settings) {
+        case .system(_, _, because: nil):
+            return (makeVoice(choice, nil), nil)
+        case .system:
+            return (makeVoice(systemChoice, nil), nil)
+        case .provider(let provider, _):
+            guard let resolved = try await resolveVoiceProvider(provider, settings: settings, secrets: secrets) else {
+                return (makeVoice(systemChoice, nil), nil)
+            }
+            let voice = FallbackSpeechSynthesizer(
+                primary: makeVoice(choice, resolved), fallback: makeVoice(systemChoice, nil))
+            return (voice, resolved.name)
+        }
     }
 
+    /// La clé du fournisseur que `route(in:)` a désigné : `nil` si la résolution échoue (`RewriteFailure` : clé absente, trousseau,
+    /// adresse), l'annulation remonte.
     @MainActor
     private static func resolveVoiceProvider(
-        _ providerID: UUID, choice: VoiceChoice, settings: AppSettings, secrets: SecretAccess
+        _ provider: Provider, settings: AppSettings, secrets: SecretAccess
     ) async throws -> ResolvedProvider? {
-        guard let provider = settings.providers.first(where: { $0.id == providerID }) else { return nil }
-        switch provider.kind {
-        case .anthropic: return nil
-        case .openAICompatible: break
-        }
-        func isBlank(_ text: String?) -> Bool { text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true }
-        guard !isBlank(choice.model), !isBlank(choice.identifier) else { return nil }
         do {
-            return try await ProviderResolver.resolve(providerID, settings: settings, secrets: secrets)
+            return try await ProviderResolver.resolve(provider.id, settings: settings, secrets: secrets)
         } catch is RewriteFailure {
             return nil
         }

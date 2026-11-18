@@ -239,16 +239,17 @@ public final class InterviewSettingsModel {
         )
     }
 
-    /// La ligne de vie privée : où part le texte, et que l'audio reste ici. La voix d'un fournisseur est nommée quand le fournisseur
-    /// existe encore ; sinon l'entretien prend la voix du système, et la ligne le dit.
+    /// La ligne de vie privée : où part le texte, et que l'audio reste ici. Le fournisseur de la voix n'est nommé que si
+    /// `VoiceChoice.route(in:)` dit qu'il parle ; sinon (voix du système, fournisseur supprimé, sans synthèse, voix incomplète)
+    /// l'entretien prend la voix du système, et la ligne le dit. Une clé absente ne se voit pas d'ici (le trousseau n'est pas lu) :
+    /// la ligne nomme alors un fournisseur qui ne recevra rien, sur-avertissement admis (voir `route(in:)`).
     public var privacyText: String {
         let voiceSentence: String
-        if settings.voice.usesProvider,
-            let provider = settings.providers.first(where: { $0.id == settings.voice.providerID })
-        {
+        switch settings.voice.route(in: settings) {
+        case .provider(let provider, _):
             voiceSentence = InterviewText.fr(
                 "La voix de Supervox vient de « \(Provider.shortName(provider.name)) » : le texte qu'elle dit lui est envoyé.")
-        } else {
+        case .system:
             voiceSentence = Self.systemVoiceSentence
         }
         return Self.privacyStart + " " + voiceSentence
