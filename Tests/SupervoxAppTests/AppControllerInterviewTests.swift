@@ -117,7 +117,9 @@ import Testing
         #expect(controller.panelModel.concludeRequested, "« Conclure » se grise")
     }
 
-    @Test("règle 1 : un clic sur la pastille Entretien au repos la choisit, l'enregistre et lance l'entretien, une seule fois")
+    /// « Un seul lancement » n'est pas vérifié ici : un second `start` serait refusé sans trace (`current != nil`), l'assertion ne
+    /// pourrait pas tomber (m-8). L'ordre et le nombre des rappels d'un clic sont tenus par `PanelModelTests`.
+    @Test("règle 1 : un clic sur la pastille Entretien au repos la choisit, l'enregistre et lance l'entretien")
     func thePillLaunchesTheInterview() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = try makeController(settings: settings(lastModeID: ModeChip.rawID))
@@ -128,9 +130,6 @@ import Testing
         #expect(store.load().settings.lastModeID == ModeChip.interviewID)
         #expect(controller.panelModel.interview?.phase == .preparing)
         _ = try await listening(controller)
-        await settle()
-        #expect(environment.prepareCount == 1, "un seul lancement : le changement de mode ne lance pas une seconde fois")
-        #expect(environment.drivers.count == 1)
     }
 
     @Test("I-2 : un clic sur la pastille Entretien déjà choisie, au repos, lance l'entretien")
