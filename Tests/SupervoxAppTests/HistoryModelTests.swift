@@ -138,16 +138,19 @@ import Testing
 
     // MARK: - Sélection
 
-    @Test("à la lecture, le plus récent est choisi ; une sélection disparue retombe sur le plus récent ; sans entretien, aucune")
+    @Test("à la première lecture, le plus récent est choisi ; une sélection disparue ne retombe sur RIEN ; sans entretien, aucune")
     func theSelectionFollowsTheList() async throws {
         let rig = try Rig()
         defer { rig.cleanUp() }
-        let model = rig.makeModel()
-        await model.reload()
-        #expect(model.selection == nil)
-        #expect(model.selectedRecord == nil)
+        let emptyRig = try Rig()
+        defer { emptyRig.cleanUp() }
+        let empty = emptyRig.makeModel()
+        await empty.reload()
+        #expect(empty.selection == nil)
+        #expect(empty.selectedRecord == nil)
 
         try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 2)])
+        let model = rig.makeModel()
         await model.reload()
         #expect(model.selection == InterviewHistoryTests.id(1))
         #expect(model.selectedRow?.id == InterviewHistoryTests.id(1))
@@ -159,7 +162,21 @@ import Testing
 
         model.selection = InterviewHistoryTests.id(99)
         await model.reload()
-        #expect(model.selection == InterviewHistoryTests.id(1), "une sélection disparue retombe sur le plus récent")
+        #expect(model.selection == nil, "une sélection disparue ne choisit pas d'office un autre entretien")
+        await model.reload()
+        #expect(model.selection == nil, "et une relecture de plus n'en choisit pas non plus")
+    }
+
+    @Test("le premier entretien n'est choisi d'office qu'à la PREMIÈRE lecture")
+    func theNewestIsChosenOnlyOnTheFirstLoad() async throws {
+        let rig = try Rig()
+        defer { rig.cleanUp() }
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.selection == nil)
+        try await rig.seed([Self.record(1)])
+        await model.reload()
+        #expect(model.selection == nil, "un entretien arrivé après la première lecture n'est pas choisi sous les doigts de la personne")
     }
 
     // MARK: - Copie (règle 4)
@@ -249,8 +266,8 @@ import Testing
 
     // MARK: - Supprimer (règle 4)
 
-    @Test("règle 4 : Supprimer retire le fichier et la ligne, et choisit le voisin ; les autres entretiens restent")
-    func deletingTheSelectionRemovesTheFileAndTheRow() async throws {
+    @Test("règle 4 + I1 : Supprimer demande confirmation (« Supprimer cet entretien ? C'est définitif. »), retire le fichier et la ligne, et ne choisit AUCUN autre entretien")
+    func deletingTheSelectionAsksThenRemovesTheFileAndTheRow() async throws {
         let rig = try Rig()
         defer { rig.cleanUp() }
         let (first, second, third) = (Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 2), Self.record(3, daysAgo: 3))
@@ -258,23 +275,64 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
         model.selection = second.id
+        #expect(model.deleteSelectedConfirmation == nil, "rien n'est demandé tant que personne n'a demandé")
+
+        model.requestDeleteSelected()
+        #expect(model.pendingDelete == second.id)
+        #expect(model.deleteSelectedConfirmation == "Supprimer cet entretien\u{00A0}? C'est définitif.")
+        #expect(try rig.names().count == 3, "la demande ne supprime rien")
 
         await model.deleteSelected()
 
         #expect(model.records.map(\.id) == [first.id, third.id])
         #expect(try rig.names() == [InterviewHistory.fileName(for: first), InterviewHistory.fileName(for: third)].sorted())
-        #expect(model.selection == third.id, "le voisin suivant")
-
-        model.selection = third.id
-        await model.deleteSelected()
-        #expect(model.selection == first.id, "le dernier supprimé : le précédent")
-        await model.deleteSelected()
-        #expect(model.records.isEmpty)
-        #expect(model.selection == nil)
-        #expect(try rig.names().isEmpty)
+        #expect(model.selection == nil, "aucun voisin choisi d'office")
+        #expect(model.pendingDelete == nil)
+        #expect(model.message == nil)
     }
 
-    @Test("une suppression refusée par le disque le dit par la phrase fixe (sans chemin) et la ligne reste")
+    @Test("I1 : deleteSelected() sans demande ne fait rien ; annuler la demande non plus")
+    func deleteSelectedNeedsARequest() async throws {
+        let rig = try Rig()
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1), Self.record(2, daysAgo: 2)])
+        let model = rig.makeModel()
+        await model.reload()
+
+        await model.deleteSelected()
+        #expect(try rig.names().count == 2, "sans demande, rien ne part")
+
+        model.requestDeleteSelected()
+        model.cancelDelete()
+        #expect(model.pendingDelete == nil)
+        await model.deleteSelected()
+        #expect(try rig.names().count == 2, "après annulation, rien ne part")
+    }
+
+    @Test("D3 : deux demandes de suppression d'affilée ne suppriment jamais deux entretiens (double clic)")
+    func twoDeletionRequestsInARowNeverDeleteTwoRecords() async throws {
+        let rig = try Rig()
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 2), Self.record(3, daysAgo: 3)])
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.selection == InterviewHistoryTests.id(1))
+
+        // Deux clics avant la confirmation : une seule demande en attente, un seul entretien part.
+        model.requestDeleteSelected()
+        model.requestDeleteSelected()
+        await model.deleteSelected()
+        #expect(try rig.names().count == 2)
+
+        // Deux clics APRÈS la confirmation : plus de sélection, la seconde demande ne vise rien.
+        model.requestDeleteSelected()
+        #expect(model.pendingDelete == nil, "aucun entretien choisi : rien à demander")
+        await model.deleteSelected()
+        #expect(try rig.names().count == 2, "le second clic ne supprime pas l'entretien suivant")
+        #expect(model.records.count == 2)
+    }
+
+    @Test("I1 : une suppression refusée par le disque le dit par la phrase fixe (sans chemin), la ligne reste et reste choisie")
     func aRefusedDeletionIsSaidAndKeepsTheRow() async throws {
         let rig = try Rig()
         defer { rig.cleanUp() }
@@ -283,12 +341,14 @@ import Testing
         await model.reload()
         #expect(chmod(rig.root.path, 0o500) == 0)
 
+        model.requestDeleteSelected()
         await model.deleteSelected()
 
         #expect(model.message == "L'historique n'a pas pu être modifié\u{00A0}: vérifiez l'espace libre sur le disque, puis réessayez.")
         #expect(model.messageIsFailure)
         #expect(model.records.count == 1, "l'entretien est toujours là")
         #expect(model.selection == InterviewHistoryTests.id(1))
+        #expect(model.pendingDelete == nil)
     }
 
     // MARK: - Tout supprimer (règle 4)
@@ -417,7 +477,7 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
 
-        let task = model.requestRetention(30)
+        let task = await model.requestRetention(30)
 
         #expect(task == nil, "rien n'est fait avant la confirmation")
         #expect(model.pendingRetention == 30)
@@ -441,7 +501,7 @@ import Testing
         try await rig.seed([5, 20, 40, 100, 200].enumerated().map { Self.record($0.offset + 1, daysAgo: Double($0.element)) })
         let model = rig.makeModel()
         await model.reload()
-        model.requestRetention(30)
+        await model.requestRetention(30)
         let announced = model.pendingRetentionCount
         let before = try rig.names().count
 
@@ -462,7 +522,7 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
 
-        model.requestRetention(30)
+        await model.requestRetention(30)
 
         #expect(model.retentionConfirmation == "1 entretien plus ancien sera supprimé maintenant.")
     }
@@ -475,7 +535,7 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
 
-        model.requestRetention(0)
+        await model.requestRetention(0)
         #expect(model.retentionConfirmation == "Les 2 entretiens gardés seront supprimés maintenant.")
         try await finish(model.confirmRetention())
 
@@ -488,7 +548,7 @@ import Testing
         try await single.seed([Self.record(1)])
         let one = single.makeModel()
         await one.reload()
-        one.requestRetention(0)
+        await one.requestRetention(0)
         #expect(one.retentionConfirmation == "L'entretien gardé sera supprimé maintenant.")
     }
 
@@ -500,7 +560,7 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
 
-        try await finish(model.requestRetention(90), "du changement")
+        try await finish(await model.requestRetention(90), "du changement")
 
         #expect(model.pendingRetention == nil)
         #expect(rig.settings.history.retentionDays == 90)
@@ -515,7 +575,7 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
 
-        try await finish(model.requestRetention(30))
+        try await finish(await model.requestRetention(30))
 
         #expect(model.pendingRetention == nil)
         #expect(rig.settings.history.retentionDays == 30)
@@ -530,7 +590,7 @@ import Testing
         let model = rig.makeModel()
         await model.reload()
 
-        #expect(model.requestRetention(30) == nil)
+        #expect(await model.requestRetention(30) == nil)
         #expect(model.confirmRetention() == nil)
 
         #expect(rig.updates == 0)
@@ -545,7 +605,7 @@ import Testing
         try await rig.seed([Self.record(1, daysAgo: 5), Self.record(2, daysAgo: 100)])
         let model = rig.makeModel()
         await model.reload()
-        model.requestRetention(30)
+        await model.requestRetention(30)
         rig.failure = ForeignError()
 
         let task = model.confirmRetention()
@@ -569,10 +629,164 @@ import Testing
         await model.reload()
         rig.failure = SettingsError.unreadableFileKept(fileName: "settings.json")
 
-        model.requestRetention(90)
+        await model.requestRetention(90)
 
         #expect(model.message?.contains("settings.json") == true)
         #expect(model.retentionDays == 30)
+    }
+
+    // MARK: - I2 : la durée relit le disque avant de compter
+
+    @Test("D1 : sur un modèle NEUF, jamais relu, « Ne rien garder » demande confirmation avec le compte du disque ; rien n'est supprimé avant")
+    func aFreshModelCountsFromTheDiskBeforeAskingAboutRetention() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 200), Self.record(2, daysAgo: 210), Self.record(3, daysAgo: 220)])
+        let model = rig.makeModel()
+        #expect(!model.isLoaded && model.records.isEmpty, "le modèle n'a rien lu")
+
+        let task = await model.requestRetention(0)
+
+        #expect(task == nil, "aucune écriture, aucune purge avant la confirmation")
+        #expect(model.pendingRetention == 0)
+        #expect(model.retentionConfirmation == "Les 3 entretiens gardés seront supprimés maintenant.")
+        #expect(rig.updates == 0)
+        #expect(try rig.names().count == 3)
+    }
+
+    @Test("D2 : sur un instantané périmé (un entretien ajouté après la lecture), le compte annoncé est celui du disque")
+    func aStaleSnapshotIsRefreshedBeforeCounting() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 100), Self.record(2, daysAgo: 150)])
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.records.count == 2)
+        try await rig.seed([Self.record(3, daysAgo: 120)])
+
+        await model.requestRetention(30)
+
+        #expect(model.pendingRetention == 30)
+        #expect(model.pendingRetentionCount == 3, "les trois du disque, pas les deux de l'instantané")
+        #expect(model.retentionConfirmation == "3 entretiens plus anciens seront supprimés maintenant.")
+    }
+
+    @Test("I2 : un instantané périmé qui ne comptait aucun entretien échu ne laisse pas passer une durée qui en supprimerait")
+    func aStaleEmptySnapshotCannotSkipTheConfirmation() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.records.isEmpty)
+        try await rig.seed([Self.record(1, daysAgo: 100)])
+
+        let task = await model.requestRetention(30)
+
+        #expect(task == nil)
+        #expect(model.pendingRetention == 30, "le disque a un entretien échu : confirmation obligatoire")
+        #expect(rig.updates == 0)
+        #expect(try rig.names().count == 1)
+    }
+
+    // MARK: - M7 : l'en-tête ne promet pas « gardé » avec « Ne rien garder »
+
+    @Test("M7 : avec « Ne rien garder », une ligne dit qu'aucun entretien n'est gardé ; avec une autre durée, aucune ligne")
+    func theHeaderDoesNotPromiseWhatIsNotKept() async throws {
+        let none = try Rig(retention: 0)
+        defer { none.cleanUp() }
+        let keepsNothing = none.makeModel()
+        #expect(keepsNothing.headerNote == "Avec «\u{00A0}Ne rien garder\u{00A0}», aucun entretien n'est gardé.")
+        #expect(HistoryModel.keepsNothingNote == keepsNothing.headerNote)
+
+        let thirty = try Rig(retention: 30)
+        defer { thirty.cleanUp() }
+        #expect(thirty.makeModel().headerNote == nil)
+
+        // La ligne suit le réglage quand il change.
+        let task = await thirty.makeModel().requestRetention(0)
+        _ = task
+        #expect(thirty.makeModel().headerNote != nil)
+    }
+
+    // MARK: - Une seule confirmation à la fois
+
+    @Test("la confirmation en attente, son texte et son bouton : celle de la durée, de la suppression d'un entretien, de tout")
+    func theSingleConfirmationRoutesToTheRightAction() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 200)])
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.confirmation == nil && model.confirmationText == nil && model.confirmationButtonTitle == nil)
+
+        model.requestDeleteSelected()
+        #expect(model.confirmation == .deleteSelected)
+        #expect(model.confirmationText == "Supprimer cet entretien\u{00A0}? C'est définitif.")
+        #expect(model.confirmationButtonTitle == "Supprimer")
+        model.cancelConfirmation()
+        #expect(model.confirmation == nil && model.pendingDelete == nil)
+
+        await model.requestRetention(30)
+        #expect(model.confirmation == .retention)
+        #expect(model.confirmationText == "1 entretien plus ancien sera supprimé maintenant.")
+        #expect(model.confirmationButtonTitle == "Supprimer")
+        model.cancelConfirmation()
+        #expect(model.confirmation == nil && model.pendingRetention == nil)
+
+        await model.requestDeleteAll()
+        #expect(model.confirmation == .deleteAll)
+        #expect(model.confirmationText == "Supprimer les 2 entretiens gardés\u{00A0}? C'est définitif.")
+        #expect(model.confirmationButtonTitle == "Tout supprimer")
+
+        await model.confirm()
+        #expect(try rig.names().isEmpty, "confirm() a exécuté la confirmation en attente : tout")
+        #expect(model.confirmation == nil)
+    }
+
+    @Test("confirm() sans rien en attente ne fait rien")
+    func confirmWithNothingPendingDoesNothing() async throws {
+        let rig = try Rig()
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1)])
+        let model = rig.makeModel()
+        await model.reload()
+        await model.confirm()
+        #expect(try rig.names().count == 1)
+        #expect(rig.updates == 0)
+    }
+
+    // MARK: - M9 : relectures qui se chevauchent
+
+    @Test("M9 : un seul instantané rend les entretiens ET le nombre de fichiers, cohérents")
+    func theSnapshotIsConsistent() async throws {
+        let rig = try Rig()
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1), Self.record(2, daysAgo: 2)])
+        try Data("pas du json".utf8).write(to: rig.root.appendingPathComponent("abîmé.json"))
+
+        let snapshot = await rig.history.snapshot()
+
+        #expect(snapshot.records.map(\.id) == [InterviewHistoryTests.id(1), InterviewHistoryTests.id(2)])
+        #expect(snapshot.fileCount == 3)
+    }
+
+    @Test("M9 : un résultat de relecture plus ancien que celui déjà appliqué est jeté ; un plus récent est toujours appliqué")
+    func anOlderReloadNeverOverwritesANewerOne() {
+        var order = ReloadOrder()
+        let first = order.begin()
+        let second = order.begin()
+        let newest = order.accept(second)
+        let oldest = order.accept(first)
+        #expect(newest, "la plus récente est appliquée")
+        #expect(!oldest, "la plus ancienne, arrivée après, est jetée")
+
+        var inOrder = ReloadOrder()
+        let a = inOrder.begin()
+        let b = inOrder.begin()
+        let early = inOrder.accept(a)
+        let late = inOrder.accept(b)
+        #expect(early, "arrivée dans l'ordre : appliquée, puis remplacée par la suivante")
+        #expect(late)
     }
 
     // MARK: - Relecture
@@ -604,6 +818,7 @@ import Testing
         )
         #expect(HistoryModel.empty == "Aucun entretien gardé pour l'instant.")
         #expect(HistoryModel.copied == "Copié.")
+        #expect(HistoryModel.keepsNothingNote == "Avec «\u{00A0}Ne rien garder\u{00A0}», aucun entretien n'est gardé.")
         #expect(HistoryModel.copyFailure == "Le texte n'a pas pu être copié\u{00A0}: réessayez.")
         #expect(
             HistoryModel.writeFailure
@@ -618,7 +833,7 @@ import Testing
         // Contrôle générique : aucune ponctuation double précédée d'une espace ordinaire.
         let sentences = [
             HistoryModel.header, HistoryModel.empty, HistoryModel.copyFailure, HistoryModel.writeFailure,
-            HistoryModel.retentionSaveFailure,
+            HistoryModel.retentionSaveFailure, HistoryModel.keepsNothingNote,
         ]
         for sentence in sentences {
             for mark in [" :", " ;", " ?", " !", "« ", " »"] { #expect(!sentence.contains(mark), "« \(mark) » ordinaire dans : \(sentence)") }

@@ -36,13 +36,16 @@ public struct HistoryPane: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            Text(HistoryModel.header)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(HistoryModel.header)
+                if let note = model.headerNote { Text(note) }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Divider()
             mainArea
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,21 +66,12 @@ public struct HistoryPane: View {
         // Un entretien conclu pendant que la fenêtre était gardée s'y voit à chaque affichage de l'onglet.
         .onAppear { Task { await model.reload() } }
         // Une confirmation en attente ne survit pas à l'onglet quitté.
-        .onDisappear {
-            model.cancelRetention()
-            model.cancelDeleteAll()
-        }
-        .sheet(
-            isPresented: Binding(get: { model.retentionConfirmation != nil }, set: { if !$0 { model.cancelRetention() } })
-        ) {
+        .onDisappear { model.cancelConfirmation() }
+        // UNE seule feuille pour les trois confirmations (durée, un entretien, tout) : plusieurs `.sheet` sur la même vue se disputent.
+        .sheet(isPresented: Binding(get: { model.confirmation != nil }, set: { if !$0 { model.cancelConfirmation() } })) {
             HistoryConfirmationSheet(
-                text: model.retentionConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle,
-                cancel: { model.cancelRetention() }, confirm: { model.confirmRetention() })
-        }
-        .sheet(isPresented: Binding(get: { model.pendingDeleteAll }, set: { if !$0 { model.cancelDeleteAll() } })) {
-            HistoryConfirmationSheet(
-                text: model.deleteAllConfirmation ?? "", confirmTitle: "Tout supprimer",
-                cancel: { model.cancelDeleteAll() }, confirm: { Task { await model.deleteAll() } })
+                text: model.confirmationText ?? "", confirmTitle: model.confirmationButtonTitle ?? HistoryModel.deleteTitle,
+                cancel: { model.cancelConfirmation() }, confirm: { Task { await model.confirm() } })
         }
     }
 
@@ -121,7 +115,7 @@ public struct HistoryPane: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 8)
-                Button(HistoryModel.deleteTitle, role: .destructive) { Task { await model.deleteSelected() } }
+                Button(HistoryModel.deleteTitle, role: .destructive) { model.requestDeleteSelected() }
                     .controlSize(.small)
                     .disabled(model.selectedRecord == nil)
                     .background(frameProbe(.deleteButton))
@@ -201,7 +195,7 @@ public struct HistoryPane: View {
                 Text(HistoryModel.retentionTitle)
                 Picker(
                     HistoryModel.retentionTitle,
-                    selection: Binding(get: { model.retentionDays }, set: { model.requestRetention($0) })
+                    selection: Binding(get: { model.retentionDays }, set: { value in Task { await model.requestRetention(value) } })
                 ) {
                     ForEach(model.retentionChoices, id: \.days) { choice in
                         Text(choice.label).tag(choice.days)

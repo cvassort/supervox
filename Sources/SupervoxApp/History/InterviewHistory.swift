@@ -103,6 +103,18 @@ public actor InterviewHistory: InterviewHistoryStoring {
         readAll().map(\.record)
     }
 
+    /// Les entretiens lisibles ET le nombre de fichiers, lus ensemble (un seul saut d'acteur : un entretien enregistré entre les deux
+    /// lectures ne fait plus compter un fichier « illisible » en trop).
+    public struct Snapshot: Sendable {
+        public var records: [InterviewRecord]
+        public var fileCount: Int
+    }
+
+    public func snapshot() async -> Snapshot {
+        guard rootState() == .directory else { return Snapshot(records: [], fileCount: 0) }
+        return Snapshot(records: readAll().map(\.record), fileCount: historyFileNames().count)
+    }
+
     /// Le nombre de fichiers `.json` du dossier, illisibles compris : exactement ce que `deleteAll` supprimera.
     public func fileCount() async -> Int {
         guard rootState() == .directory else { return 0 }

@@ -649,7 +649,7 @@ import Testing
         #expect(history.records.count == 2, "la présentation relit le disque")
         #expect(history.message == nil, "et efface le message d'avant")
 
-        history.requestRetention(30)
+        await history.requestRetention(30)
         #expect(history.pendingRetention == 30)
         content.onLeave()
         #expect(history.pendingRetention == 30, "la sortie de la fenêtre ne défait pas la confirmation en attente")

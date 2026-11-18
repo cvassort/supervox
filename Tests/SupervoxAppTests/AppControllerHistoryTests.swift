@@ -240,7 +240,7 @@ import Testing
         let model = try #require(SettingsView.makeHistoryModel(controller))
         await model.reload()
 
-        let task = model.requestRetention(90)
+        let task = await model.requestRetention(90)
         #expect(await bounded(try #require(task)) != nil)
 
         #expect(controller.settings.history.retentionDays == 90)

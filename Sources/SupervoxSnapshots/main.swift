@@ -945,7 +945,7 @@ for dark in [false, true] {
     try await historyOldExample.seed(older: true)
     defer { historyOldExample.remove() }
     let historyAsking = await historyOldExample.makeModel()
-    historyAsking.requestRetention(7)
+    await historyAsking.requestRetention(7)
     try render(
         HistoryConfirmationSheet(
             text: historyAsking.retentionConfirmation ?? "", confirmTitle: HistoryModel.deleteTitle, cancel: {}, confirm: {}),

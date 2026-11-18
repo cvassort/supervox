@@ -46,6 +46,9 @@ public final class HistoryModel {
     public static let retentionSaveFailure = InterviewText.fr(
         "Ce changement n'a pas pu être enregistré : la durée de conservation reste celle d'avant.")
 
+    /// Une ligne sous l'en-tête quand la durée est « Ne rien garder » : l'en-tête, lui, dit « chaque entretien conclu est gardé ici ».
+    public static let keepsNothingNote = InterviewText.fr("Avec « Ne rien garder », aucun entretien n'est gardé.")
+
     /// Le nom d'une durée : « Ne rien garder », « 1 jour », « 7 jours », « 1 an », « 2 ans ». Les cinq choix du brief s'écrivent
     /// « Ne rien garder », « 7 jours », « 30 jours », « 90 jours » et « 1 an ».
     static func label(forDays days: Int) -> String {
@@ -73,7 +76,12 @@ public final class HistoryModel {
     public private(set) var isLoaded = false
     /// L'entretien dont le détail est montré. Changer de sélection efface le message.
     public var selection: UUID? {
-        didSet { if selection != oldValue { clearMessage() } }
+        didSet {
+            guard selection != oldValue else { return }
+            clearMessage()
+            // Une demande de suppression ne survit pas à un changement de sélection : elle viserait un autre entretien.
+            if pendingDelete != nil, pendingDelete != selection { pendingDelete = nil }
+        }
     }
     public private(set) var message: String?
     /// Le message est un échec (icône d'erreur) ; faux pour « Copié. ».
@@ -82,10 +90,13 @@ public final class HistoryModel {
     public private(set) var pendingRetention: Int?
     /// « Tout supprimer… » attend la confirmation de la personne.
     public private(set) var pendingDeleteAll = false
+    /// L'entretien dont la suppression attend la confirmation de la personne (visé au moment de la demande), `nil` sinon.
+    public private(set) var pendingDelete: UUID?
 
     /// Les réglages tels que `read` les a donnés la dernière fois.
     private var settings: AppSettings
 
+    @ObservationIgnored private var reloadOrder = ReloadOrder()
     @ObservationIgnored private let history: InterviewHistory
     @ObservationIgnored private let read: @MainActor () -> AppSettings
     @ObservationIgnored private let update: Update
@@ -119,14 +130,19 @@ public final class HistoryModel {
     /// Relit le disque et les réglages. Le message reste (il dit ce qui vient de se passer) ; `clearMessage()` l'efface. La
     /// sélection reste si l'entretien existe encore, sinon le plus récent est choisi (aucun s'il n'y en a pas).
     public func reload() async {
-        let listed = await history.list()
-        let count = await history.fileCount()
+        let ticket = reloadOrder.begin()
+        let snapshot = await history.snapshot()
+        // Une relecture plus récente a déjà rendu son résultat : celui-ci est périmé.
+        guard reloadOrder.accept(ticket) else { return }
+        let firstLoad = !isLoaded
         settings = read()
-        records = listed
-        fileCount = count
+        records = snapshot.records
+        fileCount = snapshot.fileCount
         isLoaded = true
-        if let selection, listed.contains(where: { $0.id == selection }) { return }
-        selection = listed.first?.id
+        if let selection, snapshot.records.contains(where: { $0.id == selection }) { return }
+        // Le plus récent n'est choisi d'office qu'à la première lecture. Après, une sélection disparue (supprimée, purgée) ne devient
+        // PAS un autre entretien : un clic de plus sur « Supprimer » ne doit jamais viser celui qui prend sa place.
+        selection = firstLoad ? snapshot.records.first?.id : nil
     }
 
     public func clearMessage() {
@@ -180,6 +196,9 @@ public final class HistoryModel {
 
     public var canCopyConversation: Bool { Self.nonBlank(conversationText) != nil }
 
+    /// La ligne qui corrige l'en-tête quand la durée est « Ne rien garder » ; `nil` sinon.
+    public var headerNote: String? { retentionDays == 0 ? Self.keepsNothingNote : nil }
+
     /// Les fichiers que la liste ne montre pas (abîmés, d'une forme inconnue) : dits, pour qu'aucune donnée ne reste cachée.
     public var unreadableCount: Int { max(0, fileCount - records.count) }
 
@@ -217,10 +236,28 @@ public final class HistoryModel {
 
     // MARK: - Supprimer
 
-    /// Supprime l'entretien choisi, sans confirmation : c'est un geste sur UNE ligne, que la personne vient de choisir. Le voisin
-    /// est ensuite choisi. Refusé par le disque : la phrase fixe, et l'entretien reste.
+    /// La personne demande la suppression de l'entretien choisi : rien n'est supprimé, la confirmation attend. Sans entretien choisi,
+    /// ne demande rien. Deux demandes de suite visent le même entretien, et une suppression faite ne laisse aucune sélection : un
+    /// double clic ne peut jamais supprimer deux entretiens.
+    public func requestDeleteSelected() {
+        guard let id = selection, records.contains(where: { $0.id == id }) else { return }
+        pendingDelete = id
+    }
+
+    public func cancelDelete() {
+        pendingDelete = nil
+    }
+
+    /// « Supprimer cet entretien ? C'est définitif. »
+    public var deleteSelectedConfirmation: String? {
+        pendingDelete == nil ? nil : InterviewText.fr("Supprimer cet entretien ? C'est définitif.")
+    }
+
+    /// Supprime l'entretien visé par la demande, seulement après `requestDeleteSelected()`. Aucun entretien n'est ensuite choisi.
+    /// Refusé par le disque : la phrase fixe, l'entretien reste, et reste choisi.
     public func deleteSelected() async {
-        guard let id = selection, let index = records.firstIndex(where: { $0.id == id }) else { return }
+        guard let id = pendingDelete else { return }
+        pendingDelete = nil
         var deleted = false
         do {
             try await history.delete(id)
@@ -230,7 +267,7 @@ public final class HistoryModel {
             say(Self.writeFailure, failure: true)
         }
         await reload()
-        if deleted, !records.isEmpty { selection = records[min(index, records.count - 1)].id }
+        if deleted { selection = nil }
     }
 
     /// « Tout supprimer… » : relit le disque pour compter ce qui sera réellement supprimé, puis attend la confirmation. Sans aucun
@@ -263,6 +300,53 @@ public final class HistoryModel {
             say(Self.writeFailure, failure: true)
         }
         await reload()
+    }
+
+    // MARK: - Une seule confirmation à la fois
+
+    /// Laquelle des trois confirmations attend la personne (une seule feuille les montre).
+    public enum Confirmation: Equatable, Sendable { case retention, deleteSelected, deleteAll }
+
+    public var confirmation: Confirmation? {
+        if pendingRetention != nil { return .retention }
+        if pendingDelete != nil { return .deleteSelected }
+        if pendingDeleteAll { return .deleteAll }
+        return nil
+    }
+
+    /// La phrase de la confirmation en attente.
+    public var confirmationText: String? {
+        switch confirmation {
+        case .retention: retentionConfirmation
+        case .deleteSelected: deleteSelectedConfirmation
+        case .deleteAll: deleteAllConfirmation
+        case nil: nil
+        }
+    }
+
+    /// Le bouton qui confirme : « Supprimer », ou « Tout supprimer ».
+    public var confirmationButtonTitle: String? {
+        switch confirmation {
+        case .retention, .deleteSelected: Self.deleteTitle
+        case .deleteAll: "Tout supprimer"
+        case nil: nil
+        }
+    }
+
+    public func cancelConfirmation() {
+        pendingRetention = nil
+        pendingDelete = nil
+        pendingDeleteAll = false
+    }
+
+    /// Exécute la confirmation en attente ; sans elle, ne fait rien.
+    public func confirm() async {
+        switch confirmation {
+        case .retention: _ = confirmRetention()
+        case .deleteSelected: await deleteSelected()
+        case .deleteAll: await deleteAll()
+        case nil: break
+        }
     }
 
     // MARK: - Durée de conservation
@@ -303,13 +387,16 @@ public final class HistoryModel {
                 ? "1 entretien plus ancien sera supprimé maintenant." : "\(count) entretiens plus anciens seront supprimés maintenant.")
     }
 
-    /// La personne choisit une durée. La même que l'actuelle : rien. Une durée qui supprimerait des entretiens : elle attend la
-    /// confirmation (`pendingRetention`) et rien n'est fait. Sinon (durée plus longue, ou qui ne supprime rien) : écrite tout de
-    /// suite. Rend la tâche de purge qui suit une écriture réussie (les tests l'attendent), `nil` sinon.
+    /// La personne choisit une durée. Le disque est RELU d'abord (comme pour « Tout supprimer… ») : le compte est celui du disque à cet
+    /// instant, jamais celui d'un instantané vide ou périmé. La même durée que l'actuelle : rien. Une durée qui supprimerait au moins
+    /// un entretien : elle attend la confirmation (`pendingRetention`) et rien n'est fait, sur un modèle neuf comme sur un instantané
+    /// ancien. Sinon (durée plus longue, ou qui ne supprime rien) : écrite tout de suite. Rend la tâche de purge qui suit une écriture
+    /// réussie (les tests l'attendent), `nil` sinon.
     @discardableResult
-    public func requestRetention(_ days: Int) -> Task<Void, Never>? {
+    public func requestRetention(_ days: Int) async -> Task<Void, Never>? {
         let wanted = HistorySettings(retentionDays: days).normalized.retentionDays
         pendingRetention = nil
+        await reload()
         guard wanted != retentionDays else { return nil }
         if expiredCount(under: wanted) > 0 {
             pendingRetention = wanted
@@ -347,5 +434,25 @@ public final class HistoryModel {
             _ = await history.purge()
             await self?.reload()
         }
+    }
+}
+
+/// L'ordre des relectures du disque : une relecture lente ne doit pas écraser le résultat d'une plus récente (celle d'avant une
+/// suppression, arrivée après elle, ferait réapparaître la ligne). Chaque relecture prend un numéro en partant ; son résultat n'est
+/// appliqué que si aucun résultat plus récent ne l'a été avant. Un résultat plus ancien arrivé en premier est appliqué (il est
+/// ensuite remplacé par le suivant) : la relecture qu'un geste attend ne reste jamais sans effet.
+struct ReloadOrder {
+    private var started = 0
+    private var applied = 0
+
+    mutating func begin() -> Int {
+        started += 1
+        return started
+    }
+
+    mutating func accept(_ ticket: Int) -> Bool {
+        guard ticket > applied else { return false }
+        applied = ticket
+        return true
     }
 }
