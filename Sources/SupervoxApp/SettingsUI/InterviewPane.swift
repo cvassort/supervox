@@ -13,7 +13,8 @@ public struct InterviewPane: View {
         _advancedExpanded = State(initialValue: advancedExpanded)
     }
 
-    /// Le champ du gabarit est borné : un gabarit plus long défile dans le champ.
+    /// Le champ du gabarit est borné : un gabarit plus long défile dans le champ. Hauteurs en points : choix non mesuré, vu en image
+    /// (le gabarit d'origine, cinq lignes, y tient entier).
     static let templateMinHeight: CGFloat = 90
     static let templateMaxHeight: CGFloat = 130
 

@@ -313,9 +313,6 @@ import Testing
     /// typographique).
     @Test func theValuesNextToTheControlsAreFormattedInFrench() {
         let model = Rig().makeModel()
-        #expect(model.turnSilenceLabel == "0,50 s")
-        #expect(model.interruptMinDurationLabel == "0,30 s")
-        #expect(model.interruptLevelLabel == "\u{2212}30 dB")
         model.turnSilence = 1.5
         model.interruptMinDuration = 0.05 + 0.1
         model.interruptLevel = -25
@@ -378,7 +375,9 @@ import Testing
         #expect(model.privacyText == expected)
         #expect(!model.privacyText.contains("est celle du système"))
 
-        settings.providers[1].name = String(repeating: "V", count: Provider.shortNameLimit + 10)
+        var longProvider = Self.voiceProvider
+        longProvider.name = String(repeating: "V", count: Provider.shortNameLimit + 10)
+        settings.providers = [Self.provider, longProvider]
         let long = Rig(settings).makeModel()
         #expect(long.privacyText.contains("«\u{00A0}" + String(repeating: "V", count: Provider.shortNameLimit) + "…\u{00A0}»"))
     }

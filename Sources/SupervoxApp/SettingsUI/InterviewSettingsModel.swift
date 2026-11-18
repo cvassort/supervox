@@ -201,8 +201,10 @@ public final class InterviewSettingsModel {
         }
     }
 
-    /// « n s demandées, m s en pratique : … » : le silence demandé et celui que le détecteur de voix applique réellement (il compte
-    /// par blocs de 0,256 s : de 0,30 à 0,51 s demandées, la valeur en pratique est la même). Deux décimales, virgule.
+    /// « n s demandées, m s en pratique : … » : le silence demandé et celui que le détecteur de voix applique réellement. Il compte par
+    /// blocs de 0,256 s (4 096 échantillons à 16 kHz, code lu : `VadManager.chunkSize` et `sampleRate`) : de 0,30 à 0,51 s demandées,
+    /// la valeur en pratique est la même. `SupervoxApp` ne voit pas le détecteur, d'où ce chiffre écrit ici et la fonction injectée.
+    /// Deux décimales, virgule.
     public var effectiveSilenceText: String {
         let requested = turnSilence
         let practical = effectiveTurnSilence(requested)
@@ -247,7 +249,7 @@ public final class InterviewSettingsModel {
         }
     }
 
-    /// Arrondit au centième : un contrôle à pas additionne mal (0,7 + 0,1 = 0,7999999999999999), et la valeur écrite dans le fichier
+    /// Arrondit au centième (choix : les pas de l'interface, 0,1 / 0,05 / 1, sont des multiples du centième) : un contrôle à pas additionne mal (0,7 + 0,1 = 0,7999999999999999), et la valeur écrite dans le fichier
     /// doit être celle que la personne voit.
     private static func hundredths(_ value: Double) -> Double { (value * 100).rounded() / 100 }
 

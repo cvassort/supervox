@@ -197,7 +197,7 @@ import Testing
         #expect(ModesModel.defaultEngineTitle(for: "perso-un") == ModesModel.noTranscriptionEngineTitle)
 
         var settings = Rig.defaultSettings()
-        let other: TranscriptionEngine = TranscriptionEngine.allCases.first { $0 != .interviewDefault }!
+        let other = try #require(TranscriptionEngine.allCases.first { $0 != .interviewDefault })
         let index = try #require(settings.modes.firstIndex { $0.id == ModeChip.interviewID })
         settings.modes[index].engine = other
         settings.modes[index].hotKey = Self.keyA
