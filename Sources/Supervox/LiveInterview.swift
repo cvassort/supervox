@@ -25,6 +25,11 @@ struct LiveInterview: Sendable {
     let makeProviderVoice: @Sendable (ResolvedProvider, ProviderVoice) -> any SpeechSynthesizer
     /// Assemble la conversation (en production : `LiveInterview.session`). Injecté pour que les tests voient les pièces reçues.
     let assemble: @Sendable (Parts) -> any ConversationEngine
+    /// Les voix du système installées (en production : `SystemVoices.installed`, nommée par `main.swift` seul).
+    let systemVoices: @Sendable () -> [SystemVoiceInfo]
+    /// Le lecteur de sortie seule de l'écoute d'une voix (en production : le vrai, construit par `main.swift` seul). Fabriquer ne
+    /// joue rien.
+    let makePlayer: @Sendable () -> any ClipPlayer
 
     /// La conversation réelle : la façade du moteur (jamais `ConversationChain` directement).
     static let session: @Sendable (Parts) -> any ConversationEngine = { parts in
@@ -39,7 +44,8 @@ struct LiveInterview: Sendable {
             makeConversation: { [self] setup in try await makeConversation(setup) },
             makeVoice: { [self] choice, provider in makeVoice(choice, provider) },
             // La formule du détecteur de voix réel : l'onglet Entretien montre ce que le réglage donne en pratique.
-            effectiveTurnSilence: { FluidStreamingVoiceDetector.effectiveSilence($0) })
+            effectiveTurnSilence: { FluidStreamingVoiceDetector.effectiveSilence($0) },
+            systemVoices: systemVoices, makePlayer: makePlayer)
     }
 
     /// Télécharge ce qui manque aux réglages de transcription de l'entretien (par le catalogue, après la porte de préchargement),

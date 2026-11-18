@@ -23,6 +23,8 @@ import Testing
             var conversations: [HeldConversation] = []
         }
         private let state = Mutex(State())
+        /// Le lecteur double que l'environnement doit rendre tel quel.
+        let player = ScriptedClipPlayer()
 
         var audios: [ScriptedAudioIO] { state.withLock { $0.audios } }
         var systemVoices: [String] { state.withLock { $0.systemVoices } }
@@ -131,7 +133,8 @@ import Testing
         let made = Made()
         let live = LiveInterview(
             engines: engines, makeAudio: { made.audio() }, makeSystemVoice: { made.systemVoice($0, $1) },
-            makeProviderVoice: { made.providerVoice($0, $1) }, assemble: { made.assemble($0) })
+            makeProviderVoice: { made.providerVoice($0, $1) }, assemble: { made.assemble($0) },
+            systemVoices: { [Self.listedVoice] }, makePlayer: { [player = made.player] in player })
         return Rig(live: live, engines: engines, doubles: doubles, ledger: ledger, catalog: catalog, made: made)
     }
 
@@ -185,6 +188,19 @@ import Testing
 
     /// Le câblage réel donne à l'onglet Entretien la formule du détecteur (et non l'identité du repli) : 0,6 et 0,7 s demandées
     /// donnent 1,024 s en pratique, 0,5 s (le défaut) 0,768 s.
+    /// Une voix inventée de la liste double des voix installées.
+    static let listedVoice = SystemVoiceInfo(identifier: "voix.exemple.a", language: "fr-FR", quality: 2, name: "Voix d'exemple A")
+
+    /// Réglage des voix, tâche 3 : l'environnement réel donne la liste des voix et le lecteur que le programme lui passe (le vrai
+    /// n'est nommé que par `main.swift`), pas les défauts vides.
+    @Test("l'environnement réel donne la liste des voix et le lecteur reçus")
+    func theRealEnvironmentGivesTheVoiceListAndThePlayerItReceived() {
+        let rig = Self.rig()
+        let environment = rig.live.environment
+        #expect(environment.systemVoices() == [Self.listedVoice])
+        #expect((environment.makePlayer() as? ScriptedClipPlayer) === rig.made.player)
+    }
+
     @Test("l'environnement réel donne le silence en pratique du détecteur, pas l'identité")
     func theRealEnvironmentGivesTheDetectorsEffectiveSilence() {
         let environment = Self.rig().live.environment

@@ -174,21 +174,41 @@ public struct InterviewEnvironment: Sendable {
     /// décide qu'à la fin d'un bloc de 0,256 s. L'onglet Entretien l'affiche à côté de la valeur réglée. Le détecteur n'est pas
     /// connu de `SupervoxApp` : la cible `Supervox` donne la vraie formule ; tout le reste garde l'identité.
     public var effectiveTurnSilence: @Sendable (Double) -> Double
+    /// Les voix du système installées, pour l'onglet Voix. Seul le programme (`main.swift`) donne la vraie liste
+    /// (`SystemVoices.installed`) ; tout le reste n'en voit aucune.
+    public var systemVoices: @Sendable () -> [SystemVoiceInfo]
+    /// Fabrique le lecteur de sortie seule de l'écoute d'une voix. Seul le programme donne le vrai (`SystemClipPlayer`) ; tout le
+    /// reste reçoit un lecteur qui lève `Unavailable` et ne joue rien.
+    public var makePlayer: @Sendable () -> any ClipPlayer
 
     public init(
         prepare: @escaping @Sendable (InterviewSetup) async throws -> InterviewPreparation,
         makeConversation: @escaping @Sendable (InterviewSetup) async throws -> any ConversationEngine,
         makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer,
-        effectiveTurnSilence: @escaping @Sendable (Double) -> Double = { $0 }
+        effectiveTurnSilence: @escaping @Sendable (Double) -> Double = { $0 },
+        systemVoices: @escaping @Sendable () -> [SystemVoiceInfo] = { [] },
+        makePlayer: @escaping @Sendable () -> any ClipPlayer = InterviewEnvironment.noPlayer
     ) {
         self.prepare = prepare
         self.makeConversation = makeConversation
         self.makeVoice = makeVoice
         self.effectiveTurnSilence = effectiveTurnSilence
+        self.systemVoices = systemVoices
+        self.makePlayer = makePlayer
     }
 
     /// Ce que lèvent les fermetures de `unavailable` : aucun entretien n'est branché dans ce processus.
     public struct Unavailable: Error, Equatable, Sendable {}
+
+    /// La fabrique de lecteur par défaut : un lecteur qui lève `Unavailable` (voir `UnavailablePlayer`).
+    public static let noPlayer: @Sendable () -> any ClipPlayer = { UnavailablePlayer() }
+
+    /// Le lecteur de ce qui n'est pas le programme : `play` lève `Unavailable`, sans rien jouer ; il n'y a jamais rien à arrêter.
+    private struct UnavailablePlayer: ClipPlayer {
+        func play(_ clip: AudioClip) async throws { throw Unavailable() }
+        func stop() {}
+        @MainActor func stopNow() {}
+    }
 
     /// Aucun entretien branché : préparer et construire lèvent, la voix fabriquée lève à la première phrase. Le défaut de tout ce qui
     /// n'est pas l'application elle-même ; le panneau dit alors « L'entretien n'a pas pu démarrer : relancez Supervox. ».
