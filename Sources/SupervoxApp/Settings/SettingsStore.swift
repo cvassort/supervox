@@ -16,6 +16,21 @@ public enum SettingsError: Error, Equatable, LocalizedError {
     }
 }
 
+extension SettingsError {
+    /// Ce que l'écran dit quand l'écriture des réglages échoue pour une autre raison qu'une `SettingsError` (disque plein,
+    /// droits, erreur du système). Le texte de l'erreur du système n'y est jamais repris : il peut porter un chemin ou une
+    /// adresse. Phrase fixe, qui dit quoi faire.
+    public static let otherSaveFailure =
+        "Les réglages n'ont pas pu être enregistrés : vérifiez que le disque n'est pas plein, puis recommencez."
+
+    /// LA phrase à montrer pour une erreur d'enregistrement des réglages : celle de la `SettingsError` (fixe, elle ne nomme que
+    /// le fichier de réglages), sinon `otherSaveFailure`. Les avis du panneau, la fenêtre de réglages et l'outil de rendu
+    /// passent tous par ici.
+    public static func sentence(forSaveError error: any Error) -> String {
+        (error as? SettingsError)?.errorDescription ?? otherSaveFailure
+    }
+}
+
 /// Résultat d'une lecture des réglages : les réglages à utiliser, et un message à montrer
 /// à l'utilisateur si le fichier existant n'a pas pu être repris.
 public struct SettingsLoad: Equatable {
@@ -54,19 +69,22 @@ public struct SettingsStore: Sendable {
     public let file: URL
     private let now: @Sendable () -> Date
     private let moveItem: @Sendable (URL, URL) throws -> Void
+    private let write: @Sendable (Data, URL) throws -> Void
 
-    /// `now` sert à horodater le fichier mis de côté, `moveItem` à le déplacer : les tests y injectent
-    /// une horloge fixe et un déplacement qui échoue.
+    /// `now` sert à horodater le fichier mis de côté, `moveItem` à le déplacer, `write` à écrire les réglages encodés dans le
+    /// fichier : les tests y injectent une horloge fixe, un déplacement qui échoue et une écriture qui échoue.
     public init(
         file: URL,
         now: @escaping @Sendable () -> Date = { Date() },
         moveItem: @escaping @Sendable (URL, URL) throws -> Void = {
             try FileManager.default.moveItem(at: $0, to: $1)
-        }
+        },
+        write: @escaping @Sendable (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
     ) {
         self.file = file
         self.now = now
         self.moveItem = moveItem
+        self.write = write
     }
 
     /// `Application Support/Supervox/settings.json` de l'utilisateur. Ne crée rien.
@@ -134,7 +152,7 @@ public struct SettingsStore: Sendable {
         if settings.version < AppSettings.current { settings.version = AppSettings.current }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(settings).write(to: file, options: .atomic)
+        try write(encoder.encode(settings), file)
     }
 
     // MARK: - Décodage

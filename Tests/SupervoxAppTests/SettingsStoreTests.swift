@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import SupervoxApp
@@ -68,6 +69,14 @@ private func sampleSettings() -> AppSettings {
         ],
         strongModel: ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, model: "modele-exemple"),
         fastModel: ModelChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, model: "modele-rapide"))
+}
+
+/// Une erreur d'ailleurs (disque, système) dont le texte est reconnaissable : sous toutes ses formes de description, elle dit
+/// `TEXTE-BRUT`. Un message montré ou journalisé qui le contient a repris le texte d'une erreur du système.
+struct RawTextError: Error, LocalizedError, CustomStringConvertible {
+    static let text = "TEXTE-BRUT"
+    var errorDescription: String? { Self.text }
+    var description: String { Self.text }
 }
 
 @Suite struct SettingsStoreTests {
@@ -524,6 +533,47 @@ private func sampleSettings() -> AppSettings {
         let newer = SettingsError.newerVersionKept(fileName: "settings.json", version: 7).localizedDescription
         #expect(newer.contains("settings.json") && newer.contains("7") && newer.contains("plus récente"))
         #expect(!newer.contains("/"))
+    }
+
+    // MARK: - Phrase d'un enregistrement refusé
+
+    /// Une `SettingsError` garde sa phrase (déjà fixe, elle ne nomme que le fichier de réglages) ; toute autre erreur reçoit la
+    /// phrase fixe, qui dit quoi faire, sans rien reprendre de son texte.
+    @Test func aSettingsErrorKeepsItsOwnSentenceAndAnyOtherErrorGetsTheFixedOne() {
+        for own in [SettingsError.unreadableFileKept(fileName: "settings.json"), .newerVersionKept(fileName: "settings.json", version: 7)] {
+            #expect(SettingsError.sentence(forSaveError: own) == own.errorDescription)
+            #expect(SettingsError.sentence(forSaveError: own) != SettingsError.otherSaveFailure)
+        }
+        #expect(SettingsError.sentence(forSaveError: RawTextError()) == SettingsError.otherSaveFailure)
+        #expect(SettingsError.sentence(forSaveError: CocoaError(.fileWriteOutOfSpace)) == SettingsError.otherSaveFailure)
+        #expect(!SettingsError.otherSaveFailure.contains(RawTextError.text))
+    }
+
+    @Test func theFixedSaveSentenceIsTheOneOfTheBrief() {
+        #expect(
+            SettingsError.otherSaveFailure
+                == "Les réglages n'ont pas pu être enregistrés : vérifiez que le disque n'est pas plein, puis recommencez.")
+    }
+
+    /// Le magasin écrit par la fonction qu'on lui donne (le vrai disque par défaut) : elle reçoit les réglages encodés et le
+    /// fichier, et son erreur remonte telle quelle, sans que le fichier soit créé.
+    @Test func theWriteIsInjectableAndItsErrorSurfaces() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { removeTemporaryDirectory(directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let received = Mutex<[(Data, URL)]>([])
+        let working = SettingsStore(file: file, write: { data, url in received.withLock { $0.append((data, url)) } })
+        try working.save(sampleSettings())
+        let calls = received.withLock { $0 }
+        #expect(calls.count == 1)
+        #expect(calls.first?.1 == file)
+        let written = try #require(calls.first?.0)
+        #expect(try JSONDecoder().decode(AppSettings.self, from: written).lastModeID == sampleSettings().lastModeID)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+
+        let failing = SettingsStore(file: file, write: { _, _ in throw RawTextError() })
+        #expect(throws: RawTextError.self) { try failing.save(sampleSettings()) }
+        #expect(!FileManager.default.fileExists(atPath: file.path))
     }
 
     @Test func defaultFileIsInApplicationSupport() throws {
