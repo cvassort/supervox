@@ -54,6 +54,10 @@ public final class AppController {
     private let makeSettingsWindow: SettingsWindowMaker
     private let terminate: @MainActor () -> Void
     private let dictationEnvironment: DictationEnvironment
+    /// L'environnement de l'entretien : l'onglet Entretien lui demande le silence que le détecteur applique en pratique.
+    let interviewEnvironment: InterviewEnvironment
+    /// L'onglet que la fenêtre de réglages montre : `openSettings(tab:)` le change, un clic dessus aussi.
+    public let settingsNavigation = SettingsNavigation()
     private let terminationWait: @Sendable (Double) async -> Void
     /// La fin demandée pendant une insertion : l'attente en cours (une seule).
     private var terminationTask: Task<Void, Never>?
@@ -106,6 +110,7 @@ public final class AppController {
         self.makeSettingsWindow = makeSettingsWindow
         self.terminate = terminate
         dictationEnvironment = dictation
+        self.interviewEnvironment = interviewEnvironment
         self.systemHotKeys = systemHotKeys
         self.keyboardLayout = keyboardLayout
         hotKeys = HotKeyCenter(registrar: hotKeyRegistrar, layout: keyboardLayout)
@@ -633,8 +638,10 @@ public final class AppController {
 
     // MARK: - Actions
 
-    /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`.
-    func openSettings() {
+    /// Construit la fenêtre la première fois, puis la présente ; chaque présentation lance `onPresent`. `tab` : l'onglet à montrer ;
+    /// sans lui, la fenêtre garde l'onglet courant (Fournisseurs à la première ouverture).
+    func openSettings(tab: SettingsTab? = nil) {
+        if let tab { settingsNavigation.tab = tab }
         // L'entretien s'annule aussi quand le panneau est déjà fermé (la fermeture l'annule sinon) : rien n'est gardé.
         interview.cancel()
         panel.close()

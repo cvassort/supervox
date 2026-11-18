@@ -309,6 +309,21 @@ import Testing
         #expect(rig.updates == updates + 1, "un seul enregistrement pour les trois")
     }
 
+    /// Les valeurs montrées à côté des contrôles : deux décimales et la virgule pour les secondes, un entier pour les dB (signe moins
+    /// typographique).
+    @Test func theValuesNextToTheControlsAreFormattedInFrench() {
+        let model = Rig().makeModel()
+        #expect(model.turnSilenceLabel == "0,50 s")
+        #expect(model.interruptMinDurationLabel == "0,30 s")
+        #expect(model.interruptLevelLabel == "\u{2212}30 dB")
+        model.turnSilence = 1.5
+        model.interruptMinDuration = 0.05 + 0.1
+        model.interruptLevel = -25
+        #expect(model.turnSilenceLabel == "1,50 s")
+        #expect(model.interruptMinDurationLabel == "0,15 s")
+        #expect(model.interruptLevelLabel == "\u{2212}25 dB")
+    }
+
     // MARK: - Règle 3 : silence effectif
 
     /// Avec l'identité : la valeur demandée dite deux fois, avec deux décimales et la virgule.

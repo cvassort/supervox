@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 /// Contrôles par recherche dans les sources du dépôt, lancés avec la suite.
-@Suite struct SourceScanTests {
+@Suite(.timeLimit(.minutes(1))) struct SourceScanTests {
     /// Racine du dépôt, retrouvée depuis ce fichier (`Tests/SupervoxCoreTests/`).
     private static let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -468,6 +468,34 @@ import Testing
     @Test func theMainThreadAssumptionPatternLeavesOrdinaryUsesAlone() throws {
         let pattern = try Regex(Self.forbiddenMainThreadAssumption)
         for code in ["@MainActor final class AVSpeechBufferSource", "Task { @MainActor in }", "let mainQueue = 1", "events.yield(.end)"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+    /// Tâche 10 : l'onglet Entretien ne recopie aucune borne. Ni la vue ni le modèle n'écrivent de plage littérale (`0.3...2.0`,
+    /// `1...20`) : le modèle lit celles de `InterviewSettings`, la vue celles du modèle.
+    static let literalRange = #"-?\d+(?:\.\d+)?\s*\.\.[.<]\s*\(?-?\d"#
+
+    @Test func theInterviewTabReadsItsBoundsFromTheType() throws {
+        let pattern = try Regex(Self.literalRange)
+        let all = try Self.sources(under: "Sources/SupervoxApp/SettingsUI")
+        let model = try #require(all.first { $0.place == "InterviewSettingsModel.swift" })
+        let pane = try #require(all.first { $0.place == "InterviewPane.swift" })
+        #expect(!model.code.contains(pattern), "plage littérale dans le modèle")
+        #expect(!pane.code.contains(pattern), "plage littérale dans la vue")
+        for range in ["maxQuestionsRange", "turnSilenceRange", "interruptMinDurationRange", "interruptLevelRange"] {
+            #expect(model.code.contains("InterviewSettings.\(range)"), "le modèle ne lit pas \(range) dans le type")
+            #expect(pane.code.contains("model.\(range)"), "la vue ne lit pas \(range) dans le modèle")
+        }
+    }
+
+    @Test(arguments: ["0.3...2.0", "1 ... 20", "-50...(-10)", "0.1..<1.0", "in: 1...20"])
+    func theLiteralRangePatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.literalRange)))
+    }
+
+    @Test func theLiteralRangePatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.literalRange)
+        for code in ["{ InterviewSettings.turnSilenceRange }", "Array(0..<count)", "values[index...]", "let x: ClosedRange<Int>"] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }

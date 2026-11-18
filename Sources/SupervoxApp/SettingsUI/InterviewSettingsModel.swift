@@ -181,6 +181,15 @@ public final class InterviewSettingsModel {
         }
     }
 
+    /// Les valeurs montrées à côté des contrôles.
+    public var turnSilenceLabel: String { Self.decimal(turnSilence) + " s" }
+    public var interruptMinDurationLabel: String { Self.decimal(interruptMinDuration) + " s" }
+    /// Entier, avec le signe moins typographique (U+2212) : le niveau est négatif.
+    public var interruptLevelLabel: String {
+        let level = Int(interruptLevel.rounded())
+        return (level < 0 ? "\u{2212}\(-level)" : "\(level)") + " dB"
+    }
+
     /// Remet les trois réglages avancés à leur valeur d'origine, en un seul enregistrement ; ni le nombre de questions ni le
     /// gabarit ne bougent.
     public func restoreAdvanced() {
