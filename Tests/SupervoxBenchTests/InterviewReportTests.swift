@@ -111,3 +111,31 @@ private func drain(_ stream: AsyncThrowingStream<CompletionEvent, Error>) async 
         #expect(InterviewReport.fenced("``````") == "```````\n``````\n```````\n")
     }
 }
+
+@Suite(.timeLimit(.minutes(1))) struct InterviewReportDurationsTests {
+    /// Un rapport d'un entretien sans tour, aux valeurs choisies loin de toute valeur par défaut : ce qui est écrit vient de ce qu'on
+    /// donne au rapport, jamais d'un nombre recopié dans son texte.
+    private func markdown(trailingSilence: Double = 4.25, transcriptionLimit: Double = 41, reactionMargin: Double = 7) -> String {
+        InterviewReport(
+            launchedAt: Date(timeIntervalSince1970: 0), turnCount: 0, trace: InterviewTrace(), signals: [], maxQuestions: 8,
+            turnSilence: 1.5, trailingSilence: trailingSilence, transcriptionLimit: transcriptionLimit,
+            reactionMargin: reactionMargin, interruptAfter: nil, voiceDescription: "celle du système"
+        ).markdown()
+    }
+
+    @Test func theReportSaysTheSilenceThatWasReallyPushedAfterEachTurn() {
+        let text = markdown(trailingSilence: 4.25)
+        #expect(text.contains("les 4,250 s de silence qui la suivent"))
+        #expect(!text.contains("2 secondes de silence"), "le silence de 2 s du brief n'est plus ce que le banc pousse")
+        // Une autre valeur donne une autre phrase : le texte suit l'argument.
+        #expect(markdown(trailingSilence: 3.304).contains("les 3,304 s de silence qui la suivent"))
+    }
+
+    @Test func theReportSaysWhatNoReactionMeansInTimeAndWhereTheDelayComesFrom() {
+        let text = markdown(transcriptionLimit: 41, reactionMargin: 7)
+        #expect(text.contains("« aucune réaction » : le moteur n'a rien répondu au tour au bout de 48 s"), "\(text)")
+        #expect(text.contains("limite de temps de transcription du moteur (41 s) plus une marge de 7 s"))
+        // La somme suit les deux valeurs, et une valeur non entière garde sa décimale.
+        #expect(markdown(transcriptionLimit: 100, reactionMargin: 12.5).contains("au bout de 112,5 s"))
+    }
+}

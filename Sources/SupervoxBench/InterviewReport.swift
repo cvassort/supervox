@@ -102,6 +102,11 @@ struct InterviewReport: Equatable {
     var endReason: String
     var maxQuestions: Int
     var turnSilence: Double
+    /// Le silence que le banc pousse après la voix de chaque tour (`WavTurnFeed.trailingSilence`), en secondes.
+    var trailingSilence: Double
+    /// La limite de temps de transcription du moteur et la marge qui s'y ajoute : leur somme est le délai d'un tour sans réaction.
+    var transcriptionLimit: Double
+    var reactionMargin: Double
     var interruptAfter: Double?
     var voiceDescription: String
 
@@ -112,7 +117,7 @@ struct InterviewReport: Equatable {
 
     init(
         launchedAt: Date, turnCount: Int, trace: InterviewTrace, signals: [ReplySignal?], maxQuestions: Int, turnSilence: Double,
-        interruptAfter: Double?, voiceDescription: String
+        trailingSilence: Double, transcriptionLimit: Double, reactionMargin: Double, interruptAfter: Double?, voiceDescription: String
     ) {
         self.launchedAt = launchedAt
         self.turnCount = turnCount
@@ -123,6 +128,9 @@ struct InterviewReport: Equatable {
         notices = trace.notices.map(Self.words)
         self.maxQuestions = maxQuestions
         self.turnSilence = turnSilence
+        self.trailingSilence = trailingSilence
+        self.transcriptionLimit = transcriptionLimit
+        self.reactionMargin = reactionMargin
         self.interruptAfter = interruptAfter
         self.voiceDescription = voiceDescription
         let ended = Self.read(trace.end)
@@ -173,8 +181,9 @@ struct InterviewReport: Equatable {
             + "(`latency`) : la forme des requêtes est différente (historique de la conversation, consigne de système avec le nombre de "
             + "questions restantes). « Fin de tour » est la date où la dernière voix du fichier WAV a fini d'être poussée, avant le "
             + "silence qui la suit ; la lecture est simulée (aucun haut-parleur) : « fin de lecture simulée » compte la durée réelle du "
-            + "clip. Les dates sont lues quand la commande reçoit l'événement. La voix d'un tour et les 2 secondes de silence qui la "
-            + "suivent sont poussées d'un coup, sans attente réelle : le silence de fin de tour n'est donc pas dans ces durées (la "
+            + "clip. Les dates sont lues quand la commande reçoit l'événement. La voix d'un tour et les "
+            + "\(Reports.decimal(trailingSilence, digits: 3)) s de silence qui la suivent sont poussées d'un coup, sans attente réelle : "
+            + "le silence de fin de tour n'est donc pas dans ces durées (la "
             + "commande n'attend pas ce silence avant la transcription, comme le ferait un micro), et elles comprennent le temps que le "
             + "détecteur et la transcription mettent à rattraper le fichier entier.\n\n"
 
@@ -196,6 +205,9 @@ struct InterviewReport: Equatable {
         text += "- Silence de fin de tour du détecteur : \(Reports.decimal(turnSilence, digits: 2)) s ; "
         text += interruptAfter.map { "tour suivant poussé \(Reports.decimal($0, digits: 2)) s après le début de la lecture.\n" }
             ?? "tour suivant poussé après la fin de la réplique.\n"
+        text += "- Un tour est noté « aucune réaction » : le moteur n'a rien répondu au tour au bout de "
+            + "\(Self.duration(transcriptionLimit + reactionMargin)) s, soit la limite de temps de transcription du moteur "
+            + "(\(Self.duration(transcriptionLimit)) s) plus une marge de \(Self.duration(reactionMargin)) s.\n"
 
         text += "\n## Durées par tour (secondes)\n\n"
         text += "| Tour | Fin de tour → premier texte | → première phrase synthétisée | → fin de lecture simulée | Remarque |\n"
@@ -218,6 +230,11 @@ struct InterviewReport: Equatable {
         format.timeZone = .current
         text += "\n## Lancement\n\n- Date du lancement : \(format.string(from: launchedAt))\n"
         return text
+    }
+
+    /// Une durée de réglage en secondes : sans décimale quand elle est entière (« 150 »), à une décimale sinon (« 112,5 »).
+    private static func duration(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : Reports.decimal(value, digits: 1)
     }
 
     private static func seconds(_ value: Double?) -> String {

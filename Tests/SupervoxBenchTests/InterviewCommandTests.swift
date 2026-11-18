@@ -730,6 +730,25 @@ private func refusal(_ body: () async throws -> Void) async -> InterviewError? {
         #expect(received <= pushed && received >= pushed - 2 * 1_600, "\(received) échantillons reçus, \(pushed) poussés")
     }
 
+    /// Le rapport de la commande écrit le silence réellement poussé (celui de la formule, à 3,1 s avec le détecteur double à 2,0 s,
+    /// pas les 2 s du brief) et le délai d'un tour sans réaction, lus des constantes de la commande et du moteur.
+    @Test(arguments: [(0.3, "2,000"), (0.5, "2,000"), (2.0, "3,100")])
+    func theReportOfTheCommandGivesTheSilenceReallyPushedAndTheDelayOfNoReaction(silence: Double, pushed: String) async throws {
+        let folder = try interviewFolder(); defer { try? FileManager.default.removeItem(at: folder) }
+        let wavs = try writeWavs([.voice(turn: 0, seconds: 0.6)], in: folder)
+        let session = InterviewRig(fast: [question("Quelle est la première question ?")])
+        let file = folder.appendingPathComponent("rapport.md")
+
+        try await parse(wavs + models + ["--turn-silence", "\(silence)", "--output", file.path]).run(runtime: session.runtime())
+
+        let text = try report(file)
+        #expect(text.contains("les \(pushed) s de silence qui la suivent"), "\(pushed) attendu")
+        #expect(!text.contains("2 secondes de silence"))
+        func whole(_ value: Double) -> String { String(Int(value)) }
+        #expect(text.contains("au bout de \(whole(reactionDelay)) s, soit la limite de temps de transcription du moteur "
+                              + "(\(whole(engineDeadline)) s) plus une marge de \(whole(InterviewCommand.reactionMargin)) s"))
+    }
+
     @Test func aReplyThatConcludesEndsTheInterviewWithoutPushingTheNextFileOrAskingForTheConclusionTwice() async throws {
         // Une réplique `[CONCLURE]` : le vrai moteur émet `.speakingEnded` puis `.state(.concluding)` et ne reprend pas l'écoute. Un
         // pilote qui poussait le tour suivant dès `.speakingEnded` (au lieu du `.state(.listening)` qui suit) pousserait le tour 2.

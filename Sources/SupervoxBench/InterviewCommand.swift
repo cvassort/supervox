@@ -246,7 +246,8 @@ struct InterviewCommand: AsyncParsableCommand {
 
         let report = InterviewReport(
             launchedAt: runtime.launchedAt, turnCount: turns.count, trace: trace, signals: fast.recorded, maxQuestions: maxQuestions,
-            turnSilence: turnSilence, interruptAfter: interruptAfter,
+            turnSilence: turnSilence, trailingSilence: trailing, transcriptionLimit: config.transcriptionTimeout,
+            reactionMargin: Self.reactionMargin, interruptAfter: interruptAfter,
             voiceDescription: voiceModel != nil
                 ? "celle du fournisseur, avec repli sur la voix du système" : "celle du système")
         let markdown = redact(report.markdown())

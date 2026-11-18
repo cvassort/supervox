@@ -5,8 +5,9 @@ import SupervoxCore
 /// Le son de l'entretien du banc : des tours de parole lus dans des fichiers WAV à la place du micro, une lecture simulée à la
 /// place du haut-parleur. **Aucun matériel n'est ouvert** : c'est le seul `AudioIO` de la commande `interview`, jamais `LiveAudioIO`.
 ///
-/// - **Micro.** `pushTurn(i)` pousse le tour `i` par tranches de 20 ms, puis 2 s de silence (le détecteur de voix a besoin de
-///   silence pour fermer le passage). Quand le tour est poussé, c'est la commande qui le décide : après la fin de la réplique
+/// - **Micro.** `pushTurn(i)` pousse le tour `i` par tranches de 20 ms, puis le silence donné à la construction (`trailingSilence`,
+///   au moins 2 s ; la commande le calcule par `trailingSilence(detectorSilence:blockSeconds:)`) : le détecteur de voix a besoin de
+///   silence pour fermer le passage. Quand le tour est poussé, c'est la commande qui le décide : après la fin de la réplique
 ///   précédente, ou après un délai de lecture simulée pour une interruption (`InterviewDriver`).
 /// - **Haut-parleur.** `play` ne joue rien : le clip « finit » après son temps réel, par une attente injectée (`wait`), comme le
 ///   double `ScriptedAudioIO` dont c'est la composition. La position de lecture se déduit de l'horloge injectée (`now`) : le moteur la
