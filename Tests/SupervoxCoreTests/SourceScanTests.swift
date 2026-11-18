@@ -550,10 +550,16 @@ import Testing
         let main = try #require(sources.first { $0.place == "Supervox/main.swift" }, "le balayage doit voir le programme")
         #expect(main.code.contains(chain), "le programme doit nommer le vrai dossier")
         #expect(main.code.contains("historyRoot:"), "et le donner à AppController")
-        let elsewhere = sources.filter { !$0.place.hasPrefix("Supervox/") && ($0.code.contains(chain) || $0.code.contains(building)) }
+        // `main.swift` SEUL est exempté, pas toute la cible `Supervox` : `Tests/SupervoxTests` en dépend, et une constante du vrai dossier
+        // dans un autre de ses fichiers serait atteignable par un test sans que ce balayage le voie.
+        let elsewhere = sources.filter { $0.place != "Supervox/main.swift" && ($0.code.contains(chain) || $0.code.contains(building)) }
         #expect(elsewhere.map(\.place).isEmpty, "\(elsewhere.map(\.place))")
 
-        let tests = try Self.sources(under: "Tests").filter { !$0.place.hasSuffix("SourceScanTests.swift") && $0.code.contains(chain) }
+        // Dans les tests : la chaîne ET la construction d'un chemin finissant par « Historique » (un dossier temporaire de test ne porte
+        // pas ce nom).
+        let tests = try Self.sources(under: "Tests").filter {
+            !$0.place.hasSuffix("SourceScanTests.swift") && ($0.code.contains(chain) || $0.code.contains(building))
+        }
         #expect(tests.map(\.place).isEmpty, "\(tests.map(\.place))")
 
         let controller = try #require(sources.first { $0.place == "SupervoxApp/AppController.swift" })
@@ -562,6 +568,46 @@ import Testing
         let anyDefault = try Regex(Self.historyRootDefault)
         let otherDefaults = sources.filter { $0.code.contains(anyDefault) }.map(\.place)
         #expect(otherDefaults.isEmpty, "\(otherDefaults)")
+    }
+
+    /// Le dossier de données de l'application (`applicationSupportDirectory`, `SettingsStore.defaultFile()`) n'est atteint ni par un
+    /// test ni par l'outil de rendu : un test ou une image écrirait dans le vrai dossier. Une seule exception : le test qui LIT le
+    /// chemin de `defaultFile()` sans rien écrire (`defaultFileIsInApplicationSupport`).
+    /// Pas de `\b` devant `defaultFile` : la limite de mot Unicode ne coupe pas entre `.` et une lettre (« SettingsStore.defaultFile »).
+    static let realDataFolderAccess = #"applicationSupportDirectory|defaultFile\s*\(\s*\)"#
+
+    @Test func noTestNorTheRenderToolReachesTheRealApplicationSupportFolder() throws {
+        let pattern = try Regex(Self.realDataFolderAccess)
+        let tests = try Self.sources(under: "Tests")
+        let snapshots = try Self.sources(under: "Sources/SupervoxSnapshots")
+        #expect(snapshots.contains { $0.place == "main.swift" }, "le balayage doit voir l'outil de rendu")
+        let offending =
+            tests.filter {
+                !$0.place.hasSuffix("SourceScanTests.swift") && $0.place != "SupervoxAppTests/SettingsStoreTests.swift"
+                    && $0.code.contains(pattern)
+            }.map(\.place) + snapshots.filter { $0.code.contains(pattern) }.map { "SupervoxSnapshots/" + $0.place }
+        #expect(offending.isEmpty, "\(offending)")
+
+        // L'exception est étroite : un seul `defaultFile()`, dans le test qui ne fait que lire le chemin, aucun `applicationSupportDirectory`.
+        let store = try #require(tests.first { $0.place == "SupervoxAppTests/SettingsStoreTests.swift" })
+        #expect(store.code.matches(of: pattern).count == 1)
+        #expect(store.code.contains("func defaultFileIsInApplicationSupport"))
+        #expect(!store.code.contains("applicationSupportDirectory"))
+    }
+
+    @Test(arguments: [
+        "let url = URL.applicationSupportDirectory", "try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask)",
+        "let file = try SettingsStore.defaultFile()", "SettingsStore.defaultFile ( )",
+    ])
+    func theRealDataFolderPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realDataFolderAccess)))
+    }
+
+    @Test func theRealDataFolderPatternLeavesOrdinaryUsesAlone() throws {
+        let pattern = try Regex(Self.realDataFolderAccess)
+        for code in ["let file = directory.appendingPathComponent(\"settings.json\")", "func defaultFileName() {}", "let supportDirectory = temporary"] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
     }
 
     @Test(arguments: [

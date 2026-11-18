@@ -31,7 +31,7 @@ import Testing
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    var root: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+    var root: URL { directory.appendingPathComponent("entretiens-temporaires", isDirectory: true) }
 
     /// Rend les droits d'écriture avant de supprimer (un test peut avoir retiré ceux d'un dossier).
     func cleanUp() {

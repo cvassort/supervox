@@ -29,7 +29,7 @@ import Testing
         store = SettingsStore(file: directory.appendingPathComponent("settings.json"))
     }
 
-    var root: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+    var root: URL { directory.appendingPathComponent("entretiens-temporaires", isDirectory: true) }
 
     /// Réglages avec cette durée de conservation, enregistrés (un fichier lisible : ce n'est pas un premier lancement).
     func saveSettings(retention: Int) throws {

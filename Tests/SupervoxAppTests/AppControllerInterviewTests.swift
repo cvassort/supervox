@@ -317,7 +317,7 @@ import Testing
     // MARK: - Règle 5 de la tâche 11 : le vrai historique, bout en bout
 
     /// Le dossier du vrai historique de ces tests : dans le dossier temporaire du test, jamais celui de l'application.
-    var realRoot: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+    var realRoot: URL { directory.appendingPathComponent("entretiens-temporaires", isDirectory: true) }
 
     @Test(
         "règle 5 : avec le VRAI historique (dossier temporaire), un entretien conclu écrit UN fichier (témoin positif), et aucune autre fin n'écrit quoi que ce soit",

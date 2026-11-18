@@ -32,7 +32,7 @@ import Testing
             self.settings = settings
         }
 
-        var root: URL { directory.appendingPathComponent("Historique", isDirectory: true) }
+        var root: URL { directory.appendingPathComponent("entretiens-temporaires", isDirectory: true) }
 
         /// La durée en vigueur, lue par le magasin à chaque appel (comme la fermeture de `AppController`). Les fermetures du banc
         /// tiennent le banc fortement (un cycle, voulu : une tâche d'un volet affiché peut relire après la fin du test).
