@@ -177,8 +177,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     /// Le champ de la version 1 que la migration lit une fois.
     private static let legacyOptionsKey = "modeOptions"
 
-    /// Un champ absent prend sa valeur par défaut ; un champ inconnu est gardé ; un champ présent mais d'une autre
-    /// forme lève une erreur (le fichier est alors illisible). Seul `version` est obligatoire.
+    /// Un champ absent prend sa valeur par défaut ; un champ inconnu est gardé ; seul `version` est obligatoire. Un champ présent
+    /// mais d'une autre forme lève une erreur (le fichier est alors illisible), SAUF les trois blocs de la version 3 (`interview`,
+    /// `voice`, `history`) : un bloc qui n'est pas un objet prend ses défauts, et dans un bloc, un champ d'une autre forme prend le
+    /// sien, sans faire perdre le reste du fichier. Conséquence à connaître : une durée de conservation de la mauvaise forme
+    /// (`"retentionDays": "365"`) se lit 30 jours SANS avis ; le dossier de l'historique garde donc la durée confirmée
+    /// (`InterviewHistory.confirmedRetention`) pour que la purge au lancement ne s'en serve pas.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: JSONKey.self)
         func key(_ key: CodingKeys) -> JSONKey { JSONKey(key.rawValue) }
