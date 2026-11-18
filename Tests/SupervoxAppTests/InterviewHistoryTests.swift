@@ -120,7 +120,7 @@ import Testing
         // Dossier immuable : déjà en 0700, il n'y a rien à resserrer, mais plus rien ne peut y être créé.
         #expect(chflags(root.path, UInt32(UF_IMMUTABLE)) == 0)
 
-        await #expect(throws: (any Error).self) { try await history.save(Self.record(2)) }
+        await #expect(throws: InterviewHistory.Failure.writeFailed) { try await history.save(Self.record(2)) }
 
         #expect(chflags(root.path, 0) == 0)
         #expect(try names() == [InterviewHistory.fileName(for: old)], "ni fichier partiel ni fichier temporaire")
@@ -133,7 +133,7 @@ import Testing
         let record = Self.record(1)
         try FileManager.default.createDirectory(at: url(of: record), withIntermediateDirectories: true)
 
-        await #expect(throws: (any Error).self) { try await makeHistory().save(record) }
+        await #expect(throws: InterviewHistory.Failure.writeFailed) { try await makeHistory().save(record) }
 
         #expect(try names() == [InterviewHistory.fileName(for: record)], "seul le dossier posé par le test reste")
     }
@@ -172,7 +172,7 @@ import Testing
         let planted = try plant(record, version: 2)
         let before = try Data(contentsOf: planted)
 
-        await #expect(throws: (any Error).self) { try await makeHistory().save(record) }
+        await #expect(throws: InterviewHistory.Failure.newerFileInTheWay) { try await makeHistory().save(record) }
 
         #expect(try Data(contentsOf: planted) == before)
         #expect(try names() == [InterviewHistory.fileName(for: record)])
@@ -543,7 +543,7 @@ import Testing
         try await history.save(record)
         #expect(chmod(root.path, 0o500) == 0)
 
-        await #expect(throws: (any Error).self) { try await history.delete(record.id) }
+        await #expect(throws: InterviewHistory.Failure.writeFailed) { try await history.delete(record.id) }
 
         #expect(chmod(root.path, 0o700) == 0)
         #expect(await history.list() == [record])
@@ -577,7 +577,7 @@ import Testing
         try Data("pas un dossier".utf8).write(to: root)
         let history = makeHistory()
 
-        await #expect(throws: (any Error).self) { try await history.save(Self.record(1)) }
+        await #expect(throws: InterviewHistory.Failure.rootRefused) { try await history.save(Self.record(1)) }
         #expect(await history.list().isEmpty)
         #expect(await history.purge() == 0)
         #expect(await history.fileCount() == 0)
@@ -603,7 +603,7 @@ import Testing
         try FileManager.default.createSymbolicLink(at: root, withDestinationURL: target)
         let history = makeHistory()
 
-        await #expect(throws: (any Error).self) { try await history.save(Self.record(1)) }
+        await #expect(throws: InterviewHistory.Failure.rootRefused) { try await history.save(Self.record(1)) }
         #expect(await history.list().isEmpty, "la cible n'est pas lue")
         #expect(await history.purge() == 0, "la cible n'est pas purgée")
         try await history.deleteAll()
@@ -617,7 +617,7 @@ import Testing
         #expect(chmod(directory.path, 0o500) == 0)
         let history = makeHistory()
 
-        await #expect(throws: (any Error).self) { try await history.save(Self.record(1)) }
+        await #expect(throws: InterviewHistory.Failure.writeFailed) { try await history.save(Self.record(1)) }
 
         #expect(chmod(directory.path, 0o700) == 0)
         #expect(await history.list().isEmpty)
