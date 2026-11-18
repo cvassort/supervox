@@ -275,10 +275,8 @@ public struct SettingsView: View {
         .onChange(of: navigation.tab) {
             hotKey.cancelRecording()
             modes.cancelRecording()
-            // Décision 2 : l'écoute d'une voix et une confirmation en attente ne survivent pas à un changement d'onglet (en plus de
-            // `onDisappear` du volet).
-            voices?.stopListening()
-            voices?.cancelConfirmation()
+            // L'écoute d'une voix et une confirmation en attente de l'onglet Voix tombent par `onDisappear` du volet, seul chemin (un
+            // second ici ne tenait aucun test : la disparition du volet au changement d'onglet est vue dans `leavingStopsThePreview`).
             // Un autre onglet : le gabarit tapé dans celui-ci est enregistré.
             interview?.commitTemplate()
         }

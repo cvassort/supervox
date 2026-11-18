@@ -60,8 +60,8 @@ public struct VoicesPane: View {
             model.reload()
             model.clearMessage()
         }
-        // Décision 2 : la vue disparaît (autre onglet, fenêtre retirée) : l'écoute s'arrête et une confirmation en attente est
-        // annulée. Un brouillon d'éditeur ouvert est GARDÉ : il est le contenu de la feuille, qui fait elle-même perdre la clé à la
+        // Décision 2 : la vue disparaît (autre onglet : c'est le seul chemin du changement d'onglet, comme pour l'onglet Historique ;
+        // fenêtre retirée) : l'écoute s'arrête et une confirmation en attente est annulée. Un brouillon d'éditeur ouvert est GARDÉ : il est le contenu de la feuille, qui fait elle-même perdre la clé à la
         // fenêtre (voir `SettingsView.content`, `onLeave`).
         .onDisappear {
             model.stopListening()
