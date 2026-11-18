@@ -280,7 +280,7 @@ import Testing
         #expect(!controller.dictation.isBusy)
         if ending != .prompt {
             #expect(await until { driver.isFinished }, "la conversation est arrêtée")
-            await settle()
+            #expect(await controller.interview.drained(), "la fin est observée, pas attendue par une durée")
             #expect(history.attempts == 0, "rien n'est enregistré")
         }
         #expect(environment.drivers.count == 1)
@@ -302,8 +302,8 @@ import Testing
         let previousMenu = NSApplication.shared.mainMenu
         defer { NSApplication.shared.mainMenu = previousMenu }
 
+        // Synchrone : si l'ouverture agissait, `openSettings` aurait déjà annulé l'entretien et ouvert la fenêtre au retour de l'appel.
         controller.panelModel.openHistory()
-        await settle()
 
         #expect(controller.panelModel.interview?.phase == .listening, "l'entretien continue")
         #expect(driver.cancels == 0)
@@ -340,7 +340,8 @@ import Testing
         }
         #expect(await until { controller.panelModel.interview == nil }, "\(ending)")
         if ending != .prompt { #expect(await until { driver.isFinished }, "la conversation est arrêtée : \(ending)") }
-        await settle()
+        // La fin est OBSERVÉE (lecture du flux finie, écritures finies), pas attendue par une durée : l'absence de fichier est un fait.
+        #expect(await controller.interview.drained(), "\(ending)")
 
         let names = (try? FileManager.default.contentsOfDirectory(atPath: realRoot.path)) ?? []
         if ending == .prompt {

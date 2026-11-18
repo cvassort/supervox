@@ -286,6 +286,20 @@ final class FakeInterviewEnvironment: Sendable {
 
 /// Le contrôleur de l'entretien et ses doubles : vrai `PanelModel`, vraie résolution (`InterviewSetup.resolve`) sur un trousseau en
 /// mémoire et des modèles doubles, environnement, conversation et historique doubles.
+extension InterviewController {
+    /// La FIN OBSERVÉE d'un entretien, au lieu d'une durée fixe : la lecture du flux de la conversation est finie (son micro est rendu,
+    /// tout ce qu'elle devait faire de ses événements est fait) et toute écriture de l'historique lancée est finie. Après cela,
+    /// « rien n'a été enregistré » est un fait, pas un instant où rien n'était encore arrivé. Borné (`bounded`) : rend `false` si
+    /// l'attente ne finit pas, le test échoue au lieu de se suspendre.
+    func drained() async -> Bool {
+        let task = Task { @MainActor in
+            await self.waitUntilStopped()
+            await self.waitForSaves()
+        }
+        return await bounded(task) != nil
+    }
+}
+
 /// Les minuteries de l'attente de l'enregistrement de l'historique : aucune ne rend d'elle-même, le test les déclenche (`fire`). Une
 /// minuterie que le contrôleur annule (l'enregistrement a fini à temps) rend la main par une erreur d'annulation, sans délai écoulé.
 final class SaveTimers: Sendable {

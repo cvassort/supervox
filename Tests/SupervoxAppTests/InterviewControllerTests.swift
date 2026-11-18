@@ -453,7 +453,7 @@ import Testing
         let driver = try await rig.listening()
         driver.finish(end)
         #expect(try await outcome(rig) == expected)
-        await settle()
+        #expect(await rig.controller.drained(), "la fin est observée, pas attendue par une durée")
         #expect(rig.history.attempts == 0)
         #expect(rig.panel.interview == nil)
     }
@@ -620,7 +620,7 @@ import Testing
             // Un `.finished` tardif ne touche plus rien.
             driver.finish(.prompt("Tardif.", Self.exchange))
         }
-        await settle()
+        #expect(await rig.controller.drained(), "la fin est observée, pas attendue par une durée")
         #expect(rig.outcomes == [.cancelled], "une seule issue")
         #expect(rig.history.attempts == 0)
         #expect(rig.panel.interview == nil)
