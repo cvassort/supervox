@@ -29,10 +29,12 @@ import Testing
 
     /// `seeded` : sans fichier de réglages, en écrit un (réglages par défaut) avant la construction, pour que `launch()`
     /// suive le chemin d'un lancement ordinaire. Les tests du premier lancement passent `false`.
-    func makeController(layout: any KeyboardLayout = HotKeyTests.ansi, seeded: Bool = true) -> AppController {
+    func makeController(
+        layout: any KeyboardLayout = HotKeyTests.ansi, seeded: Bool = true, settingsStore: SettingsStore? = nil
+    ) -> AppController {
         if seeded, !FileManager.default.fileExists(atPath: store.file.path) { try? store.save(.defaults) }
         return AppController(
-            settingsStore: store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
+            settingsStore: settingsStore ?? store, secrets: InMemorySecretStore(), hotKeyRegistrar: hotKeys,
             escapeRegistrar: escape, makeModeHotKeyRegistrar: { [modeRegistrars] in modeRegistrars.make() },
             permissionsProbe: probe, systemHotKeys: system, keyboardLayout: layout,
             makePanelSurface: { [surface] _ in surface }, clickMonitor: clicks,
@@ -125,6 +127,36 @@ import Testing
     }
 
     // MARK: - Fichier non enregistrable pendant la session
+
+    // MARK: - Une erreur d'écriture d'ailleurs : phrase fixe, jamais son texte
+
+    /// Un magasin dont l'écriture échoue par une erreur d'ailleurs (disque, système), sur le fichier de ce test.
+    var failingStore: SettingsStore { SettingsStore(file: store.file, write: { _, _ in throw RawTextError() }) }
+
+    /// Premier lancement : le fichier de réglages ne peut pas être créé. L'avis du panneau est la phrase fixe.
+    @Test func aForeignErrorWhileCreatingTheSettingsFileShowsTheFixedSentence() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(seeded: false, settingsStore: failingStore)
+
+        controller.launch()
+
+        let notice = try #require(controller.panelModel.notices[.save])
+        #expect(notice == SettingsError.otherSaveFailure)
+        #expect(!notice.contains(RawTextError.text))
+    }
+
+    /// Choisir un mode l'enregistre ; l'écriture échoue : l'avis du panneau est la phrase fixe.
+    @Test func aForeignErrorWhileSavingTheModeShowsTheFixedSentence() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController(settingsStore: failingStore)
+
+        controller.panelModel.select("prompt")
+
+        let notice = try #require(controller.panelModel.notices[.save])
+        #expect(notice == SettingsError.otherSaveFailure)
+        #expect(!notice.contains(RawTextError.text))
+        #expect(controller.settings.lastModeID != "prompt")
+    }
 
     /// R1 : fichier valide rendu illisible au lancement, puis lisible de nouveau ; le changement de mode suivant ne
     /// l'écrase pas (les réglages en mémoire sont les défauts), et l'avis le dit.

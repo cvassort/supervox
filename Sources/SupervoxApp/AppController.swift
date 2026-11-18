@@ -353,8 +353,8 @@ public final class AppController {
             do {
                 try updateSettings { _ in }
             } catch {
-                panelModel.setNotice(error.localizedDescription, for: .save)
-                log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
+                panelModel.setNotice(SettingsError.sentence(forSaveError: error), for: .save)
+                log.error("réglages non créés : \(String(reflecting: type(of: error)), privacy: .public)")
             }
         }
         if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
@@ -469,7 +469,7 @@ public final class AppController {
             try settingsStore.save(updated)
             settings = updated
         } catch {
-            log.error("raccourci signalé non gardé : \(error.localizedDescription, privacy: .public)")
+            log.error("raccourci signalé non gardé : \(String(reflecting: type(of: error)), privacy: .public)")
         }
     }
 
@@ -680,8 +680,8 @@ public final class AppController {
         do {
             try updateSettings { $0.lastModeID = id }
         } catch {
-            panelModel.setNotice(error.localizedDescription, for: .save)
-            log.error("réglages non enregistrés : \(error.localizedDescription, privacy: .public)")
+            panelModel.setNotice(SettingsError.sentence(forSaveError: error), for: .save)
+            log.error("réglages non enregistrés : \(String(reflecting: type(of: error)), privacy: .public)")
         }
     }
 

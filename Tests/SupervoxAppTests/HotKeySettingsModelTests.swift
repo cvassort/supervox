@@ -325,6 +325,55 @@ import Testing
         #expect(model.message?.contains("Aucun raccourci") == true)
     }
 
+    // MARK: - Une erreur d'écriture d'ailleurs : phrase fixe, jamais son texte
+
+    /// Le raccourci n'est pas enregistré, et l'ancien est rétabli : l'avis est la phrase fixe, sans le texte de l'erreur.
+    @Test func aForeignSaveErrorOnAHotKeyShowsTheFixedSentenceNotItsText() {
+        let model = makeModel()
+        saves.failure = RawTextError()
+        model.record(Self.keyB)
+
+        #expect(model.hotKey == Self.keyA)
+        let message = model.message ?? ""
+        #expect(message.contains(SettingsError.otherSaveFailure))
+        #expect(!message.contains(RawTextError.text))
+    }
+
+    /// L'ancien raccourci ne peut pas être rétabli : le message ajoute que plus aucun n'est actif, toujours sans le texte.
+    @Test func aForeignSaveErrorWithNoHotKeyToRestoreStillShowsTheFixedSentence() {
+        registrar.refused = [Self.keyA]
+        let model = makeModel()
+        saves.failure = RawTextError()
+        model.record(Self.keyB)
+
+        let message = model.message ?? ""
+        #expect(message.contains(SettingsError.otherSaveFailure))
+        #expect(message.contains("Aucun raccourci n'est actif."))
+        #expect(!message.contains(RawTextError.text))
+    }
+
+    @Test func aForeignSaveErrorOnTheBehaviorShowsTheFixedSentenceNotItsText() {
+        let model = makeModel()
+        saves.failure = RawTextError()
+        model.setBehavior(.hold)
+
+        #expect(model.behavior == .toggle)
+        let message = model.message ?? ""
+        #expect(message.contains(SettingsError.otherSaveFailure))
+        #expect(!message.contains(RawTextError.text))
+    }
+
+    /// Une `SettingsError` garde sa phrase, sur les deux chemins : le nom du fichier y est.
+    @Test func aSettingsErrorOnTheBehaviorKeepsItsOwnSentence() {
+        let model = makeModel()
+        saves.failure = SettingsError.newerVersionKept(fileName: "settings.json", version: 7)
+        model.setBehavior(.hold)
+
+        let message = model.message ?? ""
+        #expect(message.contains("settings.json"))
+        #expect(!message.contains(SettingsError.otherSaveFailure))
+    }
+
     // MARK: - Options du comportement
 
     @Test func holdIsListedEnabledWithoutTheComingSoonMention() throws {

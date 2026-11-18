@@ -53,9 +53,10 @@ public enum ProvidersError: Error, Equatable, LocalizedError {
         case .oldKeyNotRemoved(let cause):
             "Adresse inchangée : l'ancienne clé n'a pas pu être retirée avant le changement d'hôte. \(cause)"
         case .oldKeyRemovedButNotSaved(let cause):
-            "L'ancienne clé a été retirée (nouvel hôte), mais les réglages n'ont pas été enregistrés : \(cause) Ressaisissez la clé une fois le problème réglé."
+            // La cause est la phrase d'un enregistrement refusé : elle dit déjà que les réglages ne sont pas enregistrés.
+            "L'ancienne clé a été retirée (nouvel hôte). \(cause) Ressaisissez la clé une fois le problème réglé."
         case .notSavedKeyLeft(let account, let cause):
-            "Réglages non enregistrés : \(cause) La clé saisie reste dans le trousseau. \(Self.leftoverKeyAdvice(account: account))"
+            "\(cause) La clé saisie reste dans le trousseau. \(Self.leftoverKeyAdvice(account: account))"
         }
     }
 }
@@ -354,8 +355,13 @@ public final class ProvidersModel {
             return "Accès au trousseau refusé : autorisez Supervox dans l'invite du trousseau, puis réessayez."
         case let error as SecretError:
             return error.description + "."
+        case let error as ProvidersError:
+            // Les refus de la fenêtre portent leur propre phrase, fixe ; leurs causes sont déjà passées par ici.
+            return error.errorDescription ?? SettingsError.otherSaveFailure
         default:
-            return error.localizedDescription
+            // Seule l'écriture des réglages lève ici une autre erreur (les lectures de clé lèvent `SecretError`, le réseau
+            // `EndpointError`) : la phrase d'une `SettingsError`, sinon la phrase fixe. Jamais le texte de l'erreur.
+            return SettingsError.sentence(forSaveError: error)
         }
     }
 

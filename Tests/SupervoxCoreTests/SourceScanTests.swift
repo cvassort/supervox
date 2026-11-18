@@ -331,6 +331,64 @@ import Testing
         #expect(offending.isEmpty, "\(offending)")
     }
 
+    // MARK: - Aucun texte d'erreur du système montré ni journalisé (tâche 5)
+
+    /// L'accès au texte d'erreur du système, sous toutes ses écritures : `error.localizedDescription`, `(error as NSError).…`,
+    /// `\(error.localizedDescription, privacy: .public)`, avec espaces ou retour à la ligne devant le point, par chemin de clé
+    /// (`map(\.localizedDescription)`) ou nu (dans une extension d'`Error`). Ni `\b` (la limite de mot d'Unicode ne coupe pas
+    /// entre `.` et une lettre) ni lookbehind (`Regex` ne le gère pas) : un caractère qui n'est pas d'identifiant devant (ou le
+    /// début du texte), et une borne derrière. Un autre identifiant qui le contient (`NSLocalizedDescriptionKey`,
+    /// `localizedDescriptions`) n'est pas cet accès.
+    static let systemErrorText = #"(?:^|[^A-Za-z0-9_])localizedDescription(?![A-Za-z0-9_])"#
+
+    /// Les deux SEULS endroits qui gardent `localizedDescription` : le texte brut d'une panne de transport (`URLError`, …) n'est
+    /// jamais montré tel quel, il est masqué (`errorBody`, `masked` : adresse, clé retirées) avant d'aller plus loin dans
+    /// `EndpointError.transport`, que les écrans ne montrent que par une phrase fixe (`ProvidersModel.message(for:)`).
+    static let endpointTransportSites: Set<String> = [
+        "SupervoxCore/Endpoint/EndpointRequest.swift", "SupervoxCore/Endpoint/ModelListing.swift",
+    ]
+
+    /// Ni l'application (`Sources/SupervoxApp`) ni l'outil de rendu (`Sources/SupervoxSnapshots`) ne lisent le texte d'erreur du
+    /// système : ni pour l'écran, ni pour le journal (un journal y met le TYPE de l'erreur). Hors de ces deux dossiers, seuls les
+    /// deux sites de transport du cœur le gardent ; une panne de plus ailleurs (cœur, banc d'essai) doit être décidée ici, nommée
+    /// avec sa raison. Le balayage voit les fichiers qui montrent les avis, et les deux sites de transport contiennent bien le
+    /// motif (sans quoi un motif cassé ne verrait rien nulle part).
+    @Test func theRawSystemErrorTextIsOnlyKeptByTheTwoEndpointTransportSites() throws {
+        let pattern = try Regex(Self.systemErrorText)
+        let all = try Self.sources(under: "Sources")
+        for seen in [
+            "SupervoxApp/AppController.swift", "SupervoxApp/SettingsUI/HotKeySettingsModel.swift",
+            "SupervoxApp/SettingsUI/ProvidersModel.swift", "SupervoxSnapshots/main.swift",
+        ] {
+            #expect(all.contains { $0.place == seen }, "le balayage doit voir \(seen)")
+        }
+        let holding = Set(all.filter { $0.code.contains(pattern) }.map(\.place))
+        #expect(Self.endpointTransportSites.isSubset(of: holding), "les sites de transport nommés gardent bien le motif : \(holding)")
+        let offending = holding.subtracting(Self.endpointTransportSites).sorted()
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "panelModel.setNotice(error.localizedDescription, for: .save)", #"log.error("x \(error.localizedDescription, privacy: .public)")"#,
+        "(error as NSError).localizedDescription", "error . localizedDescription", "error\n    .localizedDescription",
+        #"errors.map(\.localizedDescription)"#, "self.localizedDescription", "return localizedDescription",
+        "localizedDescription.isEmpty",
+    ])
+    func theSystemErrorTextPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.systemErrorText)))
+    }
+
+    @Test func theSystemErrorTextPatternLeavesOtherIdentifiersAlone() throws {
+        let pattern = try Regex(Self.systemErrorText)
+        for code in [
+            "(error as? SettingsError)?.errorDescription", "SettingsError.sentence(forSaveError: error)",
+            #"log.error("\(String(reflecting: type(of: error)), privacy: .public)")"#, "userInfo[NSLocalizedDescriptionKey]",
+            "let myLocalizedDescription = 1", "let localizedDescriptions = [String]()", "var localizedDescriptionText = \"\"",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
     /// L'entretien (`Core/Conversation`) ne rend que des codes de panne et des phrases fixes : jamais le texte brut d'une erreur
     /// (`localizedDescription`), et aucun journal (le texte dit pourrait y passer). Ses rappels (`onChunk`, `onEnd`, `onText`) arrivent
     /// sur le fil que le système choisit : rien n'y suppose le fil principal. Le dossier doit bien contenir le moteur, sans quoi le

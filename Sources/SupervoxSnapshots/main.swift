@@ -619,7 +619,7 @@ for dark in [false, true] {
     noticed.setNotice(
         "Le raccourci \(standardLabel) a été refusé par macOS : ouvrez le panneau depuis la barre de menus, puis choisissez-en un autre dans Réglages.",
         for: .hotKey)
-    noticed.setNotice(SettingsError.unreadableFileKept(fileName: "settings.json").localizedDescription, for: .save)
+    noticed.setNotice(SettingsError.sentence(forSaveError: SettingsError.unreadableFileKept(fileName: "settings.json")), for: .save)
     try render(
         PanelView(model: noticed, permissions: PermissionsModel(probe: missing), openSettings: {}, quit: {}),
         name: "panneau-avis", dark: dark, background: panelBackground)
