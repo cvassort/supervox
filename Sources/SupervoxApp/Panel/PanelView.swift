@@ -39,7 +39,7 @@ public struct PanelView: View {
 
     private var chips: some View {
         ModeChips(
-            modes: model.modes, selectedID: model.selectedModeID, locked: model.modesLocked, select: { model.select($0) })
+            modes: model.modes, selectedID: model.selectedModeID, locked: model.modesLocked, select: { model.chipTapped($0) })
     }
 
     /// La dictée : prêt, préparation, enregistrement, transcription, échec ou texte copié, et le dernier texte à copier.

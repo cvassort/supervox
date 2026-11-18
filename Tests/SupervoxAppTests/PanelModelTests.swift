@@ -104,6 +104,28 @@ import Testing
         #expect(reported == ["entretien"])
     }
 
+    /// I-2 : le clic est signalé à chaque fois, même sur la pastille déjà choisie ; le changement de mode seulement quand il y en a un,
+    /// et avant le clic. Pendant l'entretien ou pour un mode inconnu, rien.
+    @Test func aChipClickIsAlwaysReportedAndTheChangeOnlyWhenThereIsOne() {
+        let model = PanelModel(lastModeID: "dictee-brute")
+        var events: [String] = []
+        model.onModeChanged = { events.append("changé \($0)") }
+        model.onChipTapped = { events.append("clic \($0)") }
+
+        model.chipTapped("entretien")
+        #expect(events == ["changé entretien", "clic entretien"])
+        model.chipTapped("entretien")
+        #expect(events == ["changé entretien", "clic entretien", "clic entretien"], "déjà choisie : le clic seul")
+        model.chipTapped("mode-inconnu")
+        #expect(events.count == 3)
+
+        model.setInterview(InterviewViewState(maxQuestions: 6, privacy: ""))
+        model.chipTapped("entretien")
+        model.chipTapped("dictee-brute")
+        #expect(events.count == 3, "pendant l'entretien, aucun clic n'est pris")
+        #expect(model.selectedModeID == "entretien")
+    }
+
     @Test func selectingAnUnknownModeChangesNothing() {
         let model = PanelModel(lastModeID: "prompt")
         var reported: [String] = []

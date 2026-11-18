@@ -127,6 +127,8 @@ public final class PanelModel {
     @ObservationIgnored public var onAnnounce: (@MainActor (String) -> Void)?
     /// Appelé quand l'utilisateur change de mode, avec le nouvel identifiant, pour qu'il soit sauvé.
     @ObservationIgnored public var onModeChanged: (@MainActor (String) -> Void)?
+    /// Chaque clic sur une pastille (`chipTapped`), après `onModeChanged` s'il y a eu changement.
+    @ObservationIgnored public var onChipTapped: (@MainActor (String) -> Void)?
 
     /// `lastModeID` vient des réglages ; un identifiant inconnu retombe sur la dictée brute. `modes` : les pastilles des
     /// réglages ; sans elles, les quatre modes de base.
@@ -266,6 +268,15 @@ public final class PanelModel {
     /// Un identifiant inconnu est ignoré ; le mode déjà choisi n'est pas un changement ; pendant l'entretien (`modesLocked`) aucun
     /// changement n'est pris, quel qu'en soit le chemin (pastille, raccourci d'un mode). Rend vrai seulement si le mode a changé
     /// (et `onModeChanged` a été appelé) : un refus n'a aucun effet de bord.
+    /// Un clic sur une pastille : elle est choisie si elle ne l'est pas (`select`), puis `onChipTapped` est appelé, même quand elle
+    /// l'était déjà. La pastille Entretien déjà choisie lance donc l'entretien au repos ; c'est la dictée qui décide si c'est le
+    /// moment. Pendant l'entretien (`modesLocked`), ou pour un identifiant inconnu, rien n'est appelé.
+    public func chipTapped(_ id: String) {
+        guard !modesLocked, modes.contains(where: { $0.id == id }) else { return }
+        select(id)
+        onChipTapped?(id)
+    }
+
     @discardableResult
     public func select(_ id: String) -> Bool {
         guard !modesLocked, id != selectedModeID, modes.contains(where: { $0.id == id }) else { return false }

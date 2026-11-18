@@ -116,16 +116,90 @@ import Testing
         #expect(controller.panelModel.concludeRequested, "« Conclure » se grise")
     }
 
-    @Test("règle 1 : un clic sur la pastille Entretien au repos lance l'entretien")
+    @Test("règle 1 : un clic sur la pastille Entretien au repos la choisit, l'enregistre et lance l'entretien, une seule fois")
     func thePillLaunchesTheInterview() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = try makeController(settings: settings(lastModeID: ModeChip.rawID))
         controller.togglePanelFromMenu()
         #expect(controller.panelModel.isOpen)
-        #expect(controller.panelModel.select(ModeChip.interviewID))
+        controller.panelModel.chipTapped(ModeChip.interviewID)
+        #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
+        #expect(store.load().settings.lastModeID == ModeChip.interviewID)
         #expect(controller.panelModel.interview?.phase == .preparing)
         _ = try await listening(controller)
+        await settle()
+        #expect(environment.prepareCount == 1, "un seul lancement : le changement de mode ne lance pas une seconde fois")
+        #expect(environment.drivers.count == 1)
+    }
+
+    @Test("I-2 : un clic sur la pastille Entretien déjà choisie, au repos, lance l'entretien")
+    func theAlreadyChosenInterviewPillLaunchesTheInterview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController(settings: settings(lastModeID: ModeChip.interviewID))
+        controller.togglePanelFromMenu()
+        #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
+        controller.panelModel.chipTapped(ModeChip.interviewID)
+        #expect(controller.panelModel.interview?.phase == .preparing)
+        _ = try await listening(controller)
+        await settle()
         #expect(environment.prepareCount == 1)
+        #expect(environment.drivers.count == 1)
+    }
+
+    @Test("I-2 : un clic sur une pastille de dictée déjà choisie ne lance rien")
+    func theAlreadyChosenDictationPillLaunchesNothing() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController(settings: settings(lastModeID: ModeChip.rawID))
+        controller.togglePanelFromMenu()
+        controller.panelModel.chipTapped(ModeChip.rawID)
+        await settle()
+        #expect(controller.panelModel.selectedModeID == ModeChip.rawID)
+        #expect(!controller.dictation.isBusy, "aucune dictée")
+        #expect(engines.sessions.isEmpty)
+        #expect(controller.panelModel.interview == nil, "aucun entretien")
+        #expect(environment.prepareCount == 0 && environment.drivers.isEmpty)
+    }
+
+    @Test("I-2 : la pastille Entretien ne lance rien pendant une dictée")
+    func theInterviewPillLaunchesNothingDuringADictation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController(settings: settings(lastModeID: ModeChip.rawID))
+        hotKeys.press()
+        #expect(controller.dictation.isBusy, "une dictée est en cours")
+        controller.panelModel.chipTapped(ModeChip.interviewID)
+        await settle()
+        #expect(controller.panelModel.interview == nil)
+        #expect(environment.prepareCount == 0 && environment.drivers.isEmpty)
+        escape.press()
+    }
+
+    @Test("I-2 : la pastille Entretien déjà choisie ne lance rien pendant la relecture d'un prompt")
+    func theInterviewPillLaunchesNothingDuringAReview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController()
+        hotKeys.press()
+        let driver = try await listening(controller)
+        driver.finish(.prompt("Le prompt.", DictationInterviewTests.exchange))
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.selectedModeID == ModeChip.interviewID)
+        controller.panelModel.chipTapped(ModeChip.interviewID)
+        await settle()
+        #expect(controller.panelModel.dictation.stage == .review, "la relecture reste")
+        #expect(controller.panelModel.interview == nil)
+        #expect(environment.drivers.count == 1, "aucun second entretien")
+    }
+
+    @Test("I-2 : la pastille Entretien déjà choisie ne fait rien pendant un entretien")
+    func theInterviewPillDoesNothingDuringAnInterview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = try makeController()
+        hotKeys.press()
+        let driver = try await listening(controller)
+        controller.panelModel.chipTapped(ModeChip.interviewID)
+        await settle()
+        #expect(controller.panelModel.interview?.phase == .listening)
+        #expect(environment.drivers.count == 1 && environment.prepareCount == 1)
+        #expect(driver.concludes == 0 && driver.cancels == 0, "ni conclusion ni annulation")
     }
 
     @Test("T9-1 : le raccourci d'un autre mode pendant l'entretien : mode affiché, dernier mode enregistré et avis inchangés")

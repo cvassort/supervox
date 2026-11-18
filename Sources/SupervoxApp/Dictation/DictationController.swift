@@ -416,8 +416,9 @@ public final class DictationController {
 
     // MARK: - Entretien
 
-    /// Un clic sur une pastille (après que le panneau l'a choisie et enregistrée). Au repos (aucune dictée, relecture ni entretien),
-    /// la pastille Entretien lance l'entretien, avec le raccourci global pour propriétaire ; toute autre pastille ne fait que choisir.
+    /// Un clic sur une pastille, qu'elle ait été choisie à l'instant (et enregistrée) ou qu'elle le soit déjà (`PanelModel.chipTapped`).
+    /// Au repos (aucune dictée, relecture ni entretien), la pastille Entretien lance l'entretien, avec le raccourci global pour
+    /// propriétaire ; toute autre pastille ne fait que choisir. `modeChanged: true` : un clic montre, il ne referme jamais le panneau.
     public func modeChosen(_ id: String) {
         guard !choosingByHotKey, run == nil, review == nil, interview?.isActive != true else { return }
         guard case .interview(let engine) = modes(id) else { return }

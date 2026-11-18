@@ -200,11 +200,10 @@ public final class AppController {
         relay.quit = { [weak self] in self?.quit() }
 
         panelModel.onOpen = { [permissions] in permissions.refresh() }
-        panelModel.onModeChanged = { [weak self] id in
-            self?.saveLastMode(id)
-            // Un clic sur la pastille Entretien au repos lance l'entretien (la dictée décide si c'est le moment).
-            self?.dictation.modeChosen(id)
-        }
+        panelModel.onModeChanged = { [weak self] id in self?.saveLastMode(id) }
+        // Un clic sur la pastille Entretien au repos lance l'entretien, même déjà choisie (la dictée décide si c'est le moment).
+        // Le changement de mode seul ne lance rien : un seul lancement par clic, et le raccourci d'un mode lance de son côté.
+        panelModel.onChipTapped = { [weak self] id in self?.dictation.modeChosen(id) }
 
         if let notice = loaded.notice { log.notice("réglages : \(notice, privacy: .public)") }
     }
