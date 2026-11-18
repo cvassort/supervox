@@ -76,14 +76,15 @@ import Testing
         #expect(abs(opened - closed) < 1, "ouvert : \(opened), fermé : \(closed)")
     }
 
-    /// Règle 4 (tâche 4) : le bouton « Choisir la voix… » est dans le volet (sous la ligne de vie privée, dans le bloc de notes du
-    /// bas) ; sans onglet Voix, il n'y est pas. Son bas est mesuré et donné tel quel : le bloc de notes est sous le pli de la
-    /// fenêtre fixe, le formulaire défile pour l'atteindre.
-    @Test func theChooseVoiceButtonIsInThePaneOnlyWithTheVoicesTab() throws {
+    /// D (tâche 4, tour de correction 1) : la ligne « Voix » (libellé, légende, bouton « Choisir la voix… ») est dans le PREMIER
+    /// groupe, sous le nombre de questions : à l'ouverture du volet (groupe avancé fermé), son bas est dans la hauteur visible
+    /// (fenêtre moins la marge de la barre d'onglets) et au-dessus de l'intitulé « Réglages avancés ». Mesuré sans fenêtre.
+    /// Sans onglet Voix, pas de ligne.
+    @Test func theVoiceRowIsVisibleWithoutScrollingOnlyWithTheVoicesTab() throws {
         func buttonBottom(_ chooseVoice: (@MainActor () -> Void)?) -> CGFloat? {
             var measured: CGFloat?
             let height = SettingsView.windowSize.height
-            let pane = InterviewPane(model: model(), chooseVoice: chooseVoice, onChooseVoiceBottom: { measured = $0 })
+            let pane = InterviewPane(model: model(), chooseVoice: chooseVoice, onVoiceRowBottom: { measured = $0 })
             let host = NSHostingView(rootView: pane.frame(width: SettingsView.windowSize.width, height: height))
             host.frame = NSRect(x: 0, y: 0, width: SettingsView.windowSize.width, height: height)
             for _ in 0..<300 {
@@ -93,10 +94,12 @@ import Testing
             return measured
         }
         let measuredBottom = buttonBottom({})
-        let bottom = try #require(measuredBottom, "le bouton n'est pas dans le volet")
+        let bottom = try #require(measuredBottom, "la ligne « Voix » n'est pas dans le volet")
         let heading = try headingBottom(model: model())
-        print("Entretien : bas du bouton « Choisir la voix… » à \(bottom) points du haut du volet ; intitulé avancé à \(heading) ; hauteur utile \(SettingsView.windowSize.height - Self.tabStripAllowance)")
-        #expect(bottom > heading, "le bouton est sous l'intitulé « Réglages avancés » (dans le bloc de notes du bas)")
+        let visible = SettingsView.windowSize.height - Self.tabStripAllowance
+        print("Entretien : bas de la ligne « Voix » à \(bottom) points du haut du volet ; intitulé avancé à \(heading) ; hauteur utile \(visible)")
+        #expect(bottom <= visible, "la ligne « Voix » se voit sans défiler (\(bottom) pour \(visible))")
+        #expect(bottom < heading, "la ligne « Voix » est au-dessus de l'intitulé « Réglages avancés » (premier groupe)")
         let withoutVoices = buttonBottom(nil)
         #expect(withoutVoices == nil, "sans onglet Voix, pas de bouton")
     }

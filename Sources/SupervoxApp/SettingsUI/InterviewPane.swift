@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Onglet Entretien. La fenêtre de réglages a une hauteur fixe (`SettingsView.windowSize`, avec sa barre d'onglets) : ce qui se règle passe avant ce qui
-/// se lit une fois. De haut en bas : une phrase d'introduction, le nombre de questions, le gabarit du prompt final (champ de hauteur
+/// se lit une fois. De haut en bas : une phrase d'introduction, le nombre de questions et, sous lui, la ligne « Voix » (avec
+/// l'onglet Voix), le gabarit du prompt final (champ de hauteur
 /// bornée), les réglages avancés de l'interruption (groupe repliable, replié), puis, en bas, un bloc de notes (le reste de l'en-tête,
 /// les modèles, la vie privée, la note de maintien). Toute la logique est dans `InterviewSettingsModel`, dont viennent aussi les
 /// bornes, les pas et les phrases : cette vue n'en recopie aucun.
@@ -14,22 +15,21 @@ public struct InterviewPane: View {
     /// Mesure : reçoit le bas de l'intitulé « Réglages avancés », en points depuis le haut du volet (défilement à zéro). Sert au test
     /// qui exige que l'intitulé tienne dans la hauteur de la fenêtre ; `nil` en production.
     private let onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)?
-    /// « Choisir la voix… » : mène à l'onglet Voix ; `nil` : pas de bouton (pas d'onglet Voix).
+    /// « Choisir la voix… » : mène à l'onglet Voix ; `nil` : pas de ligne « Voix » (pas d'onglet Voix).
     private let chooseVoice: (@MainActor () -> Void)?
-    /// Mesure : reçoit le bas du bouton « Choisir la voix… », en points depuis le haut du volet (défilement à zéro) ; `nil` en
-    /// production.
-    private let onChooseVoiceBottom: (@MainActor (CGFloat) -> Void)?
+    /// Mesure : reçoit le bas de la ligne « Voix », en points depuis le haut du volet (défilement à zéro) ; `nil` en production.
+    private let onVoiceRowBottom: (@MainActor (CGFloat) -> Void)?
 
     public init(
         model: InterviewSettingsModel, advancedExpanded: Bool = false, chooseVoice: (@MainActor () -> Void)? = nil,
         onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)? = nil,
-        onChooseVoiceBottom: (@MainActor (CGFloat) -> Void)? = nil
+        onVoiceRowBottom: (@MainActor (CGFloat) -> Void)? = nil
     ) {
         self.model = model
         _advancedExpanded = State(initialValue: advancedExpanded)
         self.chooseVoice = chooseVoice
         self.onAdvancedHeadingBottom = onAdvancedHeadingBottom
-        self.onChooseVoiceBottom = onChooseVoiceBottom
+        self.onVoiceRowBottom = onVoiceRowBottom
     }
 
     /// Hauteur du champ du gabarit, en points : environ cinq lignes du texte courant. Choix non mesuré, vu en image. Un gabarit plus
@@ -55,11 +55,25 @@ public struct InterviewPane: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             Form {
                 Section {
-                    stepperRow(InterviewSettingsModel.maxQuestionsTitle, value: "\(model.maxQuestions)") {
+                    // La note du nombre de questions est le sous-titre de sa ligne (pas une rangée à part) : la ligne « Voix » tient
+                    // alors sous elle sans pousser l'intitulé « Réglages avancés » hors de la hauteur visible (mesuré, tâche 4, D).
+                    stepperRow(
+                        InterviewSettingsModel.maxQuestionsTitle, caption: InterviewSettingsModel.maxQuestionsNote,
+                        value: "\(model.maxQuestions)"
+                    ) {
                         Stepper(
                             InterviewSettingsModel.maxQuestionsTitle, value: $model.maxQuestions, in: model.maxQuestionsRange)
                     }
-                    note(InterviewSettingsModel.maxQuestionsNote)
+                    // La voix de Supervox se choisit dans l'onglet Voix : une ligne du premier groupe, visible sans défiler.
+                    if let chooseVoice {
+                        LabeledContent(VoicesText.voiceRowTitle) {
+                            HStack(spacing: 12) {
+                                Text(VoicesText.voiceRowCaption).foregroundStyle(.secondary)
+                                Button(VoicesText.chooseVoiceTitle, action: chooseVoice)
+                            }
+                        }
+                        .background(voiceRowProbe)
+                    }
                 }
                 Section {
                     TextEditor(text: $model.template)
@@ -94,15 +108,6 @@ public struct InterviewPane: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    // Sous la ligne de vie privée (qui nomme la voix) : la voix se choisit dans l'onglet Voix.
-                    if let chooseVoice {
-                        HStack {
-                            Spacer()
-                            Button(VoicesText.chooseVoiceTitle, action: chooseVoice)
-                                .controlSize(.small)
-                                .background(chooseVoiceProbe)
-                        }
-                    }
                     if let holdNote = model.holdNote {
                         note(holdNote)
                     }
@@ -114,8 +119,8 @@ public struct InterviewPane: View {
         .onPreferenceChange(AdvancedHeadingBottomKey.self) { bottom in
             if let bottom { onAdvancedHeadingBottom?(bottom) }
         }
-        .onPreferenceChange(ChooseVoiceBottomKey.self) { bottom in
-            if let bottom { onChooseVoiceBottom?(bottom) }
+        .onPreferenceChange(VoiceRowBottomKey.self) { bottom in
+            if let bottom { onVoiceRowBottom?(bottom) }
         }
         // Un réglage ajouté ailleurs pendant que la fenêtre était gardée s'y voit à chaque affichage de l'onglet.
         .onAppear { model.reload() }
@@ -134,12 +139,12 @@ public struct InterviewPane: View {
         }
     }
 
-    /// Rapporte le bas du bouton « Choisir la voix… » (seulement quand quelqu'un mesure).
-    private var chooseVoiceProbe: some View {
+    /// Rapporte le bas de la ligne « Voix » (seulement quand quelqu'un mesure).
+    private var voiceRowProbe: some View {
         GeometryReader { geometry in
             Color.clear.preference(
-                key: ChooseVoiceBottomKey.self,
-                value: onChooseVoiceBottom == nil
+                key: VoiceRowBottomKey.self,
+                value: onVoiceRowBottom == nil
                     ? nil : geometry.frame(in: .named(Self.coordinateSpaceName)).maxY)
         }
     }
@@ -176,12 +181,18 @@ public struct InterviewPane: View {
 
     /// Une ligne : le titre à gauche, la valeur puis les flèches à droite. Le titre reste celui que VoiceOver lit pour le contrôle,
     /// et la valeur est son état.
-    private func stepperRow(_ title: String, value: String, @ViewBuilder stepper: () -> some View) -> some View {
-        LabeledContent(title) {
+    /// `caption` : une phrase sous le titre, dans la même ligne (sous-titre de `LabeledContent`).
+    private func stepperRow(
+        _ title: String, caption: String? = nil, value: String, @ViewBuilder stepper: () -> some View
+    ) -> some View {
+        LabeledContent {
             HStack(spacing: 8) {
                 Text(value).monospacedDigit().foregroundStyle(.secondary)
                 stepper().labelsHidden().accessibilityValue(value)
             }
+        } label: {
+            Text(title)
+            if let caption { Text(caption) }
         }
     }
 
@@ -199,8 +210,8 @@ private struct AdvancedHeadingBottomKey: PreferenceKey {
     static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
 }
 
-/// Le bas du bouton « Choisir la voix… » dans le repère du volet ; `nil` quand personne ne mesure.
-private struct ChooseVoiceBottomKey: PreferenceKey {
+/// Le bas de la ligne « Voix » dans le repère du volet ; `nil` quand personne ne mesure.
+private struct VoiceRowBottomKey: PreferenceKey {
     static let defaultValue: CGFloat? = nil
     static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
 }

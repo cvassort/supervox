@@ -165,6 +165,9 @@ public enum VoicesText {
     public static let confirmDeleteTitle = "Supprimer"
     /// Le bouton de l'onglet Entretien qui mène à l'onglet Voix.
     public static let chooseVoiceTitle = "Choisir la voix…"
+    /// La ligne de l'onglet Entretien qui mène à l'onglet Voix : son libellé et sa légende.
+    public static let voiceRowTitle = "Voix"
+    public static let voiceRowCaption = "La voix de Supervox se choisit dans l'onglet Voix."
     /// Ce que VoiceOver dit de la marque de la ligne en cours d'écoute.
     public static let listeningMark = "En écoute"
 
