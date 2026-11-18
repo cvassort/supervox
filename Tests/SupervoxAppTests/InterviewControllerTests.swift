@@ -536,6 +536,11 @@ import Testing
         #expect(rig.outcomes == [.cancelled])
         #expect(rig.panel.interview == nil)
         #expect(!rig.controller.isActive)
+        if stage == .starting, let starting = driver {
+            // La demande d'arrêt arrive pendant `start()` et le moteur l'ignore : seule la demande refaite après le démarrage peut
+            // rendre le micro. Sans cette attente, la première demande pourrait arriver après le retour de `start()`.
+            #expect(await until { starting.ignoredCancels == 1 }, "la première demande est arrivée avant le démarrage")
+        }
         gate.open()
         if let driver {
             // Annulé pendant `start()` : la première demande arrive avant le démarrage (ignorée par le moteur) ; le contrôleur la refait.
