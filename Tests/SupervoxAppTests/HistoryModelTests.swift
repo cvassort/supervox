@@ -1144,6 +1144,7 @@ import Testing
         #expect(HistoryModel.copied == "Copié.")
         #expect(HistoryModel.keepsNothingNote == "Avec «\u{00A0}Ne rien garder\u{00A0}», aucun entretien n'est gardé.")
         #expect(HistoryModel.retentionChangedNote == Self.changedNote)
+        #expect(HistoryModel.keptNothingAfterResetNote == Self.keptNothingNote)
         #expect(HistoryModel.copyFailure == "Le texte n'a pas pu être copié\u{00A0}: réessayez.")
         #expect(
             HistoryModel.writeFailure
@@ -1158,7 +1159,7 @@ import Testing
         // Contrôle générique : aucune ponctuation double précédée d'une espace ordinaire.
         let sentences = [
             HistoryModel.header, HistoryModel.empty, HistoryModel.copyFailure, HistoryModel.writeFailure,
-            HistoryModel.retentionSaveFailure, HistoryModel.keepsNothingNote, HistoryModel.retentionChangedNote,
+            HistoryModel.retentionSaveFailure, HistoryModel.keepsNothingNote, HistoryModel.retentionChangedNote, HistoryModel.keptNothingAfterResetNote,
         ]
         for sentence in sentences {
             for mark in [" :", " ;", " ?", " !", "« ", " »"] { #expect(!sentence.contains(mark), "« \(mark) » ordinaire dans : \(sentence)") }
