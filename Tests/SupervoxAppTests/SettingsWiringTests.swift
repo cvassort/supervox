@@ -44,11 +44,11 @@ import Testing
             rewriter: .unavailable, inserter: InsertionRig().inserter, interview: interview, announcer: RecordingAnnouncer())
     }
 
-    /// Attend la présentation de la fenêtre ; une annulation du test (limite de temps) l'annule aussi, au lieu de laisser le test
-    /// suspendu sur `.value`.
+    /// Attend la présentation de la fenêtre, BORNÉE (`bounded`) : une présentation qui ne finit pas fait échouer le test au lieu de
+    /// le suspendre sur `.value`.
     func finished(_ task: Task<Void, Never>?) async {
         guard let task else { return }
-        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        #expect(await bounded(task) != nil, "la présentation de la fenêtre ne finit pas")
     }
 
     /// Les modèles que la fenêtre de test a reçus, pour agir comme l'utilisateur.
@@ -56,12 +56,15 @@ import Testing
         var hotKey: HotKeySettingsModel?
         var modes: ModesModel?
         var interview: InterviewSettingsModel?
+        var history: HistoryModel?
         var content: SettingsContent?
     }
 
     /// La vraie composition de la fenêtre (`SettingsView.content`), avec disposition et moniteur de touches doubles.
-    func testProvider(_ built: Built) -> AppController.SettingsViewProvider {
+    /// `history` : l'onglet Historique de la fenêtre (absent par défaut, comme sans dossier d'historique).
+    func testProvider(_ built: Built, history: HistoryModel? = nil) -> AppController.SettingsViewProvider {
         { [monitor] controller in
+            built.history = history
             let hotKey = SettingsView.makeHotKeyModel(controller, keyMonitor: monitor)
             built.hotKey = hotKey
             let modes = SettingsView.makeModesModel(controller, keyMonitor: monitor)
@@ -73,7 +76,7 @@ import Testing
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
                 modes: modes,
-                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview,
+                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview, history: history,
                 navigation: controller.settingsNavigation)
             built.content = content
             return content
@@ -653,6 +656,45 @@ import Testing
         #expect(history.pendingRetention == 30)
         content.onLeave()
         #expect(history.pendingRetention == 30, "la sortie de la fenêtre ne défait pas la confirmation en attente")
+    }
+
+    /// I-1 : le branchement de l'onglet Historique dans la fenêtre, par le CONTRÔLEUR : `openSettings` présente la fenêtre, `onPresent`
+    /// relit le disque et efface le message d'avant (un entretien conclu pendant que la fenêtre était gardée apparaît), et la sortie
+    /// de la fenêtre (`didResignKey` : la feuille de confirmation la provoque) ne défait pas une confirmation en attente.
+    @Test func openingTheWindowReloadsTheHistoryClearsItsMessageAndLeavingKeepsTheConfirmation() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = NSApplication.shared
+        let previousMenu = NSApplication.shared.mainMenu
+        defer { NSApplication.shared.mainMenu = previousMenu }
+        let rig = try HistoryModelTests.Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([HistoryModelTests.record(1, daysAgo: 100)])
+        let history = rig.makeModel()
+        let built = Built()
+        let controller = makeController(settingsView: testProvider(built, history: history))
+
+        controller.openSettings(tab: .history)
+        await finished(controller.settingsPresentation)
+        #expect(built.history === history, "le fournisseur a bien reçu le modèle de l'historique")
+        #expect(try #require(built.content).tabs.last == .history)
+        #expect(history.records.count == 1, "la première présentation relit le disque")
+
+        rig.copyAccepts = false
+        history.copyPrompt()
+        #expect(history.message != nil)
+        try await rig.seed([HistoryModelTests.record(2, daysAgo: 1)])
+
+        controller.openSettings(tab: .history)  // la fenêtre gardée est présentée de nouveau
+        await finished(controller.settingsPresentation)
+
+        #expect(history.records.count == 2, "un entretien conclu entre-temps apparaît")
+        #expect(history.message == nil, "le message d'avant est effacé")
+        #expect(presenter.windows.count == 1, "la même fenêtre")
+
+        await history.requestRetention(30)
+        #expect(history.pendingRetention == 30)
+        presenter.windows.first?.leave()  // la feuille fait perdre la main à la fenêtre
+        #expect(history.pendingRetention == 30, "onLeave n'annule PAS la confirmation en attente")
     }
 
     /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien.
