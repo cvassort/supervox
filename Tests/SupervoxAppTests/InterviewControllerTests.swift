@@ -350,6 +350,26 @@ import Testing
         #expect(await until { driver.concludes == 1 })
     }
 
+    @Test("M-2 : conclure pendant le démarrage de la conversation : la demande part dès le démarrage fini, une seule fois")
+    func concludingWhileTheConversationStartsIsSentOnceStarted() async throws {
+        let rig = InterviewRig()
+        let gate = TestGate()
+        defer { gate.open() }
+        rig.environment.configure { $0.startGate = gate }
+        rig.start()
+        #expect(await until { rig.environment.drivers.first?.starts == 1 })
+        let driver = try #require(rig.environment.drivers.first)
+        rig.controller.conclude()
+        await settle()
+        #expect(driver.concludes == 0 && driver.ignoredConcludes == 0, "rien n'est envoyé avant le démarrage : le moteur l'ignorerait")
+
+        gate.open()
+        #expect(await until { driver.concludes == 1 }, "la demande n'est pas perdue")
+        rig.controller.conclude()
+        await settle()
+        #expect(driver.concludes == 1 && driver.ignoredConcludes == 0, "une seule conclusion")
+    }
+
     @Test("B : la conversation est tenue pendant l'entretien et libérée après sa fin")
     func theConversationLivesUntilItsEnd() async throws {
         let rig = InterviewRig()

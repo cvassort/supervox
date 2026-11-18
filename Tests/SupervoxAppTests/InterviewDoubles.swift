@@ -23,6 +23,7 @@ final class ConversationDriver: Sendable {
         var starts = 0
         var startReturned = false
         var concludes = 0
+        var ignoredConcludes = 0
         var cancels = 0
         var ignoredCancels = 0
         var finished = false
@@ -42,7 +43,10 @@ final class ConversationDriver: Sendable {
     }
 
     var starts: Int { state.withLock { $0.starts } }
+    /// Les conclusions prises en compte (après le retour de `start()`).
     var concludes: Int { state.withLock { $0.concludes } }
+    /// Les conclusions reçues avant le retour de `start()` : ignorées, comme le vrai moteur.
+    var ignoredConcludes: Int { state.withLock { $0.ignoredConcludes } }
     /// Les annulations prises en compte (après le retour de `start()`).
     var cancels: Int { state.withLock { $0.cancels } }
     /// Les annulations reçues avant le retour de `start()` : ignorées, comme le vrai moteur (`cancel()` sans effet avant `start()`).
@@ -84,8 +88,15 @@ final class ConversationDriver: Sendable {
     }
 
     fileprivate func concluded() {
-        state.withLock { $0.concludes += 1 }
-        journal.append("conclusion demandée")
+        let accepted = state.withLock { state -> Bool in
+            guard state.startReturned else {
+                state.ignoredConcludes += 1
+                return false
+            }
+            state.concludes += 1
+            return true
+        }
+        journal.append(accepted ? "conclusion demandée" : "conclusion ignorée")
     }
 
     fileprivate func cancelled() async {

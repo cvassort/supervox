@@ -163,9 +163,12 @@ public final class InterviewController: InterviewRunning {
         guard isLive(attempt) else { return }
         attempt.conversation = conversation
         let events = await conversation.start()
+        attempt.started = true
         // Annulé pendant `start()` : la demande d'arrêt partie de `cancel()` a pu arriver avant le démarrage (le moteur ignore un
         // `cancel()` reçu avant `start()`). Elle est refaite ici, le micro ouvert : il ne reste pas ouvert sans personne.
         if !isLive(attempt) { await conversation.cancel() }
+        // Conclure demandé pendant `start()` : gardé jusqu'ici (le moteur l'aurait ignoré), envoyé maintenant, une seule fois.
+        if isLive(attempt), attempt.concludePending { Task { await conversation.conclude() } }
         // Lu jusqu'à `.finished`, même après une annulation : la conversation reste tenue jusqu'à l'arrêt réel de son micro.
         for await event in events {
             if case .finished(let end) = event {
@@ -227,6 +230,11 @@ public final class InterviewController: InterviewRunning {
         guard let attempt = current, let conversation = attempt.conversation, !attempt.concludeSent else { return }
         attempt.concludeSent = true
         log.notice("entretien : conclusion demandée")
+        // Pendant `start()`, le moteur ignorerait la demande : elle part dès le démarrage fini (`run`), jamais perdue.
+        guard attempt.started else {
+            attempt.concludePending = true
+            return
+        }
         Task { await conversation.conclude() }
     }
 
@@ -418,6 +426,10 @@ private final class Attempt {
     /// La conversation, de sa fabrication à sa fin.
     var conversation: (any ConversationEngine)?
     var concludeSent = false
+    /// `start()` de la conversation a rendu la main : le moteur prend désormais une conclusion.
+    var started = false
+    /// Conclure a été demandé pendant `start()` : la demande part dès son retour.
+    var concludePending = false
     /// `.lastWordsLost` a été signalé : la phrase de la relecture le dit (la vue de l'entretien disparaît avec l'avis).
     var lastWordsLost = false
     /// La carte « Vous » montre un aperçu, pas une réponse finie.
