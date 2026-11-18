@@ -204,6 +204,14 @@ public final class HistoryModel {
         "La durée de conservation a changé hors de cet onglet : rien ne sera supprimé automatiquement tant que vous ne l'aurez pas choisie de nouveau ci-dessous."
     )
 
+    /// La ligne quand « Ne rien garder » a été confirmé dans l'onglet mais que les réglages disent autre chose (remis à zéro, fichier mis de
+    /// côté, édité à la main) : `save` n'écrit rien tant que le dossier garde ce choix, la personne doit le savoir.
+    public static let keptNothingAfterResetNote = InterviewText.fr(
+        "Vous aviez choisi « Ne rien garder » : rien n'est gardé tant que vous n'aurez pas choisi une durée de nouveau ci-dessous.")
+
+    /// Garde-t-on quelque chose ? La même réponse que `save` (`InterviewHistory.keepsNothing`).
+    public var keepsNothing: Bool { InterviewHistory.keepsNothing(settingsDays: retentionDays, confirmed: confirmedRetention) }
+
     /// La durée confirmée du dossier à la dernière lecture.
     public private(set) var confirmedRetention: InterviewHistory.ConfirmedRetention = .absent
 
@@ -213,12 +221,15 @@ public final class HistoryModel {
         switch confirmedRetention {
         case .absent: nil
         case .unreadable: Self.retentionChangedNote
+        case .days(0) where retentionDays != 0: Self.keptNothingAfterResetNote
         case .days(let days): days == retentionDays ? nil : Self.retentionChangedNote
         }
     }
 
     /// La ligne qui corrige l'en-tête quand la durée est « Ne rien garder » ; `nil` sinon.
-    public var headerNote: String? { retentionDays == 0 ? Self.keepsNothingNote : nil }
+    public var headerNote: String? {
+        keepsNothing && retentionNote != Self.keptNothingAfterResetNote ? Self.keepsNothingNote : nil
+    }
 
     /// Les fichiers que la liste ne montre pas (abîmés, d'une forme inconnue) : dits, pour qu'aucune donnée ne reste cachée.
     public var unreadableCount: Int { max(0, fileCount - records.count) }

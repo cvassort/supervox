@@ -714,6 +714,34 @@ import Testing
 
     // Les parcours du dossier : le fichier de durée n'est JAMAIS compté ni supprimé comme un entretien.
 
+    @Test("m-9 : « Ne rien garder » confirmé reste respecté après une remise à zéro des réglages : rien n'est écrit, même avec 30 jours dans les réglages")
+    func aConfirmedKeepNothingIsHonouredAfterASettingsReset() async throws {
+        defer { cleanUp() }
+        let history = makeHistory()
+        try await history.confirmRetention(0)
+        retention.days = 30  // les réglages remis à zéro : 30 jours
+
+        try await history.save(Self.record(1))
+
+        #expect(try names().filter { $0.hasSuffix(".json") }.isEmpty, "aucun entretien écrit")
+        #expect(await history.list().isEmpty)
+    }
+
+    @Test("m-9 : la fonction unique « garde-t-on quelque chose ? » : vraie si les réglages OU la durée confirmée valent 0, jamais sur une durée illisible ou absente")
+    func theSingleKeepsNothingRule() {
+        typealias C = InterviewHistory.ConfirmedRetention
+        let table: [(settings: Int, confirmed: C, keepsNothing: Bool)] = [
+            (0, .absent, true), (0, .days(0), true), (30, .days(0), true), (0, .days(30), true), (0, .unreadable, true),
+            (30, .absent, false), (30, .days(30), false), (30, .days(365), false), (30, .unreadable, false),
+            (-5, .absent, false),  // négatif : le défaut, jamais 0
+        ]
+        for row in table {
+            #expect(
+                InterviewHistory.keepsNothing(settingsDays: row.settings, confirmed: row.confirmed) == row.keepsNothing,
+                "\(row.settings) \(row.confirmed)")
+        }
+    }
+
     @Test("C-1 : le fichier de durée n'est compté nulle part : ni `fileCount`, ni `snapshot`, ni les « illisibles », ni `list`")
     func theConfirmationFileIsNeverCounted() async throws {
         defer { cleanUp() }

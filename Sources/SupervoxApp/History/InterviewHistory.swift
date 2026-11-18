@@ -78,7 +78,9 @@ public actor InterviewHistory: InterviewHistoryStoring {
     /// Enregistre un entretien. Ne fait rien (pas même créer le dossier) si la durée vaut 0. Lève si la racine est refusée, si un
     /// fichier d'une version plus récente porte déjà ce nom, ou si le disque refuse.
     public func save(_ entry: InterviewRecord) async throws {
-        guard Self.normalized(await retentionDays()) > 0 else { return }
+        // Rien n'est écrit, pas même le dossier, quand la durée des réglages OU la durée confirmée du dossier vaut 0.
+        let settingsDays = await retentionDays()
+        guard !Self.keepsNothing(settingsDays: settingsDays, confirmed: readConfirmedRetention()) else { return }
         try prepareRoot()
         let data: Data
         do { data = try Self.encode(entry) } catch { throw Failure.writeFailed }
@@ -113,6 +115,14 @@ public actor InterviewHistory: InterviewHistoryStoring {
     }
 
     // MARK: - La durée confirmée
+
+    /// La SEULE réponse à « garde-t-on quelque chose ? » : non si la durée des réglages vaut 0 OU si la durée confirmée du dossier vaut
+    /// 0 (« Ne rien garder » choisi dans l'onglet reste respecté après une remise à zéro des réglages). Une durée confirmée absente ou
+    /// illisible ne dit rien. `save`, l'onglet (`HistoryModel.keepsNothing`, ses lignes) et l'avis de relecture en dépendent : ils ne
+    /// peuvent pas se contredire.
+    public static func keepsNothing(settingsDays: Int, confirmed: ConfirmedRetention) -> Bool {
+        normalized(settingsDays) == 0 || confirmed == .days(0)
+    }
 
     /// La durée de conservation que la personne a CONFIRMÉE depuis l'onglet Historique, gardée dans le dossier lui-même
     /// (`conservation`, `{"version": 1, "retentionDays": N}`, 0600, écriture atomique). Les réglages peuvent être remis à zéro, mis de

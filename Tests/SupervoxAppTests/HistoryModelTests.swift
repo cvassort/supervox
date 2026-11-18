@@ -1066,6 +1066,53 @@ import Testing
         #expect(model.messageIsFailure)
     }
 
+    // MARK: - m-9 : « Ne rien garder » confirmé
+
+    static let keptNothingNote =
+        "Vous aviez choisi «\u{00A0}Ne rien garder\u{00A0}»\u{00A0}: rien n'est gardé tant que vous n'aurez pas choisi une durée de nouveau ci-dessous."
+
+    @Test("m-9 : confirmé « Ne rien garder » puis réglages remis à 30 : la ligne de l'onglet le dit (phrase fixe), l'en-tête ne se répète pas")
+    func aConfirmedKeepNothingIsSaidAfterASettingsReset() async throws {
+        let rig = try Rig(retention: 30)
+        defer { rig.cleanUp() }
+        try await rig.history.confirmRetention(0)
+        let model = rig.makeModel()
+        await model.reload()
+
+        #expect(model.keepsNothing)
+        #expect(model.retentionNote == Self.keptNothingNote)
+        #expect(HistoryModel.keptNothingAfterResetNote == Self.keptNothingNote)
+        #expect(model.headerNote == nil, "la ligne dit déjà que rien n'est gardé")
+    }
+
+    @Test("m-9 : tous les lecteurs de « garde-t-on quelque chose ? » donnent la même réponse : `save`, `keepsNothing`, les lignes de l'onglet")
+    func everyReaderOfKeepsNothingAgrees() async throws {
+        typealias C = InterviewHistory.ConfirmedRetention
+        let table: [(settings: Int, confirmed: C?)] = [
+            (0, nil), (0, .days(0)), (30, .days(0)), (0, .days(30)), (30, nil), (30, .days(30)), (30, .days(365)), (30, .unreadable),
+        ]
+        for row in table {
+            let rig = try Rig(retention: row.settings)
+            defer { rig.cleanUp() }
+            switch row.confirmed {
+            case nil: break
+            case .days(let days)?: try await rig.history.confirmRetention(days)
+            case .unreadable?:
+                try FileManager.default.createDirectory(at: rig.root, withIntermediateDirectories: true)
+                try Data("pas du json".utf8).write(to: rig.root.appendingPathComponent("conservation"))
+            case .absent?: break
+            }
+            try await rig.history.save(Self.record(1))
+            let written = ((try? rig.names()) ?? []).count == 1  // le dossier peut ne pas exister : rien n'a été écrit
+            let model = rig.makeModel()
+            await model.reload()
+
+            #expect(model.keepsNothing == !written, "\(row) : keepsNothing et l'écriture d'un entretien")
+            let said = model.headerNote != nil || model.retentionNote == Self.keptNothingNote
+            #expect(said == model.keepsNothing, "\(row) : les lignes de l'onglet disent ce que `save` fait")
+        }
+    }
+
     // MARK: - Relecture
 
     @Test("reload relit les réglages et le disque : une durée changée ailleurs et un entretien ajouté ailleurs s'y voient")

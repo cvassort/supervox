@@ -389,6 +389,24 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: realRoot.path), "rien n'est écrit, pas même le dossier")
     }
 
+    @Test("m-9 : « Ne rien garder » confirmé dans le dossier, réglages remis à 30 : rien n'est écrit, et ce n'est pas un échec (aucun avertissement)")
+    func aConfirmedKeepNothingIsHonouredByTheInterview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await InterviewHistory(root: realRoot, retentionDays: { 30 }).confirmRetention(0)
+        let controller = try makeController(historyRoot: realRoot)  // réglages à 30 jours (défaut)
+        #expect(controller.settings.history.retentionDays == 30)
+        hotKeys.press()
+        let driver = try await listening(controller)
+
+        driver.finish(.prompt("Le prompt d'exemple.", DictationInterviewTests.exchange))
+
+        #expect(await until { controller.panelModel.dictation.stage == .review })
+        #expect(controller.panelModel.dictation.notice == InterviewText.promptReview)
+        #expect(await controller.interview.drained())
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: realRoot.path)) ?? []
+        #expect(names.filter { $0.hasSuffix(".json") }.isEmpty, "aucun entretien écrit")
+    }
+
     @Test("règle 5 : un entretien dont la rédaction a échoué est gardé sans prompt, avec sa conversation")
     func aFailedConclusionIsKeptWithoutAPromptInTheRealHistory() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }
