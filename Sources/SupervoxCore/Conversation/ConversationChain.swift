@@ -438,7 +438,8 @@ public actor ConversationChain: ConversationEngine {
     /// remplit pas encore un bloc. Jamais pendant un passage ouvert (le détecteur perdrait la voix en cours, et le passage son
     /// début) : l'appelant le vérifie.
     ///
-    /// Ce reste (moins d'un bloc : jusqu'à 4 095 échantillons, 0,256 s en production ; code lu, revue finale) n'a jamais été vu du
+    /// Ce reste (moins d'un bloc : jusqu'à `blockSize − 1` échantillons, soit 0,256 s pour des blocs de 4 096 ; taille déduite par
+    /// la revue finale des commentaires et de l'arithmétique de `effectiveSilence`, non lue dans la bibliothèque) n'a jamais été vu du
     /// détecteur : c'est peut-être le début d'une reprise de parole. Il est reporté au début de la ligne neuve **et** de la porte,
     /// pour que leurs indices désignent toujours le même échantillon (revue finale, I-A).
     ///
