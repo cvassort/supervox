@@ -138,6 +138,20 @@ import Testing
         #expect(try names() == [InterviewHistory.fileName(for: record)], "seul le dossier posé par le test reste")
     }
 
+    @Test("règle 1 : des droits qui ne peuvent pas être posés (dossier en 0755 rendu immuable) : save lève et n'écrit rien")
+    func permissionsThatCannotBeSetRefuseTheSave() async throws {
+        defer { cleanUp() }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        #expect(chmod(root.path, 0o755) == 0)
+        #expect(chflags(root.path, UInt32(UF_IMMUTABLE)) == 0)
+
+        await #expect(throws: InterviewHistory.Failure.rootRefused) { try await makeHistory().save(Self.record(1)) }
+
+        #expect(chflags(root.path, 0) == 0)
+        #expect(try names().isEmpty)
+        #expect(try permissions(root) == 0o755, "le dossier n'a pas été touché")
+    }
+
     @Test("règle 1 : enregistrer deux fois le même entretien laisse un seul fichier complet et lisible")
     func savingTwiceKeepsOneCompleteFile() async throws {
         defer { cleanUp() }
