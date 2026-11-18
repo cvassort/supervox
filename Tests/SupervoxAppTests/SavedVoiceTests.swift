@@ -124,6 +124,54 @@ import Testing
         #expect(twice.voices.map(\.id) == [Self.firstID])
     }
 
+    /// Point 5 du tour de correction : une `voice` dont une clé CONNUE a une forme que `VoiceChoice` ne sait pas lire. Lue tolérante,
+    /// elle prendrait le défaut de ce champ et le perdrait à la réécriture : l'entrée est donc illisible, gardée telle quelle.
+    static let voicesWithAKnownFieldOfAnotherForm: [String] = [
+        #"{"providerID":"pas-un-uuid","model":"modele-voix-exemple","identifier":"voix-exemple"}"#,
+        #"{"providerID":7,"model":"modele-voix-exemple","identifier":"voix-exemple"}"#,
+        #"{"model":3,"identifier":"voix-exemple"}"#,
+        #"{"identifier":true}"#,
+        #"{"identifier":"voix.exemple.a","language":["fr"]}"#,
+        #"{"identifier":"voix.exemple.a","gender":7}"#,
+        #"{"identifier":"voix.exemple.a","extra":"cle-exemple"}"#,
+        #"{"identifier":"voix.exemple.a","extra":{"cle-exemple":1}}"#,
+        #"{"identifier":"voix.exemple.a","extra":{"cle-exemple":null}}"#,
+    ]
+
+    @Test(arguments: voicesWithAKnownFieldOfAnotherForm)
+    func anEntryWhoseVoiceHasAKnownFieldOfAnotherFormIsKept(voice: String) throws {
+        let entry = #"{"id":"00000000-0000-0000-0000-00000000C0A9","name":"Voix d'exemple A","voice":"# + voice + "}"
+        let settings = try Self.decode(#"{"version":3,"voices":["# + entry + "," + Self.firstEntry + "]}")
+        #expect(settings.voices.map(\.id) == [Self.firstID])
+        #expect(try Self.array(try Self.written(settings)["voices"]) == [try Self.value(Self.firstEntry), try Self.value(entry)])
+
+        // La voix en vigueur garde sa lecture tolérante (règle de la version 3) : le champ fautif y prend son défaut.
+        let current = try Self.decode(#"{"version":3,"voice":"# + voice + "}")
+        #expect(current.voice == (try JSONDecoder().decode(VoiceChoice.self, from: Data(voice.utf8))), "lecture tolérante inchangée")
+    }
+
+    /// Témoin : `null` dans un champ facultatif vaut absence, que `VoiceChoice` sait lire ; l'entrée est lisible.
+    @Test func nullKnownFieldsInAVoiceStillRead() throws {
+        let entry = #"{"id":"00000000-0000-0000-0000-00000000C0A1","name":"Voix d'exemple A","voice":{"providerID":null,"model":null,"identifier":"voix.exemple.a","gender":null,"language":"fr-FR","extra":{}}}"#
+        let settings = try Self.decode(#"{"version":3,"voices":["# + entry + "]}")
+        #expect(settings.voices.map(\.id) == [Self.firstID])
+        #expect(settings.voices.first?.voice.identifier == "voix.exemple.a")
+    }
+
+    /// Point 6 du tour de correction : une entrée dont l'`id` est déjà porté par une entrée précédente est gardée comme une entrée
+    /// illisible (telle quelle, réécrite à la suite) ; `voices` ne contient jamais deux fois le même `id`.
+    @Test func aDuplicateIdIsKeptAsAnUnreadableEntry() throws {
+        let duplicate = #"{"id":"00000000-0000-0000-0000-00000000C0A1","name":"Voix d'exemple A (doublon)","voice":{"identifier":"voix-exemple","language":"fr-CA","extra":{}}}"#
+        let json = #"{"version":3,"voices":["# + Self.firstEntry + "," + duplicate + "," + Self.secondEntry + "]}"
+        let settings = try Self.decode(json)
+        #expect(settings.voices.map(\.id) == [Self.firstID, Self.secondID])
+        #expect(settings.voices.first?.name == "Voix d'exemple A", "la première entrée de cet id est celle qui est lue")
+        #expect(Set(settings.voices.map(\.id)).count == settings.voices.count)
+        #expect(
+            try Self.array(try Self.written(settings)["voices"])
+                == [try Self.value(Self.firstEntry), try Self.value(Self.secondEntry), try Self.value(duplicate)])
+    }
+
     /// Décision 1 des amendements : un `voices` qui n'est pas un tableau se lit sans voix, sans faire perdre le reste du fichier ; la
     /// valeur fautive n'est pas gardée (réécrite `[]`, puisque la clé était présente).
     @Test(arguments: [#""texte""#, "42", #"{"id":"00000000-0000-0000-0000-00000000C0A1"}"#, "null"])

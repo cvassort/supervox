@@ -100,8 +100,9 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 ///   retombe sur son défaut, les autres champs restant lus ; réécrit, il l'est avec ce défaut. Un bloc `interview`, `voice` ou
 ///   `history` qui n'est pas un objet prend tous ses défauts, sans que le reste du fichier soit mis de côté ;
 ///   une valeur hors borne de `InterviewSettings` ou de `HistorySettings` est ramenée dans sa borne à la lecture ;
-/// - `voices` (les voix enregistrées, sans changement de version) : une entrée illisible est gardée telle quelle et réécrite après
-///   les entrées lisibles ; un `voices` qui n'est pas un tableau se lit vide et se réécrit `[]` ; la clé n'est écrite que si la liste
+/// - `voices` (les voix enregistrées, sans changement de version) : une entrée illisible (champ obligatoire absent ou d'une autre
+///   forme, champ connu de sa voix d'une autre forme, `id` déjà porté par une entrée précédente) est gardée telle quelle et réécrite
+///   après les entrées lisibles ; un `voices` qui n'est pas un tableau se lit vide et se réécrit `[]` ; la clé n'est écrite que si la liste
 ///   n'est pas vide ou si elle était dans le fichier lu (un fichier de l'étape 6 relu puis réécrit reste identique).
 ///
 /// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, `TranscriptionEngine`, ou toute énumération
@@ -166,18 +167,15 @@ public struct AppSettings: Codable, Equatable, Sendable {
         static func == (lhs: KeptVoices, rhs: KeptVoices) -> Bool { lhs.unreadable == rhs.unreadable }
     }
 
-    /// Une entrée de `voices` : une `SavedVoice`, ou, si elle ne se lit pas, sa valeur JSON telle quelle. Les deux lectures se font
-    /// sur le même décodeur de l'entrée : la position dans le tableau n'en dépend pas.
-    private enum VoiceEntry: Decodable {
-        case readable(SavedVoice)
-        case unreadable(JSONValue)
+    /// Une entrée de `voices` : sa valeur JSON telle quelle, et la `SavedVoice` qu'elle donne si elle se lit. Les deux lectures se
+    /// font sur le même décodeur de l'entrée : la position dans le tableau n'en dépend pas.
+    private struct VoiceEntry: Decodable {
+        let raw: JSONValue
+        let voice: SavedVoice?
 
         init(from decoder: any Decoder) throws {
-            if let voice = try? SavedVoice(from: decoder) {
-                self = .readable(voice)
-            } else {
-                self = .unreadable(try JSONValue(from: decoder))
-            }
+            raw = try JSONValue(from: decoder)
+            voice = try? SavedVoice(from: decoder)
         }
     }
 
@@ -245,10 +243,14 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let entries = (try? container.decodeIfPresent([VoiceEntry].self, forKey: key(.voices))) ?? nil
         voices = []
         keptVoices.keyWasRead = container.contains(key(.voices))
+        // Une entrée dont l'`id` est déjà porté par une entrée précédente est gardée comme une illisible : `voices` ne contient
+        // jamais deux fois le même `id` (une ligne d'onglet s'adresse par son `id`).
+        var seen: Set<UUID> = []
         for entry in entries ?? [] {
-            switch entry {
-            case .readable(let voice): voices.append(voice)
-            case .unreadable(let value): keptVoices.unreadable.append(value)
+            if let voice = entry.voice, seen.insert(voice.id).inserted {
+                voices.append(voice)
+            } else {
+                keptVoices.unreadable.append(entry.raw)
             }
         }
         if let modes = try container.decodeIfPresent([Mode].self, forKey: key(.modes)) {
