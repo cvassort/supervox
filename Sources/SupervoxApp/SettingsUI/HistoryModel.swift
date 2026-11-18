@@ -261,6 +261,8 @@ public final class HistoryModel {
     /// ne demande rien. Deux demandes de suite visent le même entretien, et une suppression faite ne laisse aucune sélection : un
     /// double clic ne peut jamais supprimer deux entretiens.
     public func requestDeleteSelected() {
+        // Une seule confirmation à la fois : celle qui attend déjà garde la main (sa phrase ne change pas sous le pointeur).
+        guard confirmation == nil || confirmation == .deleteSelected else { return }
         guard let id = selection, records.contains(where: { $0.id == id }) else { return }
         pendingDelete = id
     }
@@ -280,21 +282,25 @@ public final class HistoryModel {
         guard let id = pendingDelete else { return }
         pendingDelete = nil
         var deleted = false
+        var failed = false
         do {
             try await history.delete(id)
             clearMessage()
             deleted = true
         } catch {
-            say(Self.writeFailure, failure: true)
+            failed = true
         }
         await reload()
         if deleted { selection = nil }
+        if failed { say(Self.writeFailure, failure: true) }
     }
 
     /// « Tout supprimer… » : relit le disque pour compter ce qui sera réellement supprimé, puis attend la confirmation. Sans aucun
     /// fichier, ne demande rien.
     public func requestDeleteAll() async {
         await reload()
+        // Une confirmation arrivée pendant la relecture garde la main.
+        guard confirmation == nil || confirmation == .deleteAll else { return }
         pendingDeleteAll = fileCount > 0
     }
 
@@ -314,13 +320,16 @@ public final class HistoryModel {
     public func deleteAll() async {
         guard pendingDeleteAll else { return }
         pendingDeleteAll = false
+        var failed = false
         do {
             try await history.deleteAll()
             clearMessage()
         } catch {
-            say(Self.writeFailure, failure: true)
+            failed = true
         }
         await reload()
+        // Après la relecture : un échec partiel fait partir l'entretien choisi, la sélection change, et ce changement efface le message.
+        if failed { say(Self.writeFailure, failure: true) }
     }
 
     // MARK: - Une seule confirmation à la fois
@@ -418,6 +427,8 @@ public final class HistoryModel {
         let wanted = HistorySettings(retentionDays: days).normalized.retentionDays
         pendingRetention = nil
         await reload()
+        // Une autre confirmation (un entretien, tout) arrivée pendant la relecture garde la main : une seule feuille à la fois.
+        guard confirmation == nil else { return nil }
         // La même durée que celle des réglages ET déjà confirmée : rien à faire. Confirmée autrement (ou jamais) : le choix passe par
         // le chemin habituel, qui écrit la durée confirmée.
         guard wanted != retentionDays || confirmedRetention != .days(wanted) else { return nil }

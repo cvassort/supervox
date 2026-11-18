@@ -915,6 +915,84 @@ import Testing
         #expect(await rig.history.confirmedRetention() == .days(365), "ni confirmé avant")
     }
 
+    // MARK: - m2 : une seule confirmation en attente à la fois
+
+    @Test("m2 : une suppression demandée pendant la relecture d'une durée : une seule confirmation, celle qui est arrivée la première")
+    func aDeletionRequestedDuringARetentionReloadWins() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 100)])
+        let model = rig.makeModel()
+        await model.reload()
+
+        // La durée est demandée ; avant que sa relecture ne rende la main, la personne clique sur « Supprimer ».
+        let retention = Task { await model.requestRetention(30) }
+        model.requestDeleteSelected()
+        #expect(model.confirmation == .deleteSelected)
+        _ = await bounded(retention)
+
+        #expect(model.confirmation == .deleteSelected, "la phrase ne change pas sous le pointeur")
+        #expect(model.pendingRetention == nil)
+        #expect(model.pendingDelete != nil)
+    }
+
+    @Test("m2 : tant qu'une confirmation attend, une autre demande (durée, un entretien, tout) ne s'ajoute pas")
+    func noSecondConfirmationIsOpenedWhileOneWaits() async throws {
+        let rig = try Rig(retention: 365)
+        defer { rig.cleanUp() }
+        try await rig.seed([Self.record(1, daysAgo: 1), Self.record(2, daysAgo: 100)])
+        let model = rig.makeModel()
+        await model.reload()
+
+        await model.requestRetention(30)
+        #expect(model.confirmation == .retention)
+        model.requestDeleteSelected()
+        await model.requestDeleteAll()
+        #expect(model.confirmation == .retention)
+        #expect(model.pendingDelete == nil && !model.pendingDeleteAll, "la durée garde la main")
+        model.cancelConfirmation()
+
+        model.requestDeleteSelected()
+        await model.requestRetention(30)
+        await model.requestDeleteAll()
+        #expect(model.confirmation == .deleteSelected)
+        #expect(model.pendingRetention == nil && !model.pendingDeleteAll)
+        model.cancelConfirmation()
+
+        await model.requestDeleteAll()
+        await model.requestRetention(30)
+        model.requestDeleteSelected()
+        #expect(model.confirmation == .deleteAll)
+        #expect(model.pendingRetention == nil && model.pendingDelete == nil)
+    }
+
+    // MARK: - m3 : un échec partiel de « Tout supprimer » garde son message
+
+    @Test("m3 : « Tout supprimer » dont un fichier résiste (le choisi part, un autre reste) : la phrase d'échec n'est pas effacée par la relecture")
+    func aPartialDeleteAllKeepsItsFailureMessage() async throws {
+        let rig = try Rig()
+        let stubborn = Self.record(2, daysAgo: 2)
+        defer {
+            chflags(rig.root.appendingPathComponent(InterviewHistory.fileName(for: stubborn)).path, 0)
+            rig.cleanUp()
+        }
+        try await rig.seed([Self.record(1, daysAgo: 1), stubborn])
+        let model = rig.makeModel()
+        await model.reload()
+        #expect(model.selection == InterviewHistoryTests.id(1))
+        // Fichier immuable (indicateur utilisateur, dossier temporaire du test) : `unlink` le refuse, les autres partent.
+        let stubbornFile = rig.root.appendingPathComponent(InterviewHistory.fileName(for: stubborn)).path
+        #expect(chflags(stubbornFile, UInt32(UF_IMMUTABLE)) == 0)
+
+        await model.requestDeleteAll()
+        await model.deleteAll()
+
+        #expect(try rig.names() == [InterviewHistory.fileName(for: stubborn)], "le choisi est parti, l'autre résiste")
+        #expect(model.selection == nil, "la sélection a changé : c'est ce qui effaçait le message")
+        #expect(model.message == HistoryModel.writeFailure, "la phrase est posée APRÈS la relecture")
+        #expect(model.messageIsFailure)
+    }
+
     // MARK: - Relecture
 
     @Test("reload relit les réglages et le disque : une durée changée ailleurs et un entretien ajouté ailleurs s'y voient")
