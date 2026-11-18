@@ -326,6 +326,7 @@ struct SaveFailure: Error, LocalizedError {
         let shown = ProvidersModel.message(for: try #require(error))
         #expect(shown.contains(SettingsError.otherSaveFailure))
         #expect(!shown.contains(RawTextError.text))
+        #expect(shown.contains("La clé saisie reste dans le trousseau."), "le fait de la clé gardée : \(shown)")
         #expect(shown.components(separatedBy: "enregistrés").count == 2, "la phrase ne se répète pas : \(shown)")
     }
 
@@ -345,6 +346,7 @@ struct SaveFailure: Error, LocalizedError {
         let shown = ProvidersModel.message(for: try #require(error))
         #expect(shown.contains(SettingsError.otherSaveFailure))
         #expect(!shown.contains(RawTextError.text))
+        #expect(shown.contains("L'ancienne clé a été retirée (nouvel hôte)."), "le fait de la clé retirée : \(shown)")
         #expect(shown.components(separatedBy: "enregistrés").count == 2, "la phrase ne se répète pas : \(shown)")
     }
 
@@ -726,7 +728,7 @@ struct SaveFailure: Error, LocalizedError {
     @Test func leftoverKeyMessagesDoNotPromiseALaterRemoval() {
         let messages = [
             ProvidersError.keyNotDeleted(account: "COMPTE-1", cause: "Accès refusé.").localizedDescription,
-            ProvidersError.notSavedKeyLeft(account: "COMPTE-1", cause: "disque plein").localizedDescription,
+            ProvidersError.notSavedKeyLeft(account: "COMPTE-1", cause: SettingsError.otherSaveFailure).localizedDescription,
         ]
         for message in messages {
             #expect(!message.contains("sera retirée au prochain enregistrement"))

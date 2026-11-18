@@ -331,7 +331,7 @@ import Testing
         #expect(offending.isEmpty, "\(offending)")
     }
 
-    // MARK: - Aucun texte d'erreur du système montré ni journalisé (tâche 5)
+    // MARK: - Aucun texte d'erreur du système montré ni journalisé
 
     /// L'accès au texte d'erreur du système, sous toutes ses écritures : `error.localizedDescription`, `(error as NSError).…`,
     /// `\(error.localizedDescription, privacy: .public)`, avec espaces ou retour à la ligne devant le point, par chemin de clé
@@ -341,18 +341,19 @@ import Testing
     /// `localizedDescriptions`) n'est pas cet accès.
     static let systemErrorText = #"(?:^|[^A-Za-z0-9_])localizedDescription(?![A-Za-z0-9_])"#
 
-    /// Les deux SEULS endroits qui gardent `localizedDescription` : le texte brut d'une panne de transport (`URLError`, …) n'est
-    /// jamais montré tel quel, il est masqué (`errorBody`, `masked` : adresse, clé retirées) avant d'aller plus loin dans
-    /// `EndpointError.transport`, que les écrans ne montrent que par une phrase fixe (`ProvidersModel.message(for:)`).
-    static let endpointTransportSites: Set<String> = [
-        "SupervoxCore/Endpoint/EndpointRequest.swift", "SupervoxCore/Endpoint/ModelListing.swift",
+    /// Les deux SEULS endroits qui gardent `localizedDescription`, UNE fois chacun : le texte brut d'une panne de transport
+    /// (`URLError`, …) n'est jamais montré tel quel, il est masqué (`errorBody`, `masked` : adresse, clé retirées) avant d'aller
+    /// plus loin dans `EndpointError.transport`, que les écrans ne montrent que par une phrase fixe (`ProvidersModel.message(for:)`).
+    static let endpointTransportSites: [String: Int] = [
+        "SupervoxCore/Endpoint/EndpointRequest.swift": 1, "SupervoxCore/Endpoint/ModelListing.swift": 1,
     ]
 
     /// Ni l'application (`Sources/SupervoxApp`) ni l'outil de rendu (`Sources/SupervoxSnapshots`) ne lisent le texte d'erreur du
     /// système : ni pour l'écran, ni pour le journal (un journal y met le TYPE de l'erreur). Hors de ces deux dossiers, seuls les
     /// deux sites de transport du cœur le gardent ; une panne de plus ailleurs (cœur, banc d'essai) doit être décidée ici, nommée
-    /// avec sa raison. Le balayage voit les fichiers qui montrent les avis, et les deux sites de transport contiennent bien le
-    /// motif (sans quoi un motif cassé ne verrait rien nulle part).
+    /// avec sa raison. Le balayage voit les fichiers qui montrent les avis, et les deux sites de transport contiennent le motif
+    /// exactement le nombre de fois nommé (sans quoi un motif cassé ne verrait rien nulle part, et une occurrence de plus dans
+    /// l'un des deux fichiers passerait sans être décidée).
     @Test func theRawSystemErrorTextIsOnlyKeptByTheTwoEndpointTransportSites() throws {
         let pattern = try Regex(Self.systemErrorText)
         let all = try Self.sources(under: "Sources")
@@ -362,10 +363,51 @@ import Testing
         ] {
             #expect(all.contains { $0.place == seen }, "le balayage doit voir \(seen)")
         }
-        let holding = Set(all.filter { $0.code.contains(pattern) }.map(\.place))
-        #expect(Self.endpointTransportSites.isSubset(of: holding), "les sites de transport nommés gardent bien le motif : \(holding)")
-        let offending = holding.subtracting(Self.endpointTransportSites).sorted()
+        var counts: [String: Int] = [:]
+        for source in all {
+            let count = source.code.matches(of: pattern).count
+            if count > 0 { counts[source.place] = count }
+        }
+        #expect(counts == Self.endpointTransportSites, "occurrences par fichier : \(counts)")
+    }
+
+    /// Une ligne de journal (`log.` suivi d'un niveau) n'interpole jamais une erreur entière (`\(error)`, `\(error, privacy: …)`,
+    /// `\(error.…)`, `String(describing: error)`, `String(reflecting: error)`) : le texte d'une erreur du système irait au journal.
+    /// Le TYPE de l'erreur seul passe (`String(reflecting: type(of: error))`). `error` ne doit pas être suivi d'une lettre : un
+    /// `\(errorCount)` est autre chose. Une ligne à la fois : un appel de journal sur plusieurs lignes n'est pas vu.
+    static let logLineWithAWholeError =
+        #"(?:^|[^A-Za-z0-9_])log\s*\.\s*(?:debug|info|notice|warning|error|fault|trace|critical)\s*\(.*(?:\\\(\s*error(?![A-Za-z0-9_])|String\s*\(\s*(?:describing|reflecting)\s*:\s*error(?![A-Za-z0-9_]))"#
+    static let logLine = #"(?:^|[^A-Za-z0-9_])log\s*\.\s*(?:debug|info|notice|warning|error|fault|trace|critical)\s*\("#
+
+    @Test func noLogLineOfTheAppNorTheRenderToolCarriesAWholeError() throws {
+        let wholeError = try Regex(Self.logLineWithAWholeError)
+        let logLine = try Regex(Self.logLine)
+        let lines = try Self.codeLines(under: "Sources/SupervoxApp").map { (place: "SupervoxApp/" + $0.place, line: $0.line) }
+            + Self.codeLines(under: "Sources/SupervoxSnapshots").map { (place: "SupervoxSnapshots/" + $0.place, line: $0.line) }
+        let appController = lines.filter { $0.place.hasPrefix("SupervoxApp/AppController.swift:") && $0.line.contains(logLine) }
+        #expect(appController.count >= 3, "le balayage doit voir les lignes de journal d'AppController : \(appController.count)")
+        let offending = lines.filter { $0.line.contains(wholeError) }.map(\.place)
         #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        #"log.error("x \(error)")"#, #"log.error("x \(error, privacy: .public)")"#, #"log.error("x \(error.localizedDescription)")"#,
+        #"log.notice("x \(String(describing: error))")"#, #"log.error("x \(String(reflecting: error))")"#,
+        #"self.log.fault("x \(error)")"#, #"log . error ( "x \( error ) " )"#,
+    ])
+    func theWholeErrorLogPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.logLineWithAWholeError)))
+    }
+
+    @Test func theWholeErrorLogPatternLeavesTheTypeAndOtherNamesAlone() throws {
+        let pattern = try Regex(Self.logLineWithAWholeError)
+        for code in [
+            #"log.error("x \(String(reflecting: type(of: error)), privacy: .public)")"#, #"log.error("x \(errorCount)")"#,
+            #"log.notice("x \(type(of: error))")"#, #"log.notice("fini")"#, #"let text = "\(error)""#,
+            #"panelModel.setNotice(SettingsError.sentence(forSaveError: error), for: .save)"#,
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
     }
 
     @Test(arguments: [

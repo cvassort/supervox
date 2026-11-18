@@ -335,7 +335,7 @@ import Testing
 
         #expect(model.hotKey == Self.keyA)
         let message = model.message ?? ""
-        #expect(message.contains(SettingsError.otherSaveFailure))
+        #expect(message == "Le raccourci n'a pas été enregistré. \(SettingsError.otherSaveFailure)")
         #expect(!message.contains(RawTextError.text))
     }
 
@@ -347,8 +347,9 @@ import Testing
         model.record(Self.keyB)
 
         let message = model.message ?? ""
-        #expect(message.contains(SettingsError.otherSaveFailure))
-        #expect(message.contains("Aucun raccourci n'est actif."))
+        #expect(
+            message
+                == "Le raccourci n'a pas été enregistré. \(SettingsError.otherSaveFailure) Aucun raccourci n'est actif.")
         #expect(!message.contains(RawTextError.text))
     }
 
@@ -359,7 +360,7 @@ import Testing
 
         #expect(model.behavior == .toggle)
         let message = model.message ?? ""
-        #expect(message.contains(SettingsError.otherSaveFailure))
+        #expect(message == "Le comportement du raccourci n'a pas été enregistré. \(SettingsError.otherSaveFailure)")
         #expect(!message.contains(RawTextError.text))
     }
 
@@ -370,6 +371,7 @@ import Testing
         model.setBehavior(.hold)
 
         let message = model.message ?? ""
+        #expect(message.hasPrefix("Le comportement du raccourci n'a pas été enregistré. "))
         #expect(message.contains("settings.json"))
         #expect(!message.contains(SettingsError.otherSaveFailure))
     }

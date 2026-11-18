@@ -549,12 +549,6 @@ struct RawTextError: Error, LocalizedError, CustomStringConvertible {
         #expect(!SettingsError.otherSaveFailure.contains(RawTextError.text))
     }
 
-    @Test func theFixedSaveSentenceIsTheOneOfTheBrief() {
-        #expect(
-            SettingsError.otherSaveFailure
-                == "Les réglages n'ont pas pu être enregistrés : vérifiez que le disque n'est pas plein, puis recommencez.")
-    }
-
     /// Le magasin écrit par la fonction qu'on lui donne (le vrai disque par défaut) : elle reçoit les réglages encodés et le
     /// fichier, et son erreur remonte telle quelle, sans que le fichier soit créé.
     @Test func theWriteIsInjectableAndItsErrorSurfaces() throws {

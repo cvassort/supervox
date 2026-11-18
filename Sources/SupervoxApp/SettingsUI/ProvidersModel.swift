@@ -29,9 +29,12 @@ public enum ProvidersError: Error, Equatable, LocalizedError {
     case keyNotDeleted(account: String, cause: String)
     /// Nouvelle origine : l'ancienne clé n'a pas pu être retirée, donc rien n'a changé.
     case oldKeyNotRemoved(String)
-    /// Nouvelle origine : l'ancienne clé est retirée, mais les réglages n'ont pas été enregistrés.
+    /// Nouvelle origine : l'ancienne clé est retirée, mais les réglages n'ont pas été enregistrés. `cause` est la phrase complète
+    /// d'un enregistrement refusé (`ProvidersModel.message(for:)`), qui dit déjà que les réglages ne sont pas enregistrés : le
+    /// message ne le redit pas.
     case oldKeyRemovedButNotSaved(String)
-    /// Ajout : les réglages n'ont pas été enregistrés et la clé saisie n'a pas pu être retirée du trousseau.
+    /// Ajout : les réglages n'ont pas été enregistrés et la clé saisie n'a pas pu être retirée du trousseau. `cause` est la phrase
+    /// complète d'un enregistrement refusé, comme pour `oldKeyRemovedButNotSaved`.
     case notSavedKeyLeft(account: String, cause: String)
 
     /// La liste des clés à retirer ne vit qu'en mémoire : rien ne promet un retrait après une relance.
@@ -357,7 +360,7 @@ public final class ProvidersModel {
             return error.description + "."
         case let error as ProvidersError:
             // Les refus de la fenêtre portent leur propre phrase, fixe ; leurs causes sont déjà passées par ici.
-            return error.errorDescription ?? SettingsError.otherSaveFailure
+            return error.errorDescription ?? "Une erreur inattendue est survenue."
         default:
             // Seule l'écriture des réglages lève ici une autre erreur (les lectures de clé lèvent `SecretError`, le réseau
             // `EndpointError`) : la phrase d'une `SettingsError`, sinon la phrase fixe. Jamais le texte de l'erreur.
