@@ -321,6 +321,74 @@ import Testing
         #expect(afterCopy.lastModeID == ModeChip.promptID)
     }
 
+    /// A3 (revue finale, A-M1) : les entrées de `voices` que cette version ne sait pas lire (une illisible, un doublon d'`id`) sont
+    /// réécrites telles quelles par TOUTE écriture, pas seulement par l'encodeur : un geste de l'onglet Fournisseurs, puis
+    /// « Utiliser », « Enregistrer » et une suppression de l'onglet Voix, chacun par les vrais modèles de la fenêtre et
+    /// `AppController.updateSettings`. Le fichier relu après chaque geste les porte toujours, à l'identique.
+    @Test func everyTabKeepsTheUnreadableVoicesOfTheFile() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = Provider(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a1")!, name: "Fournisseur d'exemple",
+            baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-voix-exemple"])
+        let readable = SavedVoice(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a2")!, name: "Voix d'exemple A",
+            voice: VoiceChoice(providerID: provider.id, model: "modele-voix-exemple", identifier: "voix-exemple"))
+        var settings = AppSettings.defaults
+        settings.providers = [provider]
+        settings.voices = [readable]
+        try store.save(settings)
+        // Le fichier porte en plus une entrée illisible (sans `id`) et un doublon de l'`id` de la voix lisible.
+        var file = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+        var entries = try #require(file["voices"] as? [Any])
+        let unreadable: [String: Any] = ["name": "Voix d'exemple B", "cle-exemple": "valeur-exemple"]
+        let duplicate: [String: Any] = [
+            "id": readable.id.uuidString, "name": "Voix d'exemple C",
+            "voice": ["identifier": "voix.exemple.a", "language": "fr-FR"],
+        ]
+        entries += [unreadable, duplicate]
+        file["voices"] = entries
+        try JSONSerialization.data(withJSONObject: file).write(to: store.file)
+
+        func keptEntries() throws -> [NSDictionary] {
+            let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+            let voices = try #require(written["voices"] as? [NSDictionary])
+            return Array(voices.suffix(2))   // après les entrées lisibles ; moins de deux entrées : la comparaison tombe
+        }
+        let expected = [unreadable as NSDictionary, duplicate as NSDictionary]
+
+        let controller = makeController()
+        #expect(controller.settings.voices.map(\.id) == [readable.id], "témoin : seule la voix lisible est lue")
+        let providers = SettingsView.makeProvidersModel(controller)
+        let voices = SettingsView.makeVoicesModel(controller)
+
+        // Onglet Fournisseurs : un fournisseur ajouté (sans clé : rien n'est écrit au trousseau).
+        try await providers.add(name: "Fournisseur d'exemple", baseURL: "https://example.com/v2", kind: .openAICompatible, key: "")
+        #expect(store.load().settings.providers.count == 2, "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après l'onglet Fournisseurs")
+
+        // Onglet Voix : « Utiliser cette voix ».
+        voices.selection = .saved(readable.id)
+        voices.use()
+        #expect(store.load().settings.voice == readable.voice.normalized, "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après « Utiliser »")
+
+        // « Enregistrer » une voix neuve.
+        voices.beginAdding()
+        voices.draft = VoicesModel.VoiceDraft(
+            name: "Voix d'exemple D", providerID: provider.id, model: "modele-voix-exemple", identifier: "voix-exemple-d")
+        voices.save()
+        let added = try #require(store.load().settings.voices.first { $0.name == "Voix d'exemple D" }, "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après « Enregistrer »")
+
+        // Supprimer la voix neuve.
+        voices.selection = .saved(added.id)
+        voices.requestDeletion()
+        voices.confirmDeletion()
+        #expect(store.load().settings.voices.map(\.id) == [readable.id], "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après la suppression")
+        #expect(voices.message == nil, "aucun refus")
+    }
+
     @Test func aRefusedSaveLeavesTheReviewChoiceAsItWas() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()

@@ -235,6 +235,38 @@ private func playingFromACancelledTask(_ player: ScriptedClipPlayer, _ clip: Aud
         #expect(!player.isPlaying)
     }
 
+    /// A4 (revue finale, A-M6) : le double refuse ce que le vrai lecteur refuse (`SystemClipPlayer.isPlayable`) : un clip non vide
+    /// hors de la plage lève `ClipPlayerError.failed`, dans chaque mode, sans être gardé ni arrêter la lecture en cours (le vrai
+    /// lecteur lève avant tout). Témoin : les bornes de la plage se jouent.
+    @Test func theDoubleRefusesWhatTheRealPlayerRefuses() async throws {
+        let accepted = ProviderSpeechSynthesizer.acceptedSampleRates
+        let refused = [accepted.lowerBound.nextDown, accepted.upperBound.nextUp, 0, .nan, .infinity]
+        // Le mode `.manual` est vu plus bas, une lecture en cours : un refus manqué y attendrait sa fin.
+        for completion in [ScriptedClipPlayer.Completion.immediate, .failing] {
+            let player = ScriptedClipPlayer(completion: completion)
+            for rate in refused {
+                await #expect(throws: ClipPlayerError.failed, "\(completion) \(rate)") {
+                    try await bounded { try await player.play(AudioClip(samples: [0.1], sampleRate: rate)) }
+                }
+            }
+            #expect(player.clips.isEmpty, "\(completion)")
+        }
+        let manual = ScriptedClipPlayer()
+        let task = playing(manual, first)
+        defer { task.cancel(); manual.finish() }
+        try await bounded { await manual.waitForPlays(1) }
+        await #expect(throws: ClipPlayerError.failed) {
+            try await bounded { try await manual.play(AudioClip(samples: [0.1], sampleRate: 4_000)) }
+        }
+        #expect(manual.isPlaying, "la lecture en cours n'est pas arrêtée")
+        #expect(manual.clips == [first])
+        let edges = ScriptedClipPlayer(completion: .immediate)
+        for rate in [accepted.lowerBound, accepted.upperBound] {
+            try await bounded { try await edges.play(AudioClip(samples: [0.1], sampleRate: rate)) }
+        }
+        #expect(edges.clips.count == 2, "témoin : les bornes se jouent")
+    }
+
     /// Point 3 : `stopNow()` arrête la lecture avant de rendre la main. Le test est sur le fil principal : l'appel est synchrone, et
     /// la ligne suivante voit déjà la lecture arrêtée, sans aucune attente entre les deux.
     @MainActor @Test func stopNowEndsPlayBeforeReturning() async throws {

@@ -213,7 +213,10 @@ public final class SystemClipPlayer: ClipPlayer {
 /// - `.manual` : `play` attend `finish()`, `stop()`, l'annulation de sa tâche ou un `play` suivant ;
 /// - `.immediate` : `play` rend la main tout de suite ;
 /// - `.failing` : `play` lève `ClipPlayerError.failed` tout de suite ;
-/// - dans les trois modes, un clip vide est gardé, arrête la lecture en cours et rend la main tout de suite, sans lever.
+/// - dans les trois modes, un clip vide est gardé, arrête la lecture en cours et rend la main tout de suite, sans lever ;
+/// - dans les trois modes, un clip non vide que le vrai lecteur refuse (`SystemClipPlayer.isPlayable`, la même fonction) lève
+///   `ClipPlayerError.failed` tout de suite, sans être gardé ni arrêter la lecture en cours, comme le vrai lecteur (A4, revue
+///   finale : l'écart ne peut pas se loger dans un test).
 ///
 /// Un test attend les lectures par `waitForPlays(_:)` (jamais par un sommeil), qui rend la main à l'annulation. Le clip reçu, la
 /// lecture en cours et le réveil de `waitForPlays` sont posés sous un même verrou : un test qui a vu la lecture arriver peut l'arrêter.
@@ -275,6 +278,7 @@ public final class ScriptedClipPlayer: ClipPlayer {
             for c in due { c.resume() }
             return
         }
+        guard SystemClipPlayer.isPlayable(sampleRate: clip.sampleRate) else { throw ClipPlayerError.failed }
         switch completion {
         case .immediate:
             record(clip)

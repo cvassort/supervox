@@ -484,15 +484,22 @@ final class OtherErrorPlayer: ClipPlayer {
     /// `stop()` pendant la résolution (une résolution sourde à l'annulation, retenue par une porte) : quand elle rend sa réponse,
     /// aucune voix n'est fabriquée et rien n'est publié après le `.idle` de `stop()`. C'est le contrôle du jeton d'après la
     /// résolution qui le tient.
+    ///
+    /// B3 (revue finale, B-M2 point 3) : l'absence est affirmée APRÈS une attente positive de la réponse tardive rendue et
+    /// consommée. La résolution est sur le fil principal, comme l'écoute : quand la réponse est rendue (`returned`), la suite de
+    /// l'écoute arrêtée a tourné dans le même travail du fil principal jusqu'à sa prochaine attente, après la fabrique (code lu :
+    /// aucun point de suspension entre le retour de la résolution, le contrôle du jeton et `makeVoice`).
     @Test func stopDuringTheResolutionMakesNoVoice() async {
         let gate = TestGate()
         defer { gate.open() }
         let entered = MainCounter()
+        let returned = MainCounter()
         let rig = Rig(
             factory: PreviewVoiceFactory(system: PreviewVoice(.clip(Self.clip))),
             resolve: { choice, _ in
                 entered.value += 1
                 await gate.wait()
+                defer { returned.value += 1 }
                 return ResolvedVoice.system(language: choice.language, identifier: choice.identifier, because: nil)
             })
         rig.start(Self.systemChoice)
@@ -500,7 +507,7 @@ final class OtherErrorPlayer: ClipPlayer {
         rig.preview.stop()
         #expect(rig.states.states == [.preparing, .idle])
         gate.open()
-        await settle()
+        #expect(await until { returned.value == 1 }, "la réponse tardive est rendue")
         #expect(rig.factory.calls.isEmpty, "aucune voix fabriquée après stop()")
         #expect(rig.states.states == [.preparing, .idle], "aucun état après stop()")
         #expect(rig.player.clips.isEmpty)
@@ -602,6 +609,10 @@ final class OtherErrorPlayer: ClipPlayer {
 
     /// La synthèse rend sa réponse APRÈS `stop()` : rien n'est joué, l'état reste `.idle`, et la synthèse a vu l'annulation (c'est
     /// l'annulation, pas seulement le jeton, qui l'arrête).
+    ///
+    /// B3 (revue finale, B-M2 point 3) : l'absence est affirmée APRÈS une attente positive d'un événement postérieur : la réponse
+    /// tardive est rendue (`sawCancellation`), puis une seconde écoute, lancée ensuite sur la même écoute et la même voix (la porte
+    /// est ouverte), joue SON clip et finit. Rien de l'écoute arrêtée n'a été joué avant (un seul clip), ni publié.
     @Test func stopSilencesALateSynthesis() async {
         let gate = TestGate()
         defer { gate.open() }
@@ -613,9 +624,11 @@ final class OtherErrorPlayer: ClipPlayer {
         #expect(rig.states.states == [.preparing, .idle])
         gate.open()
         #expect(await until { voice.sawCancellation })
-        await settle()
-        #expect(rig.player.clips.isEmpty, "rien n'est joué après stop()")
-        #expect(rig.states.states == [.preparing, .idle], "aucun état après stop()")
+        rig.start(Self.systemChoice)
+        #expect(await until { rig.states.states.count == 5 }, "la seconde écoute finit")
+        #expect(voice.texts.count == 2)
+        #expect(rig.player.clips == [Self.clip], "seul le clip de la seconde écoute est joué")
+        #expect(rig.states.states == [.preparing, .idle, .preparing, .playing, .idle], "aucun état de l'écoute arrêtée")
     }
 
     /// Pendant la lecture : `stop()` annule la tâche (le lecteur compte l'arrêt de SA lecture) puis appelle `stopNow()` ; l'état
