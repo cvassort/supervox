@@ -25,7 +25,8 @@ Ce fichier est public : n'y écrivez ni texte dicté, ni clé, ni nom de personn
   Une seule exception, dite en tête de l'étape 4 : les essais 32 à 45 gardent la relecture activée, et l'essai 46 la
   désactive. L'étape 5 (essais 47 à 62) a ses propres préparatifs : un fournisseur qui répond et un modèle fort choisi. L'étape 6
   (essais 63 à 95) a les siens, et ouvre le micro : voir « Avant de commencer l'étape 6 » et « Jamais exécuté pendant la
-  construction ».
+  construction ». L'étape 7 (essais 96 à 114) règle les voix, joue des sons et ouvre le micro dans certains essais : voir
+  « Avant de commencer l'étape 7 » et « Jamais exécuté pendant la construction (étape 7) ».
 
 ## Étape 2 — socle
 
@@ -1439,7 +1440,7 @@ code) :
   une étape suivante. » n'existe plus nulle part dans le code. Pendant un entretien, le raccourci **conclut** : il ne ferme
   plus le panneau. Sautez ces points, ou faites-les en annulant par Échap (essai 72) ; remettez « Dictée brute ».
   L'essai 45 (point 1) reste vrai : pendant une relecture, le clic sur « Entretien » ne lance rien.
-- **Essai 32 (points 1 et 2) et essai 48 (point 6)** : la barre des réglages compte **sept onglets** (essai 63), pas cinq.
+- **Essai 32 (points 1 et 2) et essai 48 (point 6)** : la barre des réglages compte **sept onglets** (essai 63), pas cinq (huit depuis l'étape 7 : essai 96).
   La ligne d'Entretien, dans l'onglet Modes, dit « Toujours relu : l'entretien passe toujours par la relecture. Ses questions
   et son gabarit se règlent dans l'onglet Entretien. » et sa feuille dit « Ce mode n'a pas de consigne à modifier : ses
   questions et son gabarit se règlent dans l'onglet Entretien. » (essai 64). Entretien reste sans interrupteur, et ne se
@@ -1485,7 +1486,8 @@ ce qui suit n'a été vu tourner sur du matériel réel pendant la construction 
   sur le code de la bibliothèque (refait à la main ici : 0,3 à 0,5 s donnent 0,768 s, 0,6 s donne 1,024 s), jamais d'une
   mesure. Le gain du défaut de 0,5 s sur 0,6 s (environ 0,26 s) n'a pas été remesuré, et le risque de couper quelqu'un qui
   marque une pause n'a pas été évalué.
-- **La vraie fenêtre** : sept onglets dans 600 points, la hauteur de l'onglet Entretien, la feuille unique des trois
+- **La vraie fenêtre** : sept onglets dans 600 points (huit dans 860 depuis l'étape 7 : voir « Jamais exécuté pendant la
+  construction (étape 7) »), la hauteur de l'onglet Entretien, la feuille unique des trois
   confirmations de l'Historique, la bande fixe de ses messages (sa tenue est testée sur la mise en page, pas par un clic
   réel), le menu « … » du panneau avec « Historique… » grisée (l'image est un dessin de l'outil, non une capture du vrai
   menu), un panneau d'entretien qui n'a pas la frappe, le défilement d'une longue réplique et son fondu : jamais vus
@@ -1500,12 +1502,13 @@ ce qui suit n'a été vu tourner sur du matériel réel pendant la construction 
   (petit modèle absent, liste trop longue) n'ont jamais été vus : ils demandent une panne difficile à provoquer.
 - **Le banc `interview`** (essai 95) : jamais lancé contre un service.
 
-### 63. Réglages : sept onglets et navigation (sans micro, sans son)
+### 63. Réglages : huit onglets et navigation (sans micro, sans son)
 
 1. Menu de l'icône, « Réglages… ». Regardez la barre d'onglets.
-   - Attendu : sept onglets, dans l'ordre : Fournisseurs, Raccourci, Permissions, Transcription, Modes, Entretien,
-     Historique. Tous lisibles, aucun coupé ni caché. **Comportement à confirmer** : la fenêtre a une taille fixe (600 sur 460
-     points) et ne s'est jamais vue avec sa barre d'onglets.
+   - Attendu : huit onglets depuis l'étape 7, dans l'ordre : Fournisseurs, Raccourci, Permissions, Transcription, Modes,
+     Entretien, Voix, Historique. Tous lisibles, aucun coupé ni caché. **Comportement à confirmer** : la fenêtre a une taille
+     fixe (860 sur 460 points depuis l'étape 7, 600 sur 460 avec les sept onglets de l'étape 6) et ne s'est jamais vue avec sa
+     barre d'onglets (essai 96).
 2. Ouvrez l'onglet Historique, fermez la fenêtre par la croix, puis menu de l'icône, « Réglages… ».
    - Attendu : la fenêtre revient sur l'onglet où vous l'avez laissée (Historique).
 3. Réduisez la fenêtre dans le Dock (⌘M), puis menu de l'icône, « Réglages… ».
@@ -1969,8 +1972,8 @@ Dans chaque cas, **votre tour est gardé** et l'écoute reprend. Rétablissez à
 
 ### 82. Voix en panne : texte seul, et voix de fournisseur fausse (ouvre le micro, joue un son)
 
-Ces réglages n'ont pas d'écran : ils s'éditent dans `settings.json`, **Supervox fermé** (une application ouverte réécrirait
-le fichier). L'entrée « voice » existe déjà, avec `"language" : "fr-FR"`. Copiez le fichier avant, et remettez-le à la fin.
+Ces réglages s'éditent ici dans `settings.json` (l'onglet Voix les règle aussi depuis l'étape 7 : essais 99 à 101 et 114),
+**Supervox fermé** (une application ouverte réécrirait le fichier). L'entrée « voice » existe déjà, avec `"language" : "fr-FR"`. Copiez le fichier avant, et remettez-le à la fin.
 
 1. **Voix du système introuvable.** Mettez `"language" : "zz-ZZ"` dans « voice », relancez, lancez un entretien.
    - Attendu : une seule fois, l'avis « La voix ne fonctionne pas : lisez la question à l'écran, puis répondez à voix haute. » ;
@@ -2340,7 +2343,486 @@ rapport. La durée est à peu près celle de l'audio des répliques.
      note après 150 s : 120 s de délai de transcription plus 30 s de marge, choix non mesuré), un nom ou une adresse visible
      dans le rapport. **Jamais lancé contre un service.**
 
-### 96. Retour à faire
+## Étape 7 — réglage des voix
+
+À cette étape, un onglet **Voix** (le septième de huit, entre Entretien et Historique) règle la voix de Supervox : on y voit les
+voix du système, par langue et par genre, on enregistre des voix de fournisseur, on choisit celle qui sert (« Utiliser cette
+voix »), on **écoute** une voix, on modifie ou on supprime les voix enregistrées. Une ligne « Voix » de l'onglet Entretien y mène.
+**Écouter une voix joue un son.** Pour une voix de fournisseur, l'écoute **envoie la phrase d'essai** (une phrase fixe, qui ne
+contient rien de vous) **à ce fournisseur et lit sa clé dans le trousseau** ; pour une voix du système, rien n'est envoyé.
+
+Pendant la construction de cette étape, **rien de ce qui touche au son, à la vraie liste des voix, au vrai lecteur, au micro, à la
+vraie fenêtre et à VoiceOver n'a été essayé** (consigne de l'utilisateur : aucun essai sur le matériel). Cette liste est le
+seul endroit où c'est consigné ; la sous-section « Jamais exécuté pendant la construction (étape 7) » le dit sans détour.
+
+Un titre qui dit « sans micro, sans son » ne les ouvre pas ; un titre qui dit « ouvre le micro » ou « joue un son » le fait. Les
+phrases entre « » viennent du code (`VoicesText.swift` pour l'onglet et l'écoute, `InterviewText.swift` pour l'entretien) ; une
+phrase « construite » a un nom ou un nombre inséré, écrit entre chevrons, que le code remplace. Les espaces insécables du français
+(avant « : », « ; », « ? », « ! ») ne se voient pas.
+
+### Avant de commencer l'étape 7
+
+- État de départ : celui de l'étape 6 (raccourci ⌃⌥Espace en bascule, pastille « Dictée brute », modèles rapide et fort choisis),
+  **aucune voix enregistrée**, voix en vigueur = la voix automatique du système, en français (`VoiceChoice.system`).
+- Pour les essais de voix de fournisseur : un fournisseur déjà réglé (essai 5), **du seul type qui sait parler**, et les valeurs de
+  votre voix chez lui (modèle de synthèse, identifiant de voix, paramètres éventuels). **Ces valeurs viennent de vos notes
+  personnelles : ne les écrivez jamais dans ce dépôt**, ni dans une remarque d'essai qui s'y retrouverait. Sans fournisseur de
+  voix, les essais 99, 100 (sauf le point 1), 105, 106 et le point 2 de l'essai 114 sont « non fait ».
+- Des haut-parleurs ou un casque, **volume prudent** : chaque écoute joue une phrase d'essai de quelques secondes (durée non
+  mesurée), à un volume qui est celui du système.
+- Une voix française du système installée (essai 82). Pour les essais 107 à 111 et 114 : le micro accordé (essai 2), les modèles
+  prêts (essai 19) ; l'essai 109 demande aussi un modèle fort (essai 57) et l'essai 110 les préparatifs de l'étape 6.
+- Ouvrez la fenêtre des réglages **sur l'onglet Voix avant** de lancer une dictée, une correction ou un entretien (essais 107 à
+  111) : « Réglages… » ferme le panneau et annule un entretien. Le panneau s'ouvre ensuite à côté sans prendre la frappe, et la
+  fenêtre doit rester visible pour qu'on y voie le bouton d'écoute.
+- **Chaque essai qui change un état le rétablit à sa fin** : voix en vigueur sur « Automatique », aucune voix d'essai restante,
+  « Dictée brute », réseau actif. Les essais 99 à 101 créent et suppriment la même voix d'essai.
+
+### Ce que l'étape 7 change aux attendus des essais précédents
+
+- **Essais 32 (point 1) et 63 (point 1)** : la barre des réglages compte **huit onglets**, dans l'ordre Fournisseurs, Raccourci,
+  Permissions, Transcription, Modes, Entretien, Voix, Historique ; la fenêtre fait 860 points de large, non plus 600 (essai 96).
+- **Essai 65 (point 1)** : le premier groupe de l'onglet Entretien a une ligne « Voix » sous « Nombre maximal de questions », dont
+  la note est devenue le sous-titre (essai 98).
+- **Essai 82** : « Ces réglages n'ont pas d'écran » n'est plus vrai : la voix se règle dans l'onglet Voix (essais 99 à 101, 114).
+  Éditer `settings.json` à la main marche toujours, et le point 2 se refait par l'onglet (essai 114, point 3).
+
+### Jamais exécuté pendant la construction (étape 7)
+
+Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel réel pendant la construction de l'étape 7.
+
+- **Le vrai lecteur de sortie** (`SystemClipPlayer`) : jamais lancé ; ni son délai de démarrage face à la marge de 2 secondes de
+  sa fin de secours (choix non mesuré), ni la durée pendant laquelle son arrêt occupe le fil principal ne sont mesurés
+  (essai 103).
+- **La vraie liste des voix du système** : jamais lue, ni son contenu, ni le temps qu'elle prend à l'ouverture de l'onglet
+  (essai 97).
+- **L'écoute réelle d'une voix**, du système ou d'un fournisseur : jamais entendue (essais 104 à 106). **La correspondance entre
+  le nom, le genre affiché et la voix entendue** n'est pas vérifiable sans son. Le genre d'une voix du système vient d'une
+  propriété du système qui rend souvent « non précisé » (documentation lue, non mesuré sur la machine de construction).
+- **La barre de huit onglets** : mesurée hors écran (fenêtre jamais affichée), non vue affichée. Elle demande 804 points (taille
+  propre de son contrôle, mesurée dans une fenêtre jamais affichée par `Tests/SupervoxAppTests/SettingsTabBarTests.swift`) ; la
+  fenêtre fait 860 points de large (804, plus 20 points de marge de chaque côté, arrondi au multiple de 20 au-dessus), sur 460 de
+  haut (choix non mesuré). **Avec sept onglets** (étape précédente), la barre demandait déjà plus que les 600 points de l'ancienne
+  fenêtre : environ 703 points d'après une sonde hors écran, qui n'est pas dans le dépôt et n'a pas été rejouée pour cette liste ;
+  elle n'a jamais été vue (essai 96).
+- **Les autres onglets à 860 points** : vus seulement en images rendues hors écran, sans barre d'onglets. Signalés, non corrigés :
+  dans Fournisseurs et Modes, le bouton d'ajout est au bord droit de la fenêtre, non au bord des cartes ; dans Voix, les boutons
+  sont aux deux bords, environ 267 points entre les deux groupes (lu sur l'image, 2 pixels par point, non mesuré) (essais 96
+  et 97).
+- **Les deux feuilles de l'onglet Voix** (éditeur, confirmation de suppression) : jamais présentées dans une vraie fenêtre ;
+  leurs tests les posent dans une fenêtre jamais affichée. **Quitter l'onglet pendant que l'éditeur est ouvert abandonne la
+  saisie** : écrit et testé hors écran, jamais vu avec une feuille réellement présentée (essai 102).
+- **Le défilement jusqu'à la voix qu'on vient d'enregistrer** : mesuré hors écran avec 40 voix inventées (un seul défilement
+  s'arrêtait avant la ligne, parce que la table estime la hauteur des lignes ; un second, après un passage de la boucle
+  principale, l'atteint). Jamais vu, jamais avec la vraie liste (essai 99).
+- **VoiceOver dans l'onglet Voix** : jamais écouté. Les libellés (coche, « en écoute », avertissement, champs numérotés) sont lus
+  dans le code, non entendus (essai 113).
+- **Les refus et coupures de l'écoute par le micro** (écoute refusée tant qu'un micro est tenu, coupée avant qu'il s'ouvre) et
+  **l'écoute juste après l'annulation d'une dictée** : testés sur des doubles seulement (essais 107 à 111).
+- **Une voix de fournisseur réelle** : jamais contre un service (requête, lecture de la clé, paramètres). Un serveur qui exige
+  un paramètre numérique (les paramètres partent en texte) refusera la requête : non établi pour un service donné.
+- **Les phrases d'essai non françaises** (anglais, espagnol, allemand, italien) sont des traductions écrites pendant la
+  construction, non relues par une personne de ces langues.
+- **La marge de l'onglet Entretien** : l'intitulé « Réglages avancés » est à environ 395 points pour 400 de hauteur visible,
+  mesuré hors écran avec la police du système de la machine de construction, soit environ 5 points de marge (essai 98).
+- **Deux lacunes de l'étape 6** : le bas de l'onglet Historique (la ligne de durée et le bouton « Confirmer ») n'a jamais été vu
+  dans une vraie fenêtre (essai 87) ; et le pipeline lance les tests en série (`--no-parallel`) : en parallèle, ils ne tournent
+  que sur la machine de construction.
+- **Un test de disposition de l'onglet Entretien** dépendait de la machine (un quart de point d'écart avec deux écrans) : il
+  compare maintenant à un point près ; la cause n'est pas établie.
+
+### 96. Réglages : la barre de huit onglets et la largeur de la fenêtre (sans micro, sans son)
+
+1. Menu de l'icône, « Réglages… ». Regardez la barre d'onglets.
+   - Attendu : huit onglets, dans l'ordre : Fournisseurs, Raccourci, Permissions, Transcription, Modes, Entretien, Voix,
+     Historique. **Les huit titres sont entiers** et **aucun chevron de débordement (») n'apparaît dans la barre**. La fenêtre
+     fait 860 points de large sur 460 (`SettingsView.windowSize`). État : barre de huit onglets : mesurée hors écran (fenêtre
+     jamais affichée), non vue affichée. **Comportement à confirmer.**
+   - Si ce n'est pas le cas, noter : le titre coupé ou caché, le chevron s'il apparaît, la largeur de votre écran, une taille de
+     texte du système qui n'est pas celle par défaut.
+2. Passez dans les sept autres onglets, un par un.
+   - Attendu : aucun ne paraît vide ni déséquilibré à cette largeur. Vus seulement en images rendues hors écran : dans
+     Fournisseurs et Modes, « Ajouter un fournisseur… » et « Ajouter un mode » flottent au bord droit de la fenêtre, pas au bord
+     des cartes (centrées, environ 704 points de large : lu sur les images, non mesuré) ; l'onglet Permissions a beaucoup de vide.
+     **À noter si ça gêne.**
+3. Fermez la fenêtre par la croix, rouvrez-la par « Réglages… ».
+   - Attendu : elle revient sur l'onglet où vous l'aviez laissée, à la même taille.
+
+### 97. Onglet Voix : la liste, la voix en vigueur, les filtres (sans micro, sans son)
+
+1. Ouvrez l'onglet Voix pour la première fois depuis le lancement. **Notez le temps d'ouverture** : la liste des voix du système
+   est relue à chaque ouverture de l'onglet, et ce temps n'a jamais été mesuré.
+   - Attendu : de haut en bas, deux sélecteurs « Langue » et « Genre » ; la liste, qui défile ; une bande de message de hauteur
+     fixe ; une rangée de boutons : à gauche « Utiliser cette voix » et « Écouter », à droite « Ajouter une voix… »,
+     « Modifier… » et « Supprimer… ». Le sélecteur de langue est sur la langue de la voix en vigueur, **en clair** : pour
+     « fr-FR », « français (France) » (forme calculée par la locale française du système, mesurée sur la machine de
+     construction). La section « Voix du système » commence, pour chaque langue, par une ligne « Automatique » dont le détail
+     est « <langue en clair> · Meilleure voix de la langue » (construit), puis une ligne par voix installée de la langue, par
+     nom, au détail « <langue en clair> · <genre> · <qualité> » (construit) : le genre est « Féminin », « Masculin », « Neutre »
+     ou « Genre non précisé » ; la qualité « Qualité standard », « Qualité améliorée », « Qualité premium » ou « Qualité non
+     précisée ». Aucune section « Voix de fournisseurs » tant qu'aucune voix n'est enregistrée.
+   - Attendu : une coche sur « Automatique » (la voix en vigueur par défaut). **Code lu, jamais vu** : sans voix française
+     installée, une ligne « Voix en vigueur » apparaît à la place, en tête de la liste, avec le triangle et « Cette voix n'est
+     plus installée sur cet ordinateur. ».
+   - Attendu : aucune ligne n'est choisie à l'ouverture : « Utiliser cette voix », « Écouter », « Modifier… » et
+     « Supprimer… » sont grisés ; « Ajouter une voix… » est actif.
+2. Choisissez une voix du système qui n'est pas « Automatique ».
+   - Attendu : « Utiliser cette voix » et « Écouter » deviennent actifs ; « Modifier… » et « Supprimer… » restent grisés (une
+     voix du système ne se modifie pas) ; la bande dit « Écouter cette voix n'envoie rien : elle est produite sur cet
+     ordinateur. ». Choisissez ensuite la ligne cochée : « Utiliser cette voix » est grisé (elle est déjà en vigueur).
+3. Ouvrez le sélecteur « Langue », choisissez « Toutes les langues », puis une autre langue.
+   - Attendu : les langues sont en clair, deux variantes d'une même langue restent deux entrées ; la liste suit le filtre ; la
+     voix en vigueur reste dans la liste quel que soit le filtre ; si le filtre cache la ligne choisie, elle n'est plus choisie
+     et les boutons se grisent. Remettez la langue de départ.
+4. Ouvrez le sélecteur « Genre » : « Tous », « Féminin », « Masculin », « Neutre », « Non précisé ». Essayez chacun.
+   - Attendu : la liste suit le filtre. **À noter : combien de voix tombent sous « Non précisé »** (beaucoup, d'après la
+     documentation, non mesuré ; la ligne « Automatique » y est toujours, code lu), et si le genre affiché d'une voix est celui
+     que vous entendrez à l'essai 104. Remettez « Tous ».
+5. Regardez la rangée de boutons : « Utiliser cette voix » et « Écouter » à gauche, les trois autres à droite.
+   - Attendu : même forme que l'onglet Historique. **À noter si l'écart entre les deux groupes gêne** (environ 267 points sur
+     l'image, non mesuré).
+   - Si ce n'est pas le cas, noter : la phrase vue, une ligne sans titre ou sans détail, une coche sur deux lignes.
+
+### 98. Onglet Entretien : la ligne « Voix » (sans micro, sans son)
+
+1. Ouvrez l'onglet Entretien, sans faire défiler.
+   - Attendu : dans le premier groupe, sous « Nombre maximal de questions » (dont la note « Après la réponse à la dernière
+     question, Supervox rédige le prompt. » est maintenant son sous-titre), une ligne « Voix » : à droite, la légende « La voix
+     de Supervox se choisit dans l'onglet Voix. » puis le bouton « Choisir la voix… ». L'intitulé « Réglages avancés » est
+     visible sans faire défiler : sa marge est de 5 points seulement (environ 395 pour 400, mesuré hors écran à la
+     construction). **À noter** s'il est coupé ou à la limite. La phrase d'introduction est alignée sur les lignes du formulaire, à 4 points près (testé hors
+     écran).
+2. Cliquez sur « Choisir la voix… ».
+   - Attendu : la fenêtre passe à l'onglet Voix, qui est sélectionné dans la barre.
+   - Si ce n'est pas le cas, noter : la ligne absente ou coupée, le bouton sans effet, l'onglet resté le même.
+
+### 99. Ajouter une voix de fournisseur (sans micro, sans son)
+
+Les valeurs viennent de vos notes personnelles : un nom de voix (libre), un fournisseur, un modèle de synthèse, un identifiant de
+voix chez lui, une langue, des paramètres éventuels en texte.
+
+1. Onglet Voix, « Ajouter une voix… ».
+   - Attendu : une feuille « Ajouter une voix », de 520 sur 540 points, avec les champs « Nom », « Fournisseur », « Modèle »,
+     « Identifiant », « Langue » et « Genre », puis « Paramètres » et « Ajouter un paramètre », puis « Annuler » et
+     « Enregistrer ». Le fournisseur proposé est le premier qui sait parler ; la langue est préremplie avec celle de la voix en
+     vigueur (« fr-FR »). Le champ de la langue garde le code, et la langue en clair s'affiche en gris à côté (« français
+     (France) ») ; rien à côté d'un code sans nom. Si le fournisseur a une liste de modèles (essai 5), une icône de liste, à côté
+     de « Modèle », la propose (infobulle « Modèles du fournisseur »). Sans fournisseur qui sait parler, le sélecteur dit
+     « Aucun fournisseur qui sait parler ».
+2. Remplissez les six champs avec les valeurs de vos notes personnelles, ajoutez un paramètre (« Ajouter un paramètre », puis
+   une clé et une valeur), puis « Enregistrer ».
+   - Attendu : la feuille se ferme ; la voix apparaît sous la section « Voix de fournisseurs », choisie et visible, avec le détail
+     « <fournisseur> · <modèle> · <langue en clair> » (construit) ; elle **n'est pas** la voix en vigueur (pas de coche : seul
+     « Utiliser cette voix » la met en vigueur, essai 101) ; la bande dit « Écouter cette voix envoie la phrase d'essai à
+     « <nom du fournisseur> » et lit sa clé dans le trousseau. » (construite).
+3. « Modifier… » sur cette voix, puis ajoutez des paramètres jusqu'à en avoir plus de trois.
+   - Attendu : les trois premières lignes se voient sans faire défiler ; au-delà, **seule la zone des paramètres défile** : le
+     titre, les six champs et les boutons ne bougent pas. Chaque ligne a un bouton « moins » (infobulle « Retirer ce
+     paramètre »). Cliquez sur « Annuler » : rien n'est enregistré.
+4. **Une voix cachée par les filtres.** Mettez le sélecteur « Genre » sur « Féminin », puis ajoutez une seconde voix (genre non
+   précisé), « Enregistrer ». Recommencez avec le sélecteur « Langue » sur une langue qui n'est pas celle de la voix saisie.
+   - Attendu : après « Enregistrer », le filtre de langue est passé à la langue écrite de la nouvelle voix et celui de genre à
+     « Tous » ; la ligne est choisie, visible, et la liste a défilé jusqu'à elle. **Le défilement n'est mesuré que hors écran
+     (40 voix inventées) : regardez, avec votre vraie liste de voix, sans doute longue, si la ligne est bien dans la zone
+     visible.** Une ligne au bord ou hors de la zone : le noter.
+   - Gardez **une seule** voix d'essai : vous supprimerez les autres à l'essai 101 (point 5).
+   - Si ce n'est pas le cas, noter : un champ qui manque, une feuille qui défile en entier, une voix enregistrée qui reste
+     cachée, la langue en clair absente.
+
+### 100. Refus de l'éditeur (sans micro, sans son)
+
+« Ajouter une voix… », puis « Enregistrer » à chaque fois, **une cause à la fois**. Le refus s'affiche dans une bande au-dessus
+des boutons (icône orange) ; la feuille reste ouverte, rien n'est écrit. Les causes sont testées dans cet ordre : nom, fournisseur,
+modèle, identifiant, paramètres.
+
+1. Nom vide.
+   - Attendu : « Donnez un nom à cette voix. »
+2. Nom rempli, **seulement si aucun de vos fournisseurs ne sait parler** (sinon, « non fait » : le sélecteur propose toujours un
+   fournisseur qui parle).
+   - Attendu : « Choisissez un fournisseur qui sait parler : ajoutez-en un dans l'onglet Fournisseurs s'il n'y en a pas. »
+3. Nom et fournisseur remplis, modèle vide.
+   - Attendu : « Indiquez le modèle de synthèse de la voix. »
+4. Modèle rempli, identifiant vide.
+   - Attendu : « Indiquez l'identifiant de la voix chez le fournisseur. »
+5. Tout rempli, un paramètre dont la clé est vide (et la valeur remplie).
+   - Attendu : « Chaque paramètre a besoin d'une clé : remplissez-la ou retirez la ligne. »
+6. Un paramètre dont la clé est `model`, puis `Voice` (avec une majuscule).
+   - Attendu, dans les deux cas : « Ces clés sont posées par Supervox et ne peuvent pas servir de paramètre : « input »,
+     « model », « response_format », « voice ». » (construite depuis les quatre noms réservés, par ordre alphabétique ; la casse
+     est ignorée).
+7. Deux paramètres de même clé (ou qui ne diffèrent que par des espaces autour).
+   - Attendu : « Deux paramètres ont la même clé : gardez-en un seul. »
+8. Facultatif : dix-sept paramètres, de clés toutes différentes.
+   - Attendu : « Une voix a au plus 16 paramètres : retirez-en. » (construite ; 16 est un choix non mesuré).
+   - À chaque refus : la bande ne déplace aucun bouton ; le refus reste affiché tant que la feuille est ouverte, jusqu'au
+     prochain « Enregistrer ». « Annuler » ou Échap ferme la feuille sans rien écrire (la liste ne change pas).
+   - Si ce n'est pas le cas, noter : la phrase vue, une phrase coupée dans la bande, un bouton qui bouge.
+
+### 101. Utiliser, modifier, supprimer une voix (sans micro, sans son)
+
+Avec la voix d'essai de l'essai 99.
+
+1. Choisissez la voix d'essai que vous avez gardée, « Utiliser cette voix ».
+   - Attendu : la coche passe sur cette ligne et nulle part ailleurs ; « Utiliser cette voix » est maintenant grisé (inactif sur
+     la voix déjà en vigueur). Fermez la fenêtre, rouvrez-la : la coche y est toujours.
+2. « Modifier… » sur cette voix.
+   - Attendu : « Modifier la voix », champs remplis, genre d'origine encore proposé parmi les choix. Changez le nom, puis
+     « Enregistrer » : la ligne change de nom sur place (pas de doublon), la coche reste (modifier la voix en vigueur écrit aussi
+     la voix en vigueur, dans la même écriture).
+3. « Supprimer… ».
+   - Attendu : une confirmation qui **nomme la voix** : « Supprimer la voix « <nom de la voix> » ? C'est la voix en vigueur :
+     Supervox reprendra la voix automatique du système, en français. » (construite ; le nom est repris tel quel), avec « Annuler »
+     et « Supprimer ». « Annuler » ou Échap : rien ne change. Retour ne déclenche rien (« Annuler » n'est pas le bouton par
+     défaut, comme dans l'Historique) : **à noter si ça surprend**.
+4. Confirmez par « Supprimer ».
+   - Attendu : la voix disparaît, la coche revient sur « Automatique », aucune ligne n'est choisie, et la bande dit « La voix
+     supprimée était la voix en vigueur : Supervox reprend la voix automatique du système, en français. ».
+5. Ajoutez de nouveau une voix (essai 99), choisissez-la **sans** « Utiliser cette voix », puis « Supprimer… ».
+   - Attendu : la confirmation n'a que la première phrase : « Supprimer la voix « <nom de la voix> » ? ». Confirmez : la voix
+     disparaît, la coche reste sur « Automatique », aucun message dans la bande. Supprimez de la même façon les autres voix
+     d'essai de l'essai 99 (point 4).
+6. Facultatif : un fournisseur jetable. Ajoutez un fournisseur « Fournisseur d'exemple » (adresse `https://example.com`, clé
+   d'essai quelconque, essai 5), une voix qui l'utilise, puis supprimez ce fournisseur dans l'onglet Fournisseurs et revenez à
+   l'onglet Voix.
+   - Attendu : la ligne dit « Fournisseur supprimé · <modèle> · <langue en clair> » (construit), avec le triangle orange et « Le
+     fournisseur de cette voix a été supprimé : choisissez-en un autre en modifiant la voix. » ; « Utiliser cette voix » est
+     grisé ; la bande dit « Cette voix ne peut pas parler : l'écouter n'envoie rien. ». Supprimez la voix.
+   - Si ce n'est pas le cas, noter : la phrase vue, une coche perdue ou restée sur deux lignes, une voix qui reste après la
+     confirmation.
+
+### 102. Quitter l'onglet pendant que l'éditeur est ouvert (sans micro, sans son)
+
+Écrit et testé hors écran, **jamais vu avec une feuille réellement présentée**.
+
+1. Onglet Voix, « Ajouter une voix… », tapez un nom, sans enregistrer. Laissez la feuille ouverte.
+2. Sans la fermer, menu de l'icône, « Ouvrir le panneau », puis menu « … » du panneau, « Historique… » (le panneau doit être au
+   repos : elle est grisée sinon).
+   - Attendu : la fenêtre passe à l'onglet Historique ; **la saisie de l'éditeur est abandonnée**. Revenez à l'onglet Voix :
+     aucune feuille ouverte, aucune voix créée.
+   - **À noter : la feuille se referme-t-elle, se rouvre-t-elle seule au retour ?** Se referme-t-elle proprement, ou
+     clignote-t-elle ?
+3. Recommencez avec la confirmation : choisissez une voix d'essai, « Supprimer… », laissez la confirmation ouverte, puis le même
+   chemin vers l'Historique.
+   - Attendu : la confirmation est annulée, la voix n'est pas supprimée.
+4. Avec une feuille ouverte (éditeur ou confirmation), cliquez sur la croix de la fenêtre.
+   - Attendu (code lu, non vu) : la fenêtre ne se ferme pas : une fenêtre qui porte une feuille ne se ferme pas. Fermez
+     d'abord la feuille.
+   - Si ce n'est pas le cas, noter : la feuille rouverte au retour, une saisie gardée, une fenêtre fermée avec sa feuille.
+
+### 103. Test matériel du lecteur : `SUPERVOX_PLAYER=1` (joue des tons, n'ouvre pas le micro)
+
+Cinq tests (suite `SystemClipPlayerHardwareTests`), écrits pour cette étape, **désactivés par défaut**. Le code ne contient pas la
+commande toute faite : elle se compose de la variable `SUPERVOX_PLAYER` et du nom de la suite, comme à l'essai 91.
+
+```sh
+SUPERVOX_PLAYER=1 swift test --filter SystemClipPlayerHardwareTests
+```
+
+**Ce que la commande fait à la machine.** Elle joue, sur la sortie audio par défaut, au volume du système, des tons de 440 Hz
+d'amplitude 0,2 (choix non mesuré ; **plus fort que les tons de l'essai 91**, à 0,05) : un de 0,3 s, une lecture de 6 s coupée
+après 0,5 s par un arrêt, une autre coupée par une annulation, une troisième coupée par une seconde lecture (de 0,3 s), une
+dernière coupée par un clip vide. Le son dure environ 2,6 s en tout (code lu) et 24,6 s au pire, si aucun arrêt ne marche. **Elle
+n'ouvre pas le micro** : l'autorisation du micro n'est pas nécessaire. Aucun réglage du système n'est changé, les clips sont
+encodés en mémoire.
+
+1. Baissez le volume, puis lancez la commande.
+   - Attendu : cinq tests verts. **Le compteur de fins de secours doit rester à 0** à la fin de chaque test : il n'est pas affiché
+     quand il est à 0 ; s'il ne l'est pas, le test échoue avec le message « le système n'a pas appelé le délégué de fin : la
+     lecture a fini par la fin de secours ». C'est alors le signe que le système ne signale pas la fin de lecture (la fin de
+     secours tombe à la durée du clip plus 2 s, choix non mesuré). C'est la **première exécution** du vrai lecteur.
+   - Si ce n'est pas le cas, noter : le nom du test et son message, si le processus de test s'est arrêté sur une exception, la
+     sortie audio utilisée (haut-parleurs ou casque : le modèle d'un casque dans vos notes personnelles seulement).
+
+### 104. Écouter une voix du système (joue un son)
+
+Volume prudent. Onglet Voix.
+
+1. Choisissez une voix du système (pas « Automatique »), « Écouter ».
+   - Attendu : le bouton devient « Arrêter » (avec un indicateur d'activité pendant la préparation), un haut-parleur apparaît à
+     droite de la ligne, et la voix dit la phrase d'essai de sa langue : en français, « Bonjour, je suis une voix que Supervox
+     peut prendre pour vous parler. ». À la fin du son, « Écouter » revient. Aucune demande du trousseau. La bande dit « Écouter
+     cette voix n'envoie rien : elle est produite sur cet ordinateur. ».
+   - **À noter** : la voix entendue est-elle celle du nom, du genre et de la langue affichés (non vérifiable sans son : jamais
+     vérifié) ; le temps entre le clic et le premier son (jamais mesuré, vraie liste et vrai lecteur).
+2. Écoutez, puis cliquez sur « Arrêter ».
+   - Attendu : le son s'arrête tout de suite, « Écouter » revient. **Si le son continue, ou si « Arrêter » reste affiché plus de
+     deux secondes après la fin du son** (fin de secours : durée du clip plus 2 s), le noter.
+3. Écoutez, puis choisissez une autre ligne pendant l'écoute.
+   - Attendu : l'écoute continue, le bouton dit toujours « Arrêter » (l'arrêt est global), le haut-parleur reste sur la ligne
+     écoutée.
+4. Écoutez, puis, en trois essais séparés : changez d'onglet ; passez dans une autre application ; fermez la fenêtre.
+   - Attendu : l'écoute s'arrête dans chaque cas.
+5. Facultatif : une voix du système d'une langue qui n'est ni le français, l'anglais, l'espagnol, l'allemand ni l'italien.
+   - Attendu (code lu) : elle dit la phrase anglaise « Hello, I am a voice Supervox can use to speak to you. ». Les phrases
+     espagnole, allemande et italienne sont des traductions non relues : dites si l'une sonne faux.
+   - Si ce n'est pas le cas, noter : une voix qui ne parle pas, une écoute qui ne s'arrête pas, un bouton resté sur
+     « Arrêter », la phrase d'une panne affichée dans la bande.
+
+### 105. Écouter la voix du fournisseur (joue un son, envoie du texte au fournisseur)
+
+**L'écoute envoie la phrase d'essai (fixe) au fournisseur et lit sa clé dans le trousseau : une demande du trousseau peut
+apparaître avant le premier son** (essai 68 : comptez-les). Avec les valeurs de vos notes personnelles (essai 99). Volume prudent.
+
+1. Choisissez la voix d'essai, « Écouter ».
+   - Attendu : la bande disait déjà « Écouter cette voix envoie la phrase d'essai à « <nom du fournisseur> » et lit sa clé dans
+     le trousseau. » (construite) ; le bouton passe par « Arrêter » avec l'indicateur d'activité (la synthèse est bornée à
+     15 secondes, choix non mesuré), puis la voix du fournisseur dit la phrase. **À noter** : le délai avant le premier son, le
+     nombre de demandes du trousseau, la voix entendue, et, si le fournisseur refuse, ce qu'il refuse (le nom d'un paramètre dans
+     vos notes personnelles seulement : un serveur qui exige un nombre, quand les paramètres partent en texte, refusera la
+     requête).
+2. Écoutez, puis « Arrêter » pendant la préparation.
+   - Attendu : rien ne parle ensuite, « Écouter » revient. Aucune autre voix ne prend le relais.
+   - Si ce n'est pas le cas, noter : le temps passé en préparation, une demande du trousseau en trop, une phrase de panne.
+
+### 106. Voix de fournisseur fausse : l'écoute échoue, sans voix du système (envoie du texte au fournisseur, ne doit jouer aucun son)
+
+1. Modifiez la voix d'essai (ou ajoutez-en une) : modèle `modele-voix-exemple`, identifiant `voix-exemple` (des noms qui n'existent pas
+   chez le fournisseur). Choisissez-la, « Écouter ».
+   - Attendu : l'écoute échoue, avec une icône rouge et **la phrase propre à la voix** (pas celle des modes), l'une de celles-ci
+     selon la réponse du fournisseur (laquelle : non établi, à noter) : « Le fournisseur ne connaît pas ce modèle ou cette adresse
+     (HTTP 404) : vérifiez le modèle, l'identifiant et les paramètres de la voix dans l'onglet Voix, puis l'adresse du
+     fournisseur. », ou « Le fournisseur a refusé la demande de cette voix (HTTP <code>) : vérifiez le modèle, l'identifiant et
+     les paramètres de la voix dans l'onglet Voix. » (construite), ou « Le fournisseur n'a pas rendu un son lisible : vérifiez le
+     modèle, l'identifiant et les paramètres de la voix dans l'onglet Voix. ».
+   - Attendu : **aucun son, de personne**. L'écoute n'a pas de repli sur la voix du système (sans cela, une voix fausse
+     « marcherait » à l'oreille). **Si vous entendez la voix du système, c'est pas OK.**
+2. Passez dans une autre application, puis revenez à Supervox.
+   - Attendu : la phrase d'erreur est toujours dans la bande (une panne affichée survit à la perte de la fenêtre active).
+3. Choisissez une autre ligne, ou changez un filtre.
+   - Attendu : la phrase d'erreur disparaît, la bande reprend la phrase de vie privée de la ligne choisie. Elle disparaît aussi
+     après une écriture réussie (« Utiliser cette voix ») et à la prochaine écoute. Refaites l'écoute pour la voir revenir.
+4. Gardez la voix fausse pour l'essai 114 (point 3), sinon supprimez-la.
+   - Si ce n'est pas le cas, noter : la phrase vue, un son entendu, une phrase d'erreur qui reste après le geste suivant, une
+     phrase des modes à la place (« mode », « consigne »).
+
+### 107. Écoute refusée tant qu'une dictée ou un entretien tient le micro (ouvre le micro)
+
+Fenêtre des réglages ouverte sur Voix, une ligne choisie (« Écouter » actif), la fenêtre visible. « Dictée brute », ⌃⌥Espace en
+bascule.
+
+1. Tapez ⌃⌥Espace (la dictée ouvre le micro).
+   - Attendu : le panneau s'ouvre et enregistre ; dans la fenêtre des réglages, **« Écouter » est grisé** tant que la dictée tient
+     le micro. La phrase « Une dictée ou un entretien se sert du micro : réessayez d'écouter cette voix quand la dictée ou
+     l'entretien sera terminé. » **n'est pas atteignable par un clic** tant que le bouton est grisé : elle ne s'affiche que si
+     l'écoute est demandée alors que le bouton n'avait pas encore suivi le micro. Si vous la voyez, notez dans quelles
+     conditions.
+2. Terminez la dictée (⌃⌥Espace de nouveau), puis regardez le bouton.
+   - Attendu : « Écouter » redevient actif quand la dictée n'occupe plus le micro, et l'écoute repart. Pendant une relecture
+     (essai 57), il est actif aussi : le micro est libre.
+3. Lancez un entretien (pastille « Entretien », essai 69 ; il ouvre le micro), regardez le bouton, puis Échap (essai 72) et
+   remettez « Dictée brute ».
+   - Attendu : « Écouter » est grisé pendant l'entretien, actif de nouveau après Échap.
+   - Si ce n'est pas le cas, noter : un bouton actif malgré le micro tenu, ou resté grisé après la fin, et la phrase si elle
+     s'affiche.
+
+### 108. Écoute coupée par la dictée (ouvre le micro, joue un son)
+
+1. Fenêtre des réglages ouverte sur Voix, une voix du système choisie. Cliquez sur « Écouter », puis, **tout de suite**, pendant la
+   phrase d'essai, tapez ⌃⌥Espace.
+   - Attendu : la voix d'essai s'arrête **avant que le micro n'écoute** ; la dictée démarre ; dans la fenêtre, « Écouter » est
+     revenu (puis grisé pendant la dictée, essai 107). Dites « un deux trois », puis terminez. **Le texte dicté ne contient rien de la phrase
+     d'essai** (aucune trace de « Bonjour, je suis une voix »). **Comportement à confirmer** : le collage vise l'application active, ici Supervox, dont la
+     fenêtre n'a pas de champ pour recevoir le texte ; ouvrez alors le panneau (menu de l'icône) et lisez la carte « Dernière
+     dictée » (essai 11), qui montre en entier un texte aussi court.
+   - Si ce n'est pas le cas, noter : une voix qui continue après l'appui, un début de phrase d'essai dans le texte dicté, un
+     écho de la voix au début de la dictée.
+
+### 109. Écoute coupée par une correction à la voix (ouvre le micro, joue un son)
+
+Préparatifs de l'essai 57 (pastille « Prompt », modèle fort). Ouvrez d'abord la fenêtre des réglages sur l'onglet Voix et
+choisissez une voix du système (« Réglages… » ferme le panneau : il ne faut pas le faire en pleine relecture). Faites ensuite une
+dictée en mode Prompt (essai 51) : vous êtes en relecture, la fenêtre des réglages toujours visible.
+
+1. « Écouter » (actif : le micro est libre pendant la relecture), puis **tout de suite** ⌃⌥Espace (pendant la relecture, il
+   commence une correction).
+   - Attendu : la voix d'essai s'arrête avant l'écoute de la consigne. Dites « ajoute que les tests doivent passer » : la
+     transcription de la consigne ne contient rien de la phrase d'essai. Terminez par Échap (« Échap annule la correction ; le
+     texte ne change pas. »), puis Échap pour fermer la relecture.
+   - Si ce n'est pas le cas, noter : une voix qui continue, une phrase d'essai dans la consigne ou dans le texte réécrit.
+
+### 110. Écoute coupée par un entretien (ouvre le micro, joue un son)
+
+Préparatifs de l'étape 6 (modèles rapide et fort, micro accordé). Choisissez d'abord la pastille « Entretien » (elle lance un
+entretien : Échap, essai 72, l'annule ; le mode reste choisi). Ouvrez ensuite la fenêtre des réglages sur Voix, visible
+(« Réglages… » annule un entretien en cours).
+
+1. Une voix du système choisie, « Écouter », puis **tout de suite** ⌃⌥Espace (il lance un entretien).
+   - Attendu : la voix d'essai s'arrête avant que l'entretien n'ouvre le micro (« Préparation de l'entretien… »), puis la première
+     question est dite par la voix de l'entretien ; la phrase d'essai n'apparaît pas comme une réponse dans « Vous ». Échap pour
+     annuler (essai 72), remettez « Dictée brute ».
+   - Si ce n'est pas le cas, noter : une voix qui continue sous la préparation, la phrase d'essai dans la carte « Vous ».
+
+### 111. Écouter juste après l'annulation d'une dictée (ouvre le micro, joue un son)
+
+C'est une **limite connue** : à l'instant d'une annulation, le micro de la dictée peut être encore en train de se fermer. Rien n'est
+gardé de ce son, mais un casque Bluetooth peut rester un instant en mode appel.
+
+1. Voix du système choisie, fenêtre visible. Tapez ⌃⌥Espace, attendez « Enregistrement », tapez Échap, puis cliquez
+   **aussitôt** sur « Écouter ».
+   - Attendu : deux issues sont possibles d'après le code. Soit l'écoute part (le micro de la dictée annulée finit de se fermer),
+     soit elle est refusée avec la phrase de l'essai 107. Dans les deux cas : aucun texte n'est collé, aucune dictée n'est gardée.
+   - **À noter** : si la voix d'essai sonne « téléphone » (étroite, étouffée) ; laquelle des deux issues vous avez eue ; avec quel
+     matériel (le modèle d'un casque dans vos notes personnelles seulement, jamais dans ce dépôt).
+
+### 112. Voix du système retirée : l'écoute le dit, l'entretien continue (ouvre le micro, joue un son)
+
+Si vous ne voulez pas retirer une voix du système, **« non fait »**.
+
+1. Choisissez une voix du système précise (pas « Automatique »), « Utiliser cette voix » (la coche est sur elle). Retirez cette
+   voix dans Réglages Système (l'endroit exact dépend de la version de macOS : non établi ici ; notez son nom dans vos notes
+   personnelles). Revenez à Supervox, changez d'onglet puis revenez à l'onglet Voix (la liste est relue à chaque ouverture ; si la ligne ne
+   change pas, quittez et relancez Supervox : on ne sait pas si le système garde la liste en mémoire, non établi).
+   - Attendu : une ligne « Voix en vigueur » est en tête de la section « Voix du système », avec le triangle orange et « Cette
+     voix n'est plus installée sur cet ordinateur. » ; « Utiliser cette voix » est grisé.
+2. Choisissez cette ligne, « Écouter ».
+   - Attendu : **aucune voix ne parle**, ni celle-là ni une autre ; la bande dit « Cette voix n'est pas installée sur cet
+     ordinateur : choisissez-en une autre. » (la phrase de l'écoute, différente de celle de la ligne).
+3. Lancez un entretien (essai 68).
+   - Attendu : la meilleure voix de la langue parle, **sans avis** (décision de l'étape : un entretien ne doit jamais se taire).
+     **À noter** : la voix entendue peut ne pas être celle choisie ; l'onglet, lui, le dit.
+4. Réinstallez la voix, puis choisissez « Automatique » et « Utiliser cette voix ».
+   - Si ce n'est pas le cas, noter : une autre voix qui parle à l'écoute (pas OK), un avis pendant l'entretien, un entretien
+     resté muet.
+
+### 113. VoiceOver dans l'onglet Voix (joue un son)
+
+Activez VoiceOver (⌘F5). **Rien n'a été écouté** : les libellés ci-dessous sont lus dans le code, non entendus. Volume prudent.
+
+1. Placez-vous sur la ligne cochée.
+   - Attendu : la coche se lit « Voix en vigueur » ; sur une ligne « Voix en vigueur » absente de la liste, elle ne le répète pas
+     (le titre le dit déjà).
+2. Écoutez une voix, placez-vous sur la ligne, puis sur le bouton.
+   - Attendu : la marque se lit « En écoute » (pendant la préparation aussi) ; le bouton se lit « Arrêter » pendant l'écoute, puis
+     « Écouter » (son titre courant seulement, sans le titre de réserve).
+3. Placez-vous sur une ligne avec un avertissement (essai 101, point 6, ou 112), puis sur la bande, avec chacun de ses états.
+   - Attendu : le triangle se lit « Avertissement » ; l'icône de la bande se lit « Avertissement » (refus), « Erreur » (panne
+     d'écoute) ou « Information » (vie privée).
+4. Ouvrez l'éditeur, placez-vous sur les champs des paramètres.
+   - Attendu : « Clé du paramètre 1 », « Valeur du paramètre 1 », puis 2, etc. ; le bouton « moins » se lit « Retirer ce
+     paramètre » ; le menu de l'icône de liste, « Modèles du fournisseur ». **Comportement à confirmer** : que VoiceOver atteigne
+     ces éléments dans la feuille. Désactivez VoiceOver (⌘F5).
+   - Si ce n'est pas le cas, noter : ce que VoiceOver a dit ou tu, à quel élément ; un champ lu sans son numéro.
+
+### 114. Entretien avec la voix choisie, et repli (ouvre le micro, joue un son)
+
+Préparatifs de l'étape 6 (modèles rapide et fort, micro accordé).
+
+1. **Une voix du système précise.** Onglet Voix, choisissez-la, « Utiliser cette voix », puis lancez un entretien (essai 68).
+   - Attendu : les questions sont dites par la voix choisie (nom, genre et voix entendue : non vérifiés, **à noter**) ; la ligne de
+     vie privée du panneau ne nomme aucun fournisseur de voix.
+2. **La voix du fournisseur** (valeurs de vos notes personnelles). « Utiliser cette voix » sur la voix d'essai, puis un entretien.
+   - Attendu : la ligne de vie privée du panneau nomme aussi le fournisseur de la voix : « Le texte que dit Supervox part chez
+     « <nom> ». » (construite, à la suite de la ligne des réponses) ; la voix du fournisseur dit les questions. De retour dans
+     l'onglet Entretien : « La voix de Supervox vient de « <nom> » : le texte qu'elle dit lui est envoyé. » (construite).
+3. **Repli annoncé.** « Utiliser cette voix » sur la voix fausse de l'essai 106, puis un entretien.
+   - Attendu : à la première phrase, la voix du système parle à la place, avec l'avis « La voix choisie ne répond pas :
+     l'entretien continue avec la voix du système. », dit une seule fois ; les phrases suivantes vont directement à la voix du
+     système (comme à l'essai 82, point 2).
+4. Rétablissez : « Automatique », « Utiliser cette voix », supprimez les voix d'essai.
+   - Si ce n'est pas le cas, noter : un entretien qui reste muet, un avis absent ou répété, une voix du fournisseur appelée
+     après l'avis, le fournisseur nommé alors que la voix est celle du système.
+
+### 115. Retour à faire
 
 À la fin, notez : les essais pas OK ; ce qui était lent (préparation, transcription, téléchargement, et le temps entre
 « Coller » et l'arrivée du texte) ; ce qui était déroutant dans le panneau ou les réglages (la relecture, l'aide sous le
@@ -2356,5 +2838,13 @@ haut-parleurs, le casque filaire et le casque Bluetooth (le modèle du casque da
 ce dépôt) ; si les questions et le prompt étaient utiles, et si le modèle a respecté la conclusion à la voix ; si les phrases
 des pannes disent bien quoi faire ; si l'Historique contient exactement ce qu'il devait contenir ; si la confirmation de
 suppression d'un entretien et l'absence de sélection ensuite vous conviennent ; si l'onglet Entretien tient dans la fenêtre ; ce que les tests matériels
-(essais 91 à 94) et le banc (essai 95) ont montré ; et, pour chaque ligne de « Jamais exécuté pendant la construction », ce
-que vous avez fini par voir.
+(essais 91 à 94 et 103) et le banc (essai 95) ont montré ; et, pour chaque ligne de « Jamais exécuté pendant la construction »
+(étapes 6 et 7), ce que vous avez fini par voir. Pour l'étape 7 : les huit titres de la barre entiers, sans chevron, et les
+autres onglets à 860 points ; le temps d'ouverture de l'onglet Voix ; combien de voix sont « Non précisé » ; si la voix entendue
+est celle du nom, du genre et de la langue affichés ; le délai entre « Écouter » et le premier son, pour une voix du système
+puis pour une voix de fournisseur ; le nombre de demandes du trousseau à l'écoute ; si l'écoute s'arrête quand elle le doit
+(« Arrêter », autre onglet, autre application, micro qui s'ouvre) ; si la voix d'essai a sonné « téléphone » après une dictée
+annulée ; si le compteur de fins de secours du lecteur était à 0 ; si la liste a défilé jusqu'à la voix qu'on vient
+d'enregistrer, avec votre vraie liste ; ce qui est arrivé à la feuille de l'éditeur quand vous avez quitté l'onglet ; ce que
+VoiceOver a dit ou tu dans l'onglet Voix ; si l'écart entre les boutons de l'onglet Voix, et les boutons d'ajout de
+Fournisseurs et de Modes, vous ont gêné.
