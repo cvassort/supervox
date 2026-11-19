@@ -30,6 +30,16 @@ public enum DictationFailure: Error, Equatable, Sendable {
     }
 }
 
+/// Une erreur de la maison (de Supervox, jamais d'une bibliothèque ni du système) dont la raison peut se lire à l'écran, dans
+/// « La transcription a échoué : <raison>. » ou « Le micro ne fonctionne pas : <raison>. ». `reason` : une raison fixe, en
+/// français, sans point final, qui ne reprend le texte d'aucune autre erreur. Seules les erreurs de la maison l'adoptent : la
+/// dictée ne garde le texte d'aucune autre erreur que celles-ci, `AudioCaptureError` et `TranscriberError` (revue finale de
+/// l'étape « réglage des voix », B-I1 : une `LocalizedError` d'une bibliothèque tierce peut porter un texte en anglais ou un
+/// chemin).
+public protocol SupervoxError: Error {
+    var reason: String { get }
+}
+
 public enum DictationPhase: Equatable, Sendable {
     case idle
     /// Chargement du détecteur et des moteurs ; le micro n'est pas encore ouvert.
