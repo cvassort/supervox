@@ -1194,6 +1194,43 @@ import Testing
         #expect(voices.draft != nil)
     }
 
+    /// R5 (tour 2) : le changement d'onglet a son propre chemin, en plus de la disparition du volet (vue seulement hors écran) :
+    /// QUITTER l'onglet Voix arrête l'écoute, annule la confirmation et abandonne le brouillon. Appelé directement, sans vue ni
+    /// disparition. Témoin : passer d'un autre onglet à un autre ne touche à rien de l'onglet Voix.
+    @Test func leavingTheVoicesTabByTheTabChangeStopsEverything() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
+        let rig = VoicesModelTests.Rig(
+            VoicesModelTests.settings(voices: [saved]), player: ScriptedClipPlayer(completion: .manual))
+        let voices = rig.model
+        let controller = makeController()
+        let view = SettingsView(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), voices: voices,
+            navigation: SettingsNavigation(tab: .voices))
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        voices.listen()
+        #expect(await until { rig.player.isPlaying })
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.requestDeletion()
+
+        view.tabChanged(from: .modes, to: .providers)
+        #expect(rig.player.isPlaying && voices.pendingDeletion == saved.id, "témoin : l'onglet Voix n'était pas quitté")
+
+        view.tabChanged(from: .voices, to: .providers)
+        #expect(!rig.player.isPlaying, "la lecture est arrêtée")
+        #expect(voices.listeningRow == nil)
+        #expect(voices.pendingDeletion == nil, "la confirmation est annulée")
+        voices.beginEditing()
+        view.tabChanged(from: .voices, to: .history)
+        #expect(voices.draft == nil, "le brouillon est abandonné")
+        #expect(rig.updates == 0)
+    }
+
     /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
     func voicesContent(
         _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()

@@ -273,16 +273,19 @@ public struct SettingsView: View {
                 Tab(tab.title, systemImage: tab.systemImage, value: tab) { pane(for: tab) }
             }
         }
-        // Une capture ne survit pas à un changement d'onglet (en plus de `onDisappear` de l'onglet Raccourci).
-        .onChange(of: navigation.tab) {
-            hotKey.cancelRecording()
-            modes.cancelRecording()
-            // L'écoute d'une voix et une confirmation en attente de l'onglet Voix tombent par `onDisappear` du volet, seul chemin (un
-            // second ici ne tenait aucun test : la disparition du volet au changement d'onglet est vue dans `leavingStopsThePreview`).
-            // Un autre onglet : le gabarit tapé dans celui-ci est enregistré.
-            interview?.commitTemplate()
-        }
+        .onChange(of: navigation.tab) { old, new in tabChanged(from: old, to: new) }
         .frame(width: Self.windowSize.width, height: Self.windowSize.height)
+    }
+
+    /// Le changement d'onglet : une capture de raccourci ne lui survit pas (en plus de `onDisappear` de l'onglet Raccourci) ; le
+    /// gabarit tapé dans l'onglet Entretien est enregistré ; QUITTER l'onglet Voix le quitte (`VoicesModel.leave` : écoute arrêtée,
+    /// confirmation annulée, brouillon abandonné). Ce chemin double celui de la disparition du volet, vu seulement hors écran ; les
+    /// deux sont idempotents (R5, tour 2).
+    func tabChanged(from old: SettingsTab, to new: SettingsTab) {
+        hotKey.cancelRecording()
+        modes.cancelRecording()
+        if old == .voices, new != .voices { voices?.leave() }
+        interview?.commitTemplate()
     }
 
     /// Le bouton « Choisir la voix… » de l'onglet Entretien : mène à l'onglet Voix ; `nil` (pas de bouton) sans onglet Voix.

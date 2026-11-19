@@ -1040,4 +1040,29 @@ import Testing
         model.clearMessage()
         #expect(model.message == nil)
     }
+
+    /// R4 (tour 2) : une seule règle pour l'état de l'écoute. `stopListening()` ne remet à zéro qu'une écoute en préparation ou en
+    /// lecture : une panne affichée survit (la fenêtre qui perd la clé l'appelle, `onLeave`) ; seuls les gestes de C4 l'effacent.
+    @Test func stoppingKeepsADisplayedFailureAndStopsAListeningInProgress() async {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        rig.microphone.held = true
+        model.listen()
+        rig.microphone.held = false
+        #expect(model.previewState == .failed(.microphoneBusy))
+        model.stopListening()
+        #expect(model.previewState == .failed(.microphoneBusy), "la panne affichée survit à l'arrêt")
+        #expect(model.previewMessage == VoicesText.failure(.microphoneBusy))
+
+        let gate = TestGate()
+        defer { gate.open() }
+        let held = Rig(Self.settings(), systemVoice: PreviewVoice(.held(gate, VoicePreviewTests.clip)))
+        held.model.selection = RowID.system(identifier: "voix.exemple.a")
+        held.model.listen()
+        #expect(held.model.previewState == .preparing)
+        held.model.stopListening()
+        #expect(held.model.previewState == .idle, "une écoute en cours revient au repos")
+        #expect(held.model.listeningRow == nil)
+    }
 }

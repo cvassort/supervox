@@ -391,10 +391,16 @@ public final class VoicesModel {
         }
     }
 
+    /// Arrête l'écoute en cours. Une seule règle pour l'état (R4, tour 2) : seule une écoute en préparation ou en lecture revient
+    /// au repos ; une panne affichée survit (la fenêtre qui perd la clé appelle cet arrêt : `onLeave`) et n'est effacée que par les
+    /// gestes qui la rendent ancienne (`clearFailedPreview`).
     public func stopListening() {
         preview.stop()
-        previewState = .idle
         listeningRow = nil
+        switch previewState {
+        case .preparing, .playing: previewState = .idle
+        case .idle, .failed: break
+        }
     }
 
     /// Une panne d'écoute affichée est effacée (une écoute en cours n'est pas touchée). Appelé par les gestes qui la rendent
