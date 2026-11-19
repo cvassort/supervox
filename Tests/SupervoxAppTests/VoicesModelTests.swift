@@ -360,17 +360,21 @@ import Testing
         #expect(model.selection == .saved(saved.id))
     }
 
-    /// Ce qui cache la voix neuve (filtre de langue, de genre, ou les deux) ; `none` : rien ne la cache (témoin).
+    /// Ce qui cache la voix neuve (filtre de langue, de genre, ou les deux) ; `none` : rien ne la cache (témoin) ;
+    /// `blankLanguage` : le brouillon n'a pas de langue (la voix est écrite normalisée, dans la langue du système, `fr-FR`), et le
+    /// filtre de langue la cache.
     enum HidingFilters: CaseIterable, Sendable {
-        case language, gender, both, none
+        case language, gender, both, none, blankLanguage
 
-        var language: String? { self == .language || self == .both ? "en-US" : "fr-FR" }
+        var language: String? { self == .gender || self == .none ? "fr-FR" : "en-US" }
         var gender: VoicesModel.GenderFilter { self == .gender || self == .both ? .male : .female }
     }
 
-    /// Décision 11 (tâche 4) : une voix qu'on vient d'enregistrer se voit. Cachée par les filtres en cours (la voix est en
-    /// `fr-FR`, féminine), les deux filtres reviennent à « tous » ; elle est alors choisie ET montrée (`selectedRow`). Rien ne la
-    /// cache : les filtres ne bougent pas.
+    /// R1 (tâche 4, tour 2, remplace la décision 11) : une voix qu'on vient d'enregistrer se voit. Cachée par les filtres en cours
+    /// (la voix est en `fr-FR`, féminine), le filtre de langue passe à LA LANGUE ÉCRITE de cette voix (pas « toutes les
+    /// langues », qui déroulait toutes les voix du système) et le filtre de genre à « tous » ; elle est alors choisie ET montrée
+    /// (`selectedRow`). Rien ne la cache : les filtres ne bougent pas. (« Une voix sans langue » n'existe pas après
+    /// l'enregistrement : `normalized` lui donne celle du système, cas `blankLanguage`.)
     @Test(arguments: HidingFilters.allCases)
     func aJustSavedVoiceIsShownAndChosen(_ hiding: HidingFilters) throws {
         let rig = Rig(Self.settings())
@@ -379,19 +383,21 @@ import Testing
         model.gender = hiding.gender
         model.beginAdding()
         model.draft = Self.validDraft()
+        if hiding == .blankLanguage { model.draft?.language = "  " }
         model.save()
         let saved = try #require(rig.settings.voices.first)
+        #expect(saved.voice.language == "fr-FR")
         #expect(model.selection == .saved(saved.id))
         #expect(model.selectedRow?.id == .saved(saved.id), "la ligne neuve est montrée (\(hiding))")
         #expect(model.rows.contains { $0.id == .saved(saved.id) })
         if hiding == .none {
             #expect(model.language == "fr-FR" && model.gender == .female, "rien ne la cachait : les filtres restent")
         } else {
-            #expect(model.language == nil && model.gender == .all, "les deux filtres reviennent à « tous » (\(hiding))")
+            #expect(model.language == "fr-FR" && model.gender == .all, "la langue de la voix, et tous les genres (\(hiding))")
         }
     }
 
-    /// Décision 11 : une voix modifiée dont la nouvelle langue est hors du filtre reste choisie et montrée.
+    /// R1 : une voix modifiée dont la nouvelle langue est hors du filtre reste choisie et montrée ; le filtre passe à sa langue.
     @Test func anEditedVoiceMovedOutOfTheFilterIsStillShown() throws {
         let saved = Self.saved("Voix d'exemple A", id: 1, gender: .female)
         let rig = Rig(Self.settings(voices: [saved]))
@@ -403,7 +409,7 @@ import Testing
         model.save()
         #expect(rig.settings.voices.first?.voice.language == "en-US")
         #expect(model.selectedRow?.id == .saved(saved.id))
-        #expect(model.language == nil && model.gender == .all)
+        #expect(model.language == "en-US" && model.gender == .all)
     }
 
     /// Modifier la voix en vigueur (la ligne cochée) met à jour la liste ET `settings.voice`, dans la même écriture. Modifier la

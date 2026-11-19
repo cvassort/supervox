@@ -1018,7 +1018,7 @@ for dark in [false, true] {
     try await render(
         voicesTab(voicesProvider), name: "reglages-voix-fournisseur", dark: dark, background: window, size: settingsSize)
     // Une voix dont le fournisseur a été supprimé, choisie : sa note, « Utiliser » grisé ; « Écouter » reste actif (l'écoute dit
-    // pourquoi elle ne parle pas). Filtre « Non précisé » : la liste ne fait pas défiler jusqu'à la ligne choisie.
+    // pourquoi elle ne parle pas). Filtre « Non précisé » : l'image est rendue sans laisser à la liste le passage où elle défile jusqu'à la ligne choisie.
     let voicesUnusable = ExampleVoices().makeModel()
     voicesUnusable.gender = .unspecified
     voicesUnusable.selection = .saved(ExampleVoices.voiceG.id)

@@ -535,6 +535,53 @@ import Testing
         RunLoop.main.run(mode: .default, before: Date())
     }
 
+    // MARK: - R1 (tour 2) : la liste défile jusqu'à la ligne choisie
+
+    /// La table d'AppKit qui porte la liste de SwiftUI, sous `view`.
+    static func table(in view: NSView) -> NSTableView? {
+        if let table = view as? NSTableView { return table }
+        for subview in view.subviews { if let table = table(in: subview) { return table } }
+        return nil
+    }
+
+    /// La ligne choisie de la table est dans sa partie visible.
+    static func selectionIsVisible(in view: NSView) -> Bool {
+        guard let table = table(in: view), table.selectedRow >= 0 else { return false }
+        return NSLocationInRange(table.selectedRow, table.rows(in: table.visibleRect))
+    }
+
+    /// R1 : 40 voix installées inventées en `en-US`, filtre en `fr-FR` ; on enregistre une voix en `en-US`. Le filtre passe à
+    /// `en-US` : la liste montre l'automatique, les 40 voix, puis la voix neuve, en bas, choisie. Mesure AppKit, dans une fenêtre
+    /// jamais affichée : la table a plus de lignes que sa partie visible (sans défilement, la ligne du bas serait hors de vue), et
+    /// la ligne choisie est dans la partie visible.
+    @Test func theListScrollsToAJustSavedVoice() async throws {
+        let installed = (1...40).map {
+            SystemVoiceInfo(identifier: "voix.exemple.\($0)", language: "en-US", quality: 1, name: "Voix d'exemple \($0)")
+        }
+        let rig = Rig(VoicesModelTests.settings(), installed: installed)
+        let model = rig.model
+        #expect(model.language == "fr-FR")
+        let shown = show(model)
+        defer { withExtendedLifetime(shown.window) {} }
+        await pump(shown.host) { false }
+        model.beginAdding()
+        var draft = VoicesModelTests.validDraft()
+        draft.language = "en-US"
+        model.draft = draft
+        model.save()
+        let saved = try #require(rig.settings.voices.first)
+        #expect(model.language == "en-US")
+        #expect(model.selection == .saved(saved.id))
+        await pump(shown.host) { Self.selectionIsVisible(in: shown.host) }
+
+        let table = try #require(Self.table(in: shown.host), "aucune table d'AppKit sous la liste")
+        let range = table.rows(in: table.visibleRect)
+        print("Liste : \(table.numberOfRows) lignes, visibles \(range.location)..<\(range.location + range.length), choisie \(table.selectedRow)")
+        #expect(range.length > 0 && range.length < table.numberOfRows, "la liste a plus de lignes que sa partie visible")
+        #expect(table.selectedRow == table.numberOfRows - 1, "la voix neuve est la dernière ligne, choisie")
+        #expect(Self.selectionIsVisible(in: shown.host), "la ligne choisie est dans la partie visible")
+    }
+
     /// Décision 1 : un fournisseur retiré des réglages pendant que l'onglet n'est pas affiché ; à l'apparition du volet, sans
     /// aucun geste, la ligne de vie privée le montre, et le message d'avant est effacé.
     @Test func appearingRereadsTheSettingsAndClearsTheMessage() async {

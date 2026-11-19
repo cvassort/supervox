@@ -504,10 +504,11 @@ public final class VoicesModel {
         }
         guard written else { return }
         self.draft = nil
-        // Une voix qu'on vient d'enregistrer se voit : cachée par les filtres en cours, les deux reviennent à « tous ». AVANT de la
-        // choisir : chaque `didSet` des filtres lâche une sélection encore cachée par l'autre filtre.
+        // Une voix qu'on vient d'enregistrer se voit (R1, tour 2, remplace la décision 11) : cachée par les filtres en cours, le
+        // filtre de langue passe à la langue ÉCRITE de cette voix (normalisée : jamais vide ; « toutes » si elle a disparu) et celui de
+        // genre à « tous ». AVANT de la choisir : chaque `didSet` des filtres lâche une sélection encore cachée par l'autre filtre.
         if !rows.contains(where: { $0.id == .saved(id) }) {
-            language = nil
+            language = settings.voices.first { $0.id == id }?.voice.normalized.language
             gender = .all
         }
         selection = .saved(id)

@@ -149,19 +149,32 @@ public struct VoicesPane: View {
         let rows = model.rows
         let system = rows.filter { $0.section == .system }
         let saved = rows.filter { $0.section == .provider }
-        return List(selection: $model.selection) {
-            if !system.isEmpty {
-                Section(VoicesText.systemSection) {
-                    ForEach(system) { row in rowView(row).tag(row.id) }
+        // R1 (tour 2) : la liste défile jusqu'à la ligne choisie quand la sélection change (une voix qu'on vient d'enregistrer est
+        // choisie par le modèle, souvent en bas de la liste). Au passage suivant de la boucle principale : la même mise à jour change
+        // le filtre, et la table n'a ses nouvelles lignes qu'après (mesuré : appelé tout de suite, la liste s'arrêtait avant la ligne).
+        return ScrollViewReader { proxy in
+            List(selection: $model.selection) {
+                if !system.isEmpty {
+                    Section(VoicesText.systemSection) {
+                        ForEach(system) { row in rowView(row).tag(row.id) }
+                    }
+                }
+                if !saved.isEmpty {
+                    Section(VoicesText.providerSection) {
+                        ForEach(saved) { row in rowView(row).tag(row.id) }
+                    }
                 }
             }
-            if !saved.isEmpty {
-                Section(VoicesText.providerSection) {
-                    ForEach(saved) { row in rowView(row).tag(row.id) }
+            .listStyle(.inset)
+            .onChange(of: model.selection) { _, selection in
+                guard let selection else { return }
+                Task { @MainActor in
+                    proxy.scrollTo(selection)
+                    await Task.yield()
+                    proxy.scrollTo(selection)
                 }
             }
         }
-        .listStyle(.inset)
     }
 
     private func rowView(_ row: VoicesModel.Row) -> some View {
