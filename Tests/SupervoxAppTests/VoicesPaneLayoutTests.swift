@@ -378,6 +378,28 @@ import Testing
         #expect(Self.scrollable(in: host).isEmpty)
     }
 
+    /// R2 (tour 2) : toute écriture de l'éditeur passe par une seule règle : sans brouillon en cours, elle est ignorée. Une écriture
+    /// tardive de la liaison (un champ qui pousse sa valeur en perdant la main, après « Enregistrer » ou « Annuler ») ne recrée
+    /// donc jamais un brouillon, ni la feuille. Avec un brouillon, elle s'applique.
+    @Test func anEditorWriteNeverRecreatesADraft() {
+        let model = Rig(VoicesModelTests.settings()).model
+        let binding = VoiceEditor.draftBinding(model)
+        #expect(model.draft == nil)
+        binding.wrappedValue.name = "Voix d'exemple A"
+        binding.wrappedValue = VoicesModel.VoiceDraft(name: "Voix d'exemple B")
+        model.editDraft { $0.gender = .female }
+        #expect(model.draft == nil, "sans brouillon, rien n'est recréé")
+        #expect(VoicesPane.sheet(for: model) == nil, "et la feuille ne se rouvre pas")
+
+        model.beginAdding()
+        binding.wrappedValue.name = "Voix d'exemple A"
+        model.editDraft { $0.gender = .female }
+        #expect(model.draft?.name == "Voix d'exemple A" && model.draft?.gender == .female)
+        model.cancel()
+        binding.wrappedValue.name = "Voix d'exemple C"
+        #expect(model.draft == nil, "après « Annuler », une écriture tardive est ignorée")
+    }
+
     // MARK: - Décisions 3 à 5 : ce que la vue montre
 
     /// La coche et le haut-parleur sont à la couleur d'accent, sauf sur la ligne surlignée (fond déjà à la couleur d'accent : vu
@@ -605,9 +627,9 @@ import Testing
         withExtendedLifetime(shown.window) {}
     }
 
-    /// Décision 2 : la disparition du volet (fenêtre retirée) arrête l'écoute (la lecture elle-même) et annule une confirmation en
-    /// attente ; un brouillon ouvert est gardé.
-    @Test func disappearingStopsThePreviewCancelsTheConfirmationAndKeepsTheDraft() async throws {
+    /// Décision 2, et R3 (tour 2, remplace « brouillon gardé ») : la disparition du volet (changement d'onglet, fenêtre retirée)
+    /// arrête l'écoute (la lecture elle-même), annule une confirmation en attente et abandonne un brouillon ouvert.
+    @Test func disappearingStopsThePreviewCancelsTheConfirmationAndAbandonsTheDraft() async throws {
         let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
         let rig = Rig(VoicesModelTests.settings(voices: [saved]), player: ScriptedClipPlayer(completion: .manual))
         let model = rig.model
@@ -634,7 +656,7 @@ import Testing
         model.beginEditing()
         again.window.contentView = NSView()
         await pump(again.host) { false }
-        #expect(model.draft != nil, "un brouillon ouvert est gardé")
+        #expect(model.draft == nil, "un brouillon ouvert est abandonné")
         withExtendedLifetime([shown.window, again.window]) {}
     }
 }

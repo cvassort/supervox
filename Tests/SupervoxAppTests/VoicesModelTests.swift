@@ -1000,4 +1000,44 @@ import Testing
         #expect(active.contains("voix automatique du système"), "\(active)")
         #expect(VoicesText.deleteConfirmation(name: "Voix d'exemple A", isActive: false).count < active.count)
     }
+
+    // MARK: - Tâche 4, tour de correction 2 : quitter l'onglet, le message de l'éditeur (R3)
+
+    /// R3 : quitter l'onglet (`leave`) arrête une écoute en cours, annule une confirmation en attente et abandonne le brouillon.
+    @Test func leavingTheTabAbandonsTheDraft() async {
+        let saved = Self.saved("Voix d'exemple A", id: 1)
+        let rig = Rig(Self.settings(voices: [saved]), player: ScriptedClipPlayer(completion: .manual))
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        model.listen()
+        #expect(await until { rig.player.isPlaying })
+        model.selection = .saved(saved.id)
+        model.requestDeletion()
+        model.leave()
+        #expect(!rig.player.isPlaying && model.listeningRow == nil && model.previewState == .idle)
+        #expect(model.pendingDeletion == nil)
+
+        model.beginEditing()
+        model.draft?.name = ""
+        model.save()  // refusé : la phrase est dans l'éditeur
+        #expect(model.draft != nil && model.message != nil)
+        model.leave()
+        #expect(model.draft == nil, "le brouillon est abandonné")
+        #expect(VoicesPane.sheet(for: model) == nil)
+        #expect(rig.updates == 0)
+    }
+
+    /// R3 : tant qu'un brouillon est ouvert, son message (le refus que l'éditeur montre) n'est pas effacé par ce qui efface le
+    /// message de l'onglet (apparition du volet, présentation de la fenêtre) ; sans brouillon, il l'est.
+    @Test func theEditorRefusalIsNotClearedWhileTheDraftIsOpen() {
+        let model = Rig(Self.settings()).model
+        model.beginAdding()
+        model.save()  // sans nom : refusé
+        #expect(model.message == VoicesText.refusalEmptyName)
+        model.clearMessage()
+        #expect(model.message == VoicesText.refusalEmptyName, "le refus reste sous les yeux de la personne")
+        model.draft = nil
+        model.clearMessage()
+        #expect(model.message == nil)
+    }
 }

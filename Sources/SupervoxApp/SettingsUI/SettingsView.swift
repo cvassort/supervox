@@ -149,7 +149,8 @@ public struct SettingsView: View {
                 modes.clearMessage()
                 interview?.reload()
                 interview?.clearMessage()
-                // Décision 1 : un fournisseur changé ailleurs change ce que dit la ligne de vie privée de l'onglet Voix.
+                // Décision 1 : un fournisseur changé ailleurs change ce que dit la ligne de vie privée de l'onglet Voix. Le message n'est
+                // pas effacé tant qu'un brouillon est ouvert : c'est le refus que l'éditeur montre (R3, règle dans `clearMessage`).
                 voices?.reload()
                 voices?.clearMessage()
                 history?.clearMessage()
@@ -163,7 +164,7 @@ public struct SettingsView: View {
                 // L'écoute d'une voix ne survit pas à la fenêtre quittée. Une confirmation en attente et un brouillon d'éditeur, eux,
                 // sont GARDÉS : une feuille fait perdre la clé à la fenêtre, `onLeave` s'appelle alors, et les annuler fermerait la
                 // feuille à peine ouverte (même constat que l'onglet Historique). Ils tombent au changement d'onglet et à la
-                // disparition du volet. Une fenêtre qui porte une feuille ne se ferme pas : fermer la fenêtre n'oublie donc aucune
+                // disparition du volet (`VoicesModel.leave`). Une fenêtre qui porte une feuille ne se ferme pas : fermer la fenêtre n'oublie donc aucune
                 // confirmation ouverte.
                 voices?.stopListening()
                 // Fenêtre fermée ou quittée, ou fin de l'application : le gabarit tapé est enregistré.

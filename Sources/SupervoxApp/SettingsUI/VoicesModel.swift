@@ -160,8 +160,29 @@ public final class VoicesModel {
         installed = systemVoices()
     }
 
+    /// Efface le message de l'onglet (apparition du volet, présentation de la fenêtre, geste d'écoute). Pas tant qu'un brouillon
+    /// est ouvert : le message est alors le refus que l'éditeur montre (R3, tour 2).
     public func clearMessage() {
+        guard draft == nil else { return }
         message = nil
+    }
+
+    /// LA règle d'écriture de l'éditeur (R2, tour 2) : sans brouillon en cours, l'écriture est ignorée. Une écriture tardive (un
+    /// champ qui pousse sa valeur en perdant la main, après « Enregistrer » ou « Annuler ») ne recrée donc jamais un brouillon, ni
+    /// la feuille.
+    public func editDraft(_ change: (inout VoiceDraft) -> Void) {
+        guard var edited = draft else { return }
+        change(&edited)
+        draft = edited
+    }
+
+    /// L'onglet est quitté (son volet disparaît, un autre onglet est choisi) : l'écoute en cours s'arrête, la confirmation en
+    /// attente est annulée et le brouillon est abandonné (R3, tour 2 : remplace « brouillon gardé »). Jamais appelé quand la
+    /// fenêtre perd la clé (`onLeave`) : la feuille elle-même la lui fait perdre, et la fermerait à peine ouverte.
+    public func leave() {
+        stopListening()
+        cancelConfirmation()
+        if draft != nil { cancel() }
     }
 
     // MARK: - Lignes

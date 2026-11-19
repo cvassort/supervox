@@ -1179,6 +1179,21 @@ import Testing
         #expect(voices.message == nil)
     }
 
+    /// R3 (tour 2) : la fenêtre présentée de nouveau pendant qu'un brouillon est ouvert n'efface pas le refus que l'éditeur montre,
+    /// et garde le brouillon.
+    @Test func presentingTheWindowKeepsTheEditorRefusal() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rig = VoicesModelTests.Rig(VoicesModelTests.settings())
+        let voices = rig.model
+        let content = voicesContent(makeController(), voices: voices)
+        voices.beginAdding()
+        voices.save()  // sans nom : refusé
+        #expect(voices.message == VoicesText.refusalEmptyName)
+        await content.onPresent()
+        #expect(voices.message == VoicesText.refusalEmptyName)
+        #expect(voices.draft != nil)
+    }
+
     /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
     func voicesContent(
         _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()

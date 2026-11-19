@@ -60,13 +60,9 @@ public struct VoicesPane: View {
             model.reload()
             model.clearMessage()
         }
-        // Décision 2 : la vue disparaît (autre onglet : c'est le seul chemin du changement d'onglet, comme pour l'onglet Historique ;
-        // fenêtre retirée) : l'écoute s'arrête et une confirmation en attente est annulée. Un brouillon d'éditeur ouvert est GARDÉ : il est le contenu de la feuille, qui fait elle-même perdre la clé à la
-        // fenêtre (voir `SettingsView.content`, `onLeave`).
-        .onDisappear {
-            model.stopListening()
-            model.cancelConfirmation()
-        }
+        // Décision 2 et R3 (tour 2) : la vue disparaît (autre onglet, fenêtre retirée) : l'onglet est quitté (`VoicesModel.leave` :
+        // écoute arrêtée, confirmation annulée, brouillon abandonné). Le changement d'onglet passe aussi par `SettingsView` (R5).
+        .onDisappear { model.leave() }
         // UNE seule feuille pour l'éditeur et la confirmation.
         .sheet(isPresented: Binding(get: { Self.sheet(for: model) != nil }, set: { if !$0 { Self.dismissSheet(model) } })) {
             switch Self.sheet(for: model) {
@@ -513,7 +509,7 @@ public struct VoiceEditor: View {
                     if !models.isEmpty {
                         Menu {
                             ForEach(models, id: \.self) { name in
-                                Button(name) { model.draft?.model = name }
+                                Button(name) { model.editDraft { $0.model = name } }
                             }
                         } label: {
                             Image(systemName: "list.bullet")
@@ -546,7 +542,7 @@ public struct VoiceEditor: View {
                         get: { Self.genderOptions(current: draft.wrappedValue.gender).firstIndex(of: draft.wrappedValue.gender) ?? 0 },
                         set: { index in
                             let options = Self.genderOptions(current: draft.wrappedValue.gender)
-                            if options.indices.contains(index) { model.draft?.gender = options[index] }
+                            if options.indices.contains(index) { model.editDraft { $0.gender = options[index] } }
                         })
                 ) {
                     ForEach(Array(Self.genderOptions(current: draft.wrappedValue.gender).enumerated()), id: \.offset) { index, gender in
@@ -576,7 +572,7 @@ public struct VoiceEditor: View {
                                 TextField(VoicesText.keyField, text: $parameter.key)
                                 TextField(VoicesText.valueField, text: $parameter.value)
                                 Button {
-                                    model.draft?.parameters.removeAll { $0.id == parameter.id }
+                                    model.editDraft { $0.parameters.removeAll { $0.id == parameter.id } }
                                 } label: {
                                     Image(systemName: "minus.circle")
                                 }
@@ -596,7 +592,7 @@ public struct VoiceEditor: View {
                 .background(frameProbe(.parametersViewport))
             }
             Button(VoicesText.addParameterTitle) {
-                model.draft?.parameters.append(VoicesModel.VoiceDraft.Parameter(key: "", value: ""))
+                model.editDraft { $0.parameters.append(VoicesModel.VoiceDraft.Parameter(key: "", value: "")) }
             }
             .background(frameProbe(.addParameter))
         }
@@ -606,8 +602,14 @@ public struct VoiceEditor: View {
     /// Hauteur de la bande du refus, en points : deux lignes de texte `callout` et leurs marges. Choix non mesuré, vu en image.
     static let refusalSlotHeight: CGFloat = 44
 
+    /// La liaison des champs de l'éditeur : elle lit le brouillon et n'écrit que par `VoicesModel.editDraft` (sans brouillon en
+    /// cours, l'écriture est ignorée : R2).
+    static func draftBinding(_ model: VoicesModel) -> Binding<VoicesModel.VoiceDraft> {
+        Binding(get: { model.draft ?? VoicesModel.VoiceDraft() }, set: { new in model.editDraft { $0 = new } })
+    }
+
     public var body: some View {
-        let draft = Binding(get: { model.draft ?? VoicesModel.VoiceDraft() }, set: { model.draft = $0 })
+        let draft = Self.draftBinding(model)
         VStack(spacing: 0) {
             Text(draft.wrappedValue.editing == nil ? VoicesText.editorAddTitle : VoicesText.editorEditTitle)
                 .font(.headline)
