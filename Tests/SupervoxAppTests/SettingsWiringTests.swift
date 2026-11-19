@@ -1304,6 +1304,57 @@ import Testing
         #expect(controller.settings.interview.template == typed, "le changement d'onglet a appelé tabChanged")
     }
 
+    /// Les cadres (en coordonnées de `host`) des cartes du formulaire groupé : vues d'AppKit du document de la vue de défilement,
+    /// plus étroites que la fenêtre et larges de plus de 300 points (mesuré hors écran à 860 : 78..782).
+    static func formCards(in host: NSView) -> [CGRect] {
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls)
+        }
+        func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
+        guard let document = scrolls(host).first?.documentView else { return [] }
+        return descendants(document)
+            .map { $0.convert($0.bounds, to: host) }
+            .filter { $0.width > 300 && $0.width < host.bounds.width - 2 }
+            .sorted { $0.minY < $1.minY }
+    }
+
+    /// T7 (tour 3) : « Ajouter un fournisseur… » et « Ajouter un mode » ont leur bord droit sur celui des cartes (centrées, de
+    /// largeur bornée par le style groupé), à un point près ; plus au bord de la fenêtre. Mesuré hors écran, fenêtre jamais
+    /// affichée ; le bouton par une sonde (`AddButtonFrameKey`), les cartes par AppKit.
+    @Test(arguments: [SettingsTab.providers, .modes])
+    func theAddButtonLinesUpWithTheCards(_ tab: SettingsTab) throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let provider = Provider(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, name: "Fournisseur d'exemple",
+            baseURL: "https://example.com", kind: .anthropic, models: [])
+        var button: CGRect?
+        let pane: AnyView =
+            tab == .providers
+            ? AnyView(
+                ProvidersPane(
+                    model: ProvidersModel(
+                        providers: [provider], secrets: InMemorySecretStore(secrets: [:]), listModels: { _, _ in [] },
+                        save: { _ in })))
+            : AnyView(ModesPane(model: SettingsView.makeModesModel(controller, keyMonitor: monitor)))
+        let host = NSHostingView(
+            rootView: pane
+                .frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
+                .onPreferenceChange(AddButtonFrameKey.self) { frame in MainActor.assumeIsolated { button = frame } })
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { withExtendedLifetime(window) {} }
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        let card = try #require(Self.formCards(in: host).first, "aucune carte trouvée (\(tab))")
+        let frame = try #require(button, "le bouton d'ajout n'est pas mesuré (\(tab))")
+        #expect(abs(frame.maxX - card.maxX) < 1, "\(tab) : bouton \(frame), carte \(card)")
+        #expect(frame.minX > card.minX, "\(tab) : le bouton est dans la largeur des cartes")
+    }
+
     /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
     func voicesContent(
         _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()

@@ -341,7 +341,28 @@ private func keyLabel(_ state: KeyState) -> String {
     }
 }
 
-private struct ProvidersPane: View {
+extension SettingsView {
+    /// La largeur des cartes d'un formulaire groupé (`.formStyle(.grouped)`) dans la fenêtre des réglages : le style les borne et
+    /// les centre. Mesuré hors écran (fenêtre jamais affichée) à 860 points de fenêtre : cartes de 78 à 782, soit 704 ; ce n'est
+    /// pas une valeur documentée par Apple. Les boutons d'ajout des onglets Fournisseurs et Modes s'alignent dessus ;
+    /// `SettingsWiringTests.theAddButtonLinesUpWithTheCards` tombe si elle change.
+    static let formCardWidth: CGFloat = 704
+}
+
+/// Le cadre (global) du bouton d'ajout des onglets Fournisseurs et Modes : une sonde pour les tests de disposition (T7, tour 3).
+struct AddButtonFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) { value = nextValue() ?? value }
+}
+
+extension View {
+    /// Pose la sonde `AddButtonFrameKey` sur cette vue.
+    func addButtonFrameProbe() -> some View {
+        background(GeometryReader { proxy in Color.clear.preference(key: AddButtonFrameKey.self, value: proxy.frame(in: .global)) })
+    }
+}
+
+struct ProvidersPane: View {
     let model: ProvidersModel
     @State private var draft: ProviderDraft?
     @State private var removal: Provider?
@@ -376,9 +397,13 @@ private struct ProvidersPane: View {
             HStack {
                 Spacer()
                 Button("Ajouter un fournisseur…") { draft = ProviderDraft(existing: nil) }
+                    .addButtonFrameProbe()
             }
+            // T7 (tour 3) : le bord droit du bouton sur celui des cartes du formulaire groupé (`SettingsView.formCardWidth`).
+            .frame(maxWidth: SettingsView.formCardWidth)
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
             .background(.bar)
         }
         .sheet(item: $draft) { draft in
