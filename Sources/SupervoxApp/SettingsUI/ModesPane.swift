@@ -64,10 +64,9 @@ public struct ModesPane: View {
             HStack {
                 Spacer()
                 AddModeButton(model: model, edit: { editing = ModeSheetTarget(id: $0) })
+                    .addButtonFrameProbe()
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .background(.bar)
+            .addButtonBar()
         }
         .sheet(item: $editing) { target in
             ModeEditor(model: model, id: target.id)

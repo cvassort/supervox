@@ -174,7 +174,7 @@ public final class HotKeySettingsModel {
                 hotKey = candidate
                 message = nil
             } catch {
-                let reason = "Raccourci non enregistré : \(error.localizedDescription)"
+                let reason = "Le raccourci n'a pas été enregistré. \(SettingsError.sentence(forSaveError: error))"
                 if case .success = control.apply(previous) {
                     message = reason
                 } else {
@@ -196,7 +196,7 @@ public final class HotKeySettingsModel {
             try save(hotKey, newBehavior)
             behavior = newBehavior
         } catch {
-            message = "Comportement non enregistré : \(error.localizedDescription)"
+            message = "Le comportement du raccourci n'a pas été enregistré. \(SettingsError.sentence(forSaveError: error))"
         }
     }
 

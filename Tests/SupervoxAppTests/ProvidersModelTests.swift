@@ -294,6 +294,79 @@ struct SaveFailure: Error, LocalizedError {
         }
     }
 
+    // MARK: - Une erreur d'écriture d'ailleurs : phrase fixe, jamais son texte
+
+    /// Le site : la phrase d'une erreur quelconque. Une erreur d'ailleurs ne laisse passer aucun de ses mots ; les refus de la
+    /// fenêtre (`ProvidersError`) et ceux des réglages (`SettingsError`) gardent chacun leur phrase, sans devenir celle du disque.
+    @Test func anErrorFromElsewhereGetsTheFixedSentenceAndTypedErrorsKeepTheirOwn() {
+        let foreign = ProvidersModel.message(for: RawTextError())
+        #expect(foreign == SettingsError.otherSaveFailure)
+        #expect(!foreign.contains(RawTextError.text))
+        #expect(ProvidersModel.message(for: ProvidersError.emptyName) == "Donnez un nom au fournisseur.")
+        #expect(ProvidersModel.message(for: ProvidersError.unknownProvider) == "Ce fournisseur n'existe plus.")
+        let refusal = SettingsError.unreadableFileKept(fileName: "settings.json")
+        #expect(ProvidersModel.message(for: refusal) == refusal.errorDescription)
+    }
+
+    /// Ajout : les réglages ne s'écrivent pas ET la clé ne peut pas être retirée : l'erreur de la fenêtre porte la cause, qui
+    /// est la phrase fixe (et ne la répète pas).
+    @Test func aForeignSaveErrorOnAddNeverReachesTheMessageOfTheLeftoverKey() async throws {
+        let store = RecordingSecretStore()
+        store.deleteFailure = .denied
+        let model = makeModel(secrets: store)
+        saver.failure = RawTextError()
+
+        let error = await #expect(throws: ProvidersError.self) {
+            try await model.add(name: "Distant", baseURL: "https://models.invalid", kind: .anthropic, key: "sk-orphan")
+        }
+        guard case .notSavedKeyLeft = error else {
+            Issue.record("erreur inattendue : \(String(describing: error))")
+            return
+        }
+        let shown = ProvidersModel.message(for: try #require(error))
+        #expect(shown.contains(SettingsError.otherSaveFailure))
+        #expect(!shown.contains(RawTextError.text))
+        #expect(shown.contains("La clé saisie reste dans le trousseau."), "le fait de la clé gardée : \(shown)")
+        #expect(shown.components(separatedBy: "enregistrés").count == 2, "la phrase ne se répète pas : \(shown)")
+    }
+
+    /// Changement d'hôte : l'ancienne clé est retirée, les réglages ne s'écrivent pas.
+    @Test func aForeignSaveErrorOnANewOriginNeverReachesTheMessage() async throws {
+        let store = RecordingSecretStore(secrets: [Self.remote.id.uuidString: "sk-remote"])
+        let model = makeModel(providers: [Self.remote], secrets: store)
+        saver.failure = RawTextError()
+        var moved = Self.remote
+        moved.baseURL = "https://elsewhere.invalid"
+
+        let error = await #expect(throws: ProvidersError.self) { try await model.update(moved, newKey: nil) }
+        guard case .oldKeyRemovedButNotSaved = error else {
+            Issue.record("erreur inattendue : \(String(describing: error))")
+            return
+        }
+        let shown = ProvidersModel.message(for: try #require(error))
+        #expect(shown.contains(SettingsError.otherSaveFailure))
+        #expect(!shown.contains(RawTextError.text))
+        #expect(shown.contains("L'ancienne clé a été retirée (nouvel hôte)."), "le fait de la clé retirée : \(shown)")
+        #expect(shown.components(separatedBy: "enregistrés").count == 2, "la phrase ne se répète pas : \(shown)")
+    }
+
+    /// La liste de modèles lue ne peut pas être enregistrée : l'état de la ligne est la phrase fixe.
+    @Test func aForeignSaveErrorAfterARefreshShowsTheFixedSentenceInTheStatus() async throws {
+        let store = RecordingSecretStore(secrets: [Self.existing.id.uuidString: "sk-local"])
+        let model = makeModel(providers: [Self.existing], secrets: store)
+        lister.set(.success(["model-z"]))
+        saver.failure = RawTextError()
+
+        await model.refreshModels(Self.existing.id)
+
+        guard case .failed(let message) = model.status(of: Self.existing.id) else {
+            Issue.record("statut inattendu")
+            return
+        }
+        #expect(message == SettingsError.otherSaveFailure)
+        #expect(!message.contains(RawTextError.text))
+    }
+
     // MARK: - Modification
 
     @Test func emptyKeyOnUpdateKeepsTheStoredKey() async throws {
@@ -655,7 +728,7 @@ struct SaveFailure: Error, LocalizedError {
     @Test func leftoverKeyMessagesDoNotPromiseALaterRemoval() {
         let messages = [
             ProvidersError.keyNotDeleted(account: "COMPTE-1", cause: "Accès refusé.").localizedDescription,
-            ProvidersError.notSavedKeyLeft(account: "COMPTE-1", cause: "disque plein").localizedDescription,
+            ProvidersError.notSavedKeyLeft(account: "COMPTE-1", cause: SettingsError.otherSaveFailure).localizedDescription,
         ]
         for message in messages {
             #expect(!message.contains("sera retirée au prochain enregistrement"))

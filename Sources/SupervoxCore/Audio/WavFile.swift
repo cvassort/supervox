@@ -25,6 +25,19 @@ public enum WavFileError: Error, Equatable {
 /// WAV PCM 16 bits mono, little-endian. Pas d'autre format : c'est ce que le banc écrit et relit.
 public enum WavFile {
     public static func write(_ clip: AudioClip, to url: URL) throws {
+        try data(from: clip).write(to: url, options: .atomic)
+    }
+
+    /// Le fichier WAV du clip, en mémoire : en-tête de 44 octets (12 de `RIFF`, 24 de `fmt `, 8 de `data` : code lu, ci-dessous) puis
+    /// 2 octets par échantillon (le seul encodeur du dépôt ; `write`
+    /// l'appelle). Un clip vide donne l'en-tête seul, un fichier valide.
+    ///
+    /// Précondition : `clip.sampleRate` est un nombre fini, positif, qui tient sur 32 bits une fois arrondi, et le double de cet
+    /// arrondi aussi. Hors de là (NaN, infini, négatif, au-delà de 2^31), la conversion vers `UInt32` arrête le processus : règle
+    /// du langage, non essayée ici. Les appelants filtrent avant : le lecteur n'accepte que 8 000 à 192 000 Hz
+    /// (`SystemClipPlayer.isPlayable`, code lu) ; `write` sert au banc (clips à 16 kHz) et au moteur de transcription par
+    /// fournisseur (`EndpointTranscriber`, clip de la capture), qui ne vérifient pas la fréquence (code lu).
+    public static func data(from clip: AudioClip) -> Data {
         let dataSize = clip.samples.count * 2
         let rate = UInt32(clip.sampleRate.rounded())
         var d = Data(capacity: 44 + dataSize)
@@ -34,7 +47,7 @@ public enum WavFile {
         d.append(Data("fmt ".utf8)); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16)
         d.append(Data("data".utf8)); u32(UInt32(dataSize))
         for s in clip.samples { u16(UInt16(bitPattern: pcm16(s))) }
-        try d.write(to: url, options: .atomic)
+        return d
     }
 
     /// `Int16(_:)` plante hors de [-32768, 32767] et sur NaN : on écrête et NaN devient du silence.

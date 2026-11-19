@@ -35,8 +35,24 @@ struct DictationSessionMessagesTests {
         #expect(failure.message.hasSuffix("."))
     }
 
-    @Test func aLocalizedErrorKeepsItsOwnMessage() async {
-        let failure = await failureOf(finalReply: .fail(TestFailure("le service ne répond pas")))
+    /// Une erreur d'une bibliothèque tierce qui porte son propre texte (`LocalizedError`, ici un type du test) : son texte n'est
+    /// jamais montré, la raison est la phrase de repli (B1, revue finale : remplace le choix du 14/11).
+    @Test func aForeignLocalizedErrorNeverShowsItsText() async {
+        struct ForeignError: LocalizedError {
+            var errorDescription: String? { "texte étranger" }
+        }
+        let failure = await failureOf(finalReply: .fail(ForeignError()))
+        #expect(failure == .engine("erreur inattendue"))
+        #expect(failure?.message.contains("texte étranger") == false)
+    }
+
+    /// Réécrit sur le protocole (B1, revue finale ; était `aLocalizedErrorKeepsItsOwnMessage`) : une erreur de la maison
+    /// (`SupervoxError`, qui n'est pas une `LocalizedError`) garde sa raison.
+    @Test func aHouseErrorKeepsItsReason() async {
+        struct HouseFailure: SupervoxError {
+            var reason: String { "le service ne répond pas" }
+        }
+        let failure = await failureOf(finalReply: .fail(HouseFailure()))
         #expect(failure == .engine("le service ne répond pas"))
     }
 

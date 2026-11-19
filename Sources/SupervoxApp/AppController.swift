@@ -61,6 +61,9 @@ public final class AppController {
     private let dictationEnvironment: DictationEnvironment
     /// L'environnement de l'entretien : l'onglet Entretien lui demande le silence que le détecteur applique en pratique.
     let interviewEnvironment: InterviewEnvironment
+    /// L'écoute d'une voix de l'onglet Voix : une seule pour l'application. Sa voix et son lecteur viennent de l'environnement de
+    /// l'entretien ; qui parle, de la résolution unique (`VoiceChoice.resolve(in:secrets:)`).
+    let voicePreview: VoicePreview
     /// L'onglet que la fenêtre de réglages montre : `openSettings(tab:)` le change, un clic dessus aussi.
     public let settingsNavigation = SettingsNavigation()
     private let terminationWait: @Sendable (Double) async -> Void
@@ -144,6 +147,18 @@ public final class AppController {
             model: panelModel, escapeRegistrar: escapeRegistrar, clickMonitor: clickMonitor,
             surface: makePanelSurface(AnyView(content)), announcer: announcer)
         self.panel = panel
+        let preview = VoicePreview(
+            makeVoice: interviewEnvironment.makeVoice, makePlayer: interviewEnvironment.makePlayer,
+            resolve: { [secretAccess = SecretAccess(secrets)] choice, settings in
+                try await choice.resolve(in: settings, secrets: secretAccess)
+            },
+            systemVoices: interviewEnvironment.systemVoices,
+            // Lu à l'appel, par le relais : les contrôleurs n'existent pas encore.
+            microphoneHeld: { relay.microphoneHeld?() ?? false },
+            sleep: { try await Task.sleep(for: .seconds($0)) })
+        voicePreview = preview
+        // LA fermeture d'avant micro : la même pour la dictée, la correction et l'entretien.
+        let stopPreviewBeforeMicrophone: @MainActor () -> Void = { [preview] in preview.stop() }
         // L'historique réel n'existe que si une racine est donnée : `nil` veut dire « pas d'historique », jamais « le vrai dossier »
         // (seul le programme `Supervox` donne la vraie racine). La durée est relue à chaque appel dans les réglages en vigueur.
         let retention = RetentionSource()
@@ -157,7 +172,8 @@ public final class AppController {
             environment: interviewEnvironment, settings: { relay.settings?() ?? .defaults },
             behavior: { relay.settings?()?.hotKeyBehavior ?? .toggle },
             resolve: resolveInterview ?? { _, _ in throw InterviewEnvironment.Unavailable() },
-            history: interviewHistory ?? realHistory ?? DiscardingInterviewHistory(), panel: panelModel)
+            history: interviewHistory ?? realHistory ?? DiscardingInterviewHistory(), panel: panelModel,
+            beforeMicrophone: stopPreviewBeforeMicrophone)
         self.interview = interviewController
         let dictationController = DictationController(
             environment: dictation, inserter: inserter,
@@ -194,7 +210,8 @@ public final class AppController {
             wait: reviewHandoverWait,
             interview: interviewController,
             // L'appui qui conclut passe par le bouton : il se grise, et une seule conclusion part.
-            concludeInterview: { [panelModel] in panelModel.concludeInterview() })
+            concludeInterview: { [panelModel] in panelModel.concludeInterview() },
+            beforeMicrophone: stopPreviewBeforeMicrophone)
         self.dictation = dictationController
         dictationController.onViewChange = { [panelModel, panel] in
             panelModel.setDictation($0)
@@ -212,6 +229,13 @@ public final class AppController {
         panel.onClosed = { [dictationController] in dictationController.panelClosedByUser() }
         panel.escapeHandler = { [dictationController] in dictationController.escapePressed() }
         relay.settings = { [weak self] in self?.settings }
+        // LA source de vérité « un micro est tenu », pour l'écoute d'une voix : une dictée ou une correction de l'appui à sa fin,
+        // un entretien de son lancement à sa fin (`isBusy`), puis tant que sa conversation n'a pas rendu son micro.
+        // Limite admise : une dictée annulée dont la session ferme encore son micro n'est pas comptée (la dictée suivante ne
+        // l'attend pas non plus, et un `cancel()` qui ne reviendrait jamais refuserait l'écoute sans fin).
+        relay.microphoneHeld = { [weak dictationController, weak interviewController] in
+            (dictationController?.isBusy ?? false) || (interviewController?.isReleasingMicrophone ?? false)
+        }
         relay.openSettings = { [weak self] in self?.openSettings() }
         relay.quit = { [weak self] in self?.quit() }
         retention.read = { [weak self] in Self.retentionDays(of: self) }
@@ -339,8 +363,8 @@ public final class AppController {
             do {
                 try updateSettings { _ in }
             } catch {
-                panelModel.setNotice(error.localizedDescription, for: .save)
-                log.error("réglages non créés : \(error.localizedDescription, privacy: .public)")
+                panelModel.setNotice(SettingsError.sentence(forSaveError: error), for: .save)
+                log.error("réglages non créés : \(String(reflecting: type(of: error)), privacy: .public)")
             }
         }
         if hotKeyNeedsPanel || isFirstLaunch || hasLoadNotice { panel.open() }
@@ -455,7 +479,7 @@ public final class AppController {
             try settingsStore.save(updated)
             settings = updated
         } catch {
-            log.error("raccourci signalé non gardé : \(error.localizedDescription, privacy: .public)")
+            log.error("raccourci signalé non gardé : \(String(reflecting: type(of: error)), privacy: .public)")
         }
     }
 
@@ -666,8 +690,8 @@ public final class AppController {
         do {
             try updateSettings { $0.lastModeID = id }
         } catch {
-            panelModel.setNotice(error.localizedDescription, for: .save)
-            log.error("réglages non enregistrés : \(error.localizedDescription, privacy: .public)")
+            panelModel.setNotice(SettingsError.sentence(forSaveError: error), for: .save)
+            log.error("réglages non enregistrés : \(String(reflecting: type(of: error)), privacy: .public)")
         }
     }
 
@@ -782,6 +806,7 @@ private final class ActionRelay {
     var openSettings: (@MainActor () -> Void)?
     var quit: (@MainActor () -> Void)?
     var settings: (@MainActor () -> AppSettings?)?
+    var microphoneHeld: (@MainActor () -> Bool)?
 }
 
 /// Délégué de menu qui rafraîchit les titres juste avant l'affichage.

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SupervoxCore
 import SwiftUI
 import Testing
 
@@ -56,6 +57,7 @@ import Testing
         var hotKey: HotKeySettingsModel?
         var modes: ModesModel?
         var interview: InterviewSettingsModel?
+        var voices: VoicesModel?
         var history: HistoryModel?
         var content: SettingsContent?
     }
@@ -71,13 +73,15 @@ import Testing
             built.modes = modes
             let interview = SettingsView.makeInterviewModel(controller)
             built.interview = interview
+            let voices = SettingsView.makeVoicesModel(controller)
+            built.voices = voices
             let content = SettingsView.content(
                 providers: SettingsView.makeProvidersModel(controller), hotKey: hotKey,
                 transcription: SettingsView.makeTranscriptionModel(
                     controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
                 modes: modes,
-                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview, history: history,
-                navigation: controller.settingsNavigation)
+                permissions: controller.permissions, openSystemSettings: { _ in }, interview: interview, voices: voices,
+                history: history, navigation: controller.settingsNavigation)
             built.content = content
             return content
         }
@@ -315,6 +319,74 @@ import Testing
         #expect(afterCopy.mode(copy)?.hotKey == nil)
         #expect(afterCopy.mode("perso-1") == onDisk.mode("perso-1"))
         #expect(afterCopy.lastModeID == ModeChip.promptID)
+    }
+
+    /// A3 (revue finale, A-M1) : les entrées de `voices` que cette version ne sait pas lire (une illisible, un doublon d'`id`) sont
+    /// réécrites telles quelles par TOUTE écriture, pas seulement par l'encodeur : un geste de l'onglet Fournisseurs, puis
+    /// « Utiliser », « Enregistrer » et une suppression de l'onglet Voix, chacun par les vrais modèles de la fenêtre et
+    /// `AppController.updateSettings`. Le fichier relu après chaque geste les porte toujours, à l'identique.
+    @Test func everyTabKeepsTheUnreadableVoicesOfTheFile() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = Provider(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a1")!, name: "Fournisseur d'exemple",
+            baseURL: "https://example.com/v1", kind: .openAICompatible, models: ["modele-voix-exemple"])
+        let readable = SavedVoice(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000000000a2")!, name: "Voix d'exemple A",
+            voice: VoiceChoice(providerID: provider.id, model: "modele-voix-exemple", identifier: "voix-exemple"))
+        var settings = AppSettings.defaults
+        settings.providers = [provider]
+        settings.voices = [readable]
+        try store.save(settings)
+        // Le fichier porte en plus une entrée illisible (sans `id`) et un doublon de l'`id` de la voix lisible.
+        var file = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+        var entries = try #require(file["voices"] as? [Any])
+        let unreadable: [String: Any] = ["name": "Voix d'exemple B", "cle-exemple": "valeur-exemple"]
+        let duplicate: [String: Any] = [
+            "id": readable.id.uuidString, "name": "Voix d'exemple C",
+            "voice": ["identifier": "voix.exemple.a", "language": "fr-FR"],
+        ]
+        entries += [unreadable, duplicate]
+        file["voices"] = entries
+        try JSONSerialization.data(withJSONObject: file).write(to: store.file)
+
+        func keptEntries() throws -> [NSDictionary] {
+            let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: store.file)) as? [String: Any])
+            let voices = try #require(written["voices"] as? [NSDictionary])
+            return Array(voices.suffix(2))   // après les entrées lisibles ; moins de deux entrées : la comparaison tombe
+        }
+        let expected = [unreadable as NSDictionary, duplicate as NSDictionary]
+
+        let controller = makeController()
+        #expect(controller.settings.voices.map(\.id) == [readable.id], "témoin : seule la voix lisible est lue")
+        let providers = SettingsView.makeProvidersModel(controller)
+        let voices = SettingsView.makeVoicesModel(controller)
+
+        // Onglet Fournisseurs : un fournisseur ajouté (sans clé : rien n'est écrit au trousseau).
+        try await providers.add(name: "Fournisseur d'exemple", baseURL: "https://example.com/v2", kind: .openAICompatible, key: "")
+        #expect(store.load().settings.providers.count == 2, "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après l'onglet Fournisseurs")
+
+        // Onglet Voix : « Utiliser cette voix ».
+        voices.selection = .saved(readable.id)
+        voices.use()
+        #expect(store.load().settings.voice == readable.voice.normalized, "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après « Utiliser »")
+
+        // « Enregistrer » une voix neuve.
+        voices.beginAdding()
+        voices.draft = VoicesModel.VoiceDraft(
+            name: "Voix d'exemple D", providerID: provider.id, model: "modele-voix-exemple", identifier: "voix-exemple-d")
+        voices.save()
+        let added = try #require(store.load().settings.voices.first { $0.name == "Voix d'exemple D" }, "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après « Enregistrer »")
+
+        // Supprimer la voix neuve.
+        voices.selection = .saved(added.id)
+        voices.requestDeletion()
+        voices.confirmDeletion()
+        #expect(store.load().settings.voices.map(\.id) == [readable.id], "témoin : le geste est écrit")
+        #expect(try keptEntries() == expected, "après la suppression")
+        #expect(voices.message == nil, "aucun refus")
     }
 
     @Test func aRefusedSaveLeavesTheReviewChoiceAsItWas() throws {
@@ -697,13 +769,14 @@ import Testing
         #expect(history.pendingRetention == 30, "onLeave n'annule PAS la confirmation en attente")
     }
 
-    /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien.
+    /// La vraie fenêtre de l'application (`SettingsView.provider`) a l'onglet Entretien, et l'onglet Voix juste après.
     @Test func theProductionWindowHasTheInterviewTab() throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let controller = makeController()
         let content = SettingsView.provider(catalog: catalog, promptTokenLimit: Self.promptTokenLimit)(controller)
-        #expect(content.tabs == SettingsTab.visible(hasInterview: true))
+        #expect(content.tabs == SettingsTab.visible(hasInterview: true, hasVoices: true))
         #expect(content.tabs.contains(.interview))
+        #expect(content.tabs.last == .voices, "sans dossier d'historique, Voix ferme la barre")
         #expect(content.navigation === controller.settingsNavigation, "la vraie fenêtre suit la navigation du contrôleur")
     }
 
@@ -1042,5 +1115,463 @@ import Testing
         #expect(SystemSettingsPane.microphone.url.absoluteString.hasSuffix("?Privacy_Microphone"))
         #expect(SystemSettingsPane.accessibility.url.absoluteString.hasSuffix("?Privacy_Accessibility"))
         #expect(SystemSettingsPane.microphone.url.scheme == "x-apple.systempreferences")
+    }
+
+    // MARK: - Onglet Voix (tâche 4)
+
+    /// Règle 3 : Voix vient entre Entretien et Historique, Historique reste dernier ; sans entretien, pas d'onglet Voix ; l'onglet
+    /// n'existe que si son modèle est donné. Titre « Voix », image `speaker.wave.2`.
+    @Test func theVoicesTabSitsBetweenInterviewAndHistory() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(
+            SettingsTab.visible(hasInterview: true, hasVoices: true, hasHistory: true).map(\.title)
+                == ["Fournisseurs", "Raccourci", "Permissions", "Transcription", "Modes", "Entretien", "Voix", "Historique"])
+        #expect(SettingsTab.visible(hasInterview: true, hasVoices: true, hasHistory: true).last == .history)
+        #expect(SettingsTab.visible(hasInterview: true, hasVoices: true).last == .voices)
+        #expect(!SettingsTab.visible(hasInterview: false, hasVoices: true, hasHistory: true).contains(.voices), "sans entretien")
+        #expect(!SettingsTab.visible(hasInterview: true, hasVoices: false, hasHistory: true).contains(.voices), "sans modèle")
+        #expect(SettingsTab.voices.title == "Voix")
+        #expect(SettingsTab.voices.systemImage == "speaker.wave.2")
+
+        let rig = try HistoryModelTests.Rig()
+        defer { rig.cleanUp() }
+        let controller = makeController()
+        func content(interview: Bool, voices: Bool, history: Bool) -> SettingsContent {
+            SettingsView.content(
+                providers: SettingsView.makeProvidersModel(controller),
+                hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+                openSystemSettings: { _ in }, interview: interview ? SettingsView.makeInterviewModel(controller) : nil,
+                voices: voices ? SettingsView.makeVoicesModel(controller) : nil, history: history ? rig.makeModel() : nil,
+                navigation: controller.settingsNavigation)
+        }
+        #expect(
+            content(interview: true, voices: true, history: true).tabs
+                == [.providers, .hotKey, .permissions, .transcription, .modes, .interview, .voices, .history])
+        #expect(!content(interview: false, voices: true, history: true).tabs.contains(.voices))
+        #expect(!content(interview: true, voices: false, history: true).tabs.contains(.voices))
+    }
+
+    /// Règle 4 : « Choisir la voix… » de l'onglet Entretien mène à l'onglet Voix ; sans onglet Voix, pas de bouton.
+    @Test func chooseTheVoiceLeadsToTheVoicesTab() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        func view(voices: Bool) -> SettingsView {
+            SettingsView(
+                providers: SettingsView.makeProvidersModel(controller),
+                hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+                transcription: SettingsView.makeTranscriptionModel(
+                    controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+                modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+                openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller),
+                voices: voices ? SettingsView.makeVoicesModel(controller) : nil, navigation: controller.settingsNavigation)
+        }
+        controller.settingsNavigation.tab = .interview
+        let choose = try #require(view(voices: true).chooseVoice)
+        choose()
+        #expect(controller.settingsNavigation.tab == .voices)
+        #expect(view(voices: false).chooseVoice == nil, "sans onglet Voix, pas de bouton")
+    }
+
+    /// La fabrique de l'onglet Voix : les écritures passent par le contrôleur (réglages en mémoire et fichier), sans écraser ce
+    /// qui s'écrit ailleurs ; la liste des voix vient de l'environnement de l'entretien (inventée ici) ; « Écouter » se grise quand
+    /// le PANNEAU montre un micro tenu (reflet d'affichage).
+    @Test func theVoicesModelWritesThroughTheControllerAndReadsThePanel() throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var environment = InterviewEnvironment.unavailable
+        let installed = VoicesModelTests.installed
+        environment.systemVoices = { installed }
+        let controller = makeController(interview: environment)
+        let voices = SettingsView.makeVoicesModel(controller)
+
+        try controller.updateSettings { $0.hotKeyBehavior = .hold }  // écrit ailleurs après la fabrique
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        voices.use()
+
+        let chosen = VoiceChoice(identifier: "voix.exemple.a", language: "fr-FR", gender: .female)
+        #expect(controller.settings.voice == chosen)
+        #expect(store.load().settings.voice == chosen)
+        #expect(controller.settings.hotKeyBehavior == .hold, "ce qui s'est écrit ailleurs reste")
+        #expect(voices.rows.first { $0.isActive }?.id == VoicesModel.Row.ID.system(identifier: "voix.exemple.a"))
+
+        #expect(voices.canListen)
+        controller.panelModel.dictation.stage = .recording
+        #expect(!voices.canListen, "une dictée écoute : « Écouter » est grisé")
+        controller.panelModel.dictation.stage = .review
+        #expect(voices.canListen, "en relecture, le micro est libre")
+    }
+
+    /// Le reflet du micro tenu, étape par étape : dictée en cours, correction qui écoute ou transcrit, entretien affiché ; pas la
+    /// relecture ni la correction qui réécrit (le micro y est libre).
+    @Test func theMicrophoneLooksBusyOnlyWhileTheMicrophoneIsHeld() {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let panel = PanelModel(lastModeID: ModeChip.rawID)
+        let cases: [(DictationStage, Bool)] = [
+            (.idle, false), (.preparing, true), (.recording, true), (.finalizing, true), (.formatting, true), (.review, false),
+            (.pasting, false), (.correcting(.preparing), true), (.correcting(.recording), true), (.correcting(.transcribing), true),
+            (.correcting(.rewriting), false), (.copied, false), (.cancelled, false), (.failed(.noSpeech), false),
+        ]
+        for (stage, busy) in cases {
+            panel.dictation.stage = stage
+            #expect(SettingsView.microphoneLooksBusy(panel) == busy, "\(stage)")
+        }
+        panel.dictation.stage = .idle
+        panel.setInterview(InterviewViewState(maxQuestions: 3, privacy: "La vie privée."))
+        #expect(SettingsView.microphoneLooksBusy(panel), "un entretien affiché")
+        panel.setInterview(nil)
+        #expect(!SettingsView.microphoneLooksBusy(panel))
+    }
+
+    /// Décision 1 : la présentation de la fenêtre relit l'onglet Voix (un fournisseur retiré ailleurs se voit dans la ligne de vie
+    /// privée) et efface son message d'avant.
+    @Test func presentingTheWindowRereadsTheVoicesTabAndClearsItsMessage() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
+        let rig = VoicesModelTests.Rig(VoicesModelTests.settings(voices: [saved]))
+        let voices = rig.model
+        let controller = makeController()
+        let content = voicesContent(controller, voices: voices)
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.beginAdding()
+        voices.save()  // refusé : un message
+        voices.draft = nil
+        #expect(voices.message != nil)
+        rig.settings.providers.removeAll { $0.id == VoicesModelTests.provider.id }
+        #expect(voices.privacyText == VoicesText.privacyProvider("Fournisseur d'exemple"), "pas encore relu")
+
+        await content.onPresent()
+
+        #expect(voices.privacyText == VoicesText.privacyCannotSpeak)
+        #expect(voices.message == nil)
+    }
+
+    /// R3 (tour 2) : la fenêtre présentée de nouveau pendant qu'un brouillon est ouvert n'efface pas le refus que l'éditeur montre,
+    /// et garde le brouillon.
+    @Test func presentingTheWindowKeepsTheEditorRefusal() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rig = VoicesModelTests.Rig(VoicesModelTests.settings())
+        let voices = rig.model
+        let content = voicesContent(makeController(), voices: voices)
+        voices.beginAdding()
+        voices.save()  // sans nom : refusé
+        #expect(voices.message == VoicesText.refusalEmptyName)
+        await content.onPresent()
+        #expect(voices.message == VoicesText.refusalEmptyName)
+        #expect(voices.draft != nil)
+    }
+
+    /// R5 (tour 2) : le changement d'onglet a son propre chemin, en plus de la disparition du volet (vue seulement hors écran) :
+    /// QUITTER l'onglet Voix arrête l'écoute, annule la confirmation et abandonne le brouillon. Appelé directement, sans vue ni
+    /// disparition. Témoin : passer d'un autre onglet à un autre ne touche à rien de l'onglet Voix.
+    @Test func leavingTheVoicesTabByTheTabChangeStopsEverything() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
+        let rig = VoicesModelTests.Rig(
+            VoicesModelTests.settings(voices: [saved]), player: ScriptedClipPlayer(completion: .manual))
+        let voices = rig.model
+        let controller = makeController()
+        let view = SettingsView(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), voices: voices,
+            navigation: SettingsNavigation(tab: .voices))
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        voices.listen()
+        #expect(await until { rig.player.isPlaying })
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.requestDeletion()
+
+        view.tabChanged(from: .modes, to: .providers)
+        #expect(rig.player.isPlaying && voices.pendingDeletion == saved.id, "témoin : l'onglet Voix n'était pas quitté")
+
+        view.tabChanged(from: .voices, to: .providers)
+        #expect(!rig.player.isPlaying, "la lecture est arrêtée")
+        #expect(voices.listeningRow == nil)
+        #expect(voices.pendingDeletion == nil, "la confirmation est annulée")
+        voices.beginEditing()
+        view.tabChanged(from: .voices, to: .history)
+        #expect(voices.draft == nil, "le brouillon est abandonné")
+        #expect(rig.updates == 0)
+    }
+
+    /// T2 (tour 3, M1) : la fenêtre qui perd la clé (`onLeave` : une autre application, une feuille) GARDE une panne d'écoute
+    /// affichée ; quitter l'onglet Voix par le changement d'onglet l'efface.
+    @Test func aListeningFailureSurvivesTheKeyLossButNotLeavingTheTab() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rig = VoicesModelTests.Rig(VoicesModelTests.settings())
+        let voices = rig.model
+        let controller = makeController()
+        let navigation = SettingsNavigation(tab: .voices)
+        let content = voicesContent(controller, voices: voices, navigation: navigation)
+        let view = SettingsView(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), voices: voices,
+            navigation: navigation)
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        rig.microphone.held = true
+        voices.listen()
+        rig.microphone.held = false
+        let failure = VoicesText.failure(.microphoneBusy)
+        #expect(voices.previewMessage == failure, "témoin : la panne est affichée")
+
+        content.onLeave()
+        #expect(voices.previewMessage == failure, "la fenêtre a perdu la clé : la panne reste")
+        view.tabChanged(from: .voices, to: .history)
+        #expect(voices.previewMessage == nil && voices.previewState == .idle, "l'onglet est quitté : la panne est effacée")
+    }
+
+    /// T4 (tour 3, M4) : le câblage `onChange(of: navigation.tab)` → `tabChanged` de la VRAIE vue, posée dans une fenêtre jamais
+    /// affichée. Il se voit par ce que seul `tabChanged` fait hors de l'onglet Entretien : le gabarit tapé (brouillon, l'onglet
+    /// Entretien n'est pas montré, donc aucune disparition de son volet) est enregistré quand on passe de Modes à Fournisseurs.
+    /// Ce que `tabChanged` fait pour l'onglet Voix est tenu par `leavingTheVoicesTabByTheTabChangeStopsEverything`.
+    @Test func theRealViewCallsTabChangedOnATabChange() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let navigation = SettingsNavigation(tab: .modes)
+        let interview = SettingsView.makeInterviewModel(controller)
+        let content = SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: interview, voices: nil, navigation: navigation)
+        let host = NSHostingView(rootView: content.view)
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { withExtendedLifetime(window) {} }
+        // Un passage de la boucle d'exécution est synchrone (`RunLoop.run` n'existe pas en contexte asynchrone).
+        func pumpOnce() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        func pump(until condition: () -> Bool) async {
+            for _ in 0..<400 where !condition() {
+                pumpOnce()
+                await Task.yield()
+            }
+        }
+        await pump { false }
+        let typed = "Rédige un prompt d'exemple."
+        interview.template = typed
+        await pump { false }
+        #expect(controller.settings.interview.template == nil, "témoin : rien n'est enregistré sans changement d'onglet")
+
+        navigation.tab = .providers
+        await pump { controller.settings.interview.template == typed }
+        #expect(controller.settings.interview.template == typed, "le changement d'onglet a appelé tabChanged")
+    }
+
+    /// Les cadres (en coordonnées de `host`) des cartes du formulaire groupé : vues d'AppKit du document de la vue de défilement,
+    /// plus étroites que la fenêtre et larges de plus de 300 points (mesuré hors écran à 860 : 78..782).
+    static func formCards(in host: NSView) -> [CGRect] {
+        func scrolls(_ view: NSView) -> [NSScrollView] {
+            (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrolls)
+        }
+        func descendants(_ view: NSView) -> [NSView] { view.subviews + view.subviews.flatMap(descendants) }
+        guard let document = scrolls(host).first?.documentView else { return [] }
+        return descendants(document)
+            .map { $0.convert($0.bounds, to: host) }
+            .filter { $0.width > 300 && $0.width < host.bounds.width - 2 }
+            .sorted { $0.minY < $1.minY }
+    }
+
+    /// T7 (tour 3) : « Ajouter un fournisseur… » et « Ajouter un mode » ont leur bord droit sur celui des cartes (centrées, de
+    /// largeur bornée par le style groupé), à un point près ; plus au bord de la fenêtre. Mesuré hors écran, fenêtre jamais
+    /// affichée ; le bouton par une sonde (`AddButtonFrameKey`), les cartes par AppKit.
+    @Test(arguments: [SettingsTab.providers, .modes])
+    func theAddButtonLinesUpWithTheCards(_ tab: SettingsTab) throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let provider = Provider(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, name: "Fournisseur d'exemple",
+            baseURL: "https://example.com", kind: .anthropic, models: [])
+        var button: CGRect?
+        let pane: AnyView =
+            tab == .providers
+            ? AnyView(
+                ProvidersPane(
+                    model: ProvidersModel(
+                        providers: [provider], secrets: InMemorySecretStore(secrets: [:]), listModels: { _, _ in [] },
+                        save: { _ in })))
+            : AnyView(ModesPane(model: SettingsView.makeModesModel(controller, keyMonitor: monitor)))
+        let host = NSHostingView(
+            rootView: pane
+                .frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
+                .onPreferenceChange(AddButtonFrameKey.self) { frame in MainActor.assumeIsolated { button = frame } })
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { withExtendedLifetime(window) {} }
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        let card = try #require(Self.formCards(in: host).first, "aucune carte trouvée (\(tab))")
+        let frame = try #require(button, "le bouton d'ajout n'est pas mesuré (\(tab))")
+        #expect(abs(frame.maxX - card.maxX) < 1, "\(tab) : bouton \(frame), carte \(card)")
+        #expect(frame.minX > card.minX, "\(tab) : le bouton est dans la largeur des cartes")
+    }
+
+    /// Les couleurs distinctes (RGBA sur 8 bits) d'une bande de `host` (coordonnées de `host`), rendue en image par
+    /// `cacheDisplay` : hors écran, la fenêtre n'est jamais affichée.
+    static func colors(in rect: CGRect, of host: NSView) throws -> Set<[Int]> {
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+        var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+        var seen = Set<[Int]>()
+        for y in Int((rect.minY * scale).rounded(.up))..<Int((rect.maxY * scale).rounded(.down)) {
+            for x in Int((rect.minX * scale).rounded(.up))..<Int((rect.maxX * scale).rounded(.down)) {
+                bitmap.getPixel(&pixel, atX: x, y: y)
+                seen.insert(pixel)
+            }
+        }
+        return seen
+    }
+
+    /// C3 (revue finale, C-m5) : la barre du bas des onglets Fournisseurs et Modes, rendue en image hors écran (fenêtre jamais
+    /// affichée), alors que des cartes défilent dessous : un trait de séparation sur TOUTE la largeur de la fenêtre au-dessus de la
+    /// barre, et sous ce trait, à gauche du bouton, une seule couleur. Ce que ce rendu ne sait pas dire : la transparence du
+    /// matériau `.bar` (mesuré : dans une fenêtre jamais mise devant, `cacheDisplay` le rend blanc uni, comme le fond de la
+    /// fenêtre ; l'outil d'images, qui met sa fenêtre devant hors de l'écran, le peint) ; l'opacité elle-même est tenue par
+    /// l'image seulement, pas par ce test. Témoins dans le même test : des cartes descendent sous la barre ; une
+    /// bande d'une carte avec son texte a plusieurs couleurs (le rendu voit le texte).
+    @Test(arguments: [SettingsTab.providers, .modes])
+    func theAddButtonBarIsSeparatedAcrossTheWholeWidth(_ tab: SettingsTab) throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes += (1...8).map { Mode(id: "perso-\($0)", name: "Mode d'exemple \($0)", instruction: "Écris.") }
+        try store.save(settings)
+        let controller = makeController()
+        let providers = (1...6).map { index in
+            Provider(
+                id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!, name: "Fournisseur d'exemple",
+                baseURL: "https://example.com/v\(index)", kind: .openAICompatible, models: ["modele-exemple"])
+        }
+        var button: CGRect?
+        let pane: AnyView =
+            tab == .providers
+            ? AnyView(
+                ProvidersPane(
+                    model: ProvidersModel(
+                        providers: providers, secrets: InMemorySecretStore(secrets: [:]), listModels: { _, _ in [] },
+                        save: { _ in })))
+            : AnyView(ModesPane(model: SettingsView.makeModesModel(controller, keyMonitor: monitor)))
+        let host = NSHostingView(
+            rootView: pane
+                .frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
+                .onPreferenceChange(AddButtonFrameKey.self) { frame in MainActor.assumeIsolated { button = frame } })
+        host.appearance = NSAppearance(named: .aqua)
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { withExtendedLifetime(window) {} }
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        let frame = try #require(button, "le bouton d'ajout n'est pas mesuré (\(tab))")
+        let cards = Self.formCards(in: host)
+        let first = try #require(cards.first, "aucune carte trouvée (\(tab))")
+        // Le haut de la barre (coordonnées de `host`, retournées) : le bouton et ses marges verticales de 12 points (code lu).
+        let top = host.bounds.maxY - frame.height - 24
+        #expect(cards.contains { $0.maxY > top + 1 }, "témoin : des cartes passent sous la barre (\(tab))")
+        let text = try Self.colors(in: CGRect(x: first.minX + 4, y: first.minY + 2, width: first.width - 8, height: 24), of: host)
+        #expect(text.count > 2, "témoin : le rendu voit le texte d'une carte (\(tab), \(text.count) couleurs)")
+
+        let fill = try Self.colors(
+            in: CGRect(x: 1, y: top + 2, width: frame.minX - 8 - 1, height: host.bounds.maxY - top - 3), of: host)
+        #expect(fill.count == 1, "\(tab) : la barre sous le trait n'est pas d'une seule couleur (\(fill.count))")
+        let line = try Self.colors(in: CGRect(x: 0, y: top, width: host.bounds.width, height: 1), of: host)
+        #expect(line.count == 1 && line != fill, "\(tab) : pas de trait d'une couleur sur toute la largeur au-dessus de la barre")
+    }
+
+    /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
+    func voicesContent(
+        _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()
+    ) -> SettingsContent {
+        SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), voices: voices,
+            navigation: navigation)
+    }
+
+    /// Règle 5 et décision 2 : quitter la fenêtre (`onLeave`) arrête l'écoute (la lecture elle-même) mais GARDE une confirmation en
+    /// attente et un brouillon ouvert (une feuille fait perdre la clé à la fenêtre : `onLeave` s'appelle alors) ; changer d'onglet
+    /// arrête l'écoute et annule la confirmation. Le changement d'onglet est vu dans la VRAIE vue, posée dans une fenêtre jamais
+    /// affichée.
+    @Test func leavingStopsThePreview() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1)
+        let rig = VoicesModelTests.Rig(
+            VoicesModelTests.settings(voices: [saved]), player: ScriptedClipPlayer(completion: .manual))
+        let voices = rig.model
+        let controller = makeController()
+        let navigation = SettingsNavigation(tab: .voices)
+        let content = voicesContent(controller, voices: voices, navigation: navigation)
+
+        // La fenêtre quittée : l'écoute s'arrête ; la confirmation en attente reste.
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        voices.listen()
+        #expect(await until { rig.player.isPlaying })
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.requestDeletion()
+        content.onLeave()
+        #expect(!rig.player.isPlaying, "la lecture est arrêtée")
+        #expect(voices.listeningRow == nil && voices.previewState == .idle)
+        #expect(voices.pendingDeletion == saved.id, "onLeave n'annule PAS la confirmation en attente")
+        voices.cancelConfirmation()
+        voices.beginEditing()
+        content.onLeave()
+        #expect(voices.draft != nil, "onLeave garde le brouillon ouvert")
+        voices.cancel()
+
+        // Le changement d'onglet, dans la vraie vue.
+        let host = NSHostingView(rootView: content.view)
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        // Un passage de la boucle d'exécution est synchrone (`RunLoop.run` n'existe pas en contexte asynchrone).
+        func pumpOnce() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        func pump(until condition: () -> Bool) async {
+            for _ in 0..<400 where !condition() {
+                pumpOnce()
+                await Task.yield()
+            }
+        }
+        await pump { false }
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.b")
+        voices.listen()
+        #expect(await until { rig.player.isPlaying })
+        voices.selection = VoicesModel.Row.ID.saved(saved.id)
+        voices.requestDeletion()
+        #expect(voices.pendingDeletion == saved.id)
+
+        navigation.tab = .providers
+        await pump { !rig.player.isPlaying && voices.pendingDeletion == nil }
+
+        #expect(!rig.player.isPlaying, "un autre onglet : la lecture est arrêtée")
+        #expect(voices.listeningRow == nil)
+        #expect(voices.pendingDeletion == nil, "un autre onglet : la confirmation est annulée")
+        #expect(rig.updates == 0, "rien n'a été supprimé")
+        withExtendedLifetime(window) {}
     }
 }

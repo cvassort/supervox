@@ -11,18 +11,20 @@ import Testing
 @MainActor @Suite(.timeLimit(.minutes(1))) struct HistoryPaneBehaviorTests {
     /// Pose le volet dans une fenêtre jamais affichée.
     private func show(_ model: HistoryModel) -> (window: NSWindow, host: NSHostingView<AnyView>) {
-        let host = NSHostingView(rootView: AnyView(HistoryPane(model: model).frame(width: 600, height: 460)))
-        host.frame = NSRect(x: 0, y: 0, width: 600, height: 460)
+        let host = NSHostingView(rootView: AnyView(HistoryPane(model: model).frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)))
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
         window.contentView = host
         return (window, host)
     }
 
-    /// Laisse SwiftUI faire sa mise en page et les tâches se poser, jusqu'à ce que la condition soit vraie (passages bornés).
+    /// Laisse SwiftUI faire sa mise en page et les tâches se poser, jusqu'à ce que la condition soit vraie (passages bornés). Un
+    /// sommeil de 5 ms par passage (2 s au plus, consommées seulement tant que la condition est fausse) : la lecture du disque se
+    /// fait hors du fil principal, et des passages sans délai pouvaient finir avant elle en série (tâche 4, F1).
     private func settle(_ host: NSView, until condition: () -> Bool) async {
         for _ in 0..<400 where !condition() {
             pump(host)
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
         }
     }
 

@@ -477,13 +477,14 @@ public actor DictationSession: DictationSessioning {
     }
 
     /// Le texte d'une erreur, en une raison qui se lit dans une phrase (sans point final). Jamais le texte brut d'une
-    /// erreur inconnue : une erreur système (`URLError`…) y met l'adresse du service. Les erreurs connues (`AudioCaptureError`,
-    /// `TranscriberError`) et celles qui portent un message d'elles-mêmes (`LocalizedError`) gardent leur message ; le
-    /// reste devient une phrase générique.
+    /// erreur qui n'est pas de la maison : une erreur système (`URLError`…) y met l'adresse du service, une `LocalizedError`
+    /// d'une bibliothèque tierce un texte en anglais ou un chemin. Seules les erreurs de la maison gardent leur raison :
+    /// `AudioCaptureError`, `TranscriberError` et `SupervoxError` ; le reste devient une phrase générique (B1, revue finale de
+    /// l'étape « réglage des voix », remplace le choix du 14/11 qui gardait le message de toute `LocalizedError`).
     private static func describe(_ error: Error) -> String {
         if let capture = error as? AudioCaptureError { return capture.reason }
         if let transcriber = error as? TranscriberError { return transcriber.description }
-        if let localized = error as? LocalizedError, let description = localized.errorDescription { return description }
+        if let house = error as? any SupervoxError { return house.reason }
         return "erreur inattendue"
     }
 }

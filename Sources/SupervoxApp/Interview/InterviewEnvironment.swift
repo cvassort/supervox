@@ -68,9 +68,9 @@ public struct InterviewSetup: Sendable {
     /// - Parameters:
     ///   - engine: le moteur du mode Entretien ; `nil` : `TranscriptionEngine.interviewDefault`.
     ///   - makeModel: fabrique le client d'un modèle (injectée : les tests n'ouvrent aucune connexion).
-    ///   - makeVoice: fabrique une voix. Avec `nil`, la voix du système, pour le choix donné (`providerID`, `model` et `identifier`
-    ///     à `nil` quand c'est un repli : l'identifiant d'une voix de fournisseur ne veut rien dire pour le système). Avec un
-    ///     fournisseur résolu, la voix de ce fournisseur pour le choix donné.
+    ///   - makeVoice: fabrique une voix, toujours pour un choix normalisé (`VoiceChoice.normalized`). Avec `nil`, la voix du système,
+    ///     pour le choix donné (`providerID`, `model` et `identifier` à `nil` quand c'est un repli : l'identifiant d'une voix de
+    ///     fournisseur ne veut rien dire pour le système). Avec un fournisseur résolu, la voix de ce fournisseur pour le choix donné.
     /// - Throws: `InterviewSetupFailure`, ou `CancellationError`. Une voix de fournisseur qui ne se résout pas n'est pas une panne :
     ///   voix du système.
     @MainActor
@@ -110,39 +110,33 @@ public struct InterviewSetup: Sendable {
         }
     }
 
-    /// La voix et le nom de son fournisseur. Un fournisseur au format Anthropic n'a pas de synthèse : il est écarté avant toute lecture
-    /// de sa clé (aucune invite du trousseau pour rien). Une voix de fournisseur sans modèle ou sans identifiant ne dit pas quoi
-    /// demander : écartée aussi. Seule une `RewriteFailure` de la résolution retombe sur le système ; l'annulation remonte.
+    /// La voix et le nom de son fournisseur, par la résolution unique (`VoiceChoice.resolve(in:secrets:)` : la route, puis la clé
+    /// pour une voix de fournisseur seulement ; aucune invite du trousseau pour un repli). La fabrique reçoit la forme normalisée.
+    /// Une `RewriteFailure` de la résolution retombe sur le système ; l'annulation remonte. Le repli garde langue et genre, sans
+    /// identifiant ; une voix de fournisseur a la voix du système en secours (`FallbackSpeechSynthesizer`).
     @MainActor
     private static func resolveVoice(
         _ choice: VoiceChoice, settings: AppSettings, secrets: SecretAccess,
         makeVoice: @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer
     ) async throws -> (voice: any SpeechSynthesizer, providerName: String?) {
-        guard let providerID = choice.providerID else { return (makeVoice(choice, nil), nil) }
+        let choice = choice.normalized
         let systemChoice = VoiceChoice(
             providerID: nil, model: nil, identifier: nil, language: choice.language, gender: choice.gender, extra: [:])
-        guard let resolved = try await resolveVoiceProvider(providerID, choice: choice, settings: settings, secrets: secrets)
-        else { return (makeVoice(systemChoice, nil), nil) }
-        let voice = FallbackSpeechSynthesizer(
-            primary: makeVoice(choice, resolved), fallback: makeVoice(systemChoice, nil))
-        return (voice, resolved.name)
-    }
-
-    @MainActor
-    private static func resolveVoiceProvider(
-        _ providerID: UUID, choice: VoiceChoice, settings: AppSettings, secrets: SecretAccess
-    ) async throws -> ResolvedProvider? {
-        guard let provider = settings.providers.first(where: { $0.id == providerID }) else { return nil }
-        switch provider.kind {
-        case .anthropic: return nil
-        case .openAICompatible: break
-        }
-        func isBlank(_ text: String?) -> Bool { text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true }
-        guard !isBlank(choice.model), !isBlank(choice.identifier) else { return nil }
+        let resolved: ResolvedVoice
         do {
-            return try await ProviderResolver.resolve(providerID, settings: settings, secrets: secrets)
+            resolved = try await choice.resolve(in: settings, secrets: secrets)
         } catch is RewriteFailure {
-            return nil
+            return (makeVoice(systemChoice, nil), nil)
+        }
+        switch resolved {
+        case .system(_, _, because: nil):
+            return (makeVoice(choice, nil), nil)
+        case .system:
+            return (makeVoice(systemChoice, nil), nil)
+        case .provider(let provider, _):
+            let voice = FallbackSpeechSynthesizer(
+                primary: makeVoice(choice, provider), fallback: makeVoice(systemChoice, nil))
+            return (voice, provider.name)
         }
     }
 }
@@ -180,21 +174,41 @@ public struct InterviewEnvironment: Sendable {
     /// décide qu'à la fin d'un bloc de 0,256 s. L'onglet Entretien l'affiche à côté de la valeur réglée. Le détecteur n'est pas
     /// connu de `SupervoxApp` : la cible `Supervox` donne la vraie formule ; tout le reste garde l'identité.
     public var effectiveTurnSilence: @Sendable (Double) -> Double
+    /// Les voix du système installées, pour l'onglet Voix. Seul le programme (`main.swift`) donne la vraie liste
+    /// (`SystemVoices.installed`) ; tout le reste n'en voit aucune.
+    public var systemVoices: @Sendable () -> [SystemVoiceInfo]
+    /// Fabrique le lecteur de sortie seule de l'écoute d'une voix. Seul le programme donne le vrai (`SystemClipPlayer`) ; tout le
+    /// reste reçoit un lecteur qui lève `Unavailable` et ne joue rien.
+    public var makePlayer: @Sendable () -> any ClipPlayer
 
     public init(
         prepare: @escaping @Sendable (InterviewSetup) async throws -> InterviewPreparation,
         makeConversation: @escaping @Sendable (InterviewSetup) async throws -> any ConversationEngine,
         makeVoice: @escaping @Sendable (VoiceChoice, ResolvedProvider?) -> any SpeechSynthesizer,
-        effectiveTurnSilence: @escaping @Sendable (Double) -> Double = { $0 }
+        effectiveTurnSilence: @escaping @Sendable (Double) -> Double = { $0 },
+        systemVoices: @escaping @Sendable () -> [SystemVoiceInfo] = { [] },
+        makePlayer: @escaping @Sendable () -> any ClipPlayer = InterviewEnvironment.noPlayer
     ) {
         self.prepare = prepare
         self.makeConversation = makeConversation
         self.makeVoice = makeVoice
         self.effectiveTurnSilence = effectiveTurnSilence
+        self.systemVoices = systemVoices
+        self.makePlayer = makePlayer
     }
 
     /// Ce que lèvent les fermetures de `unavailable` : aucun entretien n'est branché dans ce processus.
     public struct Unavailable: Error, Equatable, Sendable {}
+
+    /// La fabrique de lecteur par défaut : un lecteur qui lève `Unavailable` (voir `UnavailablePlayer`).
+    public static let noPlayer: @Sendable () -> any ClipPlayer = { UnavailablePlayer() }
+
+    /// Le lecteur de ce qui n'est pas le programme : `play` lève `Unavailable`, sans rien jouer ; il n'y a jamais rien à arrêter.
+    private struct UnavailablePlayer: ClipPlayer {
+        func play(_ clip: AudioClip) async throws { throw Unavailable() }
+        func stop() {}
+        @MainActor func stopNow() {}
+    }
 
     /// Aucun entretien branché : préparer et construire lèvent, la voix fabriquée lève à la première phrase. Le défaut de tout ce qui
     /// n'est pas l'application elle-même ; le panneau dit alors « L'entretien n'a pas pu démarrer : relancez Supervox. ».

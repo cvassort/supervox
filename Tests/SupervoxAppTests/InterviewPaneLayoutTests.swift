@@ -17,13 +17,15 @@ import Testing
     /// Marge pour la barre d'onglets, en points : choix non mesuré (la barre ne se mesure pas hors fenêtre affichée).
     static let tabStripAllowance: CGFloat = 60
 
-    /// Le bas de l'intitulé « Réglages avancés », en points depuis le haut du volet, pour un volet de cette largeur.
+    /// Le bas de l'intitulé « Réglages avancés », en points depuis le haut du volet, pour un volet de cette largeur. Le volet a le
+    /// bouton « Choisir la voix… » (règle 4 de la tâche 4 : la vraie fenêtre le montre dès que l'onglet Voix existe).
     private func headingBottom(
         model: InterviewSettingsModel, width: CGFloat = SettingsView.windowSize.width, expanded: Bool = false
     ) throws -> CGFloat {
         var measured: CGFloat?
         let height = SettingsView.windowSize.height
-        let pane = InterviewPane(model: model, advancedExpanded: expanded, onAdvancedHeadingBottom: { measured = $0 })
+        let pane = InterviewPane(
+            model: model, advancedExpanded: expanded, chooseVoice: {}, onAdvancedHeadingBottom: { measured = $0 })
         let host = NSHostingView(rootView: pane.frame(width: width, height: height))
         host.frame = NSRect(x: 0, y: 0, width: width, height: height)
         // Bornée : la mise en page se fait au passage de la boucle, jamais d'attente sans fin.
@@ -64,8 +66,62 @@ import Testing
     }
 
     /// Ouvrir le groupe ne déplace pas son intitulé : le contenu s'ouvre dessous.
+    ///
+    /// À un point près, pas à l'égalité exacte : selon la machine, la mise en page rend l'intitulé un quart de point plus haut
+    /// quand le groupe est ouvert (mesuré : 394,5 contre 394,75, session ouverte, deux écrans ; égaux session verrouillée ; cause
+    /// non établie). Un intitulé poussé par le contenu descendrait d'au moins une ligne de texte, bien au-delà d'un point.
     @Test func openingTheGroupDoesNotMoveItsHeading() throws {
-        #expect(try headingBottom(model: model(), expanded: true) == (try headingBottom(model: model(), expanded: false)))
+        let opened = try headingBottom(model: model(), expanded: true)
+        let closed = try headingBottom(model: model(), expanded: false)
+        #expect(abs(opened - closed) < 1, "ouvert : \(opened), fermé : \(closed)")
+    }
+
+    /// D (tâche 4, tour de correction 1) : la ligne « Voix » (libellé, légende, bouton « Choisir la voix… ») est dans le PREMIER
+    /// groupe, sous le nombre de questions : à l'ouverture du volet (groupe avancé fermé), son bas est dans la hauteur visible
+    /// (fenêtre moins la marge de la barre d'onglets) et au-dessus de l'intitulé « Réglages avancés ». Mesuré sans fenêtre.
+    /// Sans onglet Voix, pas de ligne.
+    @Test func theVoiceRowIsVisibleWithoutScrollingOnlyWithTheVoicesTab() throws {
+        func buttonBottom(_ chooseVoice: (@MainActor () -> Void)?) -> CGFloat? {
+            var measured: CGFloat?
+            let height = SettingsView.windowSize.height
+            let pane = InterviewPane(model: model(), chooseVoice: chooseVoice, onVoiceRowFrame: { measured = $0.maxY })
+            let host = NSHostingView(rootView: pane.frame(width: SettingsView.windowSize.width, height: height))
+            host.frame = NSRect(x: 0, y: 0, width: SettingsView.windowSize.width, height: height)
+            for _ in 0..<300 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(mode: .default, before: Date())
+            }
+            return measured
+        }
+        let measuredBottom = buttonBottom({})
+        let bottom = try #require(measuredBottom, "la ligne « Voix » n'est pas dans le volet")
+        let heading = try headingBottom(model: model())
+        let visible = SettingsView.windowSize.height - Self.tabStripAllowance
+        print("Entretien : bas de la ligne « Voix » à \(bottom) points du haut du volet ; intitulé avancé à \(heading) ; hauteur utile \(visible)")
+        #expect(bottom <= visible, "la ligne « Voix » se voit sans défiler (\(bottom) pour \(visible))")
+        #expect(bottom < heading, "la ligne « Voix » est au-dessus de l'intitulé « Réglages avancés » (premier groupe)")
+        let withoutVoices = buttonBottom(nil)
+        #expect(withoutVoices == nil, "sans onglet Voix, pas de bouton")
+    }
+
+    /// Vu dans l'image à 860 points (tâche 4, tour 2) : le formulaire groupé plafonne la largeur de ses cartes et les centre, la
+    /// phrase d'introduction restait collée au bord gauche. Le contenu a une largeur utile bornée : l'introduction commence là où
+    /// commencent les lignes du formulaire (ici la ligne « Voix »), à 4 points près.
+    @Test func theIntroductionLinesUpWithTheFormRows() throws {
+        var intro: CGRect?
+        var row: CGRect?
+        let size = SettingsView.windowSize
+        let pane = InterviewPane(
+            model: model(), chooseVoice: {}, onVoiceRowFrame: { row = $0 }, onIntroductionFrame: { intro = $0 })
+        let host = NSHostingView(rootView: pane.frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        for _ in 0..<300 where intro == nil || row == nil {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        let introFrame = try #require(intro), rowFrame = try #require(row)
+        print("Entretien : introduction à x = \(introFrame.minX), ligne « Voix » à x = \(rowFrame.minX)")
+        #expect(abs(introFrame.minX - rowFrame.minX) <= 4, "introduction \(introFrame), ligne \(rowFrame)")
     }
 
     /// La mesure est vivante : un volet plus étroit passe les phrases à la ligne, et l'intitulé descend. Sans cela, un chiffre

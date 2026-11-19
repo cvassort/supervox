@@ -48,9 +48,11 @@ final class TestClock: @unchecked Sendable {
     var reader: @Sendable () -> Double { { [self] in value.withLock { $0 } } }
 }
 
-struct TestFailure: LocalizedError, CustomStringConvertible, Equatable {
+struct TestFailure: LocalizedError, SupervoxError, CustomStringConvertible, Equatable {
     var description: String
     var errorDescription: String? { description }
+    /// Une erreur de la maison pour la dictée (B1, revue finale) : sa raison est son texte.
+    var reason: String { description }
     init(_ description: String) { self.description = description }
 }
 

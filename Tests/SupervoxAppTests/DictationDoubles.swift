@@ -437,7 +437,8 @@ final class RewriteCall: Sendable {
                 return knobs.front
             },
             hotKeyLabel: { knobs.hotKeyLabel },
-            wait: { await handover.wait($0) }, interview: interview, concludeInterview: concludeInterview)
+            wait: { await handover.wait($0) }, interview: interview, concludeInterview: concludeInterview,
+            beforeMicrophone: {})
         panel.onClosed = { [controller] in controller.panelClosedByUser() }
         rig.keys.onPostPaste = { [weak self] in self?.pasted.append(self?.rig.board.text ?? "") }
         controller.onViewChange = { [weak self] in self?.views.append($0) }

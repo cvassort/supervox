@@ -219,7 +219,7 @@ private let providerID = UUID(uuidString: "00000000-0000-0000-0000-0000000000A1"
         #expect(reloaded.interview.template == "Un gabarit d'exemple.")
         #expect(reloaded.voice.identifier == "voix-exemple")
         #expect(reloaded.voice.gender == .neutral)
-        #expect(reloaded.voice.usesProvider)
+        #expect(reloaded.voice.providerID == providerID)
         #expect(reloaded.history.retentionDays == 90)
         #expect(reloaded == settings)
     }

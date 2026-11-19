@@ -17,14 +17,19 @@ import Testing
         private struct State {
             var audios: [ScriptedAudioIO] = []
             var systemVoices: [String] = []
+            var systemIdentifiers: [String?] = []
             var providerVoices: [(provider: String, voice: ProviderVoice)] = []
             var parts: [LiveInterview.Parts] = []
             var conversations: [HeldConversation] = []
         }
         private let state = Mutex(State())
+        /// Le lecteur double que l'environnement doit rendre tel quel.
+        let player = ScriptedClipPlayer()
 
         var audios: [ScriptedAudioIO] { state.withLock { $0.audios } }
         var systemVoices: [String] { state.withLock { $0.systemVoices } }
+        /// L'identifiant reçu par chaque fabrication de la voix du système, dans l'ordre de `systemVoices`.
+        var systemIdentifiers: [String?] { state.withLock { $0.systemIdentifiers } }
         var providerVoices: [(provider: String, voice: ProviderVoice)] { state.withLock { $0.providerVoices } }
         var parts: [LiveInterview.Parts] { state.withLock { $0.parts } }
         var conversations: [HeldConversation] { state.withLock { $0.conversations } }
@@ -35,8 +40,11 @@ import Testing
             return audio
         }
 
-        func systemVoice(_ language: String) -> any SpeechSynthesizer {
-            state.withLock { $0.systemVoices.append(language) }
+        func systemVoice(_ language: String, _ identifier: String?) -> any SpeechSynthesizer {
+            state.withLock {
+                $0.systemVoices.append(language)
+                $0.systemIdentifiers.append(identifier)
+            }
             return NamedVoice("système \(language)")
         }
 
@@ -124,8 +132,9 @@ import Testing
             makeFeed: { ScriptedMicrophoneFeed(chunks: []) }, factory: factory, watchdog: nil)
         let made = Made()
         let live = LiveInterview(
-            engines: engines, makeAudio: { made.audio() }, makeSystemVoice: { made.systemVoice($0) },
-            makeProviderVoice: { made.providerVoice($0, $1) }, assemble: { made.assemble($0) })
+            engines: engines, makeAudio: { made.audio() }, makeSystemVoice: { made.systemVoice($0, $1) },
+            makeProviderVoice: { made.providerVoice($0, $1) }, assemble: { made.assemble($0) },
+            systemVoices: { [Self.listedVoice] }, makePlayer: { [player = made.player] in player })
         return Rig(live: live, engines: engines, doubles: doubles, ledger: ledger, catalog: catalog, made: made)
     }
 
@@ -176,6 +185,19 @@ import Testing
     }
 
     // MARK: - Préparation et construction (règle 11, amendement I)
+
+    /// Une voix inventée de la liste double des voix installées.
+    static let listedVoice = SystemVoiceInfo(identifier: "voix.exemple.a", language: "fr-FR", quality: 2, name: "Voix d'exemple A")
+
+    /// Réglage des voix, tâche 3 : l'environnement réel donne la liste des voix et le lecteur que le programme lui passe (le vrai
+    /// n'est nommé que par `main.swift`), pas les défauts vides.
+    @Test("l'environnement réel donne la liste des voix et le lecteur reçus")
+    func theRealEnvironmentGivesTheVoiceListAndThePlayerItReceived() {
+        let rig = Self.rig()
+        let environment = rig.live.environment
+        #expect(environment.systemVoices() == [Self.listedVoice])
+        #expect((environment.makePlayer() as? ScriptedClipPlayer) === rig.made.player)
+    }
 
     /// Le câblage réel donne à l'onglet Entretien la formule du détecteur (et non l'identité du repli) : 0,6 et 0,7 s demandées
     /// donnent 1,024 s en pratique, 0,5 s (le défaut) 0,768 s.
@@ -291,7 +313,7 @@ import Testing
         let setup = Self.setup(vocabulary: ["terme-un", "terme-deux"])
         let controller = InterviewController(
             environment: rig.live.environment, settings: { .defaults }, behavior: { .toggle }, resolve: { _, _ in setup },
-            history: DiscardingInterviewHistory(), panel: panel)
+            history: DiscardingInterviewHistory(), panel: panel, beforeMicrophone: {})
         let outcomes = Outcomes()
         controller.start(engine: nil) { outcomes.append($0) }
 
@@ -373,6 +395,219 @@ import Testing
         // Un fournisseur sans synthèse (format Anthropic) : la voix du système plutôt qu'une voix muette.
         let silent = ResolvedProvider(kind: .anthropic, config: provider.config, name: "Autre")
         #expect((rig.live.environment.makeVoice(choice, silent) as? NamedVoice)?.name == "système fr-FR")
+    }
+
+    // MARK: - La voix désignée et la forme normalisée (tâche 2 de l'étape « voix »)
+
+    static let voiceProviderID = UUID(uuidString: "00000000-0000-0000-0000-00000000E0B1")!
+
+    static let resolvedVoiceProvider = ResolvedProvider(
+        kind: .openAICompatible, config: EndpointConfig(baseURL: URL(string: "https://example.com/v1")!, apiKey: "cle-exemple"),
+        name: "Fournisseur d'exemple")
+
+    /// Des réglages écrits à la main : un fournisseur (modèles et voix), et la voix donnée, telle quelle.
+    static func handWrittenSettings(voice: String) throws -> AppSettings {
+        let json = #"""
+            {"version":3,
+             "providers":[{"id":"00000000-0000-0000-0000-00000000E0B1","name":"Fournisseur d'exemple","baseURL":"https://example.com/v1","kind":"openAICompatible","models":["modele-exemple"]}],
+             "fastModel":{"providerID":"00000000-0000-0000-0000-00000000E0B1","model":"modele-exemple"},
+             "strongModel":{"providerID":"00000000-0000-0000-0000-00000000E0B1","model":"modele-exemple"},
+             "voice":
+            """# + voice + "}"
+        return try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8))
+    }
+
+    /// La résolution réelle de l'entretien, avec la fabrique de voix réelle (`LiveInterview.makeVoice`) branchée sur les doubles :
+    /// clé en mémoire, aucun réseau, aucun modèle.
+    @MainActor
+    static func resolve(_ settings: AppSettings, with rig: Rig) async throws -> InterviewSetup {
+        let store = InMemorySecretStore(secrets: [voiceProviderID.uuidString: "cle-exemple"])
+        return try await InterviewSetup.resolve(
+            settings: settings, engine: nil, secrets: SecretAccess(store, queue: DispatchQueue(label: "test.live.\(UUID())")),
+            makeModel: { _, _ in SilentModel() }, makeVoice: rig.live.environment.makeVoice)
+    }
+
+    /// Règle 3 : ce qui part au fournisseur est la forme normalisée, même quand le fichier porte à la main des clés réservées, des
+    /// clés vides et des espaces : aucune clé réservée n'arrive à la fabrique de la voix du fournisseur.
+    @MainActor
+    @Test func reservedKeysNeverReachTheProvider() async throws {
+        let settings = try Self.handWrittenSettings(
+            voice: #"{"providerID":"00000000-0000-0000-0000-00000000E0B1","model":" modele-voix-exemple ","identifier":"voix-exemple ","language":"fr-FR","extra":{"model":"x","input":"x","voice":"x","response_format":"mp3"," model":"x","":"x"," cle-exemple ":"valeur-exemple"}}"#)
+        #expect(settings.voice.extra["model"] == "x", "le fichier porte bien les clés réservées")
+        let rig = Self.rig()
+
+        let setup = try await Self.resolve(settings, with: rig)
+
+        #expect(setup.voiceProviderName == "Fournisseur d'exemple")
+        let made = try #require(rig.made.providerVoices.first)
+        #expect(rig.made.providerVoices.count == 1)
+        #expect(made.voice == ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"]))
+        #expect(VoiceChoice.reservedExtraKeys.isDisjoint(with: made.voice.extra.keys))
+
+        // Appelée directement, sans la résolution, la fabrique ne laisse rien passer de non normalisé non plus.
+        let direct = Self.rig()
+        _ = direct.live.environment.makeVoice(settings.voice, Self.resolvedVoiceProvider)
+        let directVoice = try #require(direct.made.providerVoices.first)
+        #expect(
+            directVoice.voice
+                == ProviderVoice(model: "modele-voix-exemple", identifier: "voix-exemple", extra: ["cle-exemple": "valeur-exemple"]))
+    }
+
+    /// Un fournisseur donné avec un choix qui ne fait pas une voix de fournisseur (sans fournisseur, modèle ou identifiant blanc) :
+    /// la voix du système, sans identifiant, jamais une voix de fournisseur au modèle vide.
+    @Test(arguments: [
+        VoiceChoice(identifier: "voix.exemple.a", language: "fr-CA"),
+        VoiceChoice(providerID: voiceProviderID, model: "  ", identifier: "voix-exemple", language: "fr-CA"),
+        VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: nil, language: "fr-CA"),
+    ])
+    func aProviderWithAnUnusableChoiceGivesTheSystemVoice(_ choice: VoiceChoice) {
+        let rig = Self.rig()
+        _ = rig.live.environment.makeVoice(choice, Self.resolvedVoiceProvider)
+        #expect(rig.made.providerVoices.isEmpty, "aucune voix de fournisseur")
+        #expect(rig.made.systemVoices == ["fr-CA"])
+        #expect(rig.made.systemIdentifiers == [nil])
+    }
+
+    // MARK: - Le lien entre la règle « qui parle » et la fabrique réelle (réglage des voix, tâche 3)
+
+    static let silentProviderID = UUID(uuidString: "00000000-0000-0000-0000-00000000E0B2")!
+
+    /// Un fournisseur qui sait parler et un qui ne sait pas, tous deux nommés d'après la liste permise.
+    static func routedSettings() -> AppSettings {
+        var settings = AppSettings.defaults
+        settings.providers = [
+            Provider(
+                id: voiceProviderID, name: "Fournisseur d'exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
+                models: ["modele-voix-exemple"]),
+            Provider(
+                id: silentProviderID, name: "Fournisseur d'exemple", baseURL: "https://example.com/v2", kind: .anthropic,
+                models: []),
+        ]
+        return settings
+    }
+
+    static let routedChoices: [VoiceChoice] = [
+        VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-FR"),
+        VoiceChoice(
+            providerID: voiceProviderID, model: " modele-voix-exemple ", identifier: " voix-exemple ", language: "en-US",
+            gender: .female, extra: ["cle-exemple": "valeur-exemple"]),
+        VoiceChoice(language: "fr-FR"),
+        VoiceChoice(identifier: "voix.exemple.a", language: "fr-CA"),
+        VoiceChoice(providerID: UUID(uuidString: "00000000-0000-0000-0000-00000000E0B9")!, model: "modele-voix-exemple",
+                    identifier: "voix-exemple", language: "fr-FR"),
+        VoiceChoice(providerID: silentProviderID, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-FR"),
+        VoiceChoice(providerID: voiceProviderID, model: "  ", identifier: "voix-exemple", language: "fr-FR"),
+        VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: nil, language: "fr-FR"),
+    ]
+
+    /// Le seul garde contre un repli silencieux pendant l'écoute : pour un choix que `route(in:)` classe `.provider`, la fabrique
+    /// réelle (`LiveInterview.makeVoice`, avec le fournisseur résolu) rend la voix du fournisseur, jamais celle du système ; pour un
+    /// choix classé système, jamais celle d'un fournisseur, même si on lui donne le fournisseur référencé. Rien n'est synthétisé :
+    /// on regarde ce que la fabrique a fabriqué.
+    @Test(arguments: routedChoices)
+    func theFactoryFollowsTheRouteRule(_ choice: VoiceChoice) {
+        let settings = Self.routedSettings()
+        func resolved(_ provider: Provider) -> ResolvedProvider {
+            ResolvedProvider(kind: provider.kind, config: Self.resolvedVoiceProvider.config, name: provider.name)
+        }
+        switch choice.route(in: settings) {
+        case .provider(let provider, _):
+            let rig = Self.rig()
+            let voice = rig.live.environment.makeVoice(choice, resolved(provider))
+            #expect((voice as? NamedVoice)?.name == "fournisseur \(provider.name)")
+            #expect(rig.made.providerVoices.count == 1)
+            #expect(rig.made.systemVoices.isEmpty, "jamais la voix du système pour une voix que la règle donne au fournisseur")
+        case .system:
+            let given: [ResolvedProvider?] = [nil] + settings.providers.filter { $0.id == choice.providerID }.map(resolved)
+            for provider in given {
+                let rig = Self.rig()
+                _ = rig.live.environment.makeVoice(choice, provider)
+                #expect(rig.made.providerVoices.isEmpty, "jamais un fournisseur pour une voix que la règle donne au système")
+                #expect(rig.made.systemVoices.count == 1)
+            }
+        }
+    }
+
+    /// La table couvre les deux issues de la règle.
+    @Test func theRouteTableCoversBothOutcomes() {
+        let routes = Self.routedChoices.map { $0.route(in: Self.routedSettings()) }
+        let providers = routes.filter { if case .provider = $0 { true } else { false } }.count
+        #expect(providers == 2)
+        #expect(routes.count - providers == 6)
+    }
+
+    struct SystemFactoryCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let choice: VoiceChoice
+        let provider: ResolvedProvider?
+        /// `nil` : la fabrique du système n'est pas appelée ; sinon, langue et identifiant reçus.
+        let system: (language: String, identifier: String?)?
+        var testDescription: String { name }
+    }
+
+    static let systemFactoryCases: [SystemFactoryCase] = [
+        SystemFactoryCase(
+            name: "voix du système désignée", choice: VoiceChoice(identifier: "voix.exemple.a", language: "fr-CA"), provider: nil,
+            system: ("fr-CA", "voix.exemple.a")),
+        SystemFactoryCase(
+            name: "voix du système sans identifiant", choice: VoiceChoice(language: "fr-CA"), provider: nil, system: ("fr-CA", nil)),
+        SystemFactoryCase(
+            name: "voix de fournisseur sans fournisseur résolu : repli sans identifiant",
+            choice: VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-CA"),
+            provider: nil, system: ("fr-CA", nil)),
+        SystemFactoryCase(
+            name: "voix de fournisseur, fournisseur sans synthèse : repli sans identifiant",
+            choice: VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-CA"),
+            provider: ResolvedProvider(kind: .anthropic, config: resolvedVoiceProvider.config, name: "Fournisseur d'exemple"),
+            system: ("fr-CA", nil)),
+        SystemFactoryCase(
+            name: "voix de fournisseur résolue : la fabrique du système n'est pas appelée",
+            choice: VoiceChoice(providerID: voiceProviderID, model: "modele-voix-exemple", identifier: "voix-exemple", language: "fr-CA"),
+            provider: resolvedVoiceProvider, system: nil),
+    ]
+
+    /// Règle 5 : `makeVoice(choix, nil)` passe l'identifiant du choix à la fabrique de la voix du système ; tout repli d'une voix de
+    /// fournisseur lui passe `nil` (un identifiant de fournisseur ne désigne pas une voix du système).
+    @Test(arguments: systemFactoryCases)
+    func theSystemIdentifierReachesTheFactoryOnlyForASystemVoice(_ example: SystemFactoryCase) {
+        let rig = Self.rig()
+        _ = rig.live.environment.makeVoice(example.choice, example.provider)
+        if let system = example.system {
+            #expect(rig.made.systemVoices == [system.language])
+            #expect(rig.made.systemIdentifiers == [system.identifier])
+            #expect(rig.made.providerVoices.isEmpty)
+        } else {
+            #expect(rig.made.systemVoices.isEmpty)
+            #expect(rig.made.providerVoices.count == 1)
+        }
+    }
+
+    /// Règle 5, par la résolution réelle : une voix du système garde son identifiant (rogné) jusqu'à la fabrique ; une voix de
+    /// fournisseur résolue fabrique son secours sans identifiant ; une voix de fournisseur qui retombe (fournisseur supprimé) aussi.
+    @MainActor
+    @Test func throughTheResolutionOnlyASystemVoiceKeepsItsIdentifier() async throws {
+        let system = Self.rig()
+        _ = try await Self.resolve(
+            try Self.handWrittenSettings(voice: #"{"identifier":" voix.exemple.a ","language":"fr-CA"}"#), with: system)
+        #expect(system.made.systemIdentifiers == ["voix.exemple.a"])
+        #expect(system.made.systemVoices == ["fr-CA"])
+
+        let provider = Self.rig()
+        _ = try await Self.resolve(
+            try Self.handWrittenSettings(
+                voice: #"{"providerID":"00000000-0000-0000-0000-00000000E0B1","model":"modele-voix-exemple","identifier":"voix-exemple","language":"fr-CA"}"#),
+            with: provider)
+        #expect(provider.made.providerVoices.count == 1)
+        #expect(provider.made.systemIdentifiers == [nil], "le secours de la voix du fournisseur")
+
+        let removed = Self.rig()
+        _ = try await Self.resolve(
+            try Self.handWrittenSettings(
+                voice: #"{"providerID":"00000000-0000-0000-0000-00000000E0B9","model":"modele-voix-exemple","identifier":"voix-exemple","language":"fr-CA"}"#),
+            with: removed)
+        #expect(removed.made.providerVoices.isEmpty)
+        #expect(removed.made.systemIdentifiers == [nil])
+        #expect(removed.made.systemVoices == ["fr-CA"])
     }
 
     @Test("l'assemblage réel donne la façade du moteur, sans la démarrer")

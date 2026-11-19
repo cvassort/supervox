@@ -11,11 +11,13 @@ application.setActivationPolicy(.accessory)
 EngineLogging.keepTranscriptsOutOfLogs()
 // Un seul catalogue de modèles : celui de l'onglet Transcription et celui de la dictée.
 let engines = LiveDictationEngines()
-// Le son réel et la voix du système ne sont construits qu'ici : tests, outil de rendu et constructeurs par défaut n'ont pas
-// d'entretien (`InterviewEnvironment.unavailable`).
+// Le son réel, la voix du système, la liste des voix installées et le lecteur de l'écoute d'une voix ne sont construits qu'ici :
+// tests, outil de rendu et constructeurs par défaut n'ont pas d'entretien (`InterviewEnvironment.unavailable`). Un lecteur neuf
+// par appel de la fabrique ; l'écoute d'une voix n'en demande qu'un et le garde (`VoicePreview`).
 let interview = LiveInterview(
-    engines: engines, makeAudio: { LiveAudioIO() }, makeSystemVoice: { SystemSpeechSynthesizer(language: $0) },
-    makeProviderVoice: LiveInterview.providerVoice, assemble: LiveInterview.session)
+    engines: engines, makeAudio: { LiveAudioIO() }, makeSystemVoice: { SystemSpeechSynthesizer(language: $0, identifier: $1) },
+    makeProviderVoice: LiveInterview.providerVoice, assemble: LiveInterview.session,
+    systemVoices: SystemVoices.installed, makePlayer: { SystemClipPlayer() })
 let controller = AppController(
     settingsView: SettingsView.provider(
         catalog: engines.catalog, promptTokenLimit: WhisperKitTranscriber.promptTokenLimit),

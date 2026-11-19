@@ -147,10 +147,12 @@ public enum VoiceGender: Codable, Equatable, Sendable {
     }
 }
 
-/// La voix de l'assistant, enregistrée dans `settings.json` sous `voice` (version 3). Aucun écran ne la modifie à l'étape 6.
+/// La voix de l'assistant, enregistrée dans `settings.json` sous `voice` (version 3). L'onglet Voix l'écrit depuis l'étape 7
+/// (« Utiliser cette voix », et la modification ou la suppression de la voix en vigueur) ; le fichier se modifie aussi à la main.
 ///
 /// `providerID` `nil` : une voix du système. `identifier` `nil` : la meilleure voix du système pour `language`. `extra` : des
-/// paramètres libres envoyés tels quels au fournisseur (design 6.5). Un champ absent ou d'une autre forme prend son défaut (un
+/// paramètres libres envoyés au fournisseur (design 6.5), sous leur forme normalisée (`normalized`) : clés rognées, clés vides
+/// et clés réservées écartées, au plus `maxExtraEntries`. Un champ absent ou d'une autre forme prend son défaut (un
 /// fournisseur illisible donne donc la voix du système) ; un champ inconnu est gardé et réécrit tel quel.
 public struct VoiceChoice: Codable, Equatable, Sendable {
     public var providerID: UUID?
@@ -177,8 +179,48 @@ public struct VoiceChoice: Codable, Equatable, Sendable {
     /// La voix du système, meilleure voix pour le français.
     public static let system = VoiceChoice()
 
-    /// La voix vient d'un fournisseur (sinon, du système).
-    public var usesProvider: Bool { providerID != nil }
+    /// Les clés que la requête de synthèse pose elle-même (`OpenAICompatibleClient.speech`, code lu) : un paramètre libre ne les
+    /// porte jamais.
+    public static let reservedExtraKeys: Set<String> = ["model", "input", "voice", "response_format"]
+    /// Nombre maximal de paramètres libres envoyés au fournisseur : 16, choix non mesuré.
+    public static let maxExtraEntries = 16
+
+    /// La forme sous laquelle la voix sert : modèle et identifiant rognés (vides : `nil`) ; langue rognée (vide ou blanche :
+    /// `fr-FR`) ; clés d'`extra` rognées, les clés vides et les clés réservées (`reservedExtraKeys`, comparées après rognage et sans
+    /// casse : un serveur peut apparier les clés JSON sans casse) retirées, puis au plus `maxExtraEntries` entrées, les premières
+    /// dans l'ordre des clés. Deux clés qui se rejoignent une fois rognées : celle qui l'était déjà l'emporte, sinon la première
+    /// dans l'ordre des clés d'origine. Les valeurs ne sont pas touchées ; le fournisseur, le genre et les champs inconnus restent.
+    /// Idempotente. C'est la seule forme qui part chez un fournisseur : tenu par `providerVoice`, seul constructeur de
+    /// `ProviderVoice` à partir des réglages, qui part d'elle (et dont `route(in:)`, `resolve(in:secrets:)` et la fabrique de
+    /// l'entretien se servent).
+    public var normalized: VoiceChoice {
+        func trimmed(_ text: String?) -> String? {
+            guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            return text
+        }
+        var result = self
+        result.model = trimmed(model)
+        result.identifier = trimmed(identifier)
+        result.language = trimmed(language) ?? Self.system.language
+        // Tri par (clé rognée, clé déjà propre d'abord, clé d'origine) : l'ordre ne dépend pas du parcours du dictionnaire.
+        let entries = extra
+            .map { (key: $0.key.trimmingCharacters(in: .whitespacesAndNewlines), original: $0.key, value: $0.value) }
+            .filter { !$0.key.isEmpty && !Self.reservedExtraKeys.contains($0.key.lowercased()) }
+            .sorted { lhs, rhs in
+                if lhs.key != rhs.key { return lhs.key < rhs.key }
+                let lhsClean = lhs.key == lhs.original
+                let rhsClean = rhs.key == rhs.original
+                if lhsClean != rhsClean { return lhsClean }
+                return lhs.original < rhs.original
+            }
+        var kept: [String: String] = [:]
+        for entry in entries where kept[entry.key] == nil {
+            guard kept.count < Self.maxExtraEntries else { break }
+            kept[entry.key] = entry.value
+        }
+        result.extra = kept
+        return result
+    }
 
     /// Les champs connus seulement : un champ inconnu ne change pas l'égalité.
     public static func == (lhs: VoiceChoice, rhs: VoiceChoice) -> Bool {

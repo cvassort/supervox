@@ -7,6 +7,17 @@ public enum ProviderKind: String, Codable, Sendable {
     case anthropic
 }
 
+extension ProviderKind {
+    /// LA règle « ce fournisseur sait parler » (il a une route de synthèse de la voix) : lue par `VoiceChoice.route(in:)`, par
+    /// le brouillon de l'onglet Voix et par la fabrique de voix du programme. Un type nouveau forcera une décision ici.
+    public var canSpeak: Bool {
+        switch self {
+        case .openAICompatible: true
+        case .anthropic: false
+        }
+    }
+}
+
 /// Un fournisseur de modèles. Aucune clé d'API ici : elles vivent dans le trousseau. Un champ que cette version ne connaît pas
 /// est gardé et réécrit tel quel (`UnknownFields`) ; l'égalité ne compare que les champs connus.
 public struct Provider: Codable, Equatable, Identifiable, Sendable {
@@ -99,7 +110,11 @@ public enum HotKeyBehavior: String, Codable, Sendable {
 /// - un champ connu d'une autre forme dans les types de la version 3 (`InterviewSettings`, `VoiceChoice`, `HistorySettings`)
 ///   retombe sur son défaut, les autres champs restant lus ; réécrit, il l'est avec ce défaut. Un bloc `interview`, `voice` ou
 ///   `history` qui n'est pas un objet prend tous ses défauts, sans que le reste du fichier soit mis de côté ;
-///   une valeur hors borne de `InterviewSettings` ou de `HistorySettings` est ramenée dans sa borne à la lecture.
+///   une valeur hors borne de `InterviewSettings` ou de `HistorySettings` est ramenée dans sa borne à la lecture ;
+/// - `voices` (les voix enregistrées, sans changement de version) : une entrée illisible (champ obligatoire absent ou d'une autre
+///   forme, champ connu de sa voix d'une autre forme, `id` déjà porté par une entrée précédente) est gardée telle quelle et réécrite
+///   après les entrées lisibles ; un `voices` qui n'est pas un tableau se lit vide et se réécrit `[]` ; la clé n'est écrite que si la liste
+///   n'est pas vide ou si elle était dans le fichier lu (un fichier de l'étape 6 relu puis réécrit reste identique).
 ///
 /// Un nouveau cas d'une énumération enregistrée (`ProviderKind`, `HotKeyBehavior`, `TranscriptionEngine`, ou toute énumération
 /// ajoutée plus tard) est un tel format : il exige d'augmenter `current`. Sans cela, une application plus ancienne lit un cas
@@ -143,15 +158,44 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var voice: VoiceChoice
     /// La conservation de l'historique des entretiens. Absent d'un fichier de la version 2 : `HistorySettings.defaults`.
     public var history: HistorySettings
+    /// Les voix enregistrées, dans l'ordre de l'onglet. Absent d'un fichier plus ancien : aucune.
+    public var voices: [SavedVoice]
+    /// Ce que le fichier portait sous `voices` sans que cette version sache le lire, et si la clé était là.
+    var keptVoices = KeptVoices()
     /// Ce que cette version ne connaît pas, réécrit tel quel.
     var unknown = UnknownFields()
+
+    /// Ce que la lecture de `voices` laisse de côté : les entrées illisibles (`SavedVoice` ne les décode pas), gardées telles quelles
+    /// et réécrites après les entrées lisibles ; et la présence de la clé, pour qu'un fichier relu puis réécrit sans changement reste
+    /// identique (un `voices` vide n'est écrit que s'il était là).
+    ///
+    /// Égalité : les entrées illisibles comptent (comme `unknown`, que l'égalité synthétisée d'`AppSettings` compare) ; la présence
+    /// de la clé ne compte pas : c'est la forme du fichier, pas une valeur (des réglages écrits puis relus restent égaux).
+    struct KeptVoices: Equatable, Sendable {
+        var unreadable: [JSONValue] = []
+        var keyWasRead = false
+
+        static func == (lhs: KeptVoices, rhs: KeptVoices) -> Bool { lhs.unreadable == rhs.unreadable }
+    }
+
+    /// Une entrée de `voices` : sa valeur JSON telle quelle, et la `SavedVoice` qu'elle donne si elle se lit. Les deux lectures se
+    /// font sur le même décodeur de l'entrée : la position dans le tableau n'en dépend pas.
+    private struct VoiceEntry: Decodable {
+        let raw: JSONValue
+        let voice: SavedVoice?
+
+        init(from decoder: any Decoder) throws {
+            raw = try JSONValue(from: decoder)
+            voice = try? SavedVoice(from: decoder)
+        }
+    }
 
     public init(
         version: Int, providers: [Provider], hotKey: HotKey,
         hotKeyBehavior: HotKeyBehavior, lastModeID: String, systemConflictShown: HotKey? = nil,
         transcription: TranscriptionSettings = .defaults, modes: [Mode] = Mode.base,
         strongModel: ModelChoice? = nil, fastModel: ModelChoice? = nil, interview: InterviewSettings = .defaults,
-        voice: VoiceChoice = .system, history: HistorySettings = .defaults
+        voice: VoiceChoice = .system, history: HistorySettings = .defaults, voices: [SavedVoice] = []
     ) {
         self.version = version
         self.providers = providers
@@ -166,11 +210,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.interview = interview
         self.voice = voice
         self.history = history
+        self.voices = voices
     }
 
     private enum CodingKeys: String, CaseIterable {
         case version, providers, hotKey, hotKeyBehavior, lastModeID, systemConflictShown, transcription, modes, strongModel,
-            fastModel, interview, voice, history
+            fastModel, interview, voice, history, voices
     }
 
     private static let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
@@ -204,6 +249,21 @@ public struct AppSettings: Codable, Equatable, Sendable {
         interview = (try? container.decodeIfPresent(InterviewSettings.self, forKey: key(.interview))) ?? defaults.interview
         voice = (try? container.decodeIfPresent(VoiceChoice.self, forKey: key(.voice))) ?? defaults.voice
         history = (try? container.decodeIfPresent(HistorySettings.self, forKey: key(.history))) ?? defaults.history
+        // `voices` d'une autre forme qu'un tableau : aucune voix, comme un bloc de la version 3 d'une autre forme, et la valeur fautive
+        // n'est pas gardée. Dans le tableau, une entrée illisible ne fait perdre ni les autres ni le fichier : elle est gardée.
+        let entries = (try? container.decodeIfPresent([VoiceEntry].self, forKey: key(.voices))) ?? nil
+        voices = []
+        keptVoices.keyWasRead = container.contains(key(.voices))
+        // Une entrée dont l'`id` est déjà porté par une entrée précédente est gardée comme une illisible : `voices` ne contient
+        // jamais deux fois le même `id` (une ligne d'onglet s'adresse par son `id`).
+        var seen: Set<UUID> = []
+        for entry in entries ?? [] {
+            if let voice = entry.voice, seen.insert(voice.id).inserted {
+                voices.append(voice)
+            } else {
+                keptVoices.unreadable.append(entry.raw)
+            }
+        }
         if let modes = try container.decodeIfPresent([Mode].self, forKey: key(.modes)) {
             self.modes = Mode.normalized(modes)
         } else if version < 2 {
@@ -238,6 +298,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         try container.encode(interview, forKey: key(.interview))
         try container.encode(voice, forKey: key(.voice))
         try container.encode(history, forKey: key(.history))
+        if !voices.isEmpty || !keptVoices.unreadable.isEmpty || keptVoices.keyWasRead {
+            var list = container.nestedUnkeyedContainer(forKey: key(.voices))
+            try list.encode(contentsOf: voices)
+            try list.encode(contentsOf: keptVoices.unreadable)
+        }
         try unknown.write(to: &container, excluding: Self.knownKeys)
     }
 

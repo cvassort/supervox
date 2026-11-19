@@ -4,12 +4,13 @@
 
 supervox est une application macOS de dictée et d'entretien vocal. Elle est en cours de construction.
 Ce dépôt contient l'application telle qu'elle est (le socle, la dictée, sa relecture, les modes à consigne, la correction
-à la voix et l'entretien vocal, voir « Application », « Dictée », « Relecture », « Modes », « Corriger à la voix » et
-« Entretien ») et le banc d'essai : `supervox-bench`, un outil en ligne de commande qui mesure la qualité de transcription de
-plusieurs moteurs, le délai de réponse de bout en bout, la dictée en direct, et qui mène un entretien entier à partir de
-fichiers WAV. **L'entretien vocal est écrit et testé sur des doubles, mais il n'a jamais été essayé sur le matériel** : ni le
-micro, ni les haut-parleurs, ni la voix du système, ni l'écho, ni l'interruption, ni VoiceOver. La liste des essais à faire à la
-main est dans `docs/essai-final.md` (étape 6, « Jamais exécuté pendant la construction »).
+à la voix, l'entretien vocal et le réglage de sa voix, voir « Application », « Dictée », « Relecture », « Modes »,
+« Corriger à la voix », « Entretien » et « Voix ») et le banc d'essai : `supervox-bench`, un outil en ligne de commande qui
+mesure la qualité de transcription de plusieurs moteurs, le délai de réponse de bout en bout, la dictée en direct, et qui mène
+un entretien entier à partir de fichiers WAV. **L'entretien vocal et le réglage de sa voix sont écrits et testés sur des
+doubles, mais ils n'ont jamais été essayés sur le matériel** : ni le micro, ni les haut-parleurs, ni la voix du système, ni l'écho, ni l'interruption, ni l'écoute d'une voix, ni
+VoiceOver. La liste des essais à faire à la main est dans `docs/essai-final.md` (étapes 6 et 7, « Jamais exécuté pendant la
+construction »).
 
 ## Prérequis
 
@@ -27,8 +28,9 @@ swift test
 
 Les tests d'intégration sont désactivés par défaut, parce qu'ils téléchargent des modèles, ouvrent le micro, jouent un son ou
 font travailler la voix du système. Ils ne tournent pas dans le pipeline. À la demande de l'utilisateur, aucun essai sur le
-matériel n'a été fait pendant l'étape 6 : `SUPERVOX_SPEECH=1` n'a **jamais** été lancé ; de `SUPERVOX_SPEAKER=1`, trois tests
-sur quatre ont passé avant cet ordre (sur un casque Bluetooth, non généralisable) et le quatrième n'a jamais été lancé.
+matériel n'a été fait pendant les étapes 6 et 7 : `SUPERVOX_SPEECH=1` et `SUPERVOX_PLAYER=1` n'ont **jamais** été lancés ; de
+`SUPERVOX_SPEAKER=1`, trois tests sur quatre ont passé avant cet ordre (sur un casque Bluetooth, non généralisable) et le
+quatrième n'a jamais été lancé.
 
 - `SUPERVOX_INTEGRATION=1 swift test` : vrais moteurs de transcription et vrai détecteur de voix. Les modèles sont
   téléchargés au premier passage (leur taille dépend du moteur et n'a pas été mesurée pour ce README). Ces tests
@@ -40,6 +42,11 @@ sur quatre ont passé avant cet ordre (sur un casque Bluetooth, non généralisa
   des tons de 440 Hz d'amplitude 0,05** (−26 dB pleine échelle, calcul). L'autorisation du micro doit déjà être accordée à
   l'application qui lance les tests : sinon chaque test sort tôt avec un avertissement « non établi » et paraît vert. Ne change
   aucun réglage du système.
+- `SUPERVOX_PLAYER=1 swift test --filter SystemClipPlayerHardwareTests` : le vrai lecteur de sortie de l'onglet Voix (cinq tests).
+  **Joue des tons de 440 Hz d'amplitude 0,2** (choix non mesuré, plus fort que ceux de `SUPERVOX_SPEAKER`) sur la sortie par
+  défaut, au volume du système : environ 2,6 s de son en tout, 24,6 s au pire (code lu). **N'ouvre pas le micro** : c'est la
+  raison d'une variable à part. Ne change aucun réglage du système. Chaque test exige aussi que le compteur de fins de secours
+  du lecteur reste à 0 (sinon le système ne signale pas la fin de lecture). Jamais lancé.
 - `SUPERVOX_SPEECH=1 swift test --filter SystemSpeechIntegrationTests` : fait dire une phrase française à la voix du système
   (`AVSpeechSynthesizer.write`) et vérifie le clip. D'après le code, la synthèse reste en mémoire et rien n'est envoyé aux
   haut-parleurs (non vérifié à l'oreille). Demande une voix française installée.
@@ -55,7 +62,8 @@ sur quatre ont passé avant cet ordre (sur un casque Bluetooth, non généralisa
 
 Supervox est une application de barre de menus : pas d'icône dans le Dock, une icône d'onde dans la barre de menus.
 L'application tient le panneau, la dictée (voir « Dictée »), la relecture, les modes (voir « Modes »), la correction à la
-voix, l'entretien vocal (voir « Entretien »), l'historique des entretiens, les fournisseurs, le raccourci et les permissions.
+voix, l'entretien vocal (voir « Entretien »), le réglage de sa voix (voir « Voix »), l'historique des entretiens, les fournisseurs, le
+raccourci et les permissions.
 Trois modes dictent : la dictée brute (le texte tel quel), la dictée nettoyée et le prompt (le texte est mis en forme par un
 modèle de langage, chez le fournisseur que vous avez réglé). Le quatrième, l'entretien, pose des questions à voix haute et
 rédige un prompt. Avec la dictée brute, rien ne quitte l'ordinateur sauf le téléchargement des modèles de transcription ; avec
@@ -104,10 +112,13 @@ open build/Supervox.app
   ainsi sur l'application construite ; la relance depuis le Finder ou le Dock ne l'a pas été.
 - Un avis sur le fichier de réglages (mis de côté, illisible, version plus récente) ouvre aussi le panneau au
   lancement ; ce n'est pas l'accueil d'un nouvel utilisateur.
-- Les réglages (sept onglets : fournisseurs, raccourci, permissions, transcription, modes, entretien, historique) s'ouvrent par
-  « Réglages… », dans le menu « … » du panneau ou dans celui de l'icône de la barre de menus ; « Historique… », dans le menu
-  « … » du panneau, ouvre la fenêtre sur l'onglet Historique. Les sept onglets dans 600 points de large n'ont jamais été vus
-  dans la vraie fenêtre.
+- Les réglages (huit onglets : fournisseurs, raccourci, permissions, transcription, modes, entretien, voix, historique) s'ouvrent
+  par « Réglages… », dans le menu « … » du panneau ou dans celui de l'icône de la barre de menus ; « Historique… », dans le menu
+  « … » du panneau, ouvre la fenêtre sur l'onglet Historique. Le contenu de la fenêtre est demandé à 860 points de large sur 460
+  (la hauteur est un choix non mesuré ; taille demandée, jamais mesurée sur une vraie fenêtre) : la barre de huit onglets demande 804 à 808 points selon la machine, **mesurés hors écran dans une fenêtre
+  jamais affichée** ;
+  elle n'a jamais été vue affichée. Avec sept onglets, la barre dépassait déjà les 600 points de l'ancienne fenêtre (environ
+  703 points d'après une sonde hors écran, non conservée dans le dépôt).
 - Si le raccourci est refusé par macOS, le panneau s'ouvre au lancement pour le dire. S'il est aussi un raccourci de
   macOS activé sur ce Mac, le panneau s'ouvre pour le dire au premier lancement où c'est le cas ; ensuite l'avis
   reste dans le panneau, qui ne s'ouvre plus seul pour ce raccourci. macOS ne signale pas les conflits avec une autre application : si le raccourci
@@ -117,13 +128,14 @@ open build/Supervox.app
 
 - Les réglages (fournisseurs sans leur clé, raccourci, dernier mode, réglages de transcription, les modes avec leur
   consigne, leur modèle, leur moteur, leur raccourci et leur choix de relecture, les modèles fort et rapide, les réglages de
-  l'entretien (`interview`), la voix de Supervox (`voice`, qu'aucun écran ne modifie : elle s'édite à la main, Supervox fermé)
-  et la durée de conservation de l'historique (`history`)) :
+  l'entretien (`interview`), la voix de Supervox (`voice`) et les voix de fournisseur enregistrées (`voices`), que l'onglet Voix
+  règle (elles peuvent aussi s'éditer à la main, Supervox fermé), et la durée de conservation de l'historique (`history`)) :
   `~/Library/Application Support/Supervox/settings.json`. Le fichier est en **version 3** depuis l'étape 6 : un fichier de
   l'étape 5 (version 2) se lit sans rien mettre de côté, prend les valeurs d'origine pour `interview`, `voice` et `history`
   (absents de la version 2), et passe en version 3 à son premier enregistrement ; un fichier de l'étape 4 (version 1) se lit
-  de même et garde son entrée `modeOptions` telle quelle. **Après cette première écriture en version 3, une version plus
-  ancienne de Supervox ne peut plus y enregistrer ses réglages** : elle dit que le fichier vient d'une version plus récente, le
+  de même et garde son entrée `modeOptions` telle quelle. `voices` est un champ de plus **sans changement de version** (la version reste 3) : absent, il se
+  lit vide ; une entrée illisible est gardée telle quelle et réécrite ; un fichier de l'étape 6 relu puis réécrit reste
+  identique. **Après cette première écriture en version 3, une version plus ancienne de Supervox ne peut plus y enregistrer ses réglages** : elle dit que le fichier vient d'une version plus récente, le
   garde tel quel et n'y écrit rien (lu dans le code et vu par les tests ; jamais essayé avec une ancienne application
   construite : essai 66 de `docs/essai-final.md`). Les consignes de vos modes et le gabarit de l'entretien sont dans ce
   fichier, en clair : n'y mettez rien de confidentiel.
@@ -188,8 +200,8 @@ open build/Supervox.app
     d'images n'en ont pas et n'en touchent aucun (un balayage des sources le vérifie).
 - Les clés d'API : dans le trousseau de connexion, service `dev.supervox.app`, un compte par fournisseur (son
   identifiant). Jamais dans un fichier, ni dans les modes. Elles ne sont lues qu'au moment d'une requête qui en a besoin
-  (la liste des modèles, la mise en forme, la correction, et l'entretien : jusqu'à trois lectures à chaque lancement, pour le
-  modèle rapide, le modèle fort et une voix de fournisseur).
+  (la liste des modèles, la mise en forme, la correction, l'entretien : jusqu'à trois lectures à chaque lancement, pour le
+  modèle rapide, le modèle fort et une voix de fournisseur ; et l'écoute d'une voix de fournisseur dans l'onglet Voix).
 - Les requêtes porteuses de clé passent par une session réseau sans cache, sans cookie ni identifiant enregistré, et
   ne suivent aucune redirection vers une autre origine.
 
@@ -213,7 +225,9 @@ Fournisseurs, Raccourci, Permissions et Transcription (avec leurs feuilles et co
 défaut, avec un enregistrement refusé, toute la liste, au premier lancement, les confirmations de suppression, et la
 feuille d'un mode (consigne modifiée, Prompt d'origine, sans fournisseur, Entretien, mode personnel, sans liste de modèles,
 raccourci refusé, consigne longue) ; l'onglet Entretien (`reglages-entretien*` : d'origine, réglages avancés ouverts,
-complet, réglé à la main, enregistrement refusé) et l'onglet Historique (`reglages-historique*` : deux entretiens, vide,
+complet, réglé à la main, enregistrement refusé), l'onglet Voix (`reglages-voix*` : la liste, une voix de fournisseur, une voix
+inutilisable, une écoute en cours, une panne d'écoute ; `reglages-voix-editeur*` : l'éditeur, avec et sans refus ;
+`reglages-voix-confirmation`) et l'onglet Historique (`reglages-historique*` : deux entretiens, vide,
 « Copié. », « Ne rien garder », copie refusée avec un fichier illisible, échec d'écriture, refus de réglages, et les trois
 confirmations `historique-confirmation-*` : durée, un entretien, tout) ; le panneau avec un dessin du menu « … » (`panneau-menu`,
 et `panneau-menu-grise` pendant un entretien, « Historique… » grisée : des dessins de l'outil, **pas** des captures du vrai menu
@@ -444,7 +458,8 @@ Transcription, ou à la première dictée qui en a besoin), puis tournent sur ce
   voix). L'audio ne part nulle part : les moteurs sont locaux, y compris pour la consigne d'une correction à la voix.
 - **Pour la mise en forme, la correction à la voix et l'entretien**, le texte part au fournisseur choisi (voir « Modes » et
   « Entretien ») : un mode sans consigne (la dictée brute, un mode personnel vide) n'envoie rien. Ce sont les seuls cas où du
-  texte quitte l'ordinateur (avec la voix d'un fournisseur, le texte que dit Supervox part aussi chez lui) ; l'audio, jamais.
+  texte quitte l'ordinateur (avec la voix d'un fournisseur, le texte que dit Supervox part aussi chez lui, et l'écoute d'une voix de
+  fournisseur dans l'onglet Voix lui envoie la phrase d'essai) ; l'audio, jamais.
 - Un modèle WhisperKit « Prêt » se charge depuis son dossier, sans requête réseau : le dossier du modèle, l'interdiction de
   télécharger et le dossier du tokenizer sont donnés à WhisperKit (code et dépendance lus, jamais essayé hors ligne). Le
   tokenizer n'y fait exception que si son fichier (`models/openai/whisper-<variante>/tokenizer.json` et
@@ -493,8 +508,8 @@ vous répondez à voix haute ; à la conclusion, le modèle fort rédige un prom
 tout est écrit et testé sur des doubles (micro, son et voix scriptés, serveur local de test). **Rien n'a été essayé sur le
 matériel**, à la demande de l'utilisateur : ni le micro, ni les haut-parleurs, ni l'écho, ni l'interruption, ni la voix du
 système, ni la vraie fenêtre, ni VoiceOver. Les essais à faire à la main (63 à 95) et la liste de ce qui n'a jamais tourné sont
-dans `docs/essai-final.md`, étape 6. Toute valeur chiffrée ci-dessous est un **choix non mesuré**, sauf mention (« code lu »
-ou « mesuré »).
+dans `docs/essai-final.md`, étape 6 ; ceux des voix (96 à 114), étape 7 (voir « Voix »). Toute valeur chiffrée ci-dessous est
+un **choix non mesuré**, sauf mention (« code lu » ou « mesuré »).
 
 ### Lancer
 
@@ -588,8 +603,8 @@ ou « mesuré »).
   transcription arrêtés : conversation en relecture, non gardée. Le modèle rapide en panne : le tour est gardé, un avis, l'écoute
   reprend. Une panne avant le premier tour : une phrase, rien à relire.
 - **Voix** : si aucune voix ne parle, l'entretien continue en texte seul (« Supervox répond », la question se lit à l'écran, un
-  avis une seule fois), et la question compte. La voix d'un fournisseur (réglage `voice`, à la main) a pour secours la voix du
-  système : une phrase ratée (erreur ou 4 s) passe à la voix du système, puis la voix du fournisseur n'est plus appelée de
+  avis une seule fois), et la question compte. La voix d'un fournisseur (onglet Voix, voir « Voix », ou réglage `voice` à la main) a pour secours la
+  voix du système : une phrase ratée (erreur ou 4 s) passe à la voix du système, puis la voix du fournisseur n'est plus appelée de
   tout l'entretien (avis une seule fois).
 - **Les phrases du panneau** viennent d'une table de phrases fixes : jamais le corps d'une erreur HTTP, jamais
   `localizedDescription`, jamais un texte dit dans un journal.
@@ -603,8 +618,8 @@ champ perd la main, quand l'onglet disparaît, à la fermeture de la fenêtre et
 avancés** : silence de fin de tour (0,5 s ; 0,3 à 2,0), durée de voix pour couper la parole (0,30 s ; 0,10 à 1,00), niveau de voix
 pour couper la parole (−30 dB ; −50 à −10). « Rétablir les valeurs d'origine » ne touche ni le nombre de questions ni le
 gabarit. Les changements s'appliquent au prochain entretien. Une valeur hors borne dans le fichier est ramenée dans sa borne à la
-lecture. La voix et le moteur de transcription n'ont pas d'onglet (la feuille du mode Entretien choisit le moteur ; la voix
-s'édite dans le fichier).
+lecture. Le moteur de transcription n'a pas d'onglet (la feuille du mode Entretien le choisit) ; la voix a le sien (voir « Voix »), et
+une ligne « Voix », avec le bouton « Choisir la voix… », dans le premier groupe de l'onglet Entretien y mène.
 
 ### Vie privée (D11)
 
@@ -627,9 +642,82 @@ différents), puis, avec une voix de fournisseur, « Le texte que dit Supervox p
 
 Dit sans détour : aucun entretien complet sur le matériel ; les haut-parleurs intégrés et l'écho ; l'interruption avec une vraie
 voix ; la voix du système telle que livrée et la voix d'un fournisseur ; le détecteur de voix en flux sur une voix réelle ; un
-casque Bluetooth en mode appel ; la vraie fenêtre (sept onglets dans 600 points, panneau sans la frappe, feuilles de
+casque Bluetooth en mode appel ; la vraie fenêtre (huit onglets dans 860 points, panneau sans la frappe, feuilles de
 confirmation) ; VoiceOver ; macOS 26 ; la qualité des questions et du prompt avec un vrai modèle ; le banc `interview` contre un
 service. Le détail, avec ce qui a été mesuré isolément avant l'ordre d'arrêt, est dans `docs/essai-final.md`.
+
+## Voix
+
+L'onglet **Voix** des réglages (le septième de huit, entre Entretien et Historique) règle la voix de Supervox : celle que l'entretien
+fait parler. **État de la preuve** : tout est écrit et testé sur des doubles (liste de voix, synthèse, lecteur, fournisseur
+scriptés, fenêtres jamais affichées). **Rien n'a été essayé sur le matériel**, à la demande de l'utilisateur : ni le vrai lecteur,
+ni la vraie liste des voix, ni une écoute entendue, ni une voix de fournisseur réelle, ni VoiceOver. Les essais à faire à la main
+(96 à 114) et la liste de ce qui n'a jamais tourné sont dans `docs/essai-final.md`, étape 7. Les valeurs chiffrées sont des
+**choix non mesurés** sauf mention (« code lu » ou « mesuré »).
+
+### Ce qui se règle
+
+- **La liste.** Deux sections : « Voix du système » (par langue, une ligne « Automatique » qui prend la meilleure voix de la
+  langue, puis chaque voix installée) et « Voix de fournisseurs » (les voix enregistrées). Deux filtres, la langue (en clair, par
+  exemple « français (France) » : la locale française du système, mesuré sur la machine de construction) et le genre. Le genre
+  d'une voix du système vient d'une propriété du système qui rend souvent « non précisé » (documentation lue, non mesuré) : le
+  filtre par genre peut laisser beaucoup de voix sous « Non précisé ». La voix en vigueur est cochée et reste affichée quel que
+  soit le filtre.
+- **« Utiliser cette voix »** écrit la voix choisie dans `voice`, et rien d'autre : c'est la seule chose que l'entretien lit. Le
+  bouton est inactif sur la voix déjà en vigueur et sur une voix qui ne peut pas parler (fournisseur supprimé, voix incomplète).
+- **Une voix de fournisseur** (« Ajouter une voix… », « Modifier… », « Supprimer… ») : un nom, un fournisseur **au format
+  compatible** (le seul type qui sait parler), un modèle de synthèse, un identifiant de voix chez lui, une langue, un genre, et des
+  **paramètres libres**. Elle s'enregistre dans `voices`. L'éditeur (feuille de 520 sur 540 points) refuse, une phrase par cause :
+  nom vide, fournisseur qui ne sait pas parler, modèle ou identifiant vide, clé de paramètre vide, clé réservée, clé en double,
+  plus de 16 paramètres. La suppression se confirme (la confirmation nomme la voix) ; supprimer la voix en vigueur remet la voix
+  automatique du système en français, et le dit.
+- **Paramètres en texte.** Chaque paramètre est une paire clé et valeur **en texte**, envoyée telle quelle avec la requête de
+  synthèse (16 au plus). C'est ce que la requête fait déjà : **un serveur qui exige un paramètre numérique refusera la requête**
+  (non établi pour un service donné). **Quatre noms sont réservés**, posés par Supervox lui-même (code lu :
+  la requête de synthèse) : `input`, `model`, `response_format` et `voice` ; la casse est ignorée.
+- **Voix par défaut = voix du système.** Sans réglage, la voix est la voix automatique du système, en français, jamais celle d'un
+  fournisseur : le dépôt ne nomme aucun service ni aucune voix. La personne saisit sa voix de fournisseur une seule fois, dans
+  l'onglet.
+- **Écouter.** Le bouton joue une phrase d'essai fixe de la langue de la voix (français, anglais, espagnol, allemand ou
+  italien ; une autre langue prend l'anglais ; les quatre dernières sont des traductions non relues). **Sans repli** : une voix
+  de fournisseur mal réglée échoue avec sa phrase propre (qui dit de vérifier le modèle, l'identifiant et les paramètres de la voix) et **aucune voix du système ne parle à sa place**, sinon une voix fausse « marcherait ». La synthèse est bornée à 15
+  secondes ; la lecture passe par un lecteur de sortie seule (`SystemClipPlayer`, le clip encodé en WAV en mémoire), distinct du
+  moteur de l'entretien, qui ouvre le micro pour jouer ; sa fin de secours tombe à la durée du clip plus 2 s.
+- **Un micro tenu refuse l'écoute.** Tant qu'une dictée, une correction à la voix qui écoute ou transcrit, ou un entretien tient
+  le micro, « Écouter » est grisé, et l'écoute refuse d'elle-même (phrase fixe). À l'inverse, **une écoute en cours est coupée
+  dès qu'un micro va s'ouvrir** (dictée, correction à la voix, entretien), avant qu'il n'écoute. Limite connue : à l'instant
+  d'une dictée annulée, le micro peut encore être en train de se fermer ; rien n'est gardé de ce son, mais un casque Bluetooth
+  peut rester un instant en mode appel.
+- **Une voix du système désinstallée.** L'onglet la montre (ligne « Voix en vigueur » avec sa note), l'écoute dit qu'elle n'est
+  pas installée et ne fait parler aucune autre voix. La voix automatique d'une région dont aucune voix n'est installée n'est pas
+  dite désinstallée : sa note nomme la voix de la même langue qui parle (règle du synthétiseur) ; un entretien, lui, prend la meilleure voix de la langue, sans avis (il ne
+  doit jamais se taire).
+- **Quitter l'onglet** (autre onglet, autre application, fenêtre fermée) arrête l'écoute ; changer d'onglet ou voir le volet
+  disparaître annule aussi la confirmation et abandonne l'éditeur ouvert (écrit et testé hors écran, jamais vu avec une feuille
+  réellement présentée). Une panne d'écoute affichée reste quand on passe dans une autre application, et disparaît au geste
+  suivant dans l'onglet.
+- **Les phrases** de l'onglet et de l'écoute viennent d'une table de phrases fixes : jamais le corps d'une erreur HTTP, jamais
+  le texte d'erreur du système. Une ligne « Voix » de l'onglet Entretien, avec le bouton « Choisir la voix… », mène à l'onglet.
+
+### Vie privée (voix)
+
+- **Écouter une voix du système n'envoie rien** : elle est produite sur l'ordinateur.
+- **Écouter une voix de fournisseur envoie la phrase d'essai** (fixe, rien de vous) **à ce fournisseur et lit sa clé dans le
+  trousseau** : une demande du trousseau peut apparaître. La bande de l'onglet le dit avant l'écoute, dès que la ligne est
+  choisie : un avis plus ancien s'efface au changement de ligne (sauf pendant que l'éditeur est ouvert). Une voix qui ne peut pas
+  parler n'envoie rien et le dit.
+- **L'entretien**, avec une voix de fournisseur, envoie chaque phrase de Supervox à ce fournisseur (voir « Entretien », « Vie
+  privée (D11) »). Les voix enregistrées (noms, modèles, identifiants, paramètres) sont dans `settings.json`, en clair : n'y mettez
+  aucune clé ni rien de confidentiel dans un paramètre.
+
+### Ce qui n'a jamais été essayé
+
+Dit sans détour : le vrai lecteur de sortie (son délai de démarrage face à la marge de 2 s, la durée de son arrêt sur le fil
+principal) ; la vraie liste des voix du système (son contenu, le temps qu'elle prend) ; l'écoute réelle d'une voix, du système ou
+d'un fournisseur, et la correspondance entre le nom, le genre affiché et la voix entendue ; une voix de fournisseur contre un
+service ; la barre de huit onglets (mesurée hors écran, **non vue affichée**) ; les feuilles de l'éditeur et de la confirmation
+dans une vraie fenêtre ; le défilement jusqu'à une voix enregistrée avec une vraie liste (mesuré hors écran avec 40 voix
+inventées) ; VoiceOver. Le détail est dans `docs/essai-final.md`, « Jamais exécuté pendant la construction (étape 7) ».
 
 ## Le banc d'essai
 

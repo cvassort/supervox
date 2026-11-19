@@ -17,6 +17,9 @@ public enum InterviewOutcome: Equatable, Sendable {
 public protocol InterviewRunning: AnyObject {
     /// Vrai du lancement jusqu'à la fin : résolution, préparation, conversation, conclusion. Faux dès que `onEnd` est appelé.
     var isActive: Bool { get }
+    /// Vrai tant qu'une conversation d'un entretien fini (annulé, le plus souvent) n'a pas rendu son micro ; faux pour celle de
+    /// l'entretien en cours (`isActive` la couvre) et pour un entretien fini avant d'avoir une conversation.
+    var isReleasingMicrophone: Bool { get }
     /// Lance un entretien ; sans effet s'il y en a déjà un. `onEnd` est appelé une seule fois, à la fin, quelle qu'elle soit
     /// (`cancel()` compris, pendant l'appel).
     func start(engine: TranscriptionEngine?, onEnd: @escaping @MainActor (InterviewOutcome) -> Void)
@@ -51,6 +54,8 @@ public final class InterviewController: InterviewRunning {
     private let panel: PanelModel
     private let now: @Sendable () -> Date
     private let saveWait: @Sendable (Double) async throws -> Void
+    /// Appelée sur le fil principal juste avant l'ouverture du micro de l'entretien (`start()` de la conversation).
+    private let beforeMicrophone: @MainActor () -> Void
     private let log = Logger(subsystem: "dev.supervox.app", category: "interview")
 
     /// L'entretien en cours, `nil` hors entretien.
@@ -66,12 +71,15 @@ public final class InterviewController: InterviewRunning {
     ///   - resolve: la résolution des réglages (`InterviewSetup.resolve` dans l'application ; un double dans les tests).
     ///   - history: où va un entretien conclu.
     ///   - panel: le modèle du panneau, où l'état de l'entretien est posé.
+    ///   - beforeMicrophone: appelée de façon synchrone juste avant d'ouvrir le micro (`start()` de la conversation). Dans
+    ///     l'application : l'arrêt de l'écoute d'une voix, pour que le micro ne l'entende jamais.
     public init(
         environment: InterviewEnvironment, settings: @escaping @MainActor () -> AppSettings,
         behavior: @escaping @MainActor () -> HotKeyBehavior,
         resolve: @escaping @MainActor (AppSettings, TranscriptionEngine?) async throws -> InterviewSetup,
         history: any InterviewHistoryStoring, panel: PanelModel, now: @escaping @Sendable () -> Date = Date.init,
-        saveWait: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }
+        saveWait: @escaping @Sendable (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+        beforeMicrophone: @escaping @MainActor () -> Void
     ) {
         self.environment = environment
         self.settings = settings
@@ -81,6 +89,7 @@ public final class InterviewController: InterviewRunning {
         self.panel = panel
         self.now = now
         self.saveWait = saveWait
+        self.beforeMicrophone = beforeMicrophone
     }
 
     public var isActive: Bool { current != nil }
@@ -175,6 +184,8 @@ public final class InterviewController: InterviewRunning {
         guard isLive(attempt) else { return }
         attempt.conversation = conversation
         attempt.holdsConversation = true
+        // L'écoute d'une voix est arrêtée avant que le micro ne s'ouvre (arrêt fait au retour) : il ne l'entend jamais.
+        beforeMicrophone()
         let events = await conversation.start()
         attempt.started = true
         // Annulé pendant `start()` : la demande d'arrêt partie de `cancel()` a pu arriver avant le démarrage (le moteur ignore un
@@ -204,7 +215,7 @@ public final class InterviewController: InterviewRunning {
             log.notice("entretien : flux terminé sans fin")
             end(attempt, .notice(InterviewText.couldNotStart))
         }
-        guard !isStoppingFinishedAttempts else { return }
+        guard !isReleasingMicrophone else { return }
         let waiters = stopWaiters
         stopWaiters = [:]
         for waiter in waiters.values { waiter.resume() }
@@ -214,7 +225,7 @@ public final class InterviewController: InterviewRunning {
     /// ne compte pas : elle n'a rien à rendre tant qu'il dure. Un entretien annulé avant d'avoir une conversation (résolution,
     /// préparation, fabrication) ne compte pas non plus : il n'a ouvert aucun micro, une dictée n'attend pas son trousseau ni son
     /// téléchargement.
-    private var isStoppingFinishedAttempts: Bool {
+    public var isReleasingMicrophone: Bool {
         stopping.values.contains { !isLive($0.attempt) && $0.attempt.holdsConversation }
     }
 
@@ -225,11 +236,11 @@ public final class InterviewController: InterviewRunning {
     }
 
     public func waitUntilStopped() async {
-        guard isStoppingFinishedAttempts else { return }
+        guard isReleasingMicrophone else { return }
         let id = UUID()
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                if !isStoppingFinishedAttempts || Task.isCancelled {
+                if !isReleasingMicrophone || Task.isCancelled {
                     continuation.resume()
                 } else {
                     stopWaiters[id] = continuation

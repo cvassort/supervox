@@ -506,7 +506,9 @@ import Testing
         var settings = AppSettings.defaults
         settings.providers = [Self.provider, Self.voiceProvider]
         settings.voice = VoiceChoice(providerID: Self.voiceProvider.id, model: "voix-modele", identifier: "voix-exemple")
-        #expect(settings.voice.usesProvider)
+        #expect(
+            settings.voice.route(in: settings)
+                == .provider(Self.voiceProvider, ProviderVoice(model: "voix-modele", identifier: "voix-exemple", extra: [:])))
         let model = Rig(settings).makeModel()
         let expected =
             "Le texte de vos réponses est envoyé au fournisseur du modèle rapide et du modèle fort\u{00A0}; l'audio du micro ne quitte jamais cet ordinateur. La voix de Supervox vient de «\u{00A0}Fournisseur de voix d'exemple\u{00A0}»\u{00A0}: le texte qu'elle dit lui est envoyé."

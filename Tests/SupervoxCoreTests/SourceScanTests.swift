@@ -57,8 +57,9 @@ import Testing
     /// Les tests du cœur (`Tests/SupervoxCoreTests`) en ont le droit : leurs essais sur le matériel sont gardés par une variable
     /// d'environnement (`SUPERVOX_MIC`, `SUPERVOX_SPEAKER`, `SUPERVOX_SPEECH`), et `LiveAudioIO(device:)` y reçoit un double.
     static let realAudioOrSystemVoice = #"\b(?:LiveAudioIO|SystemSpeechSynthesizer)"# + construction
-    /// Ce qui suit le nom du type quand on le construit : `(`, `.init`, `.self.init`, ou `= .init` (`let io: LiveAudioIO = .init()`).
-    static let construction = #"\s*(?:\(|\.\s*init\b|\.\s*self\s*\.\s*init\b|=\s*\.\s*init\b)"#
+    /// Ce qui suit le nom du type quand on le construit : `(`, `.init`, `.self.init`, ou `= .init` (`let io: LiveAudioIO = .init()`),
+    /// y compris par un type déclaré optionnel ou implicitement déballé (`LiveAudioIO? = .init()`, `! = .init()`).
+    static let construction = #"\s*(?:\(|\.\s*init\b|\.\s*self\s*\.\s*init\b|[?!]?\s*=\s*\.\s*init\b)"#
 
     @Test func theRealSoundAndTheSystemVoiceAreBuiltOnlyByTheProgram() throws {
         let pattern = try Regex(Self.realAudioOrSystemVoice)
@@ -91,6 +92,7 @@ import Testing
         "SystemSpeechSynthesizer . init(language: x)", "{ LiveAudioIO() }",
         // m-F : les formes par le type déclaré et par `.self`.
         "let io: LiveAudioIO = .init()", "let v: SystemSpeechSynthesizer = .init(language: l)", "LiveAudioIO.self.init()",
+        "let io: LiveAudioIO? = .init()",
         "SystemSpeechSynthesizer.self.init(language: l)",
     ])
     func theRealSoundPatternSeesNeighbouringSpellings(code: String) throws {
@@ -232,26 +234,75 @@ import Testing
         }
     }
 
-    /// Un message montré dans le panneau ne passe jamais par le texte brut d'une erreur quelconque (`String(describing:)`,
-    /// interpolation de l'erreur) : une erreur système y met une adresse de service, un chemin ou une clé. Les chemins qui
-    /// fabriquent ces messages : la capture audio, la session de dictée, la réécriture par le modèle et le contrôleur de dictée.
-    static let forbiddenErrorText = #"String\s*\(\s*describing\s*:\s*error\s*\)|\\\(\s*error\s*\)|\\\(\s*String\s*\(\s*describing\s*:\s*error"#
+    /// Un message montré dans le panneau ne passe jamais par le texte brut d'une erreur quelconque (`String(describing:)` ou
+    /// `String(reflecting:)` d'une erreur, interpolation d'une erreur, branche `as? LocalizedError`) : une erreur système y met une
+    /// adresse de service, un chemin ou une clé, une bibliothèque tierce un texte en anglais. Une erreur, c'est ici toute valeur dont
+    /// le nom finit par `rror` (`error`, `saveError`, `underlyingError`) : un nom qui commence par une minuscule, pas un type
+    /// (`SettingsError.sentence(…)` est une phrase fixe). B2 (revue finale, B-M1) : le motif est élargi ainsi, et le balayage couvre
+    /// tout `Sources` hors `SupervoxBench` (outil de banc, qui écrit dans le terminal). Fin de nom par `(?!\w)`, pas par `\b` :
+    /// la limite de mot des expressions de Swift suit Unicode, pour qui `error.localizedDescription` est un seul mot (mesuré).
+    static let forbiddenErrorText =
+        #"String\s*\(\s*(?:describing|reflecting)\s*:\s*[a-z_]\w*rror(?!\w)|\\\(\s*[a-z_]\w*rror(?!\w)|as\?\s*LocalizedError(?!\w)"#
+
+    /// Une occurrence admise du motif : le fichier (sous `Sources`) et la ligne, rognée. Une exception vaut pour CETTE ligne et
+    /// aucune autre du fichier.
+    struct ErrorTextSite: Hashable, CustomStringConvertible {
+        let place: String
+        let line: String
+        var description: String { "\(place) : \(line)" }
+    }
+
+    /// Les exceptions, une par occurrence, chacune avec sa raison.
+    static let allowedErrorText: Set<ErrorTextSite> = [
+        // Le moteur de reconnaissance du système n'est construit que par le banc (`SupervoxBench`, `git grep`) : son texte va au
+        // terminal, jamais à l'écran de l'application.
+        ErrorTextSite(
+            place: "SupervoxEngines/AppleSpeechTranscriber.swift",
+            line: #"throw TranscriberError.engine("conversion audio échouée : \(error.map { String(describing: $0) } ?? "statut d'erreur")")"#),
+    ]
+
+    /// Les lignes de `code` (le fichier `place`) que le motif attrape.
+    static func errorTextSites(place: String, code: String, pattern: Regex<AnyRegexOutput>) -> [ErrorTextSite] {
+        code.components(separatedBy: "\n")
+            .filter { $0.contains(pattern) }
+            .map { ErrorTextSite(place: place, line: $0.trimmingCharacters(in: .whitespaces)) }
+    }
 
     @Test func noPanelMessageCarriesTheRawTextOfAnError() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
-        let folders = [
-            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Speech", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
-            "Sources/SupervoxApp/Language", "Sources/SupervoxCore/Conversation", "Sources/SupervoxApp/Interview",
-        ]
-        let offending = try folders.flatMap { folder in
-            try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
+        let files = try Self.sources(under: "Sources").filter { !$0.place.hasPrefix("SupervoxBench/") }
+        // Témoins de l'étendue : des dossiers que l'ancien balayage ne voyait pas.
+        for folder in ["SupervoxApp/SettingsUI/", "SupervoxApp/Settings/", "SupervoxEngines/", "Supervox/", "SupervoxSnapshots/"] {
+            #expect(files.contains { $0.place.hasPrefix(folder) }, "\(folder) doit être balayé")
         }
+        #expect(files.contains { $0.place == "SupervoxApp/AppController.swift" })
+        let found = files.flatMap { Self.errorTextSites(place: $0.place, code: $0.code, pattern: pattern) }
+        let offending = found.filter { !Self.allowedErrorText.contains($0) }
         #expect(offending.isEmpty, "\(offending)")
+        // Une exception qui n'est plus vue (ligne changée ou retirée) sort de la liste : elle n'excuserait rien d'autre.
+        let stale = Self.allowedErrorText.subtracting(found)
+        #expect(stale.isEmpty, "\(stale)")
+    }
+
+    /// B2 : une exception vaut pour SA ligne : une autre ligne fautive du même fichier est vue.
+    @Test func anExceptionCoversItsOwnLineOnly() throws {
+        let pattern = try Regex(Self.forbiddenErrorText)
+        let allowed = try #require(Self.allowedErrorText.first)
+        let code = ["func f() throws {", allowed.line, #"    throw TranscriberError.engine("échec : \(error)")"#, "}"]
+            .joined(separator: "\n")
+        let found = Self.errorTextSites(place: allowed.place, code: code, pattern: pattern)
+        #expect(found.count == 2)
+        #expect(found.filter { !Self.allowedErrorText.contains($0) }.map(\.line)
+                    == [#"throw TranscriberError.engine("échec : \(error)")"#])
     }
 
     @Test(arguments: [
         "AudioCaptureError.engineFailed(String(describing: error))", "\"voice processing : \\(error)\"",
         "String ( describing : error )", "\"\\( error )\"",
+        // B2 (revue finale, B-M1) : un autre nom fini par `rror`, une autre lecture, la branche `LocalizedError`.
+        "\"échec : \\(saveError)\"", "\"\\(error.localizedDescription)\"", "String(reflecting: underlyingError)",
+        "if let localized = error as? LocalizedError, let text = localized.errorDescription { return text }",
+        "(error as?  LocalizedError)?.errorDescription",
     ])
     func theErrorTextPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenErrorText)))
@@ -259,7 +310,12 @@ import Testing
 
     @Test func theErrorTextPatternLeavesOrdinaryUsesAlone() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
-        for code in ["catch { fail(.engine(Self.describe(error))) }", "\"le moteur audio a échoué (\\(message))\"", "error as? AudioCaptureError"] {
+        for code in [
+            "catch { fail(.engine(Self.describe(error))) }", "\"le moteur audio a échoué (\\(message))\"", "error as? AudioCaptureError",
+            // Un type, pas une erreur : la phrase fixe d'une `SettingsError` (B2).
+            "\"Le raccourci n'a pas été enregistré. \\(SettingsError.sentence(forSaveError: error))\"",
+            "error as? any SupervoxError",
+        ] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }
@@ -327,6 +383,106 @@ import Testing
         #expect(!language.isEmpty)
         let offending = language.filter { $0.code.contains("localizedDescription") }.map(\.place)
         #expect(offending.isEmpty, "\(offending)")
+    }
+
+    // MARK: - Aucun texte d'erreur du système montré ni journalisé
+
+    /// L'accès au texte d'erreur du système, sous toutes ses écritures : `error.localizedDescription`, `(error as NSError).…`,
+    /// `\(error.localizedDescription, privacy: .public)`, avec espaces ou retour à la ligne devant le point, par chemin de clé
+    /// (`map(\.localizedDescription)`) ou nu (dans une extension d'`Error`). Ni `\b` (la limite de mot d'Unicode ne coupe pas
+    /// entre `.` et une lettre) ni lookbehind (`Regex` ne le gère pas) : un caractère qui n'est pas d'identifiant devant (ou le
+    /// début du texte), et une borne derrière. Un autre identifiant qui le contient (`NSLocalizedDescriptionKey`,
+    /// `localizedDescriptions`) n'est pas cet accès.
+    static let systemErrorText = #"(?:^|[^A-Za-z0-9_])localizedDescription(?![A-Za-z0-9_])"#
+
+    /// Les deux SEULS endroits qui gardent `localizedDescription`, UNE fois chacun : le texte brut d'une panne de transport
+    /// (`URLError`, …) n'est jamais montré tel quel, il est masqué (`errorBody`, `masked` : adresse, clé retirées) avant d'aller
+    /// plus loin dans `EndpointError.transport`, que les écrans ne montrent que par une phrase fixe (`ProvidersModel.message(for:)`).
+    static let endpointTransportSites: [String: Int] = [
+        "SupervoxCore/Endpoint/EndpointRequest.swift": 1, "SupervoxCore/Endpoint/ModelListing.swift": 1,
+    ]
+
+    /// Ni l'application (`Sources/SupervoxApp`) ni l'outil de rendu (`Sources/SupervoxSnapshots`) ne lisent le texte d'erreur du
+    /// système : ni pour l'écran, ni pour le journal (un journal y met le TYPE de l'erreur). Hors de ces deux dossiers, seuls les
+    /// deux sites de transport du cœur le gardent ; une panne de plus ailleurs (cœur, banc d'essai) doit être décidée ici, nommée
+    /// avec sa raison. Le balayage voit les fichiers qui montrent les avis, et les deux sites de transport contiennent le motif
+    /// exactement le nombre de fois nommé (sans quoi un motif cassé ne verrait rien nulle part, et une occurrence de plus dans
+    /// l'un des deux fichiers passerait sans être décidée).
+    @Test func theRawSystemErrorTextIsOnlyKeptByTheTwoEndpointTransportSites() throws {
+        let pattern = try Regex(Self.systemErrorText)
+        let all = try Self.sources(under: "Sources")
+        for seen in [
+            "SupervoxApp/AppController.swift", "SupervoxApp/SettingsUI/HotKeySettingsModel.swift",
+            "SupervoxApp/SettingsUI/ProvidersModel.swift", "SupervoxSnapshots/main.swift",
+        ] {
+            #expect(all.contains { $0.place == seen }, "le balayage doit voir \(seen)")
+        }
+        var counts: [String: Int] = [:]
+        for source in all {
+            let count = source.code.matches(of: pattern).count
+            if count > 0 { counts[source.place] = count }
+        }
+        #expect(counts == Self.endpointTransportSites, "occurrences par fichier : \(counts)")
+    }
+
+    /// Une ligne de journal (`log.` suivi d'un niveau) n'interpole jamais une erreur entière (`\(error)`, `\(error, privacy: …)`,
+    /// `\(error.…)`, `String(describing: error)`, `String(reflecting: error)`) : le texte d'une erreur du système irait au journal.
+    /// Le TYPE de l'erreur seul passe (`String(reflecting: type(of: error))`). `error` ne doit pas être suivi d'une lettre : un
+    /// `\(errorCount)` est autre chose. Une ligne à la fois : un appel de journal sur plusieurs lignes n'est pas vu.
+    static let logLineWithAWholeError =
+        #"(?:^|[^A-Za-z0-9_])log\s*\.\s*(?:debug|info|notice|warning|error|fault|trace|critical)\s*\(.*(?:\\\(\s*error(?![A-Za-z0-9_])|String\s*\(\s*(?:describing|reflecting)\s*:\s*error(?![A-Za-z0-9_]))"#
+    static let logLine = #"(?:^|[^A-Za-z0-9_])log\s*\.\s*(?:debug|info|notice|warning|error|fault|trace|critical)\s*\("#
+
+    @Test func noLogLineOfTheAppNorTheRenderToolCarriesAWholeError() throws {
+        let wholeError = try Regex(Self.logLineWithAWholeError)
+        let logLine = try Regex(Self.logLine)
+        let lines = try Self.codeLines(under: "Sources/SupervoxApp").map { (place: "SupervoxApp/" + $0.place, line: $0.line) }
+            + Self.codeLines(under: "Sources/SupervoxSnapshots").map { (place: "SupervoxSnapshots/" + $0.place, line: $0.line) }
+        let appController = lines.filter { $0.place.hasPrefix("SupervoxApp/AppController.swift:") && $0.line.contains(logLine) }
+        #expect(appController.count >= 3, "le balayage doit voir les lignes de journal d'AppController : \(appController.count)")
+        let offending = lines.filter { $0.line.contains(wholeError) }.map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        #"log.error("x \(error)")"#, #"log.error("x \(error, privacy: .public)")"#, #"log.error("x \(error.localizedDescription)")"#,
+        #"log.notice("x \(String(describing: error))")"#, #"log.error("x \(String(reflecting: error))")"#,
+        #"self.log.fault("x \(error)")"#, #"log . error ( "x \( error ) " )"#,
+    ])
+    func theWholeErrorLogPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.logLineWithAWholeError)))
+    }
+
+    @Test func theWholeErrorLogPatternLeavesTheTypeAndOtherNamesAlone() throws {
+        let pattern = try Regex(Self.logLineWithAWholeError)
+        for code in [
+            #"log.error("x \(String(reflecting: type(of: error)), privacy: .public)")"#, #"log.error("x \(errorCount)")"#,
+            #"log.notice("x \(type(of: error))")"#, #"log.notice("fini")"#, #"let text = "\(error)""#,
+            #"panelModel.setNotice(SettingsError.sentence(forSaveError: error), for: .save)"#,
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
+    }
+
+    @Test(arguments: [
+        "panelModel.setNotice(error.localizedDescription, for: .save)", #"log.error("x \(error.localizedDescription, privacy: .public)")"#,
+        "(error as NSError).localizedDescription", "error . localizedDescription", "error\n    .localizedDescription",
+        #"errors.map(\.localizedDescription)"#, "self.localizedDescription", "return localizedDescription",
+        "localizedDescription.isEmpty",
+    ])
+    func theSystemErrorTextPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.systemErrorText)))
+    }
+
+    @Test func theSystemErrorTextPatternLeavesOtherIdentifiersAlone() throws {
+        let pattern = try Regex(Self.systemErrorText)
+        for code in [
+            "(error as? SettingsError)?.errorDescription", "SettingsError.sentence(forSaveError: error)",
+            #"log.error("\(String(reflecting: type(of: error)), privacy: .public)")"#, "userInfo[NSLocalizedDescriptionKey]",
+            "let myLocalizedDescription = 1", "let localizedDescriptions = [String]()", "var localizedDescriptionText = \"\"",
+        ] {
+            #expect(!code.contains(pattern), "\(code)")
+        }
     }
 
     /// L'entretien (`Core/Conversation`) ne rend que des codes de panne et des phrases fixes : jamais le texte brut d'une erreur
@@ -662,5 +818,185 @@ import Testing
         for code in ["historyRoot: URL? = nil,", "historyRoot: URL?, ", "historyRoot: root"] {
             #expect(!code.contains(rootDefault), "\(code)")
         }
+    }
+
+    // MARK: - Voix du système et lecteur de sortie seule (réglage des voix, tâche 1)
+
+    /// Devant un nom : début de ligne ou un caractère qui n'est pas d'identifiant. Pas de `\b` : la limite de mot Unicode ne coupe pas
+    /// entre `.` et une lettre, et `SupervoxCore.SystemClipPlayer()` passerait.
+    static let nameStart = #"(?:^|[^A-Za-z0-9_])"#
+    /// Demander au système la liste des voix installées.
+    static let systemVoiceListing = nameStart + #"speechVoices(?![A-Za-z0-9_])"#
+    /// Le lecteur de fichiers audio du système et son délégué ; pas le nœud de lecture du moteur (`…PlayerNode`), que la capture utilise.
+    static let systemFilePlayer = nameStart + #"AVAudioPlayer(?!Node)"#
+    /// Construire le vrai lecteur de sortie seule.
+    ///
+    /// Formes qui échappent à ces quatre gardes (filets contre la maladresse, pas contre une écriture délibérée) : une ligne entière de
+    /// commentaire ; un alias (`typealias R = SystemClipPlayer` puis `R()`) ; un type gardé dans une valeur
+    /// (`let t = SystemClipPlayer.self` puis `t.init()`) ; `SystemVoices.self.installed` ; les autres API du système qui listent des
+    /// voix ou jouent un son, hors du brief.
+    static let realClipPlayer = nameStart + #"SystemClipPlayer"# + construction
+    /// Lire la vraie liste des voix installées.
+    static let installedVoices = nameStart + #"SystemVoices\s*\.\s*installed(?![A-Za-z0-9_])"#
+
+    /// Règle 6 : la liste des voix n'est demandée au système que par `SystemVoices.installed` ; le lecteur du système n'est nommé que
+    /// par `Audio/ClipPlayer.swift` ; le vrai lecteur et la vraie liste ne sont pris que par le programme (`main.swift`) et leur fichier
+    /// de définition. Le programme ne les prend pas encore : la preuve que le balayage voit quelque chose vient des fichiers de
+    /// définition, qui doivent porter ce qu'ils définissent.
+    @Test func theSystemVoiceListAndTheSystemPlayerStayInTheirFiles() throws {
+        let speech = "SupervoxCore/Speech/SystemSpeechSynthesizer.swift"
+        let player = "SupervoxCore/Audio/ClipPlayer.swift"
+        let sources = try Self.sources(under: "Sources")
+        let speechFile = try #require(sources.first { $0.place == speech }, "le balayage doit voir la voix du système")
+        let playerFile = try #require(sources.first { $0.place == player }, "le balayage doit voir le lecteur")
+        #expect(speechFile.code.contains(try Regex(Self.systemVoiceListing)), "la liste des voix doit être demandée dans \(speech)")
+        #expect(speechFile.code.contains("enum SystemVoices"), "SystemVoices doit être défini dans \(speech)")
+        #expect(playerFile.code.contains(try Regex(Self.systemFilePlayer)), "le lecteur du système doit être pris dans \(player)")
+        #expect(playerFile.code.contains("final class SystemClipPlayer"), "SystemClipPlayer doit être défini dans \(player)")
+        // m5 : la vraie liste est bien vue là où elle est prise aujourd'hui (le constructeur public de la voix du système).
+        #expect(speechFile.code.contains(try Regex(Self.installedVoices)), "SystemVoices.installed doit être vu dans \(speech)")
+
+        let rules: [(name: String, pattern: String, allowed: Set<String>)] = [
+            ("speechVoices", Self.systemVoiceListing, [speech]),
+            ("AVAudioPlayer", Self.systemFilePlayer, [player]),
+            ("SystemClipPlayer(", Self.realClipPlayer, ["Supervox/main.swift", player]),
+            ("SystemVoices.installed", Self.installedVoices, ["Supervox/main.swift", speech]),
+        ]
+        for rule in rules {
+            let pattern = try Regex(rule.pattern)
+            let offending = sources.filter { !rule.allowed.contains($0.place) && $0.code.contains(pattern) }.map(\.place)
+            #expect(offending.isEmpty, "\(rule.name) : \(offending)")
+        }
+    }
+
+    /// Aucun test hors de `SupervoxCoreTests` ne nomme la liste des voix, le lecteur du système, le vrai lecteur ni la vraie liste.
+    @Test func noTestOutsideTheCoreNamesTheSystemVoiceListNorTheSystemPlayer() throws {
+        let patterns = try [Self.systemVoiceListing, Self.systemFilePlayer, Self.realClipPlayer, Self.installedVoices].map { try Regex($0) }
+        let tests = try Self.sources(under: "Tests")
+        #expect(tests.contains { $0.place.hasPrefix("SupervoxAppTests/") }, "le balayage doit voir les tests de l'application")
+        let offending = tests
+            .filter { file in !file.place.hasPrefix("SupervoxCoreTests/") && patterns.contains { file.code.contains($0) } }
+            .map(\.place)
+        #expect(offending.isEmpty, "\(offending)")
+    }
+
+    @Test(arguments: [
+        "AVSpeechSynthesisVoice.speechVoices()", "AVSpeechSynthesisVoice\n    .speechVoices ( )", "let all = AVSpeechSynthesisVoice.speechVoices",
+        "speechVoices()",
+    ])
+    func theVoiceListingPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.systemVoiceListing)))
+    }
+
+    @Test(arguments: [
+        "AVAudioPlayer(data: data)", "try AVAudioPlayer.init(data: data)", "AVFAudio.AVAudioPlayer(data: data)", "let p: AVAudioPlayer",
+        "final class P: NSObject, AVAudioPlayerDelegate {", "AVAudioPlayer",
+    ])
+    func theSystemFilePlayerPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.systemFilePlayer)))
+    }
+
+    @Test(arguments: [
+        "SystemClipPlayer()", "SystemClipPlayer ( )", "SystemClipPlayer.init()", "let p: SystemClipPlayer = .init()",
+        "SupervoxCore.SystemClipPlayer()", "{ SystemClipPlayer() }", "SystemClipPlayer.self.init()", "player: SystemClipPlayer()",
+        // m5 : par le type déclaré optionnel ou implicitement déballé.
+        "let p: SystemClipPlayer? = .init()", "var p: SystemClipPlayer! = .init()", "let p: SystemClipPlayer ? = . init()",
+    ])
+    func theRealClipPlayerPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.realClipPlayer)))
+    }
+
+    @Test(arguments: [
+        "SystemVoices.installed()", "voices: SystemVoices.installed,", "SystemVoices . installed", "SupervoxCore.SystemVoices.installed",
+        "SystemVoices\n    .installed",
+    ])
+    func theInstalledVoicesPatternSeesNeighbouringSpellings(code: String) throws {
+        #expect(code.contains(try Regex(Self.installedVoices)))
+    }
+
+    @Test func theVoiceAndPlayerPatternsLeaveOrdinaryUsesAlone() throws {
+        let listing = try Regex(Self.systemVoiceListing)
+        let filePlayer = try Regex(Self.systemFilePlayer)
+        let clipPlayer = try Regex(Self.realClipPlayer)
+        let installed = try Regex(Self.installedVoices)
+        for code in ["myspeechVoices()", "_speechVoices()", "speechVoicesCount"] {
+            #expect(!code.contains(listing), "\(code)")
+        }
+        for code in ["private let player = AVAudioPlayerNode()", "AVAudioPlayerNode.h", "MyAVAudioPlayer()", "ClipPlayer"] {
+            #expect(!code.contains(filePlayer), "\(code)")
+        }
+        for code in ["ScriptedClipPlayer()", "MySystemClipPlayer()", "let p: SystemClipPlayer", "x is SystemClipPlayer",
+                     "public final class SystemClipPlayer: ClipPlayer {", "let p: SystemClipPlayer = player",
+                     "let p: SystemClipPlayer? = nil", "var p: SystemClipPlayer! = player"] {
+            #expect(!code.contains(clipPlayer), "\(code)")
+        }
+        for code in ["SystemVoices.gender(.male)", "SystemVoices.installedCount", "MySystemVoices.installed", "enum SystemVoices {"] {
+            #expect(!code.contains(installed), "\(code)")
+        }
+    }
+
+    // MARK: - Onglet Voix et écoute d'une voix (réglage des voix, tâche 3)
+
+    /// Les fichiers de l'onglet Voix et de l'écoute, par motif de nom et non par liste : `Voices*.swift` et `VoicePreview.swift` sous
+    /// `SupervoxApp` (la vue de la tâche 4, `VoicesPane.swift`, est couverte dès qu'elle existe).
+    static func isVoicesTabFile(_ place: String) -> Bool {
+        guard place.hasPrefix("SupervoxApp/"), let name = place.split(separator: "/").last.map(String.init) else { return false }
+        return (name.hasPrefix("Voices") && name.hasSuffix(".swift")) || name == "VoicePreview.swift"
+    }
+
+    /// Règles 7 et 11 : ni le texte brut d'une erreur, ni le repli sur la voix du système, dans l'onglet Voix et l'écoute. Le balayage
+    /// prouve qu'il voit au moins les fichiers de la tâche 3.
+    @Test func theVoicesTabAndThePreviewShowNoRawErrorTextAndNeverFallBack() throws {
+        let files = try Self.sources(under: "Sources").filter { Self.isVoicesTabFile($0.place) }
+        let seen = Set(files.map(\.place))
+        for expected in [
+            "SupervoxApp/SettingsUI/VoicesModel.swift", "SupervoxApp/SettingsUI/VoicesText.swift",
+            "SupervoxApp/Interview/VoicePreview.swift",
+        ] {
+            #expect(seen.contains(expected), "le balayage doit voir \(expected)")
+        }
+        let raw = files.filter { $0.code.contains("localizedDescription") }.map(\.place)
+        #expect(raw.isEmpty, "localizedDescription : \(raw)")
+        let fallback = files.filter { $0.code.contains("FallbackSpeechSynthesizer") }.map(\.place)
+        #expect(fallback.isEmpty, "FallbackSpeechSynthesizer : \(fallback)")
+    }
+
+    /// Amendement de la tâche 3 : l'écoute décide qui parle par la résolution unique (`resolve(in:secrets:)`, injectée) et par rien
+    /// d'autre : ni la route suivie d'un `ProviderResolver` à la main, ni une `ProviderVoice` construite sur place.
+    @Test func thePreviewDecidesWhoSpeaksOnlyThroughTheSingleResolution() throws {
+        let preview = try #require(
+            try Self.sources(under: "Sources").first { $0.place == "SupervoxApp/Interview/VoicePreview.swift" })
+        for forbidden in ["ProviderResolver", "ProviderVoice(", ".route(in", ".providerVoice"] {
+            #expect(!preview.code.contains(forbidden), "\(forbidden) dans VoicePreview.swift")
+        }
+    }
+
+    /// D6 : « ce fournisseur sait parler » est UNE propriété (`ProviderKind.canSpeak`), lue par la règle, le brouillon de l'onglet
+    /// et la fabrique ; aucun des trois ne teste le type du fournisseur lui-même.
+    @Test func whetherAProviderSpeaksIsReadFromTheOneProperty() throws {
+        let sources = try Self.sources(under: "Sources")
+        for place in [
+            "SupervoxApp/Settings/VoiceRoute.swift", "SupervoxApp/SettingsUI/VoicesModel.swift", "Supervox/LiveInterview.swift",
+        ] {
+            let file = try #require(sources.first { $0.place == place }, "le balayage doit voir \(place)")
+            #expect(!file.code.contains(".openAICompatible"), "\(place) teste le type du fournisseur")
+            #expect(file.code.contains("canSpeak"), "\(place) ne lit pas canSpeak")
+        }
+    }
+
+    @Test(arguments: [
+        "SupervoxApp/SettingsUI/VoicesModel.swift", "SupervoxApp/SettingsUI/VoicesPane.swift",
+        "SupervoxApp/SettingsUI/VoicesText.swift", "SupervoxApp/Interview/VoicePreview.swift",
+    ])
+    func theVoicesTabPatternSeesItsFiles(place: String) {
+        #expect(Self.isVoicesTabFile(place))
+    }
+
+    @Test(arguments: [
+        "SupervoxApp/Settings/VoiceRoute.swift", "SupervoxApp/Settings/SavedVoice.swift", "SupervoxCore/Speech/VoicesHelper.swift",
+        "SupervoxApp/SettingsUI/InterviewPane.swift", "SupervoxApp/SettingsUI/MyVoices.swift",
+    ])
+    func theVoicesTabPatternLeavesOtherFilesAlone(place: String) {
+        #expect(!Self.isVoicesTabFile(place))
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import SupervoxCore
 import Testing
 
 @testable import SupervoxApp
@@ -325,13 +326,23 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
         #expect(system.language == "fr-FR")
         #expect(system.gender == nil)
         #expect(system.extra == [:])
-        #expect(!system.usesProvider)
+        #expect(system.route(in: .defaults) == VoiceRoute.system(language: "fr-FR", identifier: nil, because: nil))
     }
 
-    @Test func aVoiceUsesAProviderExactlyWhenItNamesOne() {
-        #expect(VoiceChoice(providerID: exampleProvider).usesProvider)
+    @Test func aVoiceSpeaksThroughAProviderOnlyWhenItNamesOne() {
+        var settings = AppSettings.defaults
+        let provider = Provider(
+            id: exampleProvider, name: "Fournisseur d'exemple", baseURL: "https://example.com/v1", kind: .openAICompatible,
+            models: [])
+        settings.providers = [provider]
+        let named = VoiceChoice(providerID: exampleProvider, model: "modele-exemple-voix", identifier: "voix-exemple")
+        #expect(
+            named.route(in: settings)
+                == .provider(provider, ProviderVoice(model: "modele-exemple-voix", identifier: "voix-exemple", extra: [:])))
         // Un modèle ou un identifiant sans fournisseur : c'est toujours une voix du système.
-        #expect(!VoiceChoice(model: "modele-exemple-voix", identifier: "voix-exemple").usesProvider)
+        #expect(
+            VoiceChoice(model: "modele-exemple-voix", identifier: "voix-exemple").route(in: settings)
+                == VoiceRoute.system(language: "fr-FR", identifier: "voix-exemple", because: nil))
     }
 
     @Test func aVoiceChoiceIsWrittenAndReadBackWithEveryField() throws {
@@ -378,7 +389,7 @@ private let exampleProvider = UUID(uuidString: "00000000-0000-0000-0000-00000000
              "extra": {"garde": "oui", "refuse": 1}}
             """#)
         #expect(read.providerID == nil)
-        #expect(!read.usesProvider)
+        #expect(read.route(in: .defaults) == VoiceRoute.system(language: "fr-FR", identifier: "voix-exemple", because: nil))
         #expect(read.model == nil)
         #expect(read.identifier == "voix-exemple")
         #expect(read.language == "fr-FR")

@@ -91,7 +91,7 @@ import Testing
         #expect(!controller.panelModel.canOpenHistory, "pas d'entrée « Historique… »")
         #expect(SettingsView.makeHistoryModel(controller) == nil)
         let content = SettingsView.provider(catalog: catalog, promptTokenLimit: 111)(controller)
-        #expect(content.tabs == SettingsTab.visible(hasInterview: true, hasHistory: false))
+        #expect(content.tabs == SettingsTab.visible(hasInterview: true, hasVoices: true, hasHistory: false))
         #expect(!content.tabs.contains(.history))
         preservingTheMainMenu {
             controller.openSettings(tab: .history)
@@ -112,8 +112,9 @@ import Testing
         #expect(controller.panelModel.canOpenHistory)
         #expect(SettingsView.makeHistoryModel(controller) != nil)
         let content = SettingsView.provider(catalog: catalog, promptTokenLimit: 111)(controller)
-        #expect(content.tabs == SettingsTab.visible(hasInterview: true, hasHistory: true))
+        #expect(content.tabs == SettingsTab.visible(hasInterview: true, hasVoices: true, hasHistory: true))
         #expect(content.tabs.last == .history)
+        #expect(content.tabs.suffix(2) == [.voices, .history], "Voix juste avant Historique")
     }
 
     @Test("règle 8 : « Historique… » du menu « … » ouvre la fenêtre sur Historique, ou y ramène la fenêtre déjà ouverte sur un autre onglet")

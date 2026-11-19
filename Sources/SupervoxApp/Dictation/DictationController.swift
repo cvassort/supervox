@@ -148,6 +148,8 @@ public final class DictationController {
     @ObservationIgnored private let wait: @MainActor (Double) async -> Void
     @ObservationIgnored private let interview: (any InterviewRunning)?
     @ObservationIgnored private let concludeInterview: @MainActor () -> Void
+    /// Appelée sur le fil principal juste avant chaque ouverture du micro (dictée et correction) : l'écoute d'une voix s'arrête.
+    @ObservationIgnored private let beforeMicrophone: @MainActor () -> Void
     @ObservationIgnored private let log = Logger(subsystem: "dev.supervox.app", category: "dictation")
 
     /// Vrai de l'appui jusqu'à la fin de la dictée : fin du collage (sans relecture), échec, annulation, ou arrivée du texte en
@@ -202,6 +204,8 @@ public final class DictationController {
     ///     pas pu démarrer : relancez Supervox. » sans toucher au micro.
     ///   - concludeInterview: ce que fait l'appui qui conclut l'entretien. Dans l'application, `PanelModel.concludeInterview()`, le
     ///     chemin du bouton « Conclure » (qui se grise) ; par défaut, `interview.conclude()`.
+    ///   - beforeMicrophone: appelée de façon synchrone juste avant d'ouvrir le micro (`start()` de la session), à chaque dictée et
+    ///     chaque correction. Dans l'application : l'arrêt de l'écoute d'une voix, pour que le micro ne l'entende jamais.
     public init(
         environment: DictationEnvironment, inserter: TextInserter,
         settings: @escaping @MainActor () -> TranscriptionSettings,
@@ -221,7 +225,8 @@ public final class DictationController {
         hotKeyLabel: @escaping @MainActor () -> String? = { nil },
         wait: @escaping @MainActor (Double) async -> Void = { try? await Task.sleep(for: .seconds($0)) },
         interview: (any InterviewRunning)? = nil,
-        concludeInterview: (@MainActor () -> Void)? = nil
+        concludeInterview: (@MainActor () -> Void)? = nil,
+        beforeMicrophone: @escaping @MainActor () -> Void
     ) {
         self.environment = environment
         self.inserter = inserter
@@ -243,6 +248,7 @@ public final class DictationController {
         self.wait = wait
         self.interview = interview
         self.concludeInterview = concludeInterview ?? { [weak interview] in interview?.conclude() }
+        self.beforeMicrophone = beforeMicrophone
     }
 
     // MARK: - Raccourci
@@ -544,6 +550,8 @@ public final class DictationController {
         // Annulée pendant la fabrication : la session n'est jamais démarrée, aucun micro ne s'ouvre.
         guard isLive(run) else { return }
         run.session = session
+        // L'écoute d'une voix est arrêtée avant que le micro ne s'ouvre (arrêt fait au retour) : il ne l'entend jamais.
+        beforeMicrophone()
         // Le flux est lu avant que `start()` ne tourne : le premier instantané ne se perd pas.
         Task { await session.start() }
         for await snapshot in session.snapshots {

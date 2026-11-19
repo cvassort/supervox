@@ -1,16 +1,48 @@
 import AVFAudio
 import Foundation
 
+/// Le genre d'une voix du système, quand le système le précise (`nil` : non précisé).
+public enum SystemVoiceGender: String, Sendable, Equatable {
+    case female, male
+}
+
 public struct SystemVoiceInfo: Equatable, Sendable {
     public var identifier: String
     public var language: String
     /// Qualité de la voix : 1 défaut, 2 améliorée, 3 premium (valeurs d'`AVSpeechSynthesisVoiceQuality`, code lu).
     public var quality: Int
+    /// Le nom que le système donne à la voix ; vide s'il n'est pas connu.
+    public var name: String
+    public var gender: SystemVoiceGender?
 
-    public init(identifier: String, language: String, quality: Int) {
+    public init(identifier: String, language: String, quality: Int, name: String = "", gender: SystemVoiceGender? = nil) {
         self.identifier = identifier
         self.language = language
         self.quality = quality
+        self.name = name
+        self.gender = gender
+    }
+}
+
+/// Les voix installées sur la machine. `installed` est le seul endroit du dépôt qui demande la liste au système (garde de
+/// `SourceScanTests`). Hors de ce fichier (où le constructeur public de la voix du système le prend), seul le programme
+/// (`main.swift`) a le droit de le nommer.
+public enum SystemVoices {
+    public static let installed: @Sendable () -> [SystemVoiceInfo] = {
+        AVSpeechSynthesisVoice.speechVoices().map {
+            SystemVoiceInfo(identifier: $0.identifier, language: $0.language, quality: $0.quality.rawValue, name: $0.name,
+                            gender: gender($0.gender))
+        }
+    }
+
+    /// Cas par cas (AVSpeechSynthesis.h : `Unspecified`, `Male`, `Female`) ; non précisé ou inconnu : `nil`.
+    static func gender(_ gender: AVSpeechSynthesisVoiceGender) -> SystemVoiceGender? {
+        switch gender {
+        case .female: .female
+        case .male: .male
+        case .unspecified: nil
+        @unknown default: nil
+        }
     }
 }
 
@@ -25,32 +57,34 @@ public final class SystemSpeechSynthesizer: SpeechSynthesizer {
     static let renderTimeout: Double = 8
 
     private let language: String
+    /// La voix désignée par l'utilisateur ; `nil`, ou absente de la machine : la meilleure voix de la langue.
+    private let identifier: String?
     private let voices: @Sendable () -> [SystemVoiceInfo]
     private let render: @Sendable (_ text: String, _ voiceIdentifier: String) async throws -> [AudioClip]
 
-    public convenience init(language: String) {
+    public convenience init(language: String, identifier: String? = nil) {
         self.init(
             language: language,
-            voices: {
-                AVSpeechSynthesisVoice.speechVoices().map {
-                    SystemVoiceInfo(identifier: $0.identifier, language: $0.language, quality: $0.quality.rawValue)
-                }
-            },
-            render: { text, identifier in
-                try await Self.renderBySystem(text: text, voiceIdentifier: identifier, language: language)
+            identifier: identifier,
+            voices: SystemVoices.installed,
+            render: { text, voice in
+                try await Self.renderBySystem(text: text, voiceIdentifier: voice, language: language)
             })
     }
 
-    init(language: String, voices: @escaping @Sendable () -> [SystemVoiceInfo],
+    init(language: String, identifier: String? = nil, voices: @escaping @Sendable () -> [SystemVoiceInfo],
          render: @escaping @Sendable (_ text: String, _ voiceIdentifier: String) async throws -> [AudioClip]) {
         self.language = language
+        self.identifier = identifier
         self.voices = voices
         self.render = render
     }
 
     public func synthesize(_ text: String) async throws -> Speech {
         try Task.checkCancellation()
-        guard let voice = Self.pickVoice(language: language, among: voices()) else { throw SpeechError.noVoice(language: language) }
+        guard let voice = Self.pickVoice(language: language, identifier: identifier, among: voices()) else {
+            throw SpeechError.noVoice(language: language)
+        }
         guard !text.isBlankForSpeech else { throw SpeechError.empty }
         let chunks: [AudioClip]
         do {
@@ -65,11 +99,20 @@ public final class SystemSpeechSynthesizer: SpeechSynthesizer {
         return Speech(clip: try Self.joined(chunks))
     }
 
-    /// La voix de la langue exacte d'abord (`fr-FR`), puis toute voix de la même langue (`fr-…`) ; à égalité, la meilleure
-    /// qualité, et à qualité égale la première de la liste. `nil` s'il n'y en a aucune.
-    static func pickVoice(language: String, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
-        func tag(_ language: String) -> String { language.replacingOccurrences(of: "_", with: "-").lowercased() }
-        func primary(_ language: String) -> Substring { tag(language).split(separator: "-", maxSplits: 1).first ?? "" }
+    /// La voix désignée si elle est installée, quelle que soit sa langue ; sinon (identifiant `nil` ou absent de la liste) la
+    /// meilleure voix de la langue, par `pickVoice(language:among:)`. Publique : l'onglet Voix dit la voix qu'elle prend.
+    public static func pickVoice(language: String, identifier: String?, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
+        if let identifier, let designated = voices.first(where: { $0.identifier == identifier }) { return designated }
+        return pickVoice(language: language, among: voices)
+    }
+
+    /// LA règle « langue exacte, puis même langue » : la voix de la langue exacte d'abord (`fr-FR`), puis toute voix de la même
+    /// langue (`fr-…`, ou `fr` écrite sans région) ; à égalité, la meilleure qualité, et à qualité égale la première de la liste.
+    /// `nil` s'il n'y en a aucune. Langues comparées par `SpeechLanguage` (sans casse, `_` et `-` confondus). Publique : l'onglet
+    /// Voix dit la voix qu'elle prend (la ligne « Voix en vigueur » d'une voix automatique).
+    public static func pickVoice(language: String, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
+        let tag = SpeechLanguage.key
+        let primary = SpeechLanguage.primary
         func best(_ candidates: [SystemVoiceInfo]) -> SystemVoiceInfo? {
             candidates.reduce(nil) { best, voice in
                 guard let best else { return voice }
