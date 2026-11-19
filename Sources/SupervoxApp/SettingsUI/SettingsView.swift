@@ -295,9 +295,10 @@ public struct SettingsView: View {
     }
 
     /// La taille de la fenêtre de réglages, en points : fixe. Les onglets s'y règlent sans que la fenêtre grandisse ; les images de
-    /// l'outil de rendu et les mesures de hauteur la lisent ici. Largeur : la barre de huit onglets demande 804 points (taille propre
-    /// de son contrôle segmenté, mesurée hors écran dans une fenêtre jamais affichée par `SettingsTabBarTests`), plus 20 points de
-    /// marge de chaque côté, arrondi au multiple de 20 au-dessus : 860. Hauteur : 460, choix non mesuré.
+    /// l'outil de rendu et les mesures de hauteur la lisent ici. Largeur : la barre de huit onglets demande 804 à 808 points selon
+    /// la machine (taille propre de son contrôle segmenté, mesurée hors écran dans une fenêtre jamais affichée par
+    /// `SettingsTabBarTests` : 804 sur la machine de construction, 808 chez le contrôleur), plus 20 points de marge de chaque
+    /// côté, arrondi au multiple de 20 au-dessus : 860 dans les deux cas. Hauteur : 460, choix non mesuré.
     public static let windowSize = CGSize(width: 860, height: 460)
 
     @ViewBuilder
@@ -356,6 +357,19 @@ struct AddButtonFrameKey: PreferenceKey {
 }
 
 extension View {
+    /// La barre du bas des onglets Fournisseurs et Modes, autour de son bouton d'ajout. T7 (tour 3) : le bord droit du bouton sur
+    /// celui des cartes du formulaire groupé (`SettingsView.formCardWidth`). C3 (revue finale, C-m5) : un fond opaque, celui de la
+    /// fenêtre, sur toute la largeur, et un trait de séparation au-dessus ; le matériau `.bar` laissait lire les cartes qui
+    /// défilent dessous. Marges de 20 et 12 points : choix non mesuré.
+    func addButtonBar() -> some View {
+        frame(maxWidth: SettingsView.formCardWidth)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .overlay(alignment: .top) { Divider() }
+    }
+
     /// Pose la sonde `AddButtonFrameKey` sur cette vue.
     func addButtonFrameProbe() -> some View {
         background(GeometryReader { proxy in Color.clear.preference(key: AddButtonFrameKey.self, value: proxy.frame(in: .global)) })
@@ -399,12 +413,7 @@ struct ProvidersPane: View {
                 Button("Ajouter un fournisseur…") { draft = ProviderDraft(existing: nil) }
                     .addButtonFrameProbe()
             }
-            // T7 (tour 3) : le bord droit du bouton sur celui des cartes du formulaire groupé (`SettingsView.formCardWidth`).
-            .frame(maxWidth: SettingsView.formCardWidth)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
+            .addButtonBar()
         }
         .sheet(item: $draft) { draft in
             ProviderEditor(model: model, existing: draft.existing)

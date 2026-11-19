@@ -25,9 +25,10 @@ import Testing
         /// La répartition des segments (`NSSegmentedControl.Distribution` : 2 = parts égales), pour le rapport.
         var detail: String
 
-        /// La largeur dont la barre a besoin : la taille propre du contrôle, la même à toute largeur de fenêtre (mesuré : 804 points
-        /// pour les huit onglets de 600 à 900 points de fenêtre). Le cadre posé n'en est pas une : AppKit le comprime quand la
-        /// fenêtre est étroite (mesuré, fenêtre jamais affichée : 611 de 600 à 780 points de fenêtre, 647 à 800, 772 à partir de 820).
+        /// La largeur dont la barre a besoin : la taille propre du contrôle, la même à toute largeur de fenêtre sur une machine
+        /// donnée (mesuré : 804 à 808 points selon la machine pour les huit onglets). Le cadre posé n'en est pas une : AppKit le
+        /// comprime quand la fenêtre est étroite (mesuré, fenêtre jamais affichée, sur une seule machine et avant les titres
+        /// actuels ; les valeurs d'alors ne sont pas reprises ici). À 860 points, le test exige que le cadre tienne la taille propre.
         var need: CGFloat { intrinsicWidth }
 
         func fits(windowWidth: CGFloat) -> Bool { need + 2 * SettingsTabBarTests.margin <= windowWidth }
@@ -112,6 +113,11 @@ import Testing
         #expect(real.labels == titles, "les huit titres, dans l'ordre")
         #expect(!crowded.fits(windowWidth: width), "témoin : l'instrument sait dire « ne tient pas » (\(crowded))")
         #expect(crowded.need > real.need, "témoin : douze titres demandent plus que huit")
+        // C4 (revue finale, C-m1) : la vraie barre est montrée, pas comprimée ; le témoin de douze titres, lui, n'est pas montré
+        // (l'instrument sait voir un élément rejeté). « À un point près » : choix non mesuré.
+        #expect(real.itemVisible, "la vraie barre est parmi les éléments montrés (\(real))")
+        #expect(!crowded.itemVisible, "témoin : la barre de douze titres n'est pas montrée (\(crowded))")
+        #expect(real.frameWidth >= real.intrinsicWidth - 1, "le cadre de la vraie barre tient sa taille propre (\(real))")
         #expect(
             real.fits(windowWidth: width),
             "la barre de huit onglets demande \(real.need) points, plus \(2 * Self.margin) de marge, pour une fenêtre de \(width)")

@@ -66,12 +66,7 @@ public struct ModesPane: View {
                 AddModeButton(model: model, edit: { editing = ModeSheetTarget(id: $0) })
                     .addButtonFrameProbe()
             }
-            // T7 (tour 3) : le bord droit du bouton sur celui des cartes du formulaire groupé (`SettingsView.formCardWidth`).
-            .frame(maxWidth: SettingsView.formCardWidth)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-            .frame(maxWidth: .infinity)
-            .background(.bar)
+            .addButtonBar()
         }
         .sheet(item: $editing) { target in
             ModeEditor(model: model, id: target.id)

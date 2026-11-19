@@ -2399,9 +2399,10 @@ Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel ré
 - **L'écoute réelle d'une voix**, du système ou d'un fournisseur : jamais entendue (essais 104 à 106). **La correspondance entre
   le nom, le genre affiché et la voix entendue** n'est pas vérifiable sans son. Le genre d'une voix du système vient d'une
   propriété du système qui rend souvent « non précisé » (documentation lue, non mesuré sur la machine de construction).
-- **La barre de huit onglets** : mesurée hors écran (fenêtre jamais affichée), non vue affichée. Elle demande 804 points (taille
-  propre de son contrôle, mesurée dans une fenêtre jamais affichée par `Tests/SupervoxAppTests/SettingsTabBarTests.swift`) ; la
-  fenêtre fait 860 points de large (804, plus 20 points de marge de chaque côté, arrondi au multiple de 20 au-dessus), sur 460 de
+- **La barre de huit onglets** : mesurée hors écran (fenêtre jamais affichée), non vue affichée. Elle demande 804 à 808 points
+  selon la machine (taille propre de son contrôle, mesurée dans une fenêtre jamais affichée par
+  `Tests/SupervoxAppTests/SettingsTabBarTests.swift`) ; la fenêtre fait 860 points de large (808 au plus, plus 20 points de marge
+  de chaque côté, arrondi au multiple de 20 au-dessus), sur 460 de
   haut (choix non mesuré). **Avec sept onglets** (étape précédente), la barre demandait déjà plus que les 600 points de l'ancienne
   fenêtre : environ 703 points d'après une sonde hors écran, qui n'est pas dans le dépôt et n'a pas été rejouée pour cette liste ;
   elle n'a jamais été vue (essai 96).

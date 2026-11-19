@@ -1423,6 +1423,80 @@ import Testing
         #expect(frame.minX > card.minX, "\(tab) : le bouton est dans la largeur des cartes")
     }
 
+    /// Les couleurs distinctes (RGBA sur 8 bits) d'une bande de `host` (coordonnées de `host`), rendue en image par
+    /// `cacheDisplay` : hors écran, la fenêtre n'est jamais affichée.
+    static func colors(in rect: CGRect, of host: NSView) throws -> Set<[Int]> {
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+        var pixel = [Int](repeating: 0, count: bitmap.samplesPerPixel)
+        var seen = Set<[Int]>()
+        for y in Int((rect.minY * scale).rounded(.up))..<Int((rect.maxY * scale).rounded(.down)) {
+            for x in Int((rect.minX * scale).rounded(.up))..<Int((rect.maxX * scale).rounded(.down)) {
+                bitmap.getPixel(&pixel, atX: x, y: y)
+                seen.insert(pixel)
+            }
+        }
+        return seen
+    }
+
+    /// C3 (revue finale, C-m5) : la barre du bas des onglets Fournisseurs et Modes, rendue en image hors écran (fenêtre jamais
+    /// affichée), alors que des cartes défilent dessous : un trait de séparation sur TOUTE la largeur de la fenêtre au-dessus de la
+    /// barre, et sous ce trait, à gauche du bouton, une seule couleur. Ce que ce rendu ne sait pas dire : la transparence du
+    /// matériau `.bar` (mesuré : dans une fenêtre jamais mise devant, `cacheDisplay` le rend blanc uni, comme le fond de la
+    /// fenêtre ; l'outil d'images, qui met sa fenêtre devant hors de l'écran, le peint) ; l'opacité elle-même est tenue par
+    /// l'image seulement, pas par ce test. Témoins dans le même test : des cartes descendent sous la barre ; une
+    /// bande d'une carte avec son texte a plusieurs couleurs (le rendu voit le texte).
+    @Test(arguments: [SettingsTab.providers, .modes])
+    func theAddButtonBarIsSeparatedAcrossTheWholeWidth(_ tab: SettingsTab) throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var settings = AppSettings.defaults
+        settings.modes += (1...8).map { Mode(id: "perso-\($0)", name: "Mode d'exemple \($0)", instruction: "Écris.") }
+        try store.save(settings)
+        let controller = makeController()
+        let providers = (1...6).map { index in
+            Provider(
+                id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!, name: "Fournisseur d'exemple",
+                baseURL: "https://example.com/v\(index)", kind: .openAICompatible, models: ["modele-exemple"])
+        }
+        var button: CGRect?
+        let pane: AnyView =
+            tab == .providers
+            ? AnyView(
+                ProvidersPane(
+                    model: ProvidersModel(
+                        providers: providers, secrets: InMemorySecretStore(secrets: [:]), listModels: { _, _ in [] },
+                        save: { _ in })))
+            : AnyView(ModesPane(model: SettingsView.makeModesModel(controller, keyMonitor: monitor)))
+        let host = NSHostingView(
+            rootView: pane
+                .frame(width: SettingsView.windowSize.width, height: SettingsView.windowSize.height)
+                .onPreferenceChange(AddButtonFrameKey.self) { frame in MainActor.assumeIsolated { button = frame } })
+        host.appearance = NSAppearance(named: .aqua)
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { withExtendedLifetime(window) {} }
+        for _ in 0..<200 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        let frame = try #require(button, "le bouton d'ajout n'est pas mesuré (\(tab))")
+        let cards = Self.formCards(in: host)
+        let first = try #require(cards.first, "aucune carte trouvée (\(tab))")
+        // Le haut de la barre (coordonnées de `host`, retournées) : le bouton et ses marges verticales de 12 points (code lu).
+        let top = host.bounds.maxY - frame.height - 24
+        #expect(cards.contains { $0.maxY > top + 1 }, "témoin : des cartes passent sous la barre (\(tab))")
+        let text = try Self.colors(in: CGRect(x: first.minX + 4, y: first.minY + 2, width: first.width - 8, height: 24), of: host)
+        #expect(text.count > 2, "témoin : le rendu voit le texte d'une carte (\(tab), \(text.count) couleurs)")
+
+        let fill = try Self.colors(
+            in: CGRect(x: 1, y: top + 2, width: frame.minX - 8 - 1, height: host.bounds.maxY - top - 3), of: host)
+        #expect(fill.count == 1, "\(tab) : la barre sous le trait n'est pas d'une seule couleur (\(fill.count))")
+        let line = try Self.colors(in: CGRect(x: 0, y: top, width: host.bounds.width, height: 1), of: host)
+        #expect(line.count == 1 && line != fill, "\(tab) : pas de trait d'une couleur sur toute la largeur au-dessus de la barre")
+    }
+
     /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
     func voicesContent(
         _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()

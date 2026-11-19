@@ -115,7 +115,8 @@ open build/Supervox.app
 - Les réglages (huit onglets : fournisseurs, raccourci, permissions, transcription, modes, entretien, voix, historique) s'ouvrent
   par « Réglages… », dans le menu « … » du panneau ou dans celui de l'icône de la barre de menus ; « Historique… », dans le menu
   « … » du panneau, ouvre la fenêtre sur l'onglet Historique. La fenêtre fait 860 points de large sur 460 (la hauteur est un
-  choix non mesuré) : la barre de huit onglets demande 804 points, **mesurés hors écran dans une fenêtre jamais affichée** ;
+  choix non mesuré) : la barre de huit onglets demande 804 à 808 points selon la machine, **mesurés hors écran dans une fenêtre
+  jamais affichée** ;
   elle n'a jamais été vue affichée. Avec sept onglets, la barre dépassait déjà les 600 points de l'ancienne fenêtre (environ
   703 points d'après une sonde hors écran, non conservée dans le dépôt).
 - Si le raccourci est refusé par macOS, le panneau s'ouvre au lancement pour le dire. S'il est aussi un raccourci de
