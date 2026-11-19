@@ -234,26 +234,75 @@ import Testing
         }
     }
 
-    /// Un message montré dans le panneau ne passe jamais par le texte brut d'une erreur quelconque (`String(describing:)`,
-    /// interpolation de l'erreur) : une erreur système y met une adresse de service, un chemin ou une clé. Les chemins qui
-    /// fabriquent ces messages : la capture audio, la session de dictée, la réécriture par le modèle et le contrôleur de dictée.
-    static let forbiddenErrorText = #"String\s*\(\s*describing\s*:\s*error\s*\)|\\\(\s*error\s*\)|\\\(\s*String\s*\(\s*describing\s*:\s*error"#
+    /// Un message montré dans le panneau ne passe jamais par le texte brut d'une erreur quelconque (`String(describing:)` ou
+    /// `String(reflecting:)` d'une erreur, interpolation d'une erreur, branche `as? LocalizedError`) : une erreur système y met une
+    /// adresse de service, un chemin ou une clé, une bibliothèque tierce un texte en anglais. Une erreur, c'est ici toute valeur dont
+    /// le nom finit par `rror` (`error`, `saveError`, `underlyingError`) : un nom qui commence par une minuscule, pas un type
+    /// (`SettingsError.sentence(…)` est une phrase fixe). B2 (revue finale, B-M1) : le motif est élargi ainsi, et le balayage couvre
+    /// tout `Sources` hors `SupervoxBench` (outil de banc, qui écrit dans le terminal). Fin de nom par `(?!\w)`, pas par `\b` :
+    /// la limite de mot des expressions de Swift suit Unicode, pour qui `error.localizedDescription` est un seul mot (mesuré).
+    static let forbiddenErrorText =
+        #"String\s*\(\s*(?:describing|reflecting)\s*:\s*[a-z_]\w*rror(?!\w)|\\\(\s*[a-z_]\w*rror(?!\w)|as\?\s*LocalizedError(?!\w)"#
+
+    /// Une occurrence admise du motif : le fichier (sous `Sources`) et la ligne, rognée. Une exception vaut pour CETTE ligne et
+    /// aucune autre du fichier.
+    struct ErrorTextSite: Hashable, CustomStringConvertible {
+        let place: String
+        let line: String
+        var description: String { "\(place) : \(line)" }
+    }
+
+    /// Les exceptions, une par occurrence, chacune avec sa raison.
+    static let allowedErrorText: Set<ErrorTextSite> = [
+        // Le moteur de reconnaissance du système n'est construit que par le banc (`SupervoxBench`, `git grep`) : son texte va au
+        // terminal, jamais à l'écran de l'application.
+        ErrorTextSite(
+            place: "SupervoxEngines/AppleSpeechTranscriber.swift",
+            line: #"throw TranscriberError.engine("conversion audio échouée : \(error.map { String(describing: $0) } ?? "statut d'erreur")")"#),
+    ]
+
+    /// Les lignes de `code` (le fichier `place`) que le motif attrape.
+    static func errorTextSites(place: String, code: String, pattern: Regex<AnyRegexOutput>) -> [ErrorTextSite] {
+        code.components(separatedBy: "\n")
+            .filter { $0.contains(pattern) }
+            .map { ErrorTextSite(place: place, line: $0.trimmingCharacters(in: .whitespaces)) }
+    }
 
     @Test func noPanelMessageCarriesTheRawTextOfAnError() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
-        let folders = [
-            "Sources/SupervoxCore/Audio", "Sources/SupervoxCore/Speech", "Sources/SupervoxCore/Dictation", "Sources/SupervoxCore/Language", "Sources/SupervoxApp/Dictation",
-            "Sources/SupervoxApp/Language", "Sources/SupervoxCore/Conversation", "Sources/SupervoxApp/Interview",
-        ]
-        let offending = try folders.flatMap { folder in
-            try Self.sources(under: folder).filter { $0.code.contains(pattern) }.map { "\(folder)/\($0.place)" }
+        let files = try Self.sources(under: "Sources").filter { !$0.place.hasPrefix("SupervoxBench/") }
+        // Témoins de l'étendue : des dossiers que l'ancien balayage ne voyait pas.
+        for folder in ["SupervoxApp/SettingsUI/", "SupervoxApp/Settings/", "SupervoxEngines/", "Supervox/", "SupervoxSnapshots/"] {
+            #expect(files.contains { $0.place.hasPrefix(folder) }, "\(folder) doit être balayé")
         }
+        #expect(files.contains { $0.place == "SupervoxApp/AppController.swift" })
+        let found = files.flatMap { Self.errorTextSites(place: $0.place, code: $0.code, pattern: pattern) }
+        let offending = found.filter { !Self.allowedErrorText.contains($0) }
         #expect(offending.isEmpty, "\(offending)")
+        // Une exception qui n'est plus vue (ligne changée ou retirée) sort de la liste : elle n'excuserait rien d'autre.
+        let stale = Self.allowedErrorText.subtracting(found)
+        #expect(stale.isEmpty, "\(stale)")
+    }
+
+    /// B2 : une exception vaut pour SA ligne : une autre ligne fautive du même fichier est vue.
+    @Test func anExceptionCoversItsOwnLineOnly() throws {
+        let pattern = try Regex(Self.forbiddenErrorText)
+        let allowed = try #require(Self.allowedErrorText.first)
+        let code = ["func f() throws {", allowed.line, #"    throw TranscriberError.engine("échec : \(error)")"#, "}"]
+            .joined(separator: "\n")
+        let found = Self.errorTextSites(place: allowed.place, code: code, pattern: pattern)
+        #expect(found.count == 2)
+        #expect(found.filter { !Self.allowedErrorText.contains($0) }.map(\.line)
+                    == [#"throw TranscriberError.engine("échec : \(error)")"#])
     }
 
     @Test(arguments: [
         "AudioCaptureError.engineFailed(String(describing: error))", "\"voice processing : \\(error)\"",
         "String ( describing : error )", "\"\\( error )\"",
+        // B2 (revue finale, B-M1) : un autre nom fini par `rror`, une autre lecture, la branche `LocalizedError`.
+        "\"échec : \\(saveError)\"", "\"\\(error.localizedDescription)\"", "String(reflecting: underlyingError)",
+        "if let localized = error as? LocalizedError, let text = localized.errorDescription { return text }",
+        "(error as?  LocalizedError)?.errorDescription",
     ])
     func theErrorTextPatternSeesNeighbouringSpellings(code: String) throws {
         #expect(code.contains(try Regex(Self.forbiddenErrorText)))
@@ -261,7 +310,12 @@ import Testing
 
     @Test func theErrorTextPatternLeavesOrdinaryUsesAlone() throws {
         let pattern = try Regex(Self.forbiddenErrorText)
-        for code in ["catch { fail(.engine(Self.describe(error))) }", "\"le moteur audio a échoué (\\(message))\"", "error as? AudioCaptureError"] {
+        for code in [
+            "catch { fail(.engine(Self.describe(error))) }", "\"le moteur audio a échoué (\\(message))\"", "error as? AudioCaptureError",
+            // Un type, pas une erreur : la phrase fixe d'une `SettingsError` (B2).
+            "\"Le raccourci n'a pas été enregistré. \\(SettingsError.sentence(forSaveError: error))\"",
+            "error as? any SupervoxError",
+        ] {
             #expect(!code.contains(pattern), "\(code)")
         }
     }
