@@ -24,8 +24,10 @@ extension SettingsError {
         "Les réglages n'ont pas pu être enregistrés : vérifiez que le disque n'est pas plein, puis recommencez."
 
     /// LA phrase à montrer pour une erreur d'enregistrement des réglages : celle de la `SettingsError` (fixe, elle ne nomme que
-    /// le fichier de réglages), sinon `otherSaveFailure`. Les avis du panneau, la fenêtre de réglages et l'outil de rendu
-    /// passent tous par ici.
+    /// le fichier de réglages), sinon `otherSaveFailure`. Passent par ici (`git grep`) : les avis du panneau (`AppController`),
+    /// les onglets Raccourci (`HotKeySettingsModel`), Fournisseurs (`ProvidersModel`) et Voix (`VoicesModel`), et l'outil de
+    /// rendu. Les onglets Modes, Entretien, Historique et Transcription (`ModesModel`, `InterviewSettingsModel`, `HistoryModel`,
+    /// `TranscriptionModel`) décident seuls, avec leur propre phrase de repli, sur le même patron `as? SettingsError`.
     public static func sentence(forSaveError error: any Error) -> String {
         (error as? SettingsError)?.errorDescription ?? otherSaveFailure
     }

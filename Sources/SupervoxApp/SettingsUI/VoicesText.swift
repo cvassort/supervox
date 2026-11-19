@@ -58,7 +58,11 @@ public enum VoicesText {
     /// La phrase d'une panne de fournisseur pendant l'écoute d'une voix. Le classement reste unique (`RewriteFailure.from`) ; seule
     /// la phrase change là où celle de `RewriteFailure`, écrite pour les modes, égarerait : pour une voix, une adresse ou un modèle
     /// inconnu, une requête refusée ou une réponse illisible veulent dire « voix mal réglée ». `switch` sans `default` : un cas
-    /// nouveau forcera une décision ici.
+    /// nouveau forcera une décision ici. Quatre cas gardent la phrase écrite pour les modes sans être atteints par l'écoute
+    /// (code lu) : `.interrupted` et `.providerError` ne naissent que d'un flux de complétion (`EndpointError.streamInterrupted`,
+    /// `CompletionError.provider`), `.truncated` et `.refused` que de la raison d'arrêt d'un flux, dans la réécriture
+    /// (`Rewrite.swift`) ; la synthèse est une seule requête, sans
+    /// flux (`OpenAICompatibleClient.speechMeasured`).
     public static func providerFailure(_ failure: RewriteFailure, canEdit: Bool = true) -> String {
         switch failure {
         case .noModel:

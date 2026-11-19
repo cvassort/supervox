@@ -594,8 +594,8 @@ Les essais ci-dessous sont faits pour les regarder.
 
 1. Ouvrez « Réglages… » (menu de l'icône) et regardez la barre des onglets.
    - Attendu : cinq onglets, Fournisseurs, Raccourci, Permissions, Transcription et Modes, tous lisibles, aucun coupé ni
-     caché. **Comportement à confirmer** : la fenêtre a une taille fixe (860 sur 460 points) ; jamais vue à l'écran avec
-     sa barre d'onglets.
+     caché. **Comportement à confirmer** : la fenêtre a une taille fixe (contenu demandé à 860 sur 460 points, taille
+     jamais mesurée sur une vraie fenêtre) ; jamais vue à l'écran avec sa barre d'onglets.
 2. Ouvrez l'onglet Modes.
    - Attendu : une phrase d'explication en haut (« Un mode dit ce que devient le texte dicté… »), une section « Modèles »
      (« Modèle fort », « Modèle rapide »), puis une section « Modes » de quatre lignes dans l'ordre des pastilles du
@@ -1507,8 +1507,8 @@ ce qui suit n'a été vu tourner sur du matériel réel pendant la construction 
 1. Menu de l'icône, « Réglages… ». Regardez la barre d'onglets.
    - Attendu : huit onglets depuis l'étape 7, dans l'ordre : Fournisseurs, Raccourci, Permissions, Transcription, Modes,
      Entretien, Voix, Historique. Tous lisibles, aucun coupé ni caché. **Comportement à confirmer** : la fenêtre a une taille
-     fixe (860 sur 460 points depuis l'étape 7, 600 sur 460 avec les sept onglets de l'étape 6) et ne s'est jamais vue avec sa
-     barre d'onglets (essai 96).
+     fixe (contenu demandé à 860 sur 460 points depuis l'étape 7, 600 sur 460 avec les sept onglets de l'étape 6 ; taille
+     jamais mesurée sur une vraie fenêtre) et ne s'est jamais vue avec sa barre d'onglets (essai 96).
 2. Ouvrez l'onglet Historique, fermez la fenêtre par la croix, puis menu de l'icône, « Réglages… ».
    - Attendu : la fenêtre revient sur l'onglet où vous l'avez laissée (Historique).
 3. Réduisez la fenêtre dans le Dock (⌘M), puis menu de l'icône, « Réglages… ».
@@ -2367,10 +2367,12 @@ phrase « construite » a un nom ou un nombre inséré, écrit entre chevrons, q
 - Pour les essais de voix de fournisseur : un fournisseur déjà réglé (essai 5), **du seul type qui sait parler**, et les valeurs de
   votre voix chez lui (modèle de synthèse, identifiant de voix, paramètres éventuels). **Ces valeurs viennent de vos notes
   personnelles : ne les écrivez jamais dans ce dépôt**, ni dans une remarque d'essai qui s'y retrouverait. Sans fournisseur de
-  voix, les essais 99, 100 (sauf le point 1), 105, 106 et le point 2 de l'essai 114 sont « non fait ».
+  voix, les essais 99, 100 (sauf les points 1 et 2), 101, 102 (point 3), 105, 106 et les points 2 et 3 de l'essai 114 sont
+  « non fait ».
 - Des haut-parleurs ou un casque, **volume prudent** : chaque écoute joue une phrase d'essai de quelques secondes (durée non
   mesurée), à un volume qui est celui du système.
-- Une voix française du système installée (essai 82). Pour les essais 107 à 111 et 114 : le micro accordé (essai 2), les modèles
+- Une voix française du système installée (essai 97, point 1 : la coche est sur « Automatique », aucune ligne « Voix en
+  vigueur » en tête de la liste). Pour les essais 107 à 111 et 114 : le micro accordé (essai 2), les modèles
   prêts (essai 19) ; l'essai 109 demande aussi un modèle fort (essai 57) et l'essai 110 les préparatifs de l'étape 6.
 - Ouvrez la fenêtre des réglages **sur l'onglet Voix avant** de lancer une dictée, une correction ou un entretien (essais 107 à
   111) : « Réglages… » ferme le panneau et annule un entretien. Le panneau s'ouvre ensuite à côté sans prendre la frappe, et la
@@ -2381,10 +2383,11 @@ phrase « construite » a un nom ou un nombre inséré, écrit entre chevrons, q
 ### Ce que l'étape 7 change aux attendus des essais précédents
 
 - **Essais 32 (point 1) et 63 (point 1)** : la barre des réglages compte **huit onglets**, dans l'ordre Fournisseurs, Raccourci,
-  Permissions, Transcription, Modes, Entretien, Voix, Historique ; la fenêtre fait 860 points de large, non plus 600 (essai 96).
+  Permissions, Transcription, Modes, Entretien, Voix, Historique ; le contenu de la fenêtre est demandé à 860 points de large,
+  non plus 600 (taille demandée, jamais mesurée sur une vraie fenêtre ; essai 96).
 - **Essai 65 (point 1)** : le premier groupe de l'onglet Entretien a une ligne « Voix » sous « Nombre maximal de questions », dont
   la note est devenue le sous-titre (essai 98).
-- **Essai 82** : « Ces réglages n'ont pas d'écran » n'est plus vrai : la voix se règle dans l'onglet Voix (essais 99 à 101, 114).
+- **Essai 82** : il ne se fait plus seulement par le fichier : la voix se règle aussi dans l'onglet Voix (essais 99 à 101, 114).
   Éditer `settings.json` à la main marche toujours, et le point 2 se refait par l'onglet (essai 114, point 3).
 
 ### Jamais exécuté pendant la construction (étape 7)
@@ -2401,15 +2404,17 @@ Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel ré
   propriété du système qui rend souvent « non précisé » (documentation lue, non mesuré sur la machine de construction).
 - **La barre de huit onglets** : mesurée hors écran (fenêtre jamais affichée), non vue affichée. Elle demande 804 à 808 points
   selon la machine (taille propre de son contrôle, mesurée dans une fenêtre jamais affichée par
-  `Tests/SupervoxAppTests/SettingsTabBarTests.swift`) ; la fenêtre fait 860 points de large (808 au plus, plus 20 points de marge
-  de chaque côté, arrondi au multiple de 20 au-dessus), sur 460 de
-  haut (choix non mesuré). **Avec sept onglets** (étape précédente), la barre demandait déjà plus que les 600 points de l'ancienne
+  `Tests/SupervoxAppTests/SettingsTabBarTests.swift`) ; le contenu de la fenêtre est demandé à 860 points de large (808 au plus,
+  plus 20 points de marge de chaque côté, arrondi au multiple de 20 au-dessus), sur 460 de haut (choix non mesuré) : taille
+  demandée, jamais mesurée sur une vraie fenêtre. **Avec sept onglets** (étape précédente), la barre demandait déjà plus que les 600 points de l'ancienne
   fenêtre : environ 703 points d'après une sonde hors écran, qui n'est pas dans le dépôt et n'a pas été rejouée pour cette liste ;
   elle n'a jamais été vue (essai 96).
-- **Les autres onglets à 860 points** : vus seulement en images rendues hors écran, sans barre d'onglets. Signalés, non corrigés :
-  dans Fournisseurs et Modes, le bouton d'ajout est au bord droit de la fenêtre, non au bord des cartes ; dans Voix, les boutons
-  sont aux deux bords, environ 267 points entre les deux groupes (lu sur l'image, 2 pixels par point, non mesuré) (essais 96
-  et 97).
+- **Les autres onglets à 860 points** : vus seulement en images rendues hors écran, sans barre d'onglets. Dans Fournisseurs et
+  Modes, le bouton d'ajout a son bord droit sur celui des cartes (cartes de 704 points, mesuré hors écran, jamais vu affiché) ;
+  sa barre, en bas, a le fond opaque de la fenêtre sur toute la largeur, avec un filet au-dessus : rien ne se lit dessous sur
+  les images, l'opacité n'est tenue que par elles (un test hors écran tient le filet sur toute la largeur, pas l'opacité).
+  Signalé, non corrigé : dans Voix, les boutons sont aux deux bords, environ 267 points entre les deux groupes (lu sur l'image,
+  2 pixels par point, non mesuré) (essais 96 et 97).
 - **Les deux feuilles de l'onglet Voix** (éditeur, confirmation de suppression) : jamais présentées dans une vraie fenêtre ;
   leurs tests les posent dans une fenêtre jamais affichée. **Quitter l'onglet pendant que l'éditeur est ouvert abandonne la
   saisie** : écrit et testé hors écran, jamais vu avec une feuille réellement présentée (essai 102).
@@ -2436,16 +2441,19 @@ Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel ré
 
 1. Menu de l'icône, « Réglages… ». Regardez la barre d'onglets.
    - Attendu : huit onglets, dans l'ordre : Fournisseurs, Raccourci, Permissions, Transcription, Modes, Entretien, Voix,
-     Historique. **Les huit titres sont entiers** et **aucun chevron de débordement (») n'apparaît dans la barre**. La fenêtre
-     fait 860 points de large sur 460 (`SettingsView.windowSize`). État : barre de huit onglets : mesurée hors écran (fenêtre
+     Historique. **Les huit titres sont entiers** et **aucun chevron de débordement (») n'apparaît dans la barre**. Le contenu
+     de la fenêtre est demandé à 860 points de large sur 460 (`SettingsView.windowSize`) : taille demandée, jamais mesurée sur
+     une vraie fenêtre. État : barre de huit onglets : mesurée hors écran (fenêtre
      jamais affichée), non vue affichée. **Comportement à confirmer.**
    - Si ce n'est pas le cas, noter : le titre coupé ou caché, le chevron s'il apparaît, la largeur de votre écran, une taille de
      texte du système qui n'est pas celle par défaut.
 2. Passez dans les sept autres onglets, un par un.
    - Attendu : aucun ne paraît vide ni déséquilibré à cette largeur. Vus seulement en images rendues hors écran : dans
-     Fournisseurs et Modes, « Ajouter un fournisseur… » et « Ajouter un mode » flottent au bord droit de la fenêtre, pas au bord
-     des cartes (centrées, environ 704 points de large : lu sur les images, non mesuré) ; l'onglet Permissions a beaucoup de vide.
-     **À noter si ça gêne.**
+     Fournisseurs et Modes, « Ajouter un fournisseur… » et « Ajouter un mode » ont leur bord droit sur celui des cartes
+     (centrées, 704 points de large : mesuré hors écran, jamais vu affiché) ; la barre du bas qui les porte a le fond opaque de
+     la fenêtre sur toute la largeur, avec un filet au-dessus. Faites défiler une liste assez longue sous cette barre : **rien
+     ne doit se lire à travers** (tenu par les images seulement). L'onglet Permissions a beaucoup de vide. **À noter si ça
+     gêne.**
 3. Fermez la fenêtre par la croix, rouvrez-la par « Réglages… ».
    - Attendu : elle revient sur l'onglet où vous l'aviez laissée, à la même taille.
 
@@ -2462,9 +2470,10 @@ Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel ré
      nom, au détail « <langue en clair> · <genre> · <qualité> » (construit) : le genre est « Féminin », « Masculin », « Neutre »
      ou « Genre non précisé » ; la qualité « Qualité standard », « Qualité améliorée », « Qualité premium » ou « Qualité non
      précisée ». Aucune section « Voix de fournisseurs » tant qu'aucune voix n'est enregistrée.
-   - Attendu : une coche sur « Automatique » (la voix en vigueur par défaut). **Code lu, jamais vu** : sans voix française
-     installée, une ligne « Voix en vigueur » apparaît à la place, en tête de la liste, avec le triangle et « Cette voix n'est
-     plus installée sur cet ordinateur. ».
+   - Attendu : une coche sur « Automatique » (la voix en vigueur par défaut). **Code lu, jamais vu** : sans aucune voix
+     française installée, une ligne « Voix en vigueur » apparaît à la place, en tête de la liste, avec le triangle et « Cette
+     voix n'est plus installée sur cet ordinateur. » ; avec une voix française d'une autre région seulement, la ligne nomme la
+     voix qui parle (point 6).
    - Attendu : aucune ligne n'est choisie à l'ouverture : « Utiliser cette voix », « Écouter », « Modifier… » et
      « Supprimer… » sont grisés ; « Ajouter une voix… » est actif.
 2. Choisissez une voix du système qui n'est pas « Automatique ».
@@ -2482,6 +2491,15 @@ Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel ré
 5. Regardez la rangée de boutons : « Utiliser cette voix » et « Écouter » à gauche, les trois autres à droite.
    - Attendu : même forme que l'onglet Historique. **À noter si l'écart entre les deux groupes gêne** (environ 267 points sur
      l'image, non mesuré).
+6. **La voix automatique d'une région sans voix.** Dans le sélecteur « Langue », trouvez une région d'une de vos langues dont
+   vous n'avez **aucune** voix (par exemple le français de Belgique, code `fr-BE`, s'il est absent de la liste). Supervox fermé, copiez
+   `settings.json`, puis mettez dans « voice » `"language" : "fr-BE"` (sans `identifier` ni `providerID`). Relancez, ouvrez
+   l'onglet Voix.
+   - Attendu : en tête de la section « Voix du système », une ligne « Voix en vigueur » avec le triangle et « Supervox parle
+     avec « <nom> », la meilleure voix installée pour cette langue. » (construite : le nom est celui de la voix française que
+     Supervox prend, langue exacte d'abord, puis même langue), **jamais** « Cette voix n'est plus installée sur cet ordinateur. ».
+     Écrit et testé hors écran (`VoicesModelTests`), jamais vu. **À noter** : si un entretien fait ensuite parler cette même
+     voix (essai 68). Remettez le fichier.
    - Si ce n'est pas le cas, noter : la phrase vue, une ligne sans titre ou sans détail, une coche sur deux lignes.
 
 ### 98. Onglet Entretien : la ligne « Voix » (sans micro, sans son)
@@ -2556,7 +2574,8 @@ modèle, identifiant, paramètres.
 8. Facultatif : dix-sept paramètres, de clés toutes différentes.
    - Attendu : « Une voix a au plus 16 paramètres : retirez-en. » (construite ; 16 est un choix non mesuré).
    - À chaque refus : la bande ne déplace aucun bouton ; le refus reste affiché tant que la feuille est ouverte, jusqu'au
-     prochain « Enregistrer ». « Annuler » ou Échap ferme la feuille sans rien écrire (la liste ne change pas).
+     prochain « Enregistrer ». Il ne se lit que dans la feuille : la bande de l'onglet, derrière elle, ne le montre pas (écrit
+     et testé hors écran, jamais vu avec une feuille présentée). « Annuler » ou Échap ferme la feuille sans rien écrire (la liste ne change pas).
    - Si ce n'est pas le cas, noter : la phrase vue, une phrase coupée dans la bande, un bouton qui bouge.
 
 ### 101. Utiliser, modifier, supprimer une voix (sans micro, sans son)
@@ -2577,7 +2596,9 @@ Avec la voix d'essai de l'essai 99.
      défaut, comme dans l'Historique) : **à noter si ça surprend**.
 4. Confirmez par « Supprimer ».
    - Attendu : la voix disparaît, la coche revient sur « Automatique », aucune ligne n'est choisie, et la bande dit « La voix
-     supprimée était la voix en vigueur : Supervox reprend la voix automatique du système, en français. ».
+     supprimée était la voix en vigueur : Supervox reprend la voix automatique du système, en français. ». Choisissez ensuite
+     une ligne : l'avis disparaît, la bande dit ce que l'écoute de cette ligne envoie (pour une voix du système, « Écouter
+     cette voix n'envoie rien : elle est produite sur cet ordinateur. »).
 5. Ajoutez de nouveau une voix (essai 99), choisissez-la **sans** « Utiliser cette voix », puis « Supprimer… ».
    - Attendu : la confirmation n'a que la première phrase : « Supprimer la voix « <nom de la voix> » ? ». Confirmez : la voix
      disparaît, la coche reste sur « Automatique », aucun message dans la bande. Supprimez de la même façon les autres voix
@@ -2587,7 +2608,10 @@ Avec la voix d'essai de l'essai 99.
    l'onglet Voix.
    - Attendu : la ligne dit « Fournisseur supprimé · <modèle> · <langue en clair> » (construit), avec le triangle orange et « Le
      fournisseur de cette voix a été supprimé : choisissez-en un autre en modifiant la voix. » ; « Utiliser cette voix » est
-     grisé ; la bande dit « Cette voix ne peut pas parler : l'écouter n'envoie rien. ». Supprimez la voix.
+     grisé ; la bande dit « Cette voix ne peut pas parler : l'écouter n'envoie rien. ». Supprimez la voix. Sur une ligne « Voix
+     en vigueur » (une voix écrite à la main dans `settings.json`, absente de la liste), qui ne se modifie pas, l'écoute dit
+     à la place « Le fournisseur de cette voix a été supprimé : choisissez une autre voix. » (écrit et testé hors écran,
+     jamais vu).
    - Si ce n'est pas le cas, noter : la phrase vue, une coche perdue ou restée sur deux lignes, une voix qui reste après la
      confirmation.
 
@@ -2606,7 +2630,8 @@ Avec la voix d'essai de l'essai 99.
    chemin vers l'Historique.
    - Attendu : la confirmation est annulée, la voix n'est pas supprimée.
 4. Avec une feuille ouverte (éditeur ou confirmation), cliquez sur la croix de la fenêtre.
-   - Attendu (code lu, non vu) : la fenêtre ne se ferme pas : une fenêtre qui porte une feuille ne se ferme pas. Fermez
+   - Attendu (comportement du système attendu, non vérifié) : la fenêtre ne se ferme pas : une fenêtre qui porte une feuille
+     ne se ferme pas. Fermez
      d'abord la feuille.
    - Si ce n'est pas le cas, noter : la feuille rouverte au retour, une saisie gardée, une fenêtre fermée avec sa feuille.
 
@@ -2847,5 +2872,5 @@ puis pour une voix de fournisseur ; le nombre de demandes du trousseau à l'éco
 (« Arrêter », autre onglet, autre application, micro qui s'ouvre) ; si la voix d'essai a sonné « téléphone » après une dictée
 annulée ; si le compteur de fins de secours du lecteur était à 0 ; si la liste a défilé jusqu'à la voix qu'on vient
 d'enregistrer, avec votre vraie liste ; ce qui est arrivé à la feuille de l'éditeur quand vous avez quitté l'onglet ; ce que
-VoiceOver a dit ou tu dans l'onglet Voix ; si l'écart entre les boutons de l'onglet Voix, et les boutons d'ajout de
-Fournisseurs et de Modes, vous ont gêné.
+VoiceOver a dit ou tu dans l'onglet Voix ; si l'écart entre les boutons de l'onglet Voix vous a gêné, et si quelque chose se
+lisait sous la barre des boutons d'ajout de Fournisseurs et de Modes.

@@ -114,8 +114,8 @@ open build/Supervox.app
   lancement ; ce n'est pas l'accueil d'un nouvel utilisateur.
 - Les réglages (huit onglets : fournisseurs, raccourci, permissions, transcription, modes, entretien, voix, historique) s'ouvrent
   par « Réglages… », dans le menu « … » du panneau ou dans celui de l'icône de la barre de menus ; « Historique… », dans le menu
-  « … » du panneau, ouvre la fenêtre sur l'onglet Historique. La fenêtre fait 860 points de large sur 460 (la hauteur est un
-  choix non mesuré) : la barre de huit onglets demande 804 à 808 points selon la machine, **mesurés hors écran dans une fenêtre
+  « … » du panneau, ouvre la fenêtre sur l'onglet Historique. Le contenu de la fenêtre est demandé à 860 points de large sur 460
+  (la hauteur est un choix non mesuré ; taille demandée, jamais mesurée sur une vraie fenêtre) : la barre de huit onglets demande 804 à 808 points selon la machine, **mesurés hors écran dans une fenêtre
   jamais affichée** ;
   elle n'a jamais été vue affichée. Avec sept onglets, la barre dépassait déjà les 600 points de l'ancienne fenêtre (environ
   703 points d'après une sonde hors écran, non conservée dans le dépôt).
@@ -689,7 +689,8 @@ ni la vraie liste des voix, ni une écoute entendue, ni une voix de fournisseur 
   d'une dictée annulée, le micro peut encore être en train de se fermer ; rien n'est gardé de ce son, mais un casque Bluetooth
   peut rester un instant en mode appel.
 - **Une voix du système désinstallée.** L'onglet la montre (ligne « Voix en vigueur » avec sa note), l'écoute dit qu'elle n'est
-  pas installée et ne fait parler aucune autre voix ; un entretien, lui, prend la meilleure voix de la langue, sans avis (il ne
+  pas installée et ne fait parler aucune autre voix. La voix automatique d'une région dont aucune voix n'est installée n'est pas
+  dite désinstallée : sa note nomme la voix de la même langue qui parle (règle du synthétiseur) ; un entretien, lui, prend la meilleure voix de la langue, sans avis (il ne
   doit jamais se taire).
 - **Quitter l'onglet** (autre onglet, autre application, fenêtre fermée) arrête l'écoute ; changer d'onglet ou voir le volet
   disparaître annule aussi la confirmation et abandonne l'éditeur ouvert (écrit et testé hors écran, jamais vu avec une feuille
@@ -702,7 +703,8 @@ ni la vraie liste des voix, ni une écoute entendue, ni une voix de fournisseur 
 
 - **Écouter une voix du système n'envoie rien** : elle est produite sur l'ordinateur.
 - **Écouter une voix de fournisseur envoie la phrase d'essai** (fixe, rien de vous) **à ce fournisseur et lit sa clé dans le
-  trousseau** : une demande du trousseau peut apparaître. La bande de l'onglet le dit avant l'écoute. Une voix qui ne peut pas
+  trousseau** : une demande du trousseau peut apparaître. La bande de l'onglet le dit avant l'écoute, dès que la ligne est
+  choisie : un avis plus ancien s'efface au changement de ligne (sauf pendant que l'éditeur est ouvert). Une voix qui ne peut pas
   parler n'envoie rien et le dit.
 - **L'entretien**, avec une voix de fournisseur, envoie chaque phrase de Supervox à ce fournisseur (voir « Entretien », « Vie
   privée (D11) »). Les voix enregistrées (noms, modèles, identifiants, paramètres) sont dans `settings.json`, en clair : n'y mettez

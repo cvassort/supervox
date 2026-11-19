@@ -297,7 +297,7 @@ public struct SettingsView: View {
     /// La taille de la fenêtre de réglages, en points : fixe. Les onglets s'y règlent sans que la fenêtre grandisse ; les images de
     /// l'outil de rendu et les mesures de hauteur la lisent ici. Largeur : la barre de huit onglets demande 804 à 808 points selon
     /// la machine (taille propre de son contrôle segmenté, mesurée hors écran dans une fenêtre jamais affichée par
-    /// `SettingsTabBarTests` : 804 sur la machine de construction, 808 chez le contrôleur), plus 20 points de marge de chaque
+    /// `SettingsTabBarTests` : 804 sur la machine de construction, 808 sur le lanceur), plus 20 points de marge de chaque
     /// côté, arrondi au multiple de 20 au-dessus : 860 dans les deux cas. Hauteur : 460, choix non mesuré.
     public static let windowSize = CGSize(width: 860, height: 460)
 

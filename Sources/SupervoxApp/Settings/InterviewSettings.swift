@@ -147,10 +147,12 @@ public enum VoiceGender: Codable, Equatable, Sendable {
     }
 }
 
-/// La voix de l'assistant, enregistrée dans `settings.json` sous `voice` (version 3). Aucun écran ne la modifie à l'étape 6.
+/// La voix de l'assistant, enregistrée dans `settings.json` sous `voice` (version 3). L'onglet Voix l'écrit depuis l'étape 7
+/// (« Utiliser cette voix », et la modification ou la suppression de la voix en vigueur) ; le fichier se modifie aussi à la main.
 ///
 /// `providerID` `nil` : une voix du système. `identifier` `nil` : la meilleure voix du système pour `language`. `extra` : des
-/// paramètres libres envoyés tels quels au fournisseur (design 6.5). Un champ absent ou d'une autre forme prend son défaut (un
+/// paramètres libres envoyés au fournisseur (design 6.5), sous leur forme normalisée (`normalized`) : clés rognées, clés vides
+/// et clés réservées écartées, au plus `maxExtraEntries`. Un champ absent ou d'une autre forme prend son défaut (un
 /// fournisseur illisible donne donc la voix du système) ; un champ inconnu est gardé et réécrit tel quel.
 public struct VoiceChoice: Codable, Equatable, Sendable {
     public var providerID: UUID?
