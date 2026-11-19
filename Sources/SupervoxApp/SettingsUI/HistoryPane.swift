@@ -165,7 +165,8 @@ public struct HistoryPane: View {
     // MARK: - Emplacement du message
 
     /// Hauteur de l'emplacement du message, en points : deux lignes de texte courant (la phrase la plus longue de l'onglet tient sur
-    /// deux lignes à 600 points de large : vu en image) et ses marges. Choix non mesuré. Un message plus long est coupé en fin de
+    /// deux lignes : vu en image quand la fenêtre faisait 600 points de large ; elle en fait 860 depuis, `SettingsView.windowSize`,
+    /// et, plus large, une phrase ne prend pas plus de lignes) et ses marges. Choix non mesuré. Un message plus long est coupé en fin de
     /// ligne ; son texte entier reste dans l'infobulle et pour VoiceOver.
     static let messageSlotHeight: CGFloat = 44
 

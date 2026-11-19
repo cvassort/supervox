@@ -594,7 +594,7 @@ Les essais ci-dessous sont faits pour les regarder.
 
 1. Ouvrez « Réglages… » (menu de l'icône) et regardez la barre des onglets.
    - Attendu : cinq onglets, Fournisseurs, Raccourci, Permissions, Transcription et Modes, tous lisibles, aucun coupé ni
-     caché. **Comportement à confirmer** : la fenêtre a une taille fixe (600 sur 460 points) ; jamais vue à l'écran avec
+     caché. **Comportement à confirmer** : la fenêtre a une taille fixe (860 sur 460 points) ; jamais vue à l'écran avec
      sa barre d'onglets.
 2. Ouvrez l'onglet Modes.
    - Attendu : une phrase d'explication en haut (« Un mode dit ce que devient le texte dicté… »), une section « Modèles »
