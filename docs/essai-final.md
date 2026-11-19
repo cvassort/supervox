@@ -2491,15 +2491,17 @@ Dit sans détour : rien de ce qui suit n'a été vu tourner sur du matériel ré
 5. Regardez la rangée de boutons : « Utiliser cette voix » et « Écouter » à gauche, les trois autres à droite.
    - Attendu : même forme que l'onglet Historique. **À noter si l'écart entre les deux groupes gêne** (environ 267 points sur
      l'image, non mesuré).
-6. **La voix automatique d'une région sans voix.** Dans le sélecteur « Langue », trouvez une région d'une de vos langues dont
-   vous n'avez **aucune** voix (par exemple le français de Belgique, code `fr-BE`, s'il est absent de la liste). Supervox fermé, copiez
+6. **La voix automatique d'une région sans voix.** Ouvrez le sélecteur « Langue » et repérez une région d'une de vos langues
+   qui **n'y figure pas** : une langue sans aucune voix installée ni enregistrée n'est pas dans ce sélecteur (code lu). Par
+   exemple le français de Belgique, code `fr-BE`, s'il n'y est pas ; sinon une autre région absente. Supervox fermé, copiez
    `settings.json`, puis mettez dans « voice » `"language" : "fr-BE"` (sans `identifier` ni `providerID`). Relancez, ouvrez
    l'onglet Voix.
    - Attendu : en tête de la section « Voix du système », une ligne « Voix en vigueur » avec le triangle et « Supervox parle
      avec « <nom> », la meilleure voix installée pour cette langue. » (construite : le nom est celui de la voix française que
      Supervox prend, langue exacte d'abord, puis même langue), **jamais** « Cette voix n'est plus installée sur cet ordinateur. ».
-     Écrit et testé hors écran (`VoicesModelTests`), jamais vu. **À noter** : si un entretien fait ensuite parler cette même
-     voix (essai 68). Remettez le fichier.
+     Écrit et testé hors écran (`VoicesModelTests`), jamais vu. Remettez le fichier. Facultatif, et hors de cet essai parce
+     qu'il ouvre le micro et joue un son : avant de remettre le fichier, faites l'essai 68 et notez si l'entretien parle avec
+     cette même voix.
    - Si ce n'est pas le cas, noter : la phrase vue, une ligne sans titre ou sans détail, une coche sur deux lignes.
 
 ### 98. Onglet Entretien : la ligne « Voix » (sans micro, sans son)
@@ -2608,10 +2610,10 @@ Avec la voix d'essai de l'essai 99.
    l'onglet Voix.
    - Attendu : la ligne dit « Fournisseur supprimé · <modèle> · <langue en clair> » (construit), avec le triangle orange et « Le
      fournisseur de cette voix a été supprimé : choisissez-en un autre en modifiant la voix. » ; « Utiliser cette voix » est
-     grisé ; la bande dit « Cette voix ne peut pas parler : l'écouter n'envoie rien. ». Supprimez la voix. Sur une ligne « Voix
-     en vigueur » (une voix écrite à la main dans `settings.json`, absente de la liste), qui ne se modifie pas, l'écoute dit
-     à la place « Le fournisseur de cette voix a été supprimé : choisissez une autre voix. » (écrit et testé hors écran,
-     jamais vu).
+     grisé ; la bande dit « Cette voix ne peut pas parler : l'écouter n'envoie rien. ». Supprimez la voix. Pas à essayer, faute de
+     recette simple : sur une ligne « Voix en vigueur » (une voix de fournisseur présente dans « voice » mais absente de
+     « voices », ce qui n'arrive qu'avec un fichier modifié à la main), qui ne se modifie pas, l'écoute dit à la place « Le
+     fournisseur de cette voix a été supprimé : choisissez une autre voix. » (écrit et testé hors écran, jamais vu).
    - Si ce n'est pas le cas, noter : la phrase vue, une coche perdue ou restée sur deux lignes, une voix qui reste après la
      confirmation.
 

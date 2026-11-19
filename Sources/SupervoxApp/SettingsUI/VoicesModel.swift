@@ -127,9 +127,9 @@ public final class VoicesModel {
     /// choisie) ; brouillon ouvert, `message` est le refus que l'éditeur montre et reste.
     ///
     /// Les gestes qui changent la sélection PAR PROGRAMME (suppression confirmée, `save()`, `dropHiddenSelection`) le font AVANT de
-    /// poser leur avis, ou n'en posent pas : l'effacement ne touche jamais l'avis que le geste vient de poser. Tenu par les tests
-    /// `theDeletionNoticeSurvivesTheSelectionChangeOfTheDeletion`, `aSuccessfulSaveThatMovesTheSelectionKeepsWhatItShows` et
-    /// `aRefusedSaveKeepsItsRefusal`.
+    /// poser leur avis, ou n'en posent pas : l'effacement ne touche jamais l'avis que le geste vient de poser. Cet ordre n'est tenu
+    /// que par le test `theDeletionNoticeSurvivesTheSelectionChangeOfTheDeletion` ; `aSuccessfulSaveThatMovesTheSelectionKeepsWhatItShows`
+    /// et `aRefusedSaveKeepsItsRefusal` décrivent ce que ces deux gestes montrent, sans passer par cet effacement.
     public var selection: Row.ID? {
         didSet {
             guard selection != oldValue else { return }
