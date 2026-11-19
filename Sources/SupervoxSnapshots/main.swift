@@ -978,14 +978,14 @@ for dark in [false, true] {
             interview: ExampleInterview().makeModel(), voices: ExampleVoices().makeModel()),
         name: "reglages-entretien", dark: dark, background: window, size: settingsSize)
     try render(
-        InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true)
+        InterviewPane(model: ExampleInterview().makeModel(), advancedExpanded: true, chooseVoice: {})
             .frame(width: settingsSize.width, height: settingsSize.height),
         name: "reglages-entretien-avance", dark: dark, background: window, size: settingsSize)
     try render(
         InterviewPane(model: ExampleInterview().makeModel(), chooseVoice: {}).frame(width: settingsSize.width, height: 760),
         name: "reglages-entretien-complet", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 760))
     try render(
-        InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true)
+        InterviewPane(model: ExampleInterview(customInterviewSettings()).makeModel(), advancedExpanded: true, chooseVoice: {})
             .frame(width: settingsSize.width, height: 1_000),
         name: "reglages-entretien-regle-complet", dark: dark, background: window, size: NSSize(width: settingsSize.width, height: 1_000))
     let interviewRefusing = ExampleInterview()
