@@ -416,6 +416,73 @@ import Testing
         #expect(model.draft == nil, "après « Annuler », une écriture tardive est ignorée")
     }
 
+    // MARK: - T1 (tour 3) : les champs des paramètres sont liés par identifiant
+
+    /// T1 (J1) : une liaison gardée vers le DERNIER paramètre, après le retrait de ce paramètre, lit une chaîne vide et n'écrit
+    /// rien (une liaison par indice lirait hors du tableau). Les autres paramètres ne bougent pas.
+    @Test func aKeptParameterBindingSurvivesTheRemovalOfItsParameter() throws {
+        let model = editing(3)
+        let last = try #require(model.draft?.parameters.last)
+        let key = VoiceEditor.parameterBinding(model, id: last.id, \.key)
+        let value = VoiceEditor.parameterBinding(model, id: last.id, \.value)
+        #expect(key.wrappedValue == "cle-exemple-2" && value.wrappedValue == "valeur-exemple")
+        key.wrappedValue = "cle-exemple-b"
+        #expect(model.draft?.parameters.last?.key == "cle-exemple-b", "avec son paramètre, la liaison écrit")
+
+        model.editDraft { $0.parameters.removeAll { $0.id == last.id } }
+        let before = model.draft
+        #expect(key.wrappedValue == "" && value.wrappedValue == "", "plus de paramètre : rien à lire")
+        key.wrappedValue = "cle-exemple-c"
+        value.wrappedValue = "valeur-exemple-c"
+        #expect(model.draft == before, "plus de paramètre : rien n'est écrit")
+        #expect(model.draft?.parameters.map(\.key) == ["cle-exemple-0", "cle-exemple-1"])
+    }
+
+    /// T1 : sans brouillon (après « Enregistrer » ou « Annuler »), la liaison d'un paramètre lit vide et son écriture tardive ne
+    /// recrée rien (même règle que R2).
+    @Test func aLateParameterWriteNeverRecreatesADraft() throws {
+        let model = editing(2)
+        let first = try #require(model.draft?.parameters.first)
+        let key = VoiceEditor.parameterBinding(model, id: first.id, \.key)
+        model.draft = nil
+        #expect(key.wrappedValue == "")
+        key.wrappedValue = "cle-exemple-c"
+        #expect(model.draft == nil, "sans brouillon, rien n'est recréé")
+        #expect(VoicesPane.sheet(for: model) == nil)
+    }
+
+    /// Les textes des champs de saisie d'AppKit sous `view`, dans l'ordre de l'arbre.
+    static func fieldTexts(in view: NSView) -> [String] {
+        var texts: [String] = []
+        if let field = view as? NSTextField, field.isEditable { texts.append(field.stringValue) }
+        for subview in view.subviews { texts += fieldTexts(in: subview) }
+        return texts
+    }
+
+    /// T1 : éditeur POSÉ hors écran avec trois paramètres ; on retire celui du milieu, puis le dernier, avec des passages de la
+    /// boucle entre les deux : la vue se redispose sans plantage, et les lignes restantes gardent leurs valeurs.
+    @Test func removingParametersFromALaidOutEditorKeepsTheOthers() throws {
+        let model = editing(3)
+        let (_, host, window) = try measureEditor(model)
+        defer { withExtendedLifetime(window) {} }
+        let ids = try #require(model.draft?.parameters.map(\.id))
+        #expect(Self.fieldTexts(in: host).contains("cle-exemple-1"), "\(Self.fieldTexts(in: host))")
+
+        model.editDraft { $0.parameters.removeAll { $0.id == ids[1] } }
+        for _ in 0..<100 { pumpOnce(host) }
+        var texts = Self.fieldTexts(in: host)
+        #expect(texts.contains("cle-exemple-0") && texts.contains("cle-exemple-2"), "\(texts)")
+        #expect(!texts.contains("cle-exemple-1"), "\(texts)")
+        #expect(model.draft?.parameters.map(\.key) == ["cle-exemple-0", "cle-exemple-2"])
+
+        model.editDraft { $0.parameters.removeAll { $0.id == ids[2] } }
+        for _ in 0..<100 { pumpOnce(host) }
+        texts = Self.fieldTexts(in: host)
+        #expect(texts.contains("cle-exemple-0") && !texts.contains("cle-exemple-2"), "\(texts)")
+        #expect(texts.filter { $0 == "valeur-exemple" }.count == 1, "\(texts)")
+        #expect(model.draft?.parameters.map(\.key) == ["cle-exemple-0"])
+    }
+
     // MARK: - Décisions 3 à 5 : ce que la vue montre
 
     /// La coche et le haut-parleur sont à la couleur d'accent, sauf sur la ligne surlignée (fond déjà à la couleur d'accent : vu

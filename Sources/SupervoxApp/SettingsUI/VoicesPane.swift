@@ -589,11 +589,11 @@ public struct VoiceEditor: View {
             if count > 0 {
                 ScrollView(.vertical) {
                     VStack(spacing: Self.parameterSpacing) {
-                        ForEach(Array(draft.parameters.enumerated()), id: \.element.id) { index, $parameter in
+                        ForEach(Array(draft.wrappedValue.parameters.enumerated()), id: \.element.id) { index, parameter in
                             HStack(spacing: 8) {
-                                TextField(VoicesText.keyField, text: $parameter.key)
+                                TextField(VoicesText.keyField, text: Self.parameterBinding(model, id: parameter.id, \.key))
                                     .accessibilityLabel(VoicesText.parameterKeyLabel(index + 1))
-                                TextField(VoicesText.valueField, text: $parameter.value)
+                                TextField(VoicesText.valueField, text: Self.parameterBinding(model, id: parameter.id, \.value))
                                     .accessibilityLabel(VoicesText.parameterValueLabel(index + 1))
                                 Button {
                                     model.editDraft { $0.parameters.removeAll { $0.id == parameter.id } }
@@ -630,6 +630,25 @@ public struct VoiceEditor: View {
     /// cours, l'écriture est ignorée : R2).
     static func draftBinding(_ model: VoicesModel) -> Binding<VoicesModel.VoiceDraft> {
         Binding(get: { model.draft ?? VoicesModel.VoiceDraft() }, set: { new in model.editDraft { $0 = new } })
+    }
+
+    /// La liaison d'un champ de paramètre (T1, tour 3), PAR IDENTIFIANT et non par indice : elle lit la clé (ou la valeur) du
+    /// paramètre `id` du brouillon, chaîne vide s'il n'existe plus ; elle écrit par `VoicesModel.editDraft`, en retrouvant le
+    /// paramètre par `id`, et n'écrit rien s'il n'existe plus (ni brouillon, ni paramètre). Une liaison d'élément de collection
+    /// lisait `parameters[indice]` : gardée par un champ après le retrait de sa ligne, elle sortait du tableau (mesuré : le
+    /// processus de test tombe, « Index out of range »).
+    static func parameterBinding(
+        _ model: VoicesModel, id: VoicesModel.VoiceDraft.Parameter.ID,
+        _ field: WritableKeyPath<VoicesModel.VoiceDraft.Parameter, String> & Sendable
+    ) -> Binding<String> {
+        Binding(
+            get: { model.draft?.parameters.first { $0.id == id }?[keyPath: field] ?? "" },
+            set: { new in
+                model.editDraft { draft in
+                    guard let index = draft.parameters.firstIndex(where: { $0.id == id }) else { return }
+                    draft.parameters[index][keyPath: field] = new
+                }
+            })
     }
 
     public var body: some View {
