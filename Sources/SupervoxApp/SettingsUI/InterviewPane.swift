@@ -17,24 +17,32 @@ public struct InterviewPane: View {
     private let onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)?
     /// « Choisir la voix… » : mène à l'onglet Voix ; `nil` : pas de ligne « Voix » (pas d'onglet Voix).
     private let chooseVoice: (@MainActor () -> Void)?
-    /// Mesure : reçoit le bas de la ligne « Voix », en points depuis le haut du volet (défilement à zéro) ; `nil` en production.
-    private let onVoiceRowBottom: (@MainActor (CGFloat) -> Void)?
+    /// Mesure : reçoit le cadre de la ligne « Voix », puis celui de la phrase d'introduction, en points dans le repère du volet
+    /// (défilement à zéro) ; `nil` en production.
+    private let onVoiceRowFrame: (@MainActor (CGRect) -> Void)?
+    private let onIntroductionFrame: (@MainActor (CGRect) -> Void)?
 
     public init(
         model: InterviewSettingsModel, advancedExpanded: Bool = false, chooseVoice: (@MainActor () -> Void)? = nil,
         onAdvancedHeadingBottom: (@MainActor (CGFloat) -> Void)? = nil,
-        onVoiceRowBottom: (@MainActor (CGFloat) -> Void)? = nil
+        onVoiceRowFrame: (@MainActor (CGRect) -> Void)? = nil,
+        onIntroductionFrame: (@MainActor (CGRect) -> Void)? = nil
     ) {
         self.model = model
         _advancedExpanded = State(initialValue: advancedExpanded)
         self.chooseVoice = chooseVoice
         self.onAdvancedHeadingBottom = onAdvancedHeadingBottom
-        self.onVoiceRowBottom = onVoiceRowBottom
+        self.onVoiceRowFrame = onVoiceRowFrame
+        self.onIntroductionFrame = onIntroductionFrame
     }
 
     /// Hauteur du champ du gabarit, en points : environ cinq lignes du texte courant. Choix non mesuré, vu en image. Un gabarit plus
     /// long défile dans le champ.
     static let templateFieldHeight: CGFloat = 88
+    /// Largeur utile de l'introduction et du formulaire, en points : celle où les cartes du formulaire groupé gardent leur marge
+    /// de 20 points et l'introduction tombe sur leurs lignes (mesuré par `theIntroductionLinesUpWithTheFormRows`). Choix vu en
+    /// image à 860 points de fenêtre.
+    static let contentMaxWidth: CGFloat = 740
     static let coordinateSpaceName = "interviewPane"
 
     public var body: some View {
@@ -47,80 +55,90 @@ public struct InterviewPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.bar)
             }
-            // L'introduction est une phrase au-dessus du formulaire, hors carte : une carte de plus coûterait une quarantaine de points
-            // à une fenêtre de hauteur fixe.
-            note(InterviewSettingsModel.introduction)
-                .padding(.horizontal, 28)
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Form {
-                Section {
-                    // La note du nombre de questions est le sous-titre de sa ligne (pas une rangée à part) : la ligne « Voix » tient
-                    // alors sous elle sans pousser l'intitulé « Réglages avancés » hors de la hauteur visible (mesuré, tâche 4, D).
-                    stepperRow(
-                        InterviewSettingsModel.maxQuestionsTitle, caption: InterviewSettingsModel.maxQuestionsNote,
-                        value: "\(model.maxQuestions)"
-                    ) {
-                        Stepper(
-                            InterviewSettingsModel.maxQuestionsTitle, value: $model.maxQuestions, in: model.maxQuestionsRange)
-                    }
-                    // La voix de Supervox se choisit dans l'onglet Voix : une ligne du premier groupe, visible sans défiler.
-                    if let chooseVoice {
-                        LabeledContent(VoicesText.voiceRowTitle) {
-                            HStack(spacing: 12) {
-                                Text(VoicesText.voiceRowCaption).foregroundStyle(.secondary)
-                                Button(VoicesText.chooseVoiceTitle, action: chooseVoice)
-                            }
+            // L'introduction et le formulaire dans une colonne de largeur bornée, centrée : le formulaire groupé plafonne déjà ses
+            // cartes, et l'introduction s'aligne ainsi sur ses lignes au lieu de rester au bord de la fenêtre (vu à 860 points).
+            VStack(spacing: 0) {
+                // L'introduction est une phrase au-dessus du formulaire, hors carte : une carte de plus coûterait une quarantaine de points
+                // à une fenêtre de hauteur fixe.
+                note(InterviewSettingsModel.introduction)
+                    .background(introductionProbe)
+                    .padding(.horizontal, 28)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Form {
+                    Section {
+                        // La note du nombre de questions est le sous-titre de sa ligne (pas une rangée à part) : la ligne « Voix » tient
+                        // alors sous elle sans pousser l'intitulé « Réglages avancés » hors de la hauteur visible (mesuré, tâche 4, D).
+                        stepperRow(
+                            InterviewSettingsModel.maxQuestionsTitle, caption: InterviewSettingsModel.maxQuestionsNote,
+                            value: "\(model.maxQuestions)"
+                        ) {
+                            Stepper(
+                                InterviewSettingsModel.maxQuestionsTitle, value: $model.maxQuestions, in: model.maxQuestionsRange)
                         }
-                        .background(voiceRowProbe)
+                        // La voix de Supervox se choisit dans l'onglet Voix : une ligne du premier groupe, visible sans défiler.
+                        if let chooseVoice {
+                            LabeledContent(VoicesText.voiceRowTitle) {
+                                HStack(spacing: 12) {
+                                    Text(VoicesText.voiceRowCaption).foregroundStyle(.secondary)
+                                    Button(VoicesText.chooseVoiceTitle, action: chooseVoice)
+                                }
+                            }
+                            .background(voiceRowProbe)
+                        }
+                    }
+                    Section {
+                        TextEditor(text: $model.template)
+                            .font(.body)
+                            .frame(height: Self.templateFieldHeight)
+                            .accessibilityLabel(InterviewSettingsModel.templateTitle)
+                            .focused($templateFocused)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
+                        note(InterviewSettingsModel.templateNote)
+                    } header: {
+                        // Le bouton est sur la ligne du titre : il ne prend pas une rangée de plus (hauteur de fenêtre fixe).
+                        HStack {
+                            Text(InterviewSettingsModel.templateTitle)
+                            Spacer(minLength: 8)
+                            Button(InterviewSettingsModel.restoreTemplateTitle) { model.restoreTemplate() }
+                                .controlSize(.small)
+                                .disabled(model.isDefaultTemplate)
+                        }
+                    }
+                    Section {
+                        DisclosureGroup(isExpanded: $advancedExpanded) {
+                            advanced
+                        } label: {
+                            Text(InterviewSettingsModel.advancedTitle)
+                                .background(headingProbe)
+                        }
+                    }
+                    Section {
+                        note(InterviewSettingsModel.introductionRest)
+                        note(InterviewSettingsModel.modelsNote)
+                        Label(model.privacyText, systemImage: "lock.shield")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let holdNote = model.holdNote {
+                            note(holdNote)
+                        }
                     }
                 }
-                Section {
-                    TextEditor(text: $model.template)
-                        .font(.body)
-                        .frame(height: Self.templateFieldHeight)
-                        .accessibilityLabel(InterviewSettingsModel.templateTitle)
-                        .focused($templateFocused)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator))
-                    note(InterviewSettingsModel.templateNote)
-                } header: {
-                    // Le bouton est sur la ligne du titre : il ne prend pas une rangée de plus (hauteur de fenêtre fixe).
-                    HStack {
-                        Text(InterviewSettingsModel.templateTitle)
-                        Spacer(minLength: 8)
-                        Button(InterviewSettingsModel.restoreTemplateTitle) { model.restoreTemplate() }
-                            .controlSize(.small)
-                            .disabled(model.isDefaultTemplate)
-                    }
-                }
-                Section {
-                    DisclosureGroup(isExpanded: $advancedExpanded) {
-                        advanced
-                    } label: {
-                        Text(InterviewSettingsModel.advancedTitle)
-                            .background(headingProbe)
-                    }
-                }
-                Section {
-                    note(InterviewSettingsModel.introductionRest)
-                    note(InterviewSettingsModel.modelsNote)
-                    Label(model.privacyText, systemImage: "lock.shield")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let holdNote = model.holdNote {
-                        note(holdNote)
-                    }
-                }
+                .formStyle(.grouped)
             }
-            .formStyle(.grouped)
+            .frame(maxWidth: Self.contentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
         .coordinateSpace(name: Self.coordinateSpaceName)
         .onPreferenceChange(AdvancedHeadingBottomKey.self) { bottom in
             if let bottom { onAdvancedHeadingBottom?(bottom) }
         }
-        .onPreferenceChange(VoiceRowBottomKey.self) { bottom in
-            if let bottom { onVoiceRowBottom?(bottom) }
+        .onPreferenceChange(VoiceRowFrameKey.self) { frame in
+            if let frame { onVoiceRowFrame?(frame) }
+        }
+        .onPreferenceChange(IntroductionFrameKey.self) { frame in
+            if let frame { onIntroductionFrame?(frame) }
         }
         // Un réglage ajouté ailleurs pendant que la fenêtre était gardée s'y voit à chaque affichage de l'onglet.
         .onAppear { model.reload() }
@@ -139,13 +157,21 @@ public struct InterviewPane: View {
         }
     }
 
-    /// Rapporte le bas de la ligne « Voix » (seulement quand quelqu'un mesure).
+    /// Rapporte le cadre de la ligne « Voix » (seulement quand quelqu'un mesure).
     private var voiceRowProbe: some View {
         GeometryReader { geometry in
             Color.clear.preference(
-                key: VoiceRowBottomKey.self,
-                value: onVoiceRowBottom == nil
-                    ? nil : geometry.frame(in: .named(Self.coordinateSpaceName)).maxY)
+                key: VoiceRowFrameKey.self,
+                value: onVoiceRowFrame == nil ? nil : geometry.frame(in: .named(Self.coordinateSpaceName)))
+        }
+    }
+
+    /// Rapporte le cadre de la phrase d'introduction (seulement quand quelqu'un mesure).
+    private var introductionProbe: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: IntroductionFrameKey.self,
+                value: onIntroductionFrame == nil ? nil : geometry.frame(in: .named(Self.coordinateSpaceName)))
         }
     }
 
@@ -210,8 +236,14 @@ private struct AdvancedHeadingBottomKey: PreferenceKey {
     static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
 }
 
-/// Le bas de la ligne « Voix » dans le repère du volet ; `nil` quand personne ne mesure.
-private struct VoiceRowBottomKey: PreferenceKey {
-    static let defaultValue: CGFloat? = nil
-    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) { value = nextValue() ?? value }
+/// Le cadre de la ligne « Voix » dans le repère du volet ; `nil` quand personne ne mesure.
+private struct VoiceRowFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) { value = nextValue() ?? value }
+}
+
+/// Le cadre de la phrase d'introduction dans le repère du volet ; `nil` quand personne ne mesure.
+private struct IntroductionFrameKey: PreferenceKey {
+    static let defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) { value = nextValue() ?? value }
 }

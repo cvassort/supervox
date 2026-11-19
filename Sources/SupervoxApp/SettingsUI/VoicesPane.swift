@@ -463,10 +463,14 @@ public struct VoiceEditor: View {
     static let parameterRowHeight: CGFloat = 24
     static let parameterSpacing: CGFloat = 6
 
-    /// La hauteur de la zone visible des paramètres : jusqu'à `visibleParameterRows` lignes, puis elle défile.
+    /// Retrait des lignes dans la zone qui défile, en points : la zone rogne ce qui dépasse, et le bord arrondi des champs touchait
+    /// ses bords (vu dans l'image de l'éditeur, tour 2).
+    static let parameterInset = CGSize(width: 3, height: 2)
+
+    /// La hauteur de la zone visible des paramètres : jusqu'à `visibleParameterRows` lignes et leur retrait, puis elle défile.
     static func parametersViewportHeight(count: Int) -> CGFloat {
         let shown = min(max(count, 0), visibleParameterRows)
-        return CGFloat(shown) * parameterRowHeight + CGFloat(max(shown - 1, 0)) * parameterSpacing
+        return CGFloat(shown) * parameterRowHeight + CGFloat(max(shown - 1, 0)) * parameterSpacing + 2 * parameterInset.height
     }
 
     /// Les six champs, sur une grille : ils ne défilent jamais.
@@ -572,6 +576,8 @@ public struct VoiceEditor: View {
                         }
                     }
                     .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, Self.parameterInset.width)
+                    .padding(.vertical, Self.parameterInset.height)
                 }
                 .frame(height: Self.parametersViewportHeight(count: count))
                 .background(frameProbe(.parametersViewport))

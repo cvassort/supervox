@@ -84,7 +84,7 @@ import Testing
         func buttonBottom(_ chooseVoice: (@MainActor () -> Void)?) -> CGFloat? {
             var measured: CGFloat?
             let height = SettingsView.windowSize.height
-            let pane = InterviewPane(model: model(), chooseVoice: chooseVoice, onVoiceRowBottom: { measured = $0 })
+            let pane = InterviewPane(model: model(), chooseVoice: chooseVoice, onVoiceRowFrame: { measured = $0.maxY })
             let host = NSHostingView(rootView: pane.frame(width: SettingsView.windowSize.width, height: height))
             host.frame = NSRect(x: 0, y: 0, width: SettingsView.windowSize.width, height: height)
             for _ in 0..<300 {
@@ -102,6 +102,26 @@ import Testing
         #expect(bottom < heading, "la ligne « Voix » est au-dessus de l'intitulé « Réglages avancés » (premier groupe)")
         let withoutVoices = buttonBottom(nil)
         #expect(withoutVoices == nil, "sans onglet Voix, pas de bouton")
+    }
+
+    /// Vu dans l'image à 860 points (tâche 4, tour 2) : le formulaire groupé plafonne la largeur de ses cartes et les centre, la
+    /// phrase d'introduction restait collée au bord gauche. Le contenu a une largeur utile bornée : l'introduction commence là où
+    /// commencent les lignes du formulaire (ici la ligne « Voix »), à 4 points près.
+    @Test func theIntroductionLinesUpWithTheFormRows() throws {
+        var intro: CGRect?
+        var row: CGRect?
+        let size = SettingsView.windowSize
+        let pane = InterviewPane(
+            model: model(), chooseVoice: {}, onVoiceRowFrame: { row = $0 }, onIntroductionFrame: { intro = $0 })
+        let host = NSHostingView(rootView: pane.frame(width: size.width, height: size.height))
+        host.frame = NSRect(origin: .zero, size: size)
+        for _ in 0..<300 where intro == nil || row == nil {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        let introFrame = try #require(intro), rowFrame = try #require(row)
+        print("Entretien : introduction à x = \(introFrame.minX), ligne « Voix » à x = \(rowFrame.minX)")
+        #expect(abs(introFrame.minX - rowFrame.minX) <= 4, "introduction \(introFrame), ligne \(rowFrame)")
     }
 
     /// La mesure est vivante : un volet plus étroit passe les phrases à la ligne, et l'intitulé descend. Sans cela, un chiffre

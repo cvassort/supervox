@@ -363,6 +363,21 @@ import Testing
         }
     }
 
+    /// Vu dans l'image de l'éditeur (tour 2) : la zone qui défile rognait le bord gauche des champs des paramètres. Chaque ligne
+    /// a un retrait dans la zone : au moins 2 points sur les côtés, au moins 1 point au-dessus de la première ligne et sous la
+    /// dernière ligne visible ; et deux lignes tiennent toujours sans défiler.
+    @Test func theParameterFieldsAreNotClippedByTheirZone() throws {
+        let (metrics, host, window) = try measureEditor(editing(2))
+        defer { withExtendedLifetime(window) {} }
+        let viewport = try #require(metrics[.parametersViewport])
+        let first = try #require(metrics[.parameterRow(0)]), second = try #require(metrics[.parameterRow(1)])
+        #expect(first.minX - viewport.minX >= 2, "à gauche : \(first) dans \(viewport)")
+        #expect(viewport.maxX - first.maxX >= 2, "à droite : \(first) dans \(viewport)")
+        #expect(first.minY - viewport.minY >= 1, "en haut : \(first) dans \(viewport)")
+        #expect(viewport.maxY - second.maxY >= 1, "en bas : \(second) dans \(viewport)")
+        #expect(Self.scrollable(in: host).isEmpty)
+    }
+
     // MARK: - Décisions 3 à 5 : ce que la vue montre
 
     /// La coche et le haut-parleur sont à la couleur d'accent, sauf sur la ligne surlignée (fond déjà à la couleur d'accent : vu
