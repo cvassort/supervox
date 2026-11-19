@@ -187,6 +187,24 @@ import Testing
         #expect(rig.model.rows.filter(\.isActive).map(\.id) == [.saved(first.id)])
     }
 
+    /// T3 (tour 3, M2) : « Utiliser cette voix » est inactif sur TOUTE ligne égale à la voix en vigueur, la jumelle non cochée
+    /// aussi (l'utiliser n'écrirait rien de neuf). Une voix différente reste utilisable (témoin).
+    @Test func theUncheckedTwinOfTheVoiceInForceCannotBeUsed() {
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let second = Self.saved("Voix d'exemple B", id: 2)
+        let other = Self.saved("Voix d'exemple C", id: 3, identifier: "voix-exemple-c")
+        let rig = Rig(Self.settings(voices: [first, second, other], voice: first.voice))
+        let model = rig.model
+        let rows = Dictionary(uniqueKeysWithValues: model.rows.map { ($0.id, $0) })
+        #expect(rows[.saved(first.id)]?.isActive == true && rows[.saved(second.id)]?.isActive == false)
+        #expect(rows[.saved(second.id)]?.canUse == false, "la jumelle de la voix en vigueur")
+        #expect(rows[.saved(other.id)]?.canUse == true, "témoin : une autre voix")
+        model.selection = .saved(second.id)
+        #expect(!model.canUse)
+        model.use()
+        #expect(rig.updates == 0, "rien n'est écrit")
+    }
+
     // MARK: - Règle 3 : voix enregistrée inutilisable
 
     @Test func anUnusableSavedVoiceIsListedAndSaysWhy() {
@@ -1064,5 +1082,20 @@ import Testing
         held.model.stopListening()
         #expect(held.model.previewState == .idle, "une écoute en cours revient au repos")
         #expect(held.model.listeningRow == nil)
+    }
+
+    /// T2 (tour 3, M1) : quitter l'onglet (disparition du volet, changement d'onglet : `leave()`) efface une panne d'écoute
+    /// affichée : revenir à l'onglet ne montre pas une panne ancienne.
+    @Test func leavingTheTabClearsADisplayedFailure() {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        rig.microphone.held = true
+        model.listen()
+        rig.microphone.held = false
+        #expect(model.previewState == .failed(.microphoneBusy), "témoin : la panne est affichée")
+        model.leave()
+        #expect(model.previewState == .idle)
+        #expect(model.previewMessage == nil)
     }
 }

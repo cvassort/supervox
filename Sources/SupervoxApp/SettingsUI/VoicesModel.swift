@@ -179,11 +179,13 @@ public final class VoicesModel {
         draft = edited
     }
 
-    /// L'onglet est quitté (son volet disparaît, un autre onglet est choisi) : l'écoute en cours s'arrête, la confirmation en
-    /// attente est annulée et le brouillon est abandonné (R3, tour 2 : remplace « brouillon gardé »). Jamais appelé quand la
-    /// fenêtre perd la clé (`onLeave`) : la feuille elle-même la lui fait perdre, et la fermerait à peine ouverte.
+    /// L'onglet est quitté (son volet disparaît, un autre onglet est choisi) : l'écoute en cours s'arrête, une panne d'écoute
+    /// affichée est effacée (T2, tour 3 : quitter l'onglet la rend ancienne), la confirmation en attente est annulée et le
+    /// brouillon est abandonné (R3, tour 2 : remplace « brouillon gardé »). Jamais appelé quand la fenêtre perd la clé
+    /// (`onLeave`) : la feuille elle-même la lui fait perdre, et la fermerait à peine ouverte ; la panne y reste.
     public func leave() {
         stopListening()
+        clearFailedPreview()
         cancelConfirmation()
         if draft != nil { cancel() }
     }
@@ -270,8 +272,9 @@ public final class VoicesModel {
         let active = settings.voice
         if let index = rows.firstIndex(where: { active.isSameVoice(as: $0.choice) }) {
             rows[index].isActive = true
-            // La voix déjà en vigueur : « Utiliser cette voix » n'a rien à faire (tâche 4, C3).
-            rows[index].canUse = false
+            // La voix déjà en vigueur : « Utiliser cette voix » n'a rien à faire (tâche 4, C3), sur la ligne cochée comme sur une
+            // jumelle non cochée, qui n'écrirait rien de neuf (T3, tour 3).
+            for twin in rows.indices where active.isSameVoice(as: rows[twin].choice) { rows[twin].canUse = false }
         } else {
             let normalized = active.normalized
             let isSystem = normalized.providerID == nil

@@ -1231,6 +1231,36 @@ import Testing
         #expect(rig.updates == 0)
     }
 
+    /// T2 (tour 3, M1) : la fenêtre qui perd la clé (`onLeave` : une autre application, une feuille) GARDE une panne d'écoute
+    /// affichée ; quitter l'onglet Voix par le changement d'onglet l'efface.
+    @Test func aListeningFailureSurvivesTheKeyLossButNotLeavingTheTab() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rig = VoicesModelTests.Rig(VoicesModelTests.settings())
+        let voices = rig.model
+        let controller = makeController()
+        let navigation = SettingsNavigation(tab: .voices)
+        let content = voicesContent(controller, voices: voices, navigation: navigation)
+        let view = SettingsView(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: SettingsView.makeInterviewModel(controller), voices: voices,
+            navigation: navigation)
+        voices.selection = VoicesModel.Row.ID.system(identifier: "voix.exemple.a")
+        rig.microphone.held = true
+        voices.listen()
+        rig.microphone.held = false
+        let failure = VoicesText.failure(.microphoneBusy)
+        #expect(voices.previewMessage == failure, "témoin : la panne est affichée")
+
+        content.onLeave()
+        #expect(voices.previewMessage == failure, "la fenêtre a perdu la clé : la panne reste")
+        view.tabChanged(from: .voices, to: .history)
+        #expect(voices.previewMessage == nil && voices.previewState == .idle, "l'onglet est quitté : la panne est effacée")
+    }
+
     /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
     func voicesContent(
         _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()
