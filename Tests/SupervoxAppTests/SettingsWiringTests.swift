@@ -1261,6 +1261,49 @@ import Testing
         #expect(voices.previewMessage == nil && voices.previewState == .idle, "l'onglet est quitté : la panne est effacée")
     }
 
+    /// T4 (tour 3, M4) : le câblage `onChange(of: navigation.tab)` → `tabChanged` de la VRAIE vue, posée dans une fenêtre jamais
+    /// affichée. Il se voit par ce que seul `tabChanged` fait hors de l'onglet Entretien : le gabarit tapé (brouillon, l'onglet
+    /// Entretien n'est pas montré, donc aucune disparition de son volet) est enregistré quand on passe de Modes à Fournisseurs.
+    /// Ce que `tabChanged` fait pour l'onglet Voix est tenu par `leavingTheVoicesTabByTheTabChangeStopsEverything`.
+    @Test func theRealViewCallsTabChangedOnATabChange() async throws {
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let controller = makeController()
+        let navigation = SettingsNavigation(tab: .modes)
+        let interview = SettingsView.makeInterviewModel(controller)
+        let content = SettingsView.content(
+            providers: SettingsView.makeProvidersModel(controller),
+            hotKey: SettingsView.makeHotKeyModel(controller, keyMonitor: monitor),
+            transcription: SettingsView.makeTranscriptionModel(
+                controller, catalog: catalog, promptTokenLimit: Self.promptTokenLimit),
+            modes: SettingsView.makeModesModel(controller, keyMonitor: monitor), permissions: controller.permissions,
+            openSystemSettings: { _ in }, interview: interview, voices: nil, navigation: navigation)
+        let host = NSHostingView(rootView: content.view)
+        host.frame = NSRect(origin: .zero, size: SettingsView.windowSize)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled], backing: .buffered, defer: true)
+        window.contentView = host
+        defer { withExtendedLifetime(window) {} }
+        // Un passage de la boucle d'exécution est synchrone (`RunLoop.run` n'existe pas en contexte asynchrone).
+        func pumpOnce() {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.main.run(mode: .default, before: Date())
+        }
+        func pump(until condition: () -> Bool) async {
+            for _ in 0..<400 where !condition() {
+                pumpOnce()
+                await Task.yield()
+            }
+        }
+        await pump { false }
+        let typed = "Rédige un prompt d'exemple."
+        interview.template = typed
+        await pump { false }
+        #expect(controller.settings.interview.template == nil, "témoin : rien n'est enregistré sans changement d'onglet")
+
+        navigation.tab = .providers
+        await pump { controller.settings.interview.template == typed }
+        #expect(controller.settings.interview.template == typed, "le changement d'onglet a appelé tabChanged")
+    }
+
     /// La vraie composition de la fenêtre avec cet onglet Voix (les autres modèles viennent du contrôleur).
     func voicesContent(
         _ controller: AppController, voices: VoicesModel, navigation: SettingsNavigation = SettingsNavigation()

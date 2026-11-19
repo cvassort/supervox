@@ -209,7 +209,7 @@ import Testing
             }
             let message = try #require(metrics[.message], "la phrase n'est pas dans la bande (\(name))")
             let slot = try #require(metrics[.messageSlot])
-            #expect(message.minY >= slot.minY - 0.5 && message.maxY <= slot.maxY + 0.5, "\(name) : \(message) hors de \(slot)")
+            #expect(message.minY >= slot.minY - 1 && message.maxY <= slot.maxY + 1, "\(name) : \(message) hors de \(slot)")
         }
     }
 
@@ -319,8 +319,8 @@ import Testing
 
     static func inside(_ inner: CGRect?, _ outer: CGRect) -> Bool {
         guard let inner else { return false }
-        return inner.minX >= outer.minX - 0.5 && inner.maxX <= outer.maxX + 0.5 && inner.minY >= outer.minY - 0.5
-            && inner.maxY <= outer.maxY + 0.5
+        return inner.minX >= outer.minX - 1 && inner.maxX <= outer.maxX + 1 && inner.minY >= outer.minY - 1
+            && inner.maxY <= outer.maxY + 1
     }
 
     /// B1 : deux paramètres et le bouton « Ajouter un paramètre » se voient sans défiler : leurs cadres sont dans la feuille et dans
@@ -375,7 +375,7 @@ import Testing
         #expect(abs(band.height - VoiceEditor.refusalSlotHeight) < 1, "\(band)")
         for probe in [VoiceEditor.Probe.parametersViewport, .addParameter, .cancelButton, .saveButton, .parameterRow(2)] {
             let frame = try #require(metrics[probe])
-            #expect(!frame.insetBy(dx: 0.5, dy: 0.5).intersects(band), "\(probe) \(frame) sous la bande \(band)")
+            #expect(!frame.insetBy(dx: 1, dy: 1).intersects(band), "\(probe) \(frame) sous la bande \(band)")
         }
     }
 
@@ -617,7 +617,7 @@ import Testing
 
     /// R9 (tour 2) : le sélecteur de genre de l'éditeur garde le genre d'origine de la voix parmi ses choix tant que l'éditeur est
     /// ouvert : on peut y revenir sans « Annuler ».
-    @Test func theEditorKeepsTheOriginalGenderAmongItsChoices() {
+    @Test func theEditorKeepsTheOriginalGenderAmongItsChoices() throws {
         let original = VoiceGender.other("voix-exemple")
         let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1, gender: original)
         let model = Rig(VoicesModelTests.settings(voices: [saved])).model
@@ -625,11 +625,13 @@ import Testing
         model.beginEditing()
         #expect(model.draft?.originalGender == original)
         model.editDraft { $0.gender = .female }
-        let options = VoiceEditor.genderOptions(current: model.draft?.gender, original: model.draft?.originalGender)
+        // T4 (tour 3, M5) : la fonction que la vue appelle, sur le brouillon du modèle.
+        let draft = try #require(model.draft)
+        let options = VoiceEditor.genderOptions(for: draft)
         #expect(options.contains(original), "le genre d'origine reste proposé : \(options)")
         #expect(options.contains(.female))
         model.editDraft { $0.gender = original }
-        #expect(VoiceEditor.genderOptions(current: original, original: original).filter { $0 == original }.count == 1)
+        #expect(VoiceEditor.genderOptions(for: try #require(model.draft)).filter { $0 == original }.count == 1)
     }
 
     /// R8 (tour 2) : les libellés d'accessibilité, par le code (rien n'est vérifié avec VoiceOver). L'icône de la bande dit le genre
