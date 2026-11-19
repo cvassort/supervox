@@ -238,11 +238,19 @@ public struct VoicesPane: View {
     /// Ce que la bande montre. Ordre de priorité (décision 5) : `message` d'abord (un refus d'enregistrement, ou la suppression de
     /// la voix en vigueur), puis `previewMessage` (la panne de l'écoute), et à défaut `privacyText` (ce qu'écouter la voix choisie
     /// envoie). Le modèle ne date ni `message` ni l'état de l'écoute : « la plus récente gagne » est tenu par le geste d'écoute, qui
-    /// efface `message` avant d'écouter (`toggleListening`) ; un refus postérieur à une panne d'écoute passe devant elle par l'ordre.
+    /// efface `message` avant d'écouter (`toggleListening`), et par le changement de sélection, qui l'efface aussi (C1, revue
+    /// finale : la note de vie privée de la ligne choisie se voit avant l'écoute) ; un refus postérieur à une panne d'écoute passe
+    /// devant elle par l'ordre.
     struct Band: Equatable {
         enum Kind: Equatable { case notice, failure, privacy }
         var text: String
         var kind: Kind
+    }
+
+    /// La bande du volet pour ce modèle : celle que `messageSlot` montre. Tant qu'un brouillon est ouvert, `message` est le refus
+    /// que l'éditeur montre dans sa propre bande : celle du volet, derrière la feuille, ne le montre pas (C2, revue finale).
+    static func band(for model: VoicesModel) -> Band? {
+        band(message: model.draft == nil ? model.message : nil, previewMessage: model.previewMessage, privacy: model.privacyText)
     }
 
     static func band(message: String?, previewMessage: String?, privacy: String?) -> Band? {
@@ -264,9 +272,7 @@ public struct VoicesPane: View {
     private var messageSlot: some View {
         ZStack(alignment: .leading) {
             Color.clear
-            if let band = Self.band(
-                message: model.message, previewMessage: model.previewMessage, privacy: model.privacyText)
-            {
+            if let band = Self.band(for: model) {
                 VoicesMessageLine(band: band)
                     .padding(.horizontal, 20)
                     .background(frameProbe(.message))

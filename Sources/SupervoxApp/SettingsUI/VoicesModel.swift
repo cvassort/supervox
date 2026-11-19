@@ -122,15 +122,29 @@ public final class VoicesModel {
         didSet { filtersChanged(gender != oldValue) }
     }
     /// La ligne choisie. Une ligne que les filtres cachent n'est jamais visée par un geste (`selectedRow` ne la rend pas). Un
-    /// changement efface une panne d'écoute affichée ; une écoute en cours continue (« Arrêter » reste là).
+    /// changement efface une panne d'écoute affichée ; une écoute en cours continue (« Arrêter » reste là). Il efface aussi
+    /// `message` quand aucun brouillon n'est ouvert (C1, revue finale : un avis ancien cachait la note de vie privée de la ligne
+    /// choisie) ; brouillon ouvert, `message` est le refus que l'éditeur montre et reste.
+    ///
+    /// Les gestes qui changent la sélection PAR PROGRAMME (suppression confirmée, `save()`, `dropHiddenSelection`) le font AVANT de
+    /// poser leur avis, ou n'en posent pas : l'effacement ne touche jamais l'avis que le geste vient de poser. Tenu par les tests
+    /// `theDeletionNoticeSurvivesTheSelectionChangeOfTheDeletion`, `aSuccessfulSaveThatMovesTheSelectionKeepsWhatItShows` et
+    /// `aRefusedSaveKeepsItsRefusal`.
     public var selection: Row.ID? {
-        didSet { if selection != oldValue { clearFailedPreview() } }
+        didSet {
+            guard selection != oldValue else { return }
+            clearFailedPreview()
+            clearMessage()
+        }
     }
     public var draft: VoiceDraft?
     public private(set) var message: String?
     public private(set) var previewState: VoicePreview.State = .idle
     /// La ligne dont l'écoute est en préparation ou en lecture ; `nil` sinon (fin, arrêt, panne, remplacement).
     public private(set) var listeningRow: Row.ID?
+    /// La ligne de la dernière écoute lancée (celle dont `previewState` dit l'état) : la phrase d'une panne dépend de ce qu'on
+    /// peut faire de la ligne (B4).
+    private var previewedRow: Row.ID?
     /// La voix enregistrée dont la suppression attend la confirmation (visée au moment de la demande), `nil` sinon.
     public private(set) var pendingDeletion: UUID?
 
@@ -164,8 +178,8 @@ public final class VoicesModel {
         installed = systemVoices()
     }
 
-    /// Efface le message de l'onglet (apparition du volet, présentation de la fenêtre, geste d'écoute). Pas tant qu'un brouillon
-    /// est ouvert : le message est alors le refus que l'éditeur montre (R3, tour 2).
+    /// Efface le message de l'onglet (apparition du volet, présentation de la fenêtre, geste d'écoute, changement de sélection).
+    /// Pas tant qu'un brouillon est ouvert : le message est alors le refus que l'éditeur montre (R3, tour 2).
     public func clearMessage() {
         guard draft == nil else { return }
         message = nil
@@ -389,10 +403,12 @@ public final class VoicesModel {
 
     // MARK: - Écouter (règles 7 à 9)
 
-    /// La phrase de l'état de l'écoute : celle de la panne, `nil` sinon.
+    /// La phrase de l'état de l'écoute : celle de la panne, `nil` sinon. Seule une voix enregistrée se modifie : pour toute autre
+    /// ligne (la ligne « Voix en vigueur »), la phrase ne renvoie pas à « Modifier » (B4, revue finale).
     public var previewMessage: String? {
-        if case .failed(let failure) = previewState { return VoicesText.failure(failure) }
-        return nil
+        guard case .failed(let failure) = previewState else { return nil }
+        let canEdit = if case .saved = previewedRow { true } else { false }
+        return VoicesText.failure(failure, canEdit: canEdit)
     }
 
     /// Écoute la voix choisie. Relit d'abord les réglages et la liste des voix, puis décide et lance sur ce même instantané : la
@@ -403,6 +419,7 @@ public final class VoicesModel {
         reload()
         guard let row = selectedRow else { return }
         let id = row.id
+        previewedRow = id
         preview.start(row.choice, settings: settings) { [weak self] state in
             guard let self else { return }
             previewState = state

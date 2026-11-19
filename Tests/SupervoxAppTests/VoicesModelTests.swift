@@ -1132,4 +1132,133 @@ import Testing
         #expect(model.previewState == .idle)
         #expect(model.previewMessage == nil)
     }
+
+    // MARK: - Revue finale : la bande et les phrases du modèle (C1, C2, B4)
+
+    /// C1 (revue finale, C-I2) : la note de vie privée se voit avant l'écoute. Un avis ancien (la suppression de la voix en
+    /// vigueur) est effacé quand la personne choisit une autre ligne : la bande montre alors ce qu'écouter la voix choisie envoie.
+    @Test func choosingAnotherRowShowsThePrivacyNoteInsteadOfAnOldNotice() {
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let other = Self.saved("Voix d'exemple B", id: 2, model: "modele-exemple")
+        let rig = Rig(Self.settings(voices: [first, other], voice: first.voice))
+        let model = rig.model
+        model.selection = .saved(first.id)
+        model.requestDeletion()
+        model.confirmDeletion()
+        #expect(VoicesPane.band(for: model) == VoicesPane.Band(text: VoicesText.deletedActive, kind: .notice), "témoin")
+        model.selection = .saved(other.id)
+        #expect(model.message == nil)
+        #expect(VoicesPane.band(for: model)
+                    == VoicesPane.Band(text: VoicesText.privacyProvider("Fournisseur d'exemple"), kind: .privacy))
+    }
+
+    /// C1 : brouillon ouvert, un changement de sélection n'efface pas le message (le refus que l'éditeur montre).
+    @Test func aSelectionChangeKeepsTheEditorRefusalWhileTheDraftIsOpen() {
+        let model = Rig(Self.settings()).model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        model.beginAdding()
+        model.save()  // sans nom : refusé
+        #expect(model.message == VoicesText.refusalEmptyName, "témoin")
+        model.selection = RowID.system(identifier: "voix.exemple.b")
+        #expect(model.message == VoicesText.refusalEmptyName)
+    }
+
+    /// C1 : la suppression confirmée change la sélection PAR PROGRAMME (la ligne supprimée n'est plus choisie) : l'avis que ce
+    /// geste pose n'est pas effacé par ce changement-là.
+    @Test func theDeletionNoticeSurvivesTheSelectionChangeOfTheDeletion() {
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let rig = Rig(Self.settings(voices: [first], voice: first.voice))
+        let model = rig.model
+        model.selection = .saved(first.id)
+        model.requestDeletion()
+        model.confirmDeletion()
+        #expect(rig.updates == 1)
+        #expect(model.selection == nil, "témoin : la sélection a changé")
+        #expect(model.message == VoicesText.deletedActive)
+        #expect(VoicesPane.band(for: model) == VoicesPane.Band(text: VoicesText.deletedActive, kind: .notice))
+    }
+
+    /// C1 : un `save()` réussi qui déplace la sélection (et les filtres : la voix neuve est cachée par le filtre de langue) : ce
+    /// qu'il affiche est toujours là, la voix enregistrée choisie et sa note de vie privée.
+    @Test func aSuccessfulSaveThatMovesTheSelectionKeepsWhatItShows() throws {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        model.beginAdding()
+        model.draft = Self.validDraft()
+        model.draft?.language = "en-US"  // cachée par le filtre « fr-FR »
+        model.save()
+        #expect(rig.updates == 1)
+        let saved = try #require(rig.settings.voices.first)
+        #expect(model.selection == .saved(saved.id), "témoin : la sélection a bougé")
+        #expect(model.language == "en-US", "témoin : le filtre a bougé")
+        #expect(model.message == nil)
+        #expect(VoicesPane.band(for: model)
+                    == VoicesPane.Band(text: VoicesText.privacyProvider("Fournisseur d'exemple"), kind: .privacy))
+    }
+
+    /// C1 : un `save()` refusé (par le brouillon, puis par l'enregistrement) : le refus est toujours là.
+    @Test func aRefusedSaveKeepsItsRefusal() {
+        let rig = Rig(Self.settings())
+        let model = rig.model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        model.beginAdding()
+        model.save()
+        #expect(model.message == VoicesText.refusalEmptyName)
+        model.draft = Self.validDraft()
+        rig.failure = ForeignError()
+        model.save()
+        #expect(rig.updates == 1)
+        #expect(model.message == SettingsError.sentence(forSaveError: ForeignError()))
+        #expect(model.draft != nil, "le brouillon reste")
+    }
+
+    /// C2 (revue finale, C-m6) : tant qu'un brouillon est ouvert, la bande du VOLET ne montre pas `message` (le refus se lit dans
+    /// l'éditeur) ; elle montre ce qu'elle montrerait sans lui. Brouillon fermé, un avis s'y lit de nouveau (témoin).
+    @Test func thePaneBandDoesNotShowTheEditorRefusal() {
+        let model = Rig(Self.settings()).model
+        model.selection = RowID.system(identifier: "voix.exemple.a")
+        model.beginAdding()
+        model.save()  // sans nom : refusé
+        #expect(model.message == VoicesText.refusalEmptyName, "témoin")
+        #expect(VoicesPane.band(for: model) == VoicesPane.Band(text: VoicesText.privacyNothingSent, kind: .privacy))
+        let first = Self.saved("Voix d'exemple A", id: 1)
+        let rig = Rig(Self.settings(voices: [first], voice: first.voice))
+        rig.model.selection = .saved(first.id)
+        rig.model.requestDeletion()
+        rig.model.confirmDeletion()
+        #expect(VoicesPane.band(for: rig.model) == VoicesPane.Band(text: VoicesText.deletedActive, kind: .notice), "témoin")
+    }
+
+    /// B4 (revue finale, B-M5) : la ligne « Voix en vigueur » ne se modifie pas : la phrase de ce qui l'empêche de parler ne dit
+    /// pas « en modifiant la voix », elle finit par « choisissez une autre voix ». Une voix enregistrée, elle, se modifie : sa
+    /// phrase le dit toujours (témoin).
+    @Test func theVoiceInForceThatCannotBeEditedSaysChooseAnotherVoice() async {
+        let removed = UUID(uuidString: "00000000-0000-0000-0000-0000000000ff")
+        let cases: [(VoiceChoice, String)] = [
+            (Self.saved("Voix d'exemple D", id: 9, provider: removed).voice,
+             InterviewText.fr("Le fournisseur de cette voix a été supprimé : choisissez une autre voix.")),
+            (Self.saved("Voix d'exemple E", id: 8, identifier: nil).voice,
+             InterviewText.fr("Le modèle ou l'identifiant de cette voix manque : choisissez une autre voix.")),
+        ]
+        for (voice, expected) in cases {
+            let rig = Rig(Self.settings(voice: voice))
+            let model = rig.model
+            model.selection = .active
+            #expect(model.selectedRow?.id == .active)
+            #expect(!model.canEdit)
+            model.listen()
+            #expect(await until { model.previewMessage != nil })
+            #expect(model.previewMessage == expected)
+            #expect(model.previewMessage?.contains("en modifiant la voix") == false)
+        }
+        let saved = Self.saved("Voix d'exemple D", id: 1, provider: removed)
+        let rig = Rig(Self.settings(voices: [saved]))
+        rig.model.selection = .saved(saved.id)
+        #expect(rig.model.canEdit)
+        rig.model.listen()
+        #expect(await until { rig.model.previewMessage != nil })
+        #expect(rig.model.previewMessage == VoicesText.reason(.providerRemoved))
+        #expect(rig.model.previewMessage?.contains("en modifiant la voix") == true)
+    }
 }

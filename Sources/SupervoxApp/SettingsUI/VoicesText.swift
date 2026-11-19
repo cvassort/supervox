@@ -24,15 +24,21 @@ public enum VoicesText {
 
     // MARK: - Pannes de l'écoute
 
-    /// La phrase d'une panne de l'écoute ; pour `.provider(f)`, la phrase fixe de `f` (`RewriteFailure.message`).
+    /// La phrase d'une panne de l'écoute ; pour `.provider(f)`, la phrase fixe de `f` (`RewriteFailure.message`). Sans `canEdit` :
+    /// la ligne écoutée se modifie (une voix enregistrée). `canEdit` faux : la phrase d'une voix qui ne peut pas parler ne renvoie
+    /// pas à « Modifier » (`reason(_:canEdit:)`).
     public static func failure(_ failure: VoicePreview.Failure) -> String {
+        Self.failure(failure, canEdit: true)
+    }
+
+    public static func failure(_ failure: VoicePreview.Failure, canEdit: Bool) -> String {
         switch failure {
         case .notInstalled:
             InterviewText.fr("Cette voix n'est pas installée sur cet ordinateur : choisissez-en une autre.")
         case .unusable(let reason):
-            Self.reason(reason)
+            Self.reason(reason, canEdit: canEdit)
         case .provider(let failure):
-            providerFailure(failure)
+            providerFailure(failure, canEdit: canEdit)
         case .silent:
             InterviewText.fr("La voix n'a rendu aucun son : il n'y a rien à faire entendre.")
         case .timedOut:
@@ -53,14 +59,14 @@ public enum VoicesText {
     /// la phrase change là où celle de `RewriteFailure`, écrite pour les modes, égarerait : pour une voix, une adresse ou un modèle
     /// inconnu, une requête refusée ou une réponse illisible veulent dire « voix mal réglée ». `switch` sans `default` : un cas
     /// nouveau forcera une décision ici.
-    public static func providerFailure(_ failure: RewriteFailure) -> String {
+    public static func providerFailure(_ failure: RewriteFailure, canEdit: Bool = true) -> String {
         switch failure {
         case .noModel:
             InterviewText.fr(
                 "Aucun modèle n'est donné pour cette voix : vérifiez le modèle, l'identifiant et les paramètres de la voix dans "
                     + "l'onglet Voix.")
         case .providerMissing:
-            Self.reason(.providerRemoved)
+            Self.reason(.providerRemoved, canEdit: canEdit)
         case .notFound:
             InterviewText.fr(
                 "Le fournisseur ne connaît pas ce modèle ou cette adresse (HTTP 404) : vérifiez le modèle, l'identifiant et les "
@@ -83,15 +89,21 @@ public enum VoicesText {
         }
     }
 
-    /// Pourquoi une voix de fournisseur ne peut pas parler (règle 3).
-    public static func reason(_ reason: SystemReason) -> String {
+    /// Pourquoi une voix de fournisseur ne peut pas parler (règle 3). `canEdit` faux : la ligne ne se modifie pas (la ligne
+    /// « Voix en vigueur », B4 de la revue finale) ; la phrase finit alors par « choisissez une autre voix », jamais par « en
+    /// modifiant la voix ».
+    public static func reason(_ reason: SystemReason, canEdit: Bool = true) -> String {
         switch reason {
         case .providerRemoved:
-            InterviewText.fr("Le fournisseur de cette voix a été supprimé : choisissez-en un autre en modifiant la voix.")
+            canEdit
+                ? InterviewText.fr("Le fournisseur de cette voix a été supprimé : choisissez-en un autre en modifiant la voix.")
+                : InterviewText.fr("Le fournisseur de cette voix a été supprimé : choisissez une autre voix.")
         case .providerCannotSpeak:
             InterviewText.fr("Ce fournisseur ne sait pas parler : il n'a pas de synthèse de la voix.")
         case .incomplete:
-            InterviewText.fr("Le modèle ou l'identifiant de cette voix manque : complétez-les en modifiant la voix.")
+            canEdit
+                ? InterviewText.fr("Le modèle ou l'identifiant de cette voix manque : complétez-les en modifiant la voix.")
+                : InterviewText.fr("Le modèle ou l'identifiant de cette voix manque : choisissez une autre voix.")
         }
     }
 
