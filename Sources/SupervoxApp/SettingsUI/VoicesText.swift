@@ -170,6 +170,14 @@ public enum VoicesText {
     public static let voiceRowCaption = "La voix de Supervox se choisit dans l'onglet Voix."
     /// Ce que VoiceOver dit de la marque de la ligne en cours d'écoute.
     public static let listeningMark = "En écoute"
+    /// Ce que VoiceOver dit des icônes (R8, tour 2) : le triangle d'une note et l'icône de la bande d'un avis, d'une panne, de la
+    /// vie privée.
+    public static let warningLabel = "Avertissement"
+    public static let errorLabel = "Erreur"
+    public static let informationLabel = "Information"
+    /// Ce que VoiceOver dit des champs d'un paramètre : leur numéro les distingue (R8, tour 2).
+    public static func parameterKeyLabel(_ number: Int) -> String { "Clé du paramètre \(number)" }
+    public static func parameterValueLabel(_ number: Int) -> String { "Valeur du paramètre \(number)" }
 
     // MARK: - L'éditeur d'une voix de fournisseur (tâche 4)
 

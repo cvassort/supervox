@@ -23,8 +23,11 @@ import Testing
     static var paneHeight: CGFloat { SettingsView.windowSize.height - InterviewPaneLayoutTests.tabStripAllowance }
     static let buttons: [VoicesPane.Probe] = [.useButton, .listenButton, .addButton, .editButton, .deleteButton]
 
-    /// Mesure le volet à cette taille.
-    private func measure(_ model: VoicesModel, width: CGFloat = SettingsView.windowSize.width) throws -> VoicesPane.Metrics {
+    /// Mesure le volet à cette taille. `after` : un geste joué APRÈS l'apparition du volet (qui efface le message d'avant), puis
+    /// la mesure est reprise.
+    private func measure(
+        _ model: VoicesModel, width: CGFloat = SettingsView.windowSize.width, after: (() -> Void)? = nil
+    ) throws -> VoicesPane.Metrics {
         var measured: VoicesPane.Metrics?
         let height = Self.paneHeight
         let host = NSHostingView(rootView: VoicesPane(model: model, onMeasure: { measured = $0 }).frame(width: width, height: height))
@@ -33,6 +36,13 @@ import Testing
         for _ in 0..<300 {
             host.layoutSubtreeIfNeeded()
             RunLoop.main.run(mode: .default, before: Date())
+        }
+        if let after {
+            after()
+            for _ in 0..<300 {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(mode: .default, before: Date())
+            }
         }
         return try #require(measured, "le volet n'a rien mesuré")
     }
@@ -171,18 +181,24 @@ import Testing
         #expect(await until { failing.previewMessage != nil })
         #expect(failing.previewMessage == tallest.text)
 
+        // R7 (tour 2) : le refus (bande d'avis) est vraiment mesuré : il arrive APRÈS l'apparition du volet (qui efface le message
+        // d'avant), le brouillon refusé fermé sans `cancel()` (qui effacerait le refus).
         let refused = Rig(settings).model
-        refused.beginAdding()
-        refused.draft?.name = " "
-        refused.save()
-        #expect(refused.message == VoicesText.refusalEmptyName)
-        refused.cancel()
+        let refuse = {
+            refused.beginAdding()
+            refused.draft?.name = " "
+            refused.save()
+            refused.draft = nil
+        }
         let privacy = Rig(settings).model
         privacy.selection = .saved(saved.id)
         #expect(privacy.privacyText != nil)
 
-        for (name, model) in [("phrase la plus haute", failing), ("vie privée", privacy)] {
-            let metrics = try measure(model)
+        for (name, model, after) in [
+            ("phrase la plus haute", failing, nil), ("refus", refused, refuse), ("vie privée", privacy, nil),
+        ] as [(String, VoicesModel, (() -> Void)?)] {
+            let metrics = try measure(model, after: after)
+            if name == "refus" { #expect(refused.message == VoicesText.refusalEmptyName, "le refus est dans la bande") }
             for probe in probes {
                 let expected = try #require(baseline[probe])
                 let actual = try #require(metrics[probe], "\(probe) n'est pas mesuré avec « \(name) »")
@@ -489,17 +505,16 @@ import Testing
         let rig = Rig(VoicesModelTests.settings(voice: VoiceChoice(language: current)))
         let model = rig.model
         #expect(model.language == current)
-        let options = VoicesPane.languageOptions(model.languages, current: model.language).map(\.code)
-        #expect(options.contains(current), "\(options)")
-        #expect(options.count == model.languages.count, "aucune entrée ajoutée ni perdue")
-        #expect(Set(options.map(VoicesModel.languageKey)).count == options.count, "aucun doublon")
-        #expect(VoicesPane.languageOptions(model.languages, current: nil).map(\.code) == model.languages)
+        // R6 (tour 2) : c'est le MODÈLE qui rend la langue du filtre telle qu'elle est écrite ; la vue n'y corrige rien.
+        #expect(model.languages.contains(current), "\(model.languages)")
+        #expect(Set(model.languages.map(VoicesModel.languageKey)).count == model.languages.count, "aucun doublon")
+        #expect(VoicesPane.languageOptions(model.languages).map(\.code) == model.languages)
     }
 
     /// C1 (tâche 4, tour de correction 1) : le filtre montre la langue en clair, et garde le code pour valeur. Deux codes d'une même
     /// langue y ont deux libellés différents ; un code inventé y reste son code.
     @Test func theLanguageFilterShowsPlainNamesAndKeepsCodes() {
-        let options = VoicesPane.languageOptions(["fr-CA", "fr-FR", "zz-ZZ"], current: "fr_FR")
+        let options = VoicesPane.languageOptions(["fr-CA", "fr_FR", "zz-ZZ"])
         #expect(options.map(\.code) == ["fr-CA", "fr_FR", "zz-ZZ"])
         #expect(options[0].label.contains("français") && options[1].label.contains("français"))
         #expect(options[0].label != options[1].label, "deux libellés différents pour deux codes du français")
@@ -531,6 +546,47 @@ import Testing
         }
         #expect(VoiceEditor.genderOptions(current: .other("voix-exemple")).count == 5)
         #expect(VoiceEditor.genderOptions(current: nil).count == 4)
+    }
+
+    /// R9 (tour 2) : le sélecteur de genre de l'éditeur garde le genre d'origine de la voix parmi ses choix tant que l'éditeur est
+    /// ouvert : on peut y revenir sans « Annuler ».
+    @Test func theEditorKeepsTheOriginalGenderAmongItsChoices() {
+        let original = VoiceGender.other("voix-exemple")
+        let saved = VoicesModelTests.saved("Voix d'exemple A", id: 1, gender: original)
+        let model = Rig(VoicesModelTests.settings(voices: [saved])).model
+        model.selection = .saved(saved.id)
+        model.beginEditing()
+        #expect(model.draft?.originalGender == original)
+        model.editDraft { $0.gender = .female }
+        let options = VoiceEditor.genderOptions(current: model.draft?.gender, original: model.draft?.originalGender)
+        #expect(options.contains(original), "le genre d'origine reste proposé : \(options)")
+        #expect(options.contains(.female))
+        model.editDraft { $0.gender = original }
+        #expect(VoiceEditor.genderOptions(current: original, original: original).filter { $0 == original }.count == 1)
+    }
+
+    /// R8 (tour 2) : les libellés d'accessibilité, par le code (rien n'est vérifié avec VoiceOver). L'icône de la bande dit le genre
+    /// du message ; le triangle d'une note dit « Avertissement » ; la coche de la ligne « Voix en vigueur » (absente de la liste)
+    /// ne répète pas son titre ; les champs des paramètres se distinguent ; le bouton d'écoute porte son titre courant.
+    @Test func theAccessibilityLabelsSayWhatTheIconsMean() {
+        #expect(VoicesPane.iconLabel(.notice) == VoicesText.warningLabel)
+        #expect(VoicesPane.iconLabel(.failure) == VoicesText.errorLabel)
+        #expect(VoicesPane.iconLabel(.privacy) == VoicesText.informationLabel)
+        #expect(Set([VoicesText.warningLabel, VoicesText.errorLabel, VoicesText.informationLabel]).count == 3)
+
+        let rig = Rig(VoicesModelTests.settings(voice: VoiceChoice(identifier: "voix.exemple.absente", language: "fr-FR")))
+        let rows = rig.model.rows
+        let absent = rows.first { $0.id == .active }
+        #expect(absent?.title == VoicesText.activeVoice)
+        #expect(absent.map(VoicesPane.checkmarkLabel) == .some(nil), "la ligne dit déjà « Voix en vigueur »")
+        let inForce = Rig(VoicesModelTests.settings()).model.rows.first { $0.isActive }
+        #expect(inForce.map(VoicesPane.checkmarkLabel) == .some(VoicesText.activeVoice))
+        let other = rows.first { !$0.isActive }
+        #expect(other.map(VoicesPane.checkmarkLabel) == .some(nil))
+
+        #expect(VoicesText.parameterKeyLabel(1) != VoicesText.parameterKeyLabel(2))
+        #expect(VoicesText.parameterKeyLabel(1) == "Clé du paramètre 1")
+        #expect(VoicesText.parameterValueLabel(2) == "Valeur du paramètre 2")
     }
 
     // MARK: - Apparition, disparition (décisions 1 et 2)

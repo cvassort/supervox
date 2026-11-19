@@ -1143,7 +1143,7 @@ import Testing
         let cases: [(DictationStage, Bool)] = [
             (.idle, false), (.preparing, true), (.recording, true), (.finalizing, true), (.formatting, true), (.review, false),
             (.pasting, false), (.correcting(.preparing), true), (.correcting(.recording), true), (.correcting(.transcribing), true),
-            (.correcting(.rewriting), false), (.copied, false), (.cancelled, false),
+            (.correcting(.rewriting), false), (.copied, false), (.cancelled, false), (.failed(.noSpeech), false),
         ]
         for (stage, busy) in cases {
             panel.dictation.stage = stage

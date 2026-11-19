@@ -86,6 +86,9 @@ public final class VoicesModel {
         public var language: String
         public var gender: VoiceGender?
         public var parameters: [Parameter]
+        /// Le genre de la voix enregistrée à l'ouverture de l'éditeur (`nil` pour une voix neuve) : l'éditeur le garde parmi ses
+        /// choix tant qu'il est ouvert (R9, tour 2).
+        public var originalGender: VoiceGender?
 
         public init(
             editing: UUID? = nil, name: String = "", providerID: UUID? = nil, model: String = "", identifier: String = "",
@@ -197,15 +200,20 @@ public final class VoicesModel {
     }
 
     /// Les langues proposées par le filtre (voix installées et enregistrées, et toujours la langue en cours du filtre, même si
-    /// plus aucune voix ne la porte), triées, sans doublon.
+    /// plus aucune voix ne la porte), triées, sans doublon (sans casse, `-` et `_` confondus). La langue du filtre y est telle
+    /// qu'elle est écrite, à la place de l'entrée de même clé : le sélecteur a toujours une étiquette égale à sa valeur (R6, tour
+    /// 2 : la vue n'y corrige plus rien).
     public var languages: [String] {
         var seen = Set<String>()
         let listed = Self.allRows(settings: settings, installed: installed)
             .filter { $0.id != .active }
             .map(\.language)
-        return (listed + (language.map { [$0] } ?? []))
+        let unique = (listed + (language.map { [$0] } ?? []))
             .sorted()
             .filter { seen.insert(Self.languageKey($0)).inserted }
+        guard let language else { return unique }
+        let key = Self.languageKey(language)
+        return unique.map { Self.languageKey($0) == key ? language : $0 }
     }
 
     /// La ligne choisie, si elle est montrée (`rows`) ; `nil` sinon.
@@ -486,6 +494,7 @@ public final class VoicesModel {
             editing: id, name: saved.name, providerID: voice.providerID, model: voice.model ?? "",
             identifier: voice.identifier ?? "", language: voice.language, gender: voice.gender,
             parameters: voice.extra.sorted { $0.key < $1.key }.map { VoiceDraft.Parameter(key: $0.key, value: $0.value) })
+        draft?.originalGender = voice.gender
     }
 
     /// Ferme le brouillon sans rien écrire.

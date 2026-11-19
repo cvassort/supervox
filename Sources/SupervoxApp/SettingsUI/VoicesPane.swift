@@ -103,28 +103,38 @@ public struct VoicesPane: View {
 
     // MARK: - Filtres
 
-    /// Les langues du sélecteur. `VoicesModel.languages` contient toujours la langue en cours, mais dédoublonne sans casse et en
-    /// confondant `-` et `_` : la langue en cours peut y figurer sous une autre écriture (`fr_FR` pour `fr-FR`). L'entrée de même clé
-    /// prend alors l'écriture exacte de la langue en cours, pour que le sélecteur ait toujours une étiquette égale à sa valeur.
-    /// Le libellé est la langue en clair (`VoicesText.languageName`) : deux codes d'une même langue y restent distincts.
+    /// Les entrées du sélecteur de langue, sur `VoicesModel.languages` telles quelles (le modèle y écrit la langue du filtre comme
+    /// elle l'est : R6). Le libellé est la langue en clair (`VoicesText.languageName`) : deux codes d'une même langue y restent
+    /// distincts.
     struct LanguageOption: Hashable {
         let code: String
         let label: String
     }
 
-    static func languageOptions(_ languages: [String], current: String?) -> [LanguageOption] {
-        languages.map { language in
-            var code = language
-            if let current, VoicesModel.languageKey(language) == VoicesModel.languageKey(current) { code = current }
-            return LanguageOption(code: code, label: VoicesText.languageName(code))
+    static func languageOptions(_ languages: [String]) -> [LanguageOption] {
+        languages.map { LanguageOption(code: $0, label: VoicesText.languageName($0)) }
+    }
+
+    /// Ce que VoiceOver dit de l'icône de la bande (R8) : le genre du message, que l'icône et la couleur seules portaient.
+    static func iconLabel(_ kind: Band.Kind) -> String {
+        switch kind {
+        case .notice: VoicesText.warningLabel
+        case .failure: VoicesText.errorLabel
+        case .privacy: VoicesText.informationLabel
         }
+    }
+
+    /// Ce que VoiceOver dit de la coche (R8) : « Voix en vigueur » sur la ligne cochée ; rien (coche cachée) sur une autre ligne, et
+    /// sur la ligne « Voix en vigueur » absente de la liste, dont le titre le dit déjà.
+    static func checkmarkLabel(_ row: VoicesModel.Row) -> String? {
+        row.isActive && row.id != .active ? VoicesText.activeVoice : nil
     }
 
     private var filters: some View {
         HStack(spacing: 16) {
             Picker(VoicesText.languageFilterLabel, selection: $model.language) {
                 Text(VoicesText.allLanguages).tag(String?.none)
-                ForEach(Self.languageOptions(model.languages, current: model.language), id: \.code) { option in
+                ForEach(Self.languageOptions(model.languages), id: \.code) { option in
                     Text(option.label).tag(Optional(option.code))
                 }
             }
@@ -180,8 +190,8 @@ public struct VoicesPane: View {
                 .font(.callout.weight(.semibold))
                 .opacity(row.isActive ? 1 : 0)
                 .frame(width: 14)
-                .accessibilityHidden(!row.isActive)
-                .accessibilityLabel(VoicesText.activeVoice)
+                .accessibilityHidden(Self.checkmarkLabel(row) == nil)
+                .accessibilityLabel(Self.checkmarkLabel(row) ?? "")
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.title)
                 Text(row.detail)
@@ -192,6 +202,7 @@ public struct VoicesPane: View {
                         Text(note).foregroundStyle(.secondary)
                     } icon: {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            .accessibilityLabel(VoicesText.warningLabel)
                     }
                     .font(.caption)
                     .fixedSize(horizontal: false, vertical: true)
@@ -242,7 +253,8 @@ public struct VoicesPane: View {
     }
 
     /// Hauteur de la bande, en points : `messageLineLimit` lignes de texte `callout` et leurs marges. La phrase la plus longue qui
-    /// peut y arriver tient sur ces lignes à la largeur de la fenêtre (`SettingsView.windowSize`) : mesuré par `VoicesPaneLayoutTests`. Choix de la marge non mesuré.
+    /// peut y arriver tient sur ces lignes à la largeur de la fenêtre (`SettingsView.windowSize`) : mesuré par
+    /// `VoicesPaneLayoutTests`. Choix de la marge non mesuré.
     static let messageSlotHeight: CGFloat = 62
     static let messageLineLimit = 3
     /// Largeur du texte de la bande : la fenêtre moins les marges (20 points de chaque côté) et l'icône (16 points et 8 d'écart).
@@ -318,6 +330,8 @@ public struct VoicesPane: View {
                         .accessibilityHidden(!listen.showsProgress)
                 }
             }
+            // Le titre courant seulement : les deux titres de réserve sont cachés (R8).
+            .accessibilityLabel(listen.title)
             .disabled(!listen.isEnabled)
             .background(frameProbe(.listenButton))
             Spacer(minLength: 8)
@@ -375,7 +389,7 @@ struct VoicesMessageLine: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            icon.frame(width: 16)
+            icon.frame(width: 16).accessibilityLabel(VoicesPane.iconLabel(band.kind))
             Text(band.text)
                 .font(.callout)
                 .foregroundStyle(band.kind == .privacy ? .secondary : .primary)
@@ -432,8 +446,6 @@ public struct VoiceEditor: View {
         }
     }
 
-    /// La taille de la feuille, en points : 520×540 (décision du contrôleur, tour 1 : les six champs, deux paramètres et
-    /// « Ajouter un paramètre » se voient sans défiler). Choix non mesuré, vu en image.
     /// Le nom en clair montré à côté du champ de la langue (le champ garde le code, qui est enregistré) ; `nil` pour un code
     /// sans nom (inconnu, vide) : il n'y a rien de plus clair à dire.
     static func languageHint(_ code: String) -> String? {
@@ -441,6 +453,8 @@ public struct VoiceEditor: View {
         return name == code ? nil : name
     }
 
+    /// La taille de la feuille, en points : 520×540 (décision du contrôleur, tour 1 : les six champs, deux paramètres et
+    /// « Ajouter un paramètre » se voient sans défiler). Choix non mesuré, vu en image.
     public static let size = CGSize(width: 520, height: 540)
 
     /// Les fournisseurs proposés : ceux qui savent parler ; le fournisseur du brouillon s'il n'y est pas (supprimé, ou qui ne sait
@@ -458,11 +472,19 @@ public struct VoiceEditor: View {
         return options
     }
 
-    /// Les genres proposés : non précisé, féminin, masculin, neutre, et le genre « autre » du brouillon s'il en a un.
-    static func genderOptions(current: VoiceGender?) -> [VoiceGender?] {
+    /// Les genres proposés : non précisé, féminin, masculin, neutre, le genre d'origine de la voix (R9 : on peut y revenir tant que
+    /// l'éditeur est ouvert) et le genre « autre » du brouillon s'il en a un.
+    static func genderOptions(current: VoiceGender?, original: VoiceGender? = nil) -> [VoiceGender?] {
         var options: [VoiceGender?] = [nil, .female, .male, .neutral]
-        if let current, !options.contains(current) { options.append(current) }
+        for extra in [original, current] {
+            if let extra, !options.contains(extra) { options.append(extra) }
+        }
         return options
+    }
+
+    /// Les genres proposés pour ce brouillon (son genre et son genre d'origine).
+    static func genderOptions(for draft: VoicesModel.VoiceDraft) -> [VoiceGender?] {
+        genderOptions(current: draft.gender, original: draft.originalGender)
     }
 
     /// Paramètres visibles sans défiler : au-delà, seule la zone des paramètres défile (décision du contrôleur, tour 1).
@@ -539,13 +561,13 @@ public struct VoiceEditor: View {
                 Picker(
                     VoicesText.genderField,
                     selection: Binding(
-                        get: { Self.genderOptions(current: draft.wrappedValue.gender).firstIndex(of: draft.wrappedValue.gender) ?? 0 },
+                        get: { Self.genderOptions(for: draft.wrappedValue).firstIndex(of: draft.wrappedValue.gender) ?? 0 },
                         set: { index in
-                            let options = Self.genderOptions(current: draft.wrappedValue.gender)
+                            let options = Self.genderOptions(for: draft.wrappedValue)
                             if options.indices.contains(index) { model.editDraft { $0.gender = options[index] } }
                         })
                 ) {
-                    ForEach(Array(Self.genderOptions(current: draft.wrappedValue.gender).enumerated()), id: \.offset) { index, gender in
+                    ForEach(Array(Self.genderOptions(for: draft.wrappedValue).enumerated()), id: \.offset) { index, gender in
                         Text(VoicesText.editorGenderTitle(gender)).tag(index)
                     }
                 }
@@ -570,7 +592,9 @@ public struct VoiceEditor: View {
                         ForEach(Array(draft.parameters.enumerated()), id: \.element.id) { index, $parameter in
                             HStack(spacing: 8) {
                                 TextField(VoicesText.keyField, text: $parameter.key)
+                                    .accessibilityLabel(VoicesText.parameterKeyLabel(index + 1))
                                 TextField(VoicesText.valueField, text: $parameter.value)
+                                    .accessibilityLabel(VoicesText.parameterValueLabel(index + 1))
                                 Button {
                                     model.editDraft { $0.parameters.removeAll { $0.id == parameter.id } }
                                 } label: {
