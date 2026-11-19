@@ -179,6 +179,40 @@ import Testing
         #expect(unsavedRow?.section == .provider)
     }
 
+    /// A1 (revue finale, A-I1) : une voix automatique en vigueur que le système sait dire n'est jamais dite « plus installée ».
+    /// Sans ligne « Automatique » de sa langue exacte, la ligne « Voix en vigueur » suit la règle du synthétiseur (langue exacte,
+    /// puis même langue) et nomme la voix qu'il prendrait ; sans aucune voix de la langue, ou pour une voix désignée absente, la
+    /// note « n'est plus installée » reste. « Utiliser » reste inactif sur cette ligne.
+    @Test func anAutomaticVoiceTheSystemCanSayIsNeverSaidUninstalled() throws {
+        func activeRow(_ voice: VoiceChoice, installed: [SystemVoiceInfo]) throws -> VoicesModel.Row {
+            let row = try #require(Rig(Self.settings(voice: voice), installed: installed).model.rows.first { $0.isActive })
+            #expect(row.id == .active)
+            #expect(!row.canUse)
+            return row
+        }
+        // `fr-FR` sur une machine qui n'a de français que du `fr-CA` : deux voix, la meilleure qualité est nommée, comme la règle
+        // du synthétiseur la prend.
+        let canadianLow = SystemVoiceInfo(identifier: "voix.exemple.1", language: "fr-CA", quality: 1, name: "Voix d'exemple 1")
+        let canadianHigh = SystemVoiceInfo(identifier: "voix.exemple.2", language: "fr-CA", quality: 3, name: "Voix d'exemple 2")
+        let canadian = [canadianLow, Self.voiceC, canadianHigh]
+        let regional = try activeRow(VoiceChoice(language: "fr-FR"), installed: canadian)
+        #expect(regional.note == VoicesText.speaksWithBestVoice(named: "Voix d'exemple 2"))
+        #expect(SystemSpeechSynthesizer.pickVoice(language: "fr-FR", identifier: nil, among: canadian) == canadianHigh,
+                "la même règle que le synthétiseur")
+        // Un nom vide : l'identifiant à sa place.
+        let unnamed = SystemVoiceInfo(identifier: "voix.exemple.3", language: "fr-CA", quality: 2)
+        #expect(try activeRow(VoiceChoice(language: "fr-FR"), installed: [unnamed]).note
+                    == VoicesText.speaksWithBestVoice(named: "voix.exemple.3"))
+        // Une langue écrite sans région (`fr`) : la meilleure voix française installée.
+        #expect(try activeRow(VoiceChoice(language: "fr"), installed: Self.installed).note
+                    == VoicesText.speaksWithBestVoice(named: "Voix d'exemple B"))
+        // Aucune voix de la langue : la note d'origine reste.
+        #expect(try activeRow(VoiceChoice(language: "de-DE"), installed: Self.installed).note == VoicesText.noLongerInstalled)
+        // Une voix désignée absente de la liste : « n'est plus installée » est vrai, même si une voix de sa langue existe.
+        #expect(try activeRow(VoiceChoice(identifier: "voix.exemple.absente", language: "fr-FR"), installed: canadian).note
+                    == VoicesText.noLongerInstalled)
+    }
+
     /// Deux voix enregistrées identiques : UNE ligne cochée, la première dans l'ordre affiché.
     @Test func twoIdenticalSavedVoicesCheckOnlyTheFirst() {
         let first = Self.saved("Voix d'exemple A", id: 1)

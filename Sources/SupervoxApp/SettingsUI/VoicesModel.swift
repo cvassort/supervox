@@ -51,7 +51,8 @@ public final class VoicesModel {
         public var choice: VoiceChoice
         /// La ligne cochée : la voix en vigueur.
         public var isActive: Bool
-        /// Ce qui ne va pas : la raison d'une voix inutilisable, ou « n'est plus installée » / « n'est pas enregistrée ».
+        /// Ce qui ne va pas : la raison d'une voix inutilisable, ou « n'est plus installée » / « n'est pas enregistrée », ou, pour
+        /// une voix automatique sans ligne de sa langue exacte, la voix installée qui parle à sa place.
         public var note: String?
         /// « Utiliser cette voix » est possible.
         public var canUse: Bool
@@ -284,10 +285,20 @@ public final class VoicesModel {
                     ? "\(VoicesText.languageName(normalized.language)) · \(normalized.identifier ?? VoicesText.automatic)"
                     : providerDetail(normalized, settings: settings),
                 language: normalized.language, genderGroup: group(normalized.gender), choice: active, isActive: true,
-                note: isSystem ? VoicesText.noLongerInstalled : VoicesText.notSaved, canUse: false)
+                note: isSystem ? systemActiveNote(normalized, installed: installed) : VoicesText.notSaved, canUse: false)
             rows.insert(row, at: isSystem ? 0 : system.count)
         }
         return rows
+    }
+
+    /// La note de la ligne « Voix en vigueur » d'une voix du système (normalisée) qu'aucune ligne ne montre. Désignée par son
+    /// identifiant : elle n'est pas dans la liste, « n'est plus installée » est vrai. Automatique (sans identifiant) : la MÊME règle
+    /// que le synthétiseur (`SystemSpeechSynthesizer.pickVoice`, langue exacte puis même langue) ; s'il prend une voix (autre région,
+    /// ou langue écrite sans région), la note la nomme, jamais « n'est plus installée » (A1, revue finale) ; sinon la note reste.
+    private static func systemActiveNote(_ voice: VoiceChoice, installed: [SystemVoiceInfo]) -> String {
+        guard voice.identifier == nil, let spoken = SystemSpeechSynthesizer.pickVoice(language: voice.language, among: installed)
+        else { return VoicesText.noLongerInstalled }
+        return VoicesText.speaksWithBestVoice(named: spoken.name.isEmpty ? spoken.identifier : spoken.name)
     }
 
     private static func savedRow(_ saved: SavedVoice, settings: AppSettings) -> Row {
@@ -337,9 +348,9 @@ public final class VoicesModel {
         }
     }
 
-    /// Sans casse, `_` et `-` confondus : la règle de `isSameVoice(as:)`.
+    /// Sans casse, `_` et `-` confondus : `SpeechLanguage.key`, la clé de `isSameVoice(as:)` et du synthétiseur.
     static func languageKey(_ language: String) -> String {
-        language.lowercased().replacingOccurrences(of: "_", with: "-")
+        SpeechLanguage.key(language)
     }
 
     /// Ordre des noms : sans casse ni accents, indépendant de la langue du système.

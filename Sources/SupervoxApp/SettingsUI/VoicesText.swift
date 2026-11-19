@@ -107,6 +107,13 @@ public enum VoicesText {
     /// Le nom d'un fournisseur qui n'est plus dans les réglages, à la place de son nom.
     public static let providerRemovedName = "Fournisseur supprimé"
     public static let noLongerInstalled = InterviewText.fr("Cette voix n'est plus installée sur cet ordinateur.")
+    /// La note de la ligne « Voix en vigueur » d'une voix automatique du système dont la langue exacte n'a pas de ligne
+    /// « Automatique » mais dont la langue a une voix installée (autre région, ou langue écrite sans région) : elle nomme la voix
+    /// que le synthétiseur prend (`SystemSpeechSynthesizer.pickVoice`), par son nom, ou son identifiant si le nom est vide. Le nom
+    /// est repris tel quel (les espaces insécables ne touchent que la phrase autour).
+    public static func speaksWithBestVoice(named name: String) -> String {
+        InterviewText.fr("Supervox parle avec « ") + name + InterviewText.fr(" », la meilleure voix installée pour cette langue.")
+    }
     public static let notSaved = InterviewText.fr("Cette voix n'est pas enregistrée dans la liste.")
 
     /// La langue d'un code (`fr-FR`), en clair et en français (« français (France) »), calculée avec une locale française FIXE,

@@ -100,17 +100,19 @@ public final class SystemSpeechSynthesizer: SpeechSynthesizer {
     }
 
     /// La voix désignée si elle est installée, quelle que soit sa langue ; sinon (identifiant `nil` ou absent de la liste) la
-    /// meilleure voix de la langue, par `pickVoice(language:among:)`.
-    static func pickVoice(language: String, identifier: String?, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
+    /// meilleure voix de la langue, par `pickVoice(language:among:)`. Publique : l'onglet Voix dit la voix qu'elle prend.
+    public static func pickVoice(language: String, identifier: String?, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
         if let identifier, let designated = voices.first(where: { $0.identifier == identifier }) { return designated }
         return pickVoice(language: language, among: voices)
     }
 
-    /// La voix de la langue exacte d'abord (`fr-FR`), puis toute voix de la même langue (`fr-…`) ; à égalité, la meilleure
-    /// qualité, et à qualité égale la première de la liste. `nil` s'il n'y en a aucune.
-    static func pickVoice(language: String, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
-        func tag(_ language: String) -> String { language.replacingOccurrences(of: "_", with: "-").lowercased() }
-        func primary(_ language: String) -> Substring { tag(language).split(separator: "-", maxSplits: 1).first ?? "" }
+    /// LA règle « langue exacte, puis même langue » : la voix de la langue exacte d'abord (`fr-FR`), puis toute voix de la même
+    /// langue (`fr-…`, ou `fr` écrite sans région) ; à égalité, la meilleure qualité, et à qualité égale la première de la liste.
+    /// `nil` s'il n'y en a aucune. Langues comparées par `SpeechLanguage` (sans casse, `_` et `-` confondus). Publique : l'onglet
+    /// Voix dit la voix qu'elle prend (la ligne « Voix en vigueur » d'une voix automatique).
+    public static func pickVoice(language: String, among voices: [SystemVoiceInfo]) -> SystemVoiceInfo? {
+        let tag = SpeechLanguage.key
+        let primary = SpeechLanguage.primary
         func best(_ candidates: [SystemVoiceInfo]) -> SystemVoiceInfo? {
             candidates.reduce(nil) { best, voice in
                 guard let best else { return voice }

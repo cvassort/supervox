@@ -47,9 +47,9 @@ extension VoiceChoice {
     /// (`==` : fournisseur, modèle, identifiant, langue, genre, paramètres ; les champs inconnus ne comptent pas). Deux voix du système :
     /// si les deux ont un identifiant (normalisé), l'identifiant seul décide (une voix installée désignée parle pareil quelle que soit
     /// la langue notée, `SystemSpeechSynthesizer` la cherche avant la langue) ; si aucune n'en a, la langue (normalisée) décide, sans
-    /// casse, `_` et `-` confondus, rien d'autre (`fr-FR` et `fr-CA` sont deux voix) ; l'une avec et l'autre sans : jamais la même.
-    /// Genre et paramètres ne comptent pas. C'est une relation d'équivalence. Une voix du système et une voix de
-    /// fournisseur ne sont jamais la même. `settings.voice` ne porte pas d'identité de ligne : si plusieurs voix enregistrées sont la
+    /// casse, `_` et `-` confondus (`SpeechLanguage.key`), rien d'autre (`fr-FR` et `fr-CA` sont deux voix) ; l'une avec et
+    /// l'autre sans : jamais la même. Genre et paramètres ne comptent pas. C'est une relation d'équivalence. Une voix du système
+    /// et une voix de fournisseur ne sont jamais la même. `settings.voice` ne porte pas d'identité de ligne : si plusieurs voix enregistrées sont la
     /// même voix, la première de la liste est la voix en vigueur.
     public func isSameVoice(as other: VoiceChoice) -> Bool {
         let lhs = normalized
@@ -60,8 +60,7 @@ extension VoiceChoice {
             case (let left?, let right?):
                 return left == right
             case (nil, nil):
-                func languageKey(_ language: String) -> String { language.lowercased().replacingOccurrences(of: "_", with: "-") }
-                return languageKey(lhs.language) == languageKey(rhs.language)
+                return SpeechLanguage.key(lhs.language) == SpeechLanguage.key(rhs.language)
             default:
                 return false
             }
